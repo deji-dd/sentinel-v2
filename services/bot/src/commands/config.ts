@@ -19,7 +19,7 @@ export const configCommand = {
 	async execute(interaction: ChatInputCommandInteraction): Promise<void> {
 		try {
 			const guildId = interaction.guildId;
-			const baseUrl = "https://blasted-labs.tech/";
+			const baseUrl = "https://sentinel.blasted-labs.tech";
 			const dashboardUrl = guildId ? `${baseUrl}/guilds/${guildId}` : baseUrl;
 
 			const embed = createBaseEmbed(

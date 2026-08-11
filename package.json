@@ -9,8 +9,6 @@
 	"scripts": {
 		"db:generate": "bun --filter @sentinel/database db:generate",
 		"db:migrate": "bun --filter @sentinel/database db:migrate",
-		"db:migrate:postgres:dev": "NODE_ENV=development bun run scripts/migrate-postgres.ts",
-		"db:migrate:postgres:prod": "NODE_ENV=production bun run scripts/migrate-postgres.ts",
 		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
 		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
 		"bot:start": "NODE_ENV=production bun run services/bot/index.ts",
@@ -33,7 +31,6 @@
 		"@biomejs/biome": "latest",
 		"@types/bun": "latest",
 		"openapi-typescript": "latest",
-		"postgres": "latest",
 		"typescript": "^6.0.0"
 	},
 	"peerDependencies": {}

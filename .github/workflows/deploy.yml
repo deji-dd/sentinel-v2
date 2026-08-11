@@ -2,14 +2,13 @@ name: Deploy to Production
 
 on:
   workflow_dispatch:
-  # Uncomment push trigger when ready for automatic deployments:
-  # push:
-  #   branches:
-  #     - main
-  #   paths-ignore:
-  #     - "README.md"
-  #     - "docs/**"
-  #     - ".gitignore"
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - ".gitignore"
 
 jobs:
   validate-and-build:
@@ -80,17 +79,16 @@ jobs:
 
             cd "$TARGET_DIR"
             echo "Pulling latest changes from main..."
-            git fetch origin main
-            git reset --hard origin/main
+            git pull origin main
 
             echo "Installing dependencies..."
-            bun install
+            bun install --production
 
             echo "Building Bot Dashboard..."
             bun run bot-dashboard:build
 
-            echo "Running Postgres DB Migrations..."
-            bun run db:migrate:postgres:prod
+            echo "Running SQLite Database Migrations..."
+            bun run db:migrate
 
             echo "Updating Systemd Services..."
             sudo cp .systemd/*.service /etc/systemd/system/

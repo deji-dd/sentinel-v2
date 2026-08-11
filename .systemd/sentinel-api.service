@@ -9,6 +9,7 @@ WorkingDirectory=/opt/sentinel-v2
 ExecStart=/home/deji/.bun/bin/bun run api:start
 Restart=always
 RestartSec=5
+Environment="PATH=/home/deji/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=/opt/sentinel-v2/.env.production
 MemoryHigh=150M
 MemoryMax=200M
