@@ -48,9 +48,6 @@ repomix.config.json
 *.db-shm
 *.db-wal
 
-# formatter
-biome.json
-
 # tests
 *.test.ts
 
