@@ -27,6 +27,9 @@ jobs:
       - name: Install Dependencies
         run: bun install --frozen-lockfile
 
+      - name: Migrate SQLite Schema for Tests
+        run: bun run db:migrate
+
       - name: Run Typecheck
         run: bun run typecheck
 
