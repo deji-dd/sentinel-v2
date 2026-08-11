@@ -1,0 +1,25 @@
+{
+	"name": "@sentinel/api",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"exports": {
+		".": "./index.ts"
+	},
+	"scripts": {
+		"start": "NODE_ENV=production bun run index.ts",
+		"dev": "NODE_ENV=development bun --watch run index.ts"
+	},
+	"devDependencies": {},
+	"peerDependencies": {},
+	"dependencies": {
+		"@elysiajs/cors": "latest",
+		"@elysiajs/static": "latest",
+		"@elysiajs/swagger": "latest",
+		"@sentinel/database": "workspace:*",
+		"@sentinel/schemas": "workspace:*",
+		"@sentinel/torn-api": "workspace:*",
+		"@sentinel/utils": "workspace:*",
+		"elysia": "latest"
+	}
+}

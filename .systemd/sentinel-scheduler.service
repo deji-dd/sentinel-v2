@@ -1,0 +1,17 @@
+[Unit]
+Description=Sentinel Scheduler Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=deji
+WorkingDirectory=/opt/sentinel-v2
+ExecStart=/home/deji/.bun/bin/bun run scheduler:start
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/sentinel-v2/.env.production
+MemoryHigh=600M
+MemoryMax=700M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+{
+	"name": "@sentinel/bot",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"exports": {
+		".": "./index.ts"
+	},
+	"scripts": {
+		"start": "NODE_ENV=production bun run index.ts",
+		"dev": "NODE_ENV=development bun --watch run index.ts"
+	},
+	"devDependencies": {},
+	"peerDependencies": {},
+	"dependencies": {
+		"@sentinel/database": "workspace:*",
+		"@sentinel/schemas": "workspace:*",
+		"@sentinel/utils": "workspace:*",
+		"discord.js": "latest",
+		"@resvg/resvg-js": "latest"
+	}
+}

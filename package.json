@@ -1,0 +1,40 @@
+{
+	"name": "sentinel-v2",
+	"workspaces": [
+		"services/*",
+		"web/*",
+		"packages/*"
+	],
+	"module": "index.ts",
+	"scripts": {
+		"db:generate": "bun --filter @sentinel/database db:generate",
+		"db:migrate": "bun --filter @sentinel/database db:migrate",
+		"db:migrate:postgres:dev": "NODE_ENV=development bun run scripts/migrate-postgres.ts",
+		"db:migrate:postgres:prod": "NODE_ENV=production bun run scripts/migrate-postgres.ts",
+		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
+		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
+		"bot:start": "NODE_ENV=production bun run services/bot/index.ts",
+		"bot:dev": "NODE_ENV=development bun --watch run services/bot/index.ts",
+		"api:start": "NODE_ENV=production bun run services/api/index.ts",
+		"api:dev": "NODE_ENV=development bun --watch run services/api/index.ts",
+		"bot-dashboard:build": "bun --filter @sentinel/bot-dashboard build",
+		"bot-dashboard:dev": "bun --filter @sentinel/bot-dashboard dev",
+		"trigger": "bun run services/scheduler/src/scripts/trigger.ts",
+		"refresh:alliances": "bun run scripts/refresh-faction-alliances.ts",
+		"torn-types:generate": "bun --bun openapi-typescript https://www.torn.com/swagger/openapi.json -o packages/schemas/src/torn/swagger.ts",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"sync:env": "rsync -avz .env.production deji@100.96.215.46:/opt/sentinel-v2/.env.production"
+	},
+	"type": "module",
+	"private": true,
+	"devDependencies": {
+		"@biomejs/biome": "latest",
+		"@types/bun": "latest",
+		"openapi-typescript": "latest",
+		"postgres": "latest",
+		"typescript": "^6.0.0"
+	},
+	"peerDependencies": {}
+}

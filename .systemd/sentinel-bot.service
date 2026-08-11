@@ -1,0 +1,17 @@
+[Unit]
+Description=Sentinel Discord Bot Service
+After=network.target postgresql.service sentinel-scheduler.service
+
+[Service]
+Type=simple
+User=deji
+WorkingDirectory=/opt/sentinel-v2
+ExecStart=/home/deji/.bun/bin/bun run bot:start
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/sentinel-v2/.env.production
+MemoryHigh=200M
+MemoryMax=250M
+
+[Install]
+WantedBy=multi-user.target

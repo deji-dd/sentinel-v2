@@ -1,0 +1,17 @@
+[Unit]
+Description=Sentinel Dashboard API Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=deji
+WorkingDirectory=/opt/sentinel-v2
+ExecStart=/home/deji/.bun/bin/bun run api:start
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/sentinel-v2/.env.production
+MemoryHigh=150M
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

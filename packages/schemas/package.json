@@ -1,0 +1,12 @@
+{
+	"name": "@sentinel/schemas",
+	"module": "index.ts",
+	"type": "module",
+	"types": "./index.ts",
+	"exports": {
+		".": "./index.ts"
+	},
+	"private": true,
+	"devDependencies": {},
+	"peerDependencies": {}
+}
