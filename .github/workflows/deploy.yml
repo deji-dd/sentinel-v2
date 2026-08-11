@@ -36,11 +36,11 @@ jobs:
       - name: Run Linter
         run: bun run lint
 
-      - name: Run Unit Tests
-        run: bun test
-
       - name: Build Bot Dashboard
         run: bun run bot-dashboard:build
+
+      - name: Run Unit Tests
+        run: bun test
 
   deploy:
     name: Deploy to VPS
