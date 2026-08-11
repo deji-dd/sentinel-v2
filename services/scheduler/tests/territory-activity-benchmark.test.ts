@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { performance } from "node:perf_hooks";
 import {
 	apiKeys,
 	db,
@@ -7,7 +8,6 @@ import {
 	territoryStates,
 	warLedgers,
 } from "@sentinel/database";
-import { performance } from "node:perf_hooks";
 import { executeActivityEngine } from "../src/workers/torn/territory-activity";
 
 describe("Territory Activity Multi-Pass Performance Benchmark (DB vs Network vs CPU)", () => {
@@ -42,86 +42,80 @@ describe("Territory Activity Multi-Pass Performance Benchmark (DB vs Network vs 
 		await db.delete(warLedgers).where(like(warLedgers.id, "WAR_BENCH_%"));
 	});
 
-	test(
-		"calculates average DB read/write performance vs Network across 3 passes",
-		async () => {
-			const NETWORK_LATENCY_MS = 20;
-			const NUM_PASSES = 3;
+	test("calculates average DB read/write performance vs Network across 3 passes", async () => {
+		const NETWORK_LATENCY_MS = 20;
+		const NUM_PASSES = 3;
 
-		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
-			(async (url: string | URL | Request) => {
-				await new Promise((r) => setTimeout(r, NETWORK_LATENCY_MS));
-				const urlStr = url.toString();
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			await new Promise((r) => setTimeout(r, NETWORK_LATENCY_MS));
+			const urlStr = url.toString();
 
-				if (urlStr.includes("/faction/rackets")) {
-					return new Response(
-						JSON.stringify({
-							rackets: [
-								{
-									territory: "PAR",
-									name: "Park Racket",
-									level: 2,
-									faction: 100,
-								},
-							],
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
-
-				if (urlStr.includes("/torn") && urlStr.includes("territorywars")) {
-					return new Response(
-						JSON.stringify({
-							territorywars: {
-								WAR_1: {
-									territory_war_id: 12345,
-									territory: "PAR",
-									assaulting_faction: 200,
-									defending_faction: 100,
-									started: Math.floor(Date.now() / 1000) - 3600,
-								},
+			if (urlStr.includes("/faction/rackets")) {
+				return new Response(
+					JSON.stringify({
+						rackets: [
+							{
+								territory: "PAR",
+								name: "Park Racket",
+								level: 2,
+								faction: 100,
 							},
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
 
-				if (
-					urlStr.includes("/faction/basic") ||
-					urlStr.includes("/faction/")
-				) {
-					return new Response(
-						JSON.stringify({
-							ID: 100,
-							name: "Benchmark Faction",
-							tag: "BENCH",
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
+			if (urlStr.includes("/torn") && urlStr.includes("territorywars")) {
+				return new Response(
+					JSON.stringify({
+						territorywars: {
+							WAR_1: {
+								territory_war_id: 12345,
+								territory: "PAR",
+								assaulting_faction: 200,
+								defending_faction: 100,
+								started: Math.floor(Date.now() / 1000) - 3600,
+							},
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
 
-				if (urlStr.includes("/faction/territoryownership")) {
-					return new Response(
-						JSON.stringify({
-							territoryOwnership: Array.from({ length: 500 }, (_, i) => ({
-								id: `TERR_${i}`,
-								faction: 100 + (i % 10),
-								sector: 1,
-								size: 10,
-								density: 5,
-								slots: 4,
-							})),
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
+			if (urlStr.includes("/faction/basic") || urlStr.includes("/faction/")) {
+				return new Response(
+					JSON.stringify({
+						ID: 100,
+						name: "Benchmark Faction",
+						tag: "BENCH",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
 
-				return new Response(JSON.stringify({}), { status: 200 });
-			}) as unknown as typeof fetch,
-		);
+			if (urlStr.includes("/faction/territoryownership")) {
+				return new Response(
+					JSON.stringify({
+						territoryOwnership: Array.from({ length: 500 }, (_, i) => ({
+							id: `TERR_${i}`,
+							faction: 100 + (i % 10),
+							sector: 1,
+							size: 10,
+							density: 5,
+							slots: 4,
+						})),
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
 
 		const dbReadTimes: number[] = [];
-		const dbWriteTimes: number[] = [];
 		const engineTimes: number[] = [];
 
 		for (let pass = 1; pass <= NUM_PASSES; pass++) {

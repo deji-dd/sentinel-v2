@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
-	apiKeys,
 	db,
 	eq,
 	factionRoleMappings,
@@ -22,10 +21,18 @@ describe("Verification Engine", () => {
 	beforeEach(async () => {
 		prevEnvKey = process.env.TORN_API_KEY;
 		process.env.TORN_API_KEY = "mock_system_api_key";
-		await db.delete(guildConfigs).where(eq(guildConfigs.guildId, TEST_GUILD_ID));
-		await db.delete(guildApiKeys).where(eq(guildApiKeys.guildId, TEST_GUILD_ID));
-		await db.delete(factionRoleMappings).where(eq(factionRoleMappings.guildId, TEST_GUILD_ID));
-		await db.delete(verifiedUsers).where(eq(verifiedUsers.discordId, TEST_DISCORD_ID));
+		await db
+			.delete(guildConfigs)
+			.where(eq(guildConfigs.guildId, TEST_GUILD_ID));
+		await db
+			.delete(guildApiKeys)
+			.where(eq(guildApiKeys.guildId, TEST_GUILD_ID));
+		await db
+			.delete(factionRoleMappings)
+			.where(eq(factionRoleMappings.guildId, TEST_GUILD_ID));
+		await db
+			.delete(verifiedUsers)
+			.where(eq(verifiedUsers.discordId, TEST_DISCORD_ID));
 
 		// Set up test guild config
 		await db.insert(guildConfigs).values({
@@ -61,38 +68,48 @@ describe("Verification Engine", () => {
 		if (fetchSpy) {
 			fetchSpy.mockRestore();
 		}
-		await db.delete(guildConfigs).where(eq(guildConfigs.guildId, TEST_GUILD_ID));
-		await db.delete(guildApiKeys).where(eq(guildApiKeys.guildId, TEST_GUILD_ID));
-		await db.delete(factionRoleMappings).where(eq(factionRoleMappings.guildId, TEST_GUILD_ID));
-		await db.delete(verifiedUsers).where(eq(verifiedUsers.discordId, TEST_DISCORD_ID));
-		await db.delete(verificationLogs).where(eq(verificationLogs.guildId, TEST_GUILD_ID));
+		await db
+			.delete(guildConfigs)
+			.where(eq(guildConfigs.guildId, TEST_GUILD_ID));
+		await db
+			.delete(guildApiKeys)
+			.where(eq(guildApiKeys.guildId, TEST_GUILD_ID));
+		await db
+			.delete(factionRoleMappings)
+			.where(eq(factionRoleMappings.guildId, TEST_GUILD_ID));
+		await db
+			.delete(verifiedUsers)
+			.where(eq(verifiedUsers.discordId, TEST_DISCORD_ID));
+		await db
+			.delete(verificationLogs)
+			.where(eq(verificationLogs.guildId, TEST_GUILD_ID));
 	});
 
 	test("calculates role diffs and formatted nickname for verified user", async () => {
-		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
-			(async (url: string | URL | Request) => {
-				const urlStr = url.toString();
-				if (urlStr.includes("/user")) {
-					return new Response(
-						JSON.stringify({
-							profile: {
-								id: 2633269,
-								name: "Deji",
-							},
-							faction: {
-								id: 999,
-								name: "Alpha Faction",
-								tag: "ALPHA",
-								position: "Leader",
-							},
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("/user")) {
+				return new Response(
+					JSON.stringify({
+						profile: {
+							id: 2633269,
+							name: "Deji",
+						},
+						faction: {
+							id: 999,
+							name: "Alpha Faction",
+							tag: "ALPHA",
+							position: "Leader",
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
 
-				return new Response(JSON.stringify({}), { status: 200 });
-			}) as unknown as typeof fetch,
-		);
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
 
 		const res = await runVerificationJob(
 			{

@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { apiKeys, db } from "../../database";
-import {
-	getPersonalKey,
-	getSystemKeyPool,
-	hashApiKey,
-} from "../index";
+import { getPersonalKey, getSystemKeyPool, hashApiKey } from "../index";
 
 describe("Torn API Manager - Key Pool Manager", () => {
 	const keyHash1 = hashApiKey("sys_key_1", "pepper");

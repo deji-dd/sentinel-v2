@@ -19,7 +19,6 @@ describe("Crypto Utils", () => {
 		expect(decrypted).toBe(VALID_KEY);
 	});
 
-
 	it("returns original string if key is already unencrypted", () => {
 		expect(decryptApiKey(VALID_KEY, MASTER_KEY)).toBe(VALID_KEY);
 	});

@@ -1,6 +1,6 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "../src/ipc";
 
 describe("ipc utility", () => {

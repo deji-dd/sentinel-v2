@@ -6,11 +6,7 @@ describe("modules utility", () => {
 		test("should normalize valid module keys and aliases", () => {
 			const input = ["verify", "territories", "REACTION_ROLES"];
 			const result = normalizeModules(input);
-			expect(result).toEqual([
-				"verification",
-				"territory",
-				"reaction_role",
-			]);
+			expect(result).toEqual(["verification", "territory", "reaction_role"]);
 		});
 
 		test("should deduplicate alias variations into canonical keys", () => {
@@ -28,9 +24,7 @@ describe("modules utility", () => {
 			expect(normalizeModules(null)).toEqual([]);
 			expect(normalizeModules(undefined)).toEqual([]);
 			// @ts-expect-error testing runtime resilience
-			expect(normalizeModules([123, null, "verify"])).toEqual([
-				"verification",
-			]);
+			expect(normalizeModules([123, null, "verify"])).toEqual(["verification"]);
 		});
 	});
 

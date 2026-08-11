@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { generateAllianceMapPng, generateAllianceMapSvg } from "../src/lib/alliance-map-generator";
-import { generateBurnMapPng, generateBurnMapSvg } from "../src/lib/burn-map-generator";
+import {
+	generateAllianceMapPng,
+	generateAllianceMapSvg,
+} from "../src/lib/alliance-map-generator";
+import {
+	generateBurnMapPng,
+	generateBurnMapSvg,
+} from "../src/lib/burn-map-generator";
 
 describe("alliance-map-generator", () => {
 	test("generateAllianceMapSvg produces valid SVG string with xmlns", () => {

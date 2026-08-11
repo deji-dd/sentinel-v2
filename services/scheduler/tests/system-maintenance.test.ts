@@ -19,8 +19,12 @@ describe("System Maintenance Worker", () => {
 	beforeEach(async () => {
 		// Clean test records
 		await db.delete(warLedgers).where(like(warLedgers.id, "WAR_TEST_%"));
-		await db.delete(verificationLogs).where(like(verificationLogs.id, "LOG_TEST_%"));
-		await db.delete(travelDestinations).where(eq(travelDestinations.id, TEST_DEST_ID));
+		await db
+			.delete(verificationLogs)
+			.where(like(verificationLogs.id, "LOG_TEST_%"));
+		await db
+			.delete(travelDestinations)
+			.where(eq(travelDestinations.id, TEST_DEST_ID));
 
 		const hundredDaysAgo = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000);
 		const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
@@ -119,7 +123,9 @@ describe("System Maintenance Worker", () => {
 
 		expect(dest).toBeDefined();
 		if (dest) {
-			const stocks = dest.stocks as unknown as { history: { timestamp: number }[] }[];
+			const stocks = dest.stocks as unknown as {
+				history: { timestamp: number }[];
+			}[];
 			const history = stocks[0]?.history ?? [];
 			expect(history.length).toBe(1);
 		}

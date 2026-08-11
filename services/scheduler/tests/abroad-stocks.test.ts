@@ -22,34 +22,34 @@ describe("Torn Abroad Stocks Sync Worker", () => {
 	});
 
 	test("fetches YATA export and updates travel destinations with timestamped stock history", async () => {
-		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
-			(async (url: string | URL | Request) => {
-				const urlStr = url.toString();
-				if (urlStr.includes("yata.yt/api/v1/travel/export")) {
-					return new Response(
-						JSON.stringify({
-							stocks: {
-								[TEST_COUNTRY_CODE]: {
-									update: Math.floor(Date.now() / 1000),
-									country: "Hawaii",
-									stocks: [
-										{
-											id: 260,
-											name: "Plumeria Flower",
-											quantity: 120,
-											cost: 400,
-										},
-									],
-								},
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("yata.yt/api/v1/travel/export")) {
+				return new Response(
+					JSON.stringify({
+						stocks: {
+							[TEST_COUNTRY_CODE]: {
+								update: Math.floor(Date.now() / 1000),
+								country: "Hawaii",
+								stocks: [
+									{
+										id: 260,
+										name: "Plumeria Flower",
+										quantity: 120,
+										cost: 400,
+									},
+								],
 							},
-						}),
-						{ status: 200, headers: { "Content-Type": "application/json" } },
-					);
-				}
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
 
-				return new Response(JSON.stringify({}), { status: 200 });
-			}) as unknown as typeof fetch,
-		);
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
 
 		await runTravelSync();
 

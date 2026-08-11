@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { WarRecord } from "../src/lib/territory-burn-logic";
 import {
 	checkSector7Cooldown,
 	checkTerritoryBurn,
 	getBurnedTerritories,
 } from "../src/lib/territory-burn-logic";
-import type { WarRecord } from "../src/lib/territory-burn-logic";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -230,11 +230,7 @@ describe("checkSector7Cooldown", () => {
 			victorFaction: FACTION_B,
 		});
 		// Most recent first (mimics DB ordering)
-		const result = checkSector7Cooldown(
-			FACTION_A,
-			[recentLoss, olderLoss],
-			0,
-		);
+		const result = checkSector7Cooldown(FACTION_A, [recentLoss, olderLoss], 0);
 		expect(result.isOnCooldown).toBe(true);
 		// hoursRemaining should reflect the 5h-ago loss (~67h left), not the 60h-ago one (~12h left)
 		expect(result.hoursRemaining).toBeGreaterThan(12);

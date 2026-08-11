@@ -10,10 +10,10 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(response.status).toBe(200);
 
 		const data = (await response.json()) as Record<string, unknown>;
-		expect(data["status"]).toBe("ok");
-		expect(typeof data["timestamp"]).toBe("string");
-		expect(typeof data["uptime"]).toBe("number");
-		expect(typeof data["environment"]).toBe("string");
+		expect(data.status).toBe("ok");
+		expect(typeof data.timestamp).toBe("string");
+		expect(typeof data.uptime).toBe("number");
+		expect(typeof data.environment).toBe("string");
 	});
 
 	it("GET / serves index.html static SPA asset", async () => {
@@ -31,7 +31,9 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		const jsFile = jsMatch ? jsMatch[1] : "";
 		expect(jsFile).not.toBe("");
 
-		const jsResponse = await app.handle(new Request(`http://localhost/${jsFile}`));
+		const jsResponse = await app.handle(
+			new Request(`http://localhost/${jsFile}`),
+		);
 		expect(jsResponse.status).toBe(200);
 		const contentType = jsResponse.headers.get("content-type") ?? "";
 		expect(contentType).toContain("javascript");
@@ -45,8 +47,8 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(response.status).toBe(200);
 
 		const data = (await response.json()) as Record<string, unknown>;
-		expect(data["authenticated"]).toBe(false);
-		expect(data["user"]).toBeNull();
+		expect(data.authenticated).toBe(false);
+		expect(data.user).toBeNull();
 	});
 
 	it("performs full in-house database session lifecycle (login -> me -> logout)", async () => {

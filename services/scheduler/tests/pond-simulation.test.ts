@@ -13,13 +13,21 @@ describe("Pond Simulation Worker", () => {
 
 	beforeEach(async () => {
 		// Reset test device controls & readings for pond_01
-		await db.delete(deviceControls).where(eq(deviceControls.deviceId, DEVICE_ID));
-		await db.delete(sensorReadings).where(eq(sensorReadings.deviceId, DEVICE_ID));
+		await db
+			.delete(deviceControls)
+			.where(eq(deviceControls.deviceId, DEVICE_ID));
+		await db
+			.delete(sensorReadings)
+			.where(eq(sensorReadings.deviceId, DEVICE_ID));
 	});
 
 	afterEach(async () => {
-		await db.delete(deviceControls).where(eq(deviceControls.deviceId, DEVICE_ID));
-		await db.delete(sensorReadings).where(eq(sensorReadings.deviceId, DEVICE_ID));
+		await db
+			.delete(deviceControls)
+			.where(eq(deviceControls.deviceId, DEVICE_ID));
+		await db
+			.delete(sensorReadings)
+			.where(eq(sensorReadings.deviceId, DEVICE_ID));
 	});
 
 	test("injects simulated data point when no recent telemetry exists", async () => {
