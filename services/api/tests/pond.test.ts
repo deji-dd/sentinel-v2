@@ -129,4 +129,62 @@ describe("Elysia API Server - Pond IoT Routes", () => {
 		expect(data.pump_drain).toBe(false);
 		expect(data.simulate_breach).toBe(true);
 	});
+
+	it("handles CORS preflight and requests from https://aquasense.ayodejib.dev", async () => {
+		const preflightResponse = await app.handle(
+			new Request("http://localhost/pond/data", {
+				method: "OPTIONS",
+				headers: {
+					Origin: "https://aquasense.ayodejib.dev",
+					"Access-Control-Request-Method": "POST",
+					"Access-Control-Request-Headers": "Content-Type",
+				},
+			}),
+		);
+
+		expect(preflightResponse.status).toBe(204);
+		expect(preflightResponse.headers.get("access-control-allow-origin")).toBe(
+			"https://aquasense.ayodejib.dev",
+		);
+
+		const getResponse = await app.handle(
+			new Request(`http://localhost/pond/data/${testDeviceId}`, {
+				headers: {
+					Origin: "https://aquasense.ayodejib.dev",
+				},
+			}),
+		);
+
+		expect(getResponse.status).toBe(200);
+		expect(getResponse.headers.get("access-control-allow-origin")).toBe(
+			"https://aquasense.ayodejib.dev",
+		);
+	});
+
+	it("allows ESP32 non-browser requests without Origin header", async () => {
+		const espPayload = {
+			device_id: "esp32_hardware_unit_1",
+			temperature_c: 25.1,
+			ph: 7.4,
+			turbidity_ntu: 5.2,
+			pond_level_pct: 90,
+			pump_in_active: true,
+			pump_drain_active: false,
+		};
+
+		const response = await app.handle(
+			new Request("http://localhost/pond/data", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"User-Agent": "ESP32-HTTP-Client/1.0",
+				},
+				body: JSON.stringify(espPayload),
+			}),
+		);
+
+		expect(response.status).toBe(201);
+		const data = (await response.json()) as { success: boolean; id: string };
+		expect(data.success).toBe(true);
+	});
 });

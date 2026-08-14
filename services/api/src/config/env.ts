@@ -8,6 +8,8 @@ export const env = {
 	ALLOWED_ORIGINS: [
 		"https://sentinel.blasted-labs.tech",
 		"https://sentinel.ayodejib.dev",
+		"https://aquasense.ayodejib.dev",
+		"https://api.ayodejib.dev",
 		"http://localhost:3000",
 		"http://bot.localhost:3000",
 		"http://user.localhost:3000",

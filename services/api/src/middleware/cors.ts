@@ -15,7 +15,25 @@ export const corsPlugin = new Elysia({ name: "middleware.cors" }).use(
 				return true;
 			}
 
-			return env.ALLOWED_ORIGINS.includes(origin);
+			if (env.ALLOWED_ORIGINS.includes(origin)) {
+				return true;
+			}
+
+			try {
+				const url = new URL(origin);
+				if (
+					url.hostname === "blasted-labs.tech" ||
+					url.hostname.endsWith(".blasted-labs.tech") ||
+					url.hostname === "ayodejib.dev" ||
+					url.hostname.endsWith(".ayodejib.dev")
+				) {
+					return true;
+				}
+			} catch {
+				return false;
+			}
+
+			return false;
 		},
 		credentials: true,
 		allowedHeaders: [
