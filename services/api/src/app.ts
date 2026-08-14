@@ -5,6 +5,7 @@ import { corsPlugin } from "./middleware/cors";
 import { requestLoggerPlugin } from "./middleware/request-logger";
 import { staticSpaPlugin } from "./middleware/static-spa";
 import { healthRoutes } from "./routes/health";
+import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
 
 export const app = new Elysia()
@@ -24,6 +25,7 @@ export const app = new Elysia()
 		}),
 	)
 	.use(healthRoutes)
+	.use(pondRoutes)
 	.use(v1Routes)
 	.use(staticSpaPlugin)
 	.onError(({ code, error, set }) => {
