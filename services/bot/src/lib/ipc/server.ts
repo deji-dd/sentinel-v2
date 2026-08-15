@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
+	BulkVerificationProgressData,
 	VerificationRequest,
 	VerificationResponse,
 } from "@sentinel/schemas";
 import {
+	type BulkVerificationResult,
 	pendingBulkRequests,
 	pendingRequests,
 	workerIpcClient,
@@ -38,18 +40,23 @@ export async function sendVerificationRequest(
 	});
 }
 
+export type BulkVerificationProgressCallback = (
+	progress: BulkVerificationProgressData,
+) => void | Promise<void>;
+
 /**
- * Sends a bulk guild verification request directly over UDS to the worker engine.
+ * Sends a bulk guild verification request directly over UDS to the worker engine,
+ * streaming progress updates back to the caller and resetting the heartbeat timeout on each progress event.
  */
-export async function sendBulkVerificationRequest(
-	data: { guildId: string; channelId?: string; triggeredBy?: "admin" | "cron" },
-	timeoutMs = 60000,
-): Promise<{
-	guildId: string;
-	processed: number;
-	updated: number;
-	errors: number;
-}> {
+export async function streamBulkVerificationRequest(
+	data: {
+		guildId: string;
+		channelId?: string;
+		triggeredBy?: "admin" | "cron" | "user";
+	},
+	onProgress?: BulkVerificationProgressCallback,
+	inactivityTimeoutMs = 60000,
+): Promise<BulkVerificationResult> {
 	const requestId = randomUUID();
 
 	return new Promise((resolve, reject) => {
@@ -60,9 +67,15 @@ export async function sendBulkVerificationRequest(
 					"Bulk verification timed out. Worker engine did not respond in time.",
 				),
 			);
-		}, timeoutMs);
+		}, inactivityTimeoutMs);
 
-		pendingBulkRequests.set(requestId, { resolve, reject, timer });
+		pendingBulkRequests.set(requestId, {
+			resolve,
+			reject,
+			onProgress,
+			inactivityTimeoutMs,
+			timer,
+		});
 
 		workerIpcClient.send({
 			action: "bulk_verification_request",
@@ -70,4 +83,14 @@ export async function sendBulkVerificationRequest(
 			data,
 		});
 	});
+}
+
+/**
+ * Sends a bulk guild verification request directly over UDS to the worker engine.
+ */
+export async function sendBulkVerificationRequest(
+	data: { guildId: string; channelId?: string; triggeredBy?: "admin" | "cron" },
+	timeoutMs = 60000,
+): Promise<BulkVerificationResult> {
+	return streamBulkVerificationRequest(data, undefined, timeoutMs);
 }

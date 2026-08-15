@@ -8,7 +8,11 @@ import {
 	verificationLogs,
 	verifiedUsers,
 } from "@sentinel/database";
-import { runVerificationJob } from "../src/lib/verification";
+import type { BulkVerificationProgressData } from "@sentinel/schemas";
+import {
+	runBulkGuildVerification,
+	runVerificationJob,
+} from "../src/lib/verification";
 
 describe("Verification Engine", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
@@ -145,5 +149,62 @@ describe("Verification Engine", () => {
 			expect(dbUser.tornName).toBe("Deji");
 			expect(dbUser.factionId).toBe(999);
 		}
+	});
+
+	test("runBulkGuildVerification streams progress events in real time", async () => {
+		// Insert mock verified user
+		await db.insert(verifiedUsers).values({
+			discordId: TEST_DISCORD_ID,
+			tornId: 2633269,
+			tornName: "Deji",
+			factionId: 999,
+			factionTag: "ALPHA",
+			lastCheckedAt: new Date(),
+		});
+
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("/faction")) {
+				return new Response(
+					JSON.stringify({
+						members: {
+							"2633269": {
+								name: "Deji",
+								position: "Leader",
+								days_in_faction: 100,
+							},
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
+
+		const progressEvents: BulkVerificationProgressData[] = [];
+		const onProgress = (progress: BulkVerificationProgressData) => {
+			progressEvents.push({ ...progress });
+		};
+
+		const result = await runBulkGuildVerification(
+			TEST_GUILD_ID,
+			"admin",
+			onProgress,
+		);
+
+		expect(result.processed).toBeGreaterThanOrEqual(1);
+		expect(result.total).toBeGreaterThanOrEqual(1);
+		expect(result.errors).toBe(0);
+
+		// Verify stream progress events were triggered
+		expect(progressEvents.length).toBeGreaterThanOrEqual(2);
+		expect(progressEvents[0]?.status).toBe("running");
+		expect(progressEvents[progressEvents.length - 1]?.status).toBe("completed");
+		expect(progressEvents[progressEvents.length - 1]?.processed).toBe(
+			result.processed,
+		);
 	});
 });

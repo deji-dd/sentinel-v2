@@ -198,16 +198,34 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 			});
 
 			if (res.error) {
-				const errValue = res.error.value as { error?: string } | undefined;
-				toast(errValue?.error ?? "Failed to register API key.", "error");
+				const errObj = res.error as unknown;
+				let errMsg = "Failed to register API key.";
+				if (typeof errObj === "object" && errObj !== null) {
+					if (
+						"value" in errObj &&
+						typeof (errObj as { value: unknown }).value === "object"
+					) {
+						const val = (errObj as { value: Record<string, unknown> }).value;
+						if (val && typeof val.error === "string") errMsg = val.error;
+						else if (val && typeof val.message === "string")
+							errMsg = val.message;
+					} else if (
+						"error" in errObj &&
+						typeof (errObj as { error: unknown }).error === "string"
+					) {
+						errMsg = (errObj as { error: string }).error;
+					}
+				}
+				toast(errMsg, "error");
 				return;
 			}
 
 			toast("API key verified & registered!", "success");
 			setNewApiKey("");
 			await fetchConfig();
-		} catch {
-			toast("Failed to add API key.", "error");
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : "Failed to add API key.";
+			toast(msg, "error");
 		} finally {
 			setIsAddingKey(false);
 		}
@@ -446,23 +464,29 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 							value={newApiKey}
 							onChange={(e) => setNewApiKey(e.target.value)}
 							maxLength={16}
+							disabled={isAddingKey}
 							placeholder="Enter 16-character Torn API Key..."
 							className="flex-1 font-mono text-xs rounded-xl"
 						/>
 						<Button
 							type="submit"
-							disabled={isAddingKey}
-							className="h-10 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+							disabled={isAddingKey || !newApiKey.trim()}
+							className="h-10 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer gap-1.5"
 						>
 							{isAddingKey ? (
-								<Loader2
-									className="size-4 animate-spin"
-									data-icon="inline-start"
-								/>
+								<>
+									<Loader2
+										className="size-4 animate-spin"
+										data-icon="inline-start"
+									/>
+									<span>Verifying...</span>
+								</>
 							) : (
-								<Plus className="size-4" data-icon="inline-start" />
+								<>
+									<Plus className="size-4" data-icon="inline-start" />
+									<span>Register Key</span>
+								</>
 							)}
-							Register Key
 						</Button>
 					</form>
 

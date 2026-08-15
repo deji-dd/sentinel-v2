@@ -27,6 +27,7 @@ let dbActiveWarsCache: Map<string, IpcWarPayload> | null = null;
 type CompactTerritoryState = {
 	id: string;
 	factionId: number | null;
+	racket: ApiRacket | null;
 	racketChangedAt: number | null;
 	racketLevel: number | null;
 	isWarring: boolean;
@@ -169,6 +170,7 @@ export async function executeActivityEngine(): Promise<number> {
 						{
 							id: s.id,
 							factionId: s.factionId,
+							racket: racket,
 							racketChangedAt: racket?.changed_at ?? null,
 							racketLevel: racket?.level ?? null,
 							isWarring: s.isWarring,
@@ -331,7 +333,7 @@ export async function executeActivityEngine(): Promise<number> {
 							data: {
 								id: oldState.id,
 								factionId: oldState.factionId,
-								racket: null,
+								racket: oldState.racket,
 								isWarring: oldState.isWarring,
 							},
 						});
@@ -388,6 +390,7 @@ export async function executeActivityEngine(): Promise<number> {
 					dbStatesCache?.set(item.id, {
 						id: item.id,
 						factionId: item.factionId,
+						racket: itemRacket,
 						racketChangedAt: itemRacket?.changed_at ?? null,
 						racketLevel: itemRacket?.level ?? null,
 						isWarring: item.isWarring,

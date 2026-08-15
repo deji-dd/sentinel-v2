@@ -8,6 +8,7 @@ import {
 	verifiedUsers,
 } from "@sentinel/database";
 import type {
+	BulkVerificationProgressData,
 	TornSchema,
 	VerificationFailureResponse,
 	VerificationRequest,
@@ -375,11 +376,18 @@ export async function runVerificationJob(
  * Optimised bulk guild verification run.
  * Leverages `tornApi.executeBatch` to fetch mapped faction member lists in parallel across all registered guild API keys.
  * Uses Staggered Soft-Expiry (oldest-first priority, up to 15 stale users re-verified per run) to detect unlinked accounts without overwhelming API keys.
+ * Emits real-time progress callbacks for streaming back over IPC.
  */
 export async function runBulkGuildVerification(
 	guildId: string,
 	triggeredBy: "cron" | "admin" | "user" = "cron",
-): Promise<{ processed: number; updated: number; errors: number }> {
+	onProgress?: (progress: BulkVerificationProgressData) => Promise<void> | void,
+): Promise<{
+	processed: number;
+	total: number;
+	updated: number;
+	errors: number;
+}> {
 	const finishLog = logger.time();
 
 	try {
@@ -403,7 +411,16 @@ export async function runBulkGuildVerification(
 			logger.warn(
 				`No valid API keys found for bulk verification of guild ${guildId}`,
 			);
-			return { processed: 0, updated: 0, errors: 1 };
+			await onProgress?.({
+				guildId,
+				processed: 0,
+				total: 0,
+				updated: 0,
+				errors: 1,
+				status: "failed",
+				message: "No valid API keys found for bulk verification of this guild.",
+			});
+			return { processed: 0, total: 0, updated: 0, errors: 1 };
 		}
 
 		const managedKeys: ManagedApiKey[] = validGuildKeys.map((k) => ({
@@ -464,9 +481,21 @@ export async function runBulkGuildVerification(
 
 		// Fetch all verified users in DB
 		const verifiedUsersList = await db.query.verifiedUsers.findMany();
+		const total = verifiedUsersList.length;
 		let processed = 0;
 		let updated = 0;
 		let errors = 0;
+
+		// Emit initial progress event
+		await onProgress?.({
+			guildId,
+			processed: 0,
+			total,
+			updated: 0,
+			errors: 0,
+			status: "running",
+			message: `Starting bulk verification of ${total} members...`,
+		});
 
 		// Staggered Soft-Expiry: Priority-sort users whose link check is older than 7 days (oldest checked / un-checked first)
 		const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -508,57 +537,88 @@ export async function runBulkGuildVerification(
 					} else {
 						updated++;
 					}
-					continue;
-				}
+				} else {
+					// Otherwise use fast in-memory faction member check
+					let userFactionId: number | null = null;
 
-				// Otherwise use fast in-memory faction member check
-				let userFactionId: number | null = null;
-
-				for (const [factionId, membersSet] of factionMembersMap) {
-					if (membersSet.has(user.tornId)) {
-						userFactionId = factionId;
-						break;
+					for (const [factionId, membersSet] of factionMembersMap) {
+						if (membersSet.has(user.tornId)) {
+							userFactionId = factionId;
+							break;
+						}
 					}
-				}
 
-				// If faction changed, update verifiedUsers table
-				if (user.factionId !== userFactionId) {
+					// If faction changed, update verifiedUsers table
+					if (user.factionId !== userFactionId) {
+						await db
+							.update(verifiedUsers)
+							.set({
+								factionId: userFactionId,
+								updatedAt: new Date(),
+							})
+							.where(eq(verifiedUsers.discordId, user.discordId));
+						updated++;
+					}
+
 					await db
-						.update(verifiedUsers)
-						.set({
-							factionId: userFactionId,
-							updatedAt: new Date(),
+						.insert(verificationLogs)
+						.values({
+							guildId,
+							discordId: user.discordId,
+							status: "success",
+							triggeredBy,
+							rolesAdded: [],
+							rolesRemoved: [],
+							oldNickname: user.tornName,
+							newNickname: user.tornName,
 						})
-						.where(eq(verifiedUsers.discordId, user.discordId));
-					updated++;
+						.catch(() => {});
 				}
-
-				await db
-					.insert(verificationLogs)
-					.values({
-						guildId,
-						discordId: user.discordId,
-						status: "success",
-						triggeredBy,
-						rolesAdded: [],
-						rolesRemoved: [],
-						oldNickname: user.tornName,
-						newNickname: user.tornName,
-					})
-					.catch(() => {});
 			} catch (_err) {
 				errors++;
 			}
+
+			// Stream progress update every 10 users or upon reaching the end
+			if (processed % 10 === 0 || processed === total) {
+				await onProgress?.({
+					guildId,
+					processed,
+					total,
+					updated,
+					errors,
+					status: "running",
+				});
+			}
 		}
 
+		// Emit completed event
+		await onProgress?.({
+			guildId,
+			processed,
+			total,
+			updated,
+			errors,
+			status: "completed",
+			message: `Bulk verification completed: ${processed} processed, ${updated} updated, ${errors} errors.`,
+		});
+
 		finishLog();
-		return { processed, updated, errors };
+		return { processed, total, updated, errors };
 	} catch (err) {
 		logger.error(
 			`Error in runBulkGuildVerification for guild ${guildId}:`,
 			err,
 		);
+		await onProgress?.({
+			guildId,
+			processed: 0,
+			total: 0,
+			updated: 0,
+			errors: 1,
+			status: "failed",
+			message: err instanceof Error ? err.message : String(err),
+		});
 		finishLog();
-		return { processed: 0, updated: 0, errors: 1 };
+		return { processed: 0, total: 0, updated: 0, errors: 1 };
 	}
 }

@@ -1,9 +1,29 @@
-import { db, eq, factions } from "@sentinel/database";
+import { db, eq, factions, tornItems } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import type { Client, EmbedBuilder, TextChannel } from "discord.js";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 
 const logger = new Logger("TerritoryAlertDistributor");
+
+const itemNameCache = new Map<number, string>();
+
+async function resolveItemName(itemId: number): Promise<string | null> {
+	if (itemNameCache.has(itemId)) {
+		return itemNameCache.get(itemId) ?? null;
+	}
+	try {
+		const item = await db.query.tornItems.findFirst({
+			where: eq(tornItems.id, String(itemId)),
+		});
+		if (item?.name) {
+			itemNameCache.set(itemId, item.name);
+			return item.name;
+		}
+	} catch (err) {
+		logger.warn(`Failed to resolve item name for ID ${itemId}:`, err);
+	}
+	return null;
+}
 
 const EVENT_COLORS = {
 	ASSAULT_START: EMBED_COLORS.DANGER,
@@ -146,7 +166,7 @@ export async function handleTerritoryAlert(
 		switch (action) {
 			case "assault_start":
 				embed = createBaseEmbed(
-					`Assault Started • ${territoryCode}`,
+					`Assault Begun • ${territoryCode}`,
 					undefined,
 					EVENT_COLORS.ASSAULT_START,
 				).addFields(
@@ -158,7 +178,7 @@ export async function handleTerritoryAlert(
 
 			case "assault_succeed":
 				embed = createBaseEmbed(
-					`Assault Succeeded • ${territoryCode}`,
+					`Assault Won • ${territoryCode}`,
 					undefined,
 					EVENT_COLORS.ASSAULT_SUCCEED,
 				).addFields(
@@ -171,7 +191,7 @@ export async function handleTerritoryAlert(
 
 			case "assault_fail":
 				embed = createBaseEmbed(
-					`Assault Failed • ${territoryCode}`,
+					`Assault Lost • ${territoryCode}`,
 					undefined,
 					EVENT_COLORS.ASSAULT_FAIL,
 				).addFields(
@@ -195,7 +215,7 @@ export async function handleTerritoryAlert(
 
 			case "tt_claim":
 				embed = createBaseEmbed(
-					`Territory Claimed • ${territoryCode}`,
+					`Territory Claim • ${territoryCode}`,
 					undefined,
 					EVENT_COLORS.TT_CLAIM,
 				).addFields(
@@ -206,7 +226,7 @@ export async function handleTerritoryAlert(
 
 			case "tt_drop":
 				embed = createBaseEmbed(
-					`Territory Dropped • ${territoryCode}`,
+					`Territory Drop • ${territoryCode}`,
 					undefined,
 					EVENT_COLORS.TT_DROP,
 				).addFields(
@@ -231,25 +251,51 @@ export async function handleTerritoryAlert(
 					description?: string;
 				};
 				const racket = data.racket as RacketData | null | undefined;
-				const racketName = racket?.name || "Unknown Racket";
-				const rewardStr = racket?.reward
-					? `${racket.reward.quantity}x ${racket.reward.type}`
-					: null;
+				const racketName = racket?.name
+					? racket.level
+						? `${racket.name} (Level ${racket.level})`
+						: racket.name
+					: "Unknown Racket";
+
+				let rewardStr: string | null = null;
+				if (racket?.reward && racket.reward.quantity !== undefined) {
+					const rType = (racket.reward.type || "").toLowerCase().trim();
+					const qty = racket.reward.quantity;
+					if (rType === "money" || rType === "cash") {
+						rewardStr = `$${qty.toLocaleString("en-US")}`;
+					} else if (rType === "points" || rType === "point") {
+						rewardStr = `${qty.toLocaleString("en-US")} Points`;
+					} else {
+						let itemName: string | null = null;
+						if (racket.reward.id) {
+							itemName = await resolveItemName(racket.reward.id);
+						}
+						if (!itemName && racket.description) {
+							const match = racket.description.match(
+								/^\d+x\s+(.*?)(?:\s+daily|\s+weekly)?$/i,
+							);
+							if (match?.[1]) {
+								itemName = match[1].trim();
+							}
+						}
+						rewardStr = `${qty}x ${itemName || (racket.reward.type !== "Item" ? racket.reward.type : "Item")}`;
+					}
+				}
 
 				let title = `Racket Alert • ${territoryCode}`;
 				let color = EVENT_COLORS.RACKET_SPAWN;
 
 				if (action === "racket_spawn") {
-					title = `Racket Spawned • ${territoryCode}`;
+					title = `Racket Spawn • ${territoryCode}`;
 					color = EVENT_COLORS.RACKET_SPAWN;
 				} else if (action === "racket_despawn") {
-					title = `Racket Despawned • ${territoryCode}`;
+					title = `Racket Despawn • ${territoryCode}`;
 					color = EVENT_COLORS.RACKET_DESPAWN;
 				} else if (action === "racket_level_up") {
-					title = `Racket Leveled Up • ${territoryCode}`;
+					title = `Racket Level Up • ${territoryCode}`;
 					color = EVENT_COLORS.RACKET_LEVEL_UP;
 				} else if (action === "racket_level_down") {
-					title = `Racket Leveled Down • ${territoryCode}`;
+					title = `Racket Level Down • ${territoryCode}`;
 					color = EVENT_COLORS.RACKET_LEVEL_DOWN;
 				}
 

@@ -62,6 +62,19 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				};
 			}
 
+			if (
+				result.user.discordId &&
+				env.DISCORD_USER_ID &&
+				result.user.discordId === env.DISCORD_USER_ID &&
+				result.user.role === "user"
+			) {
+				db.update(users)
+					.set({ role: "owner" })
+					.where(eq(users.id, result.user.id))
+					.run();
+				result.user.role = "owner";
+			}
+
 			return {
 				user: result.user as AuthUser,
 				session: result.session as AuthSession,
@@ -187,6 +200,10 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				email: string | null;
 			};
 
+			const isOwner = Boolean(
+				env.DISCORD_USER_ID && discordUser.id === env.DISCORD_USER_ID,
+			);
+
 			// Upsert user in our DB by discordId
 			let user = db
 				.select()
@@ -205,16 +222,24 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					.values({
 						discordId: discordUser.id,
 						username: displayName,
-						role: "user",
+						role: isOwner ? "owner" : "user",
 					})
 					.returning()
 					.get();
 				user = inserted;
 			} else {
 				db.update(users)
-					.set({ username: displayName })
+					.set({
+						username: displayName,
+						...(isOwner && user.role !== "owner" && user.role !== "admin"
+							? { role: "owner" }
+							: {}),
+					})
 					.where(eq(users.discordId, discordUser.id))
 					.run();
+				if (isOwner && user.role !== "owner" && user.role !== "admin") {
+					user.role = "owner";
+				}
 			}
 
 			// Store access token in session for guild fetching later

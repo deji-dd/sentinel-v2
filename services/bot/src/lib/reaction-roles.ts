@@ -8,6 +8,7 @@ import {
 import { isModuleEnabled, Logger } from "@sentinel/utils";
 import type {
 	Client,
+	Guild,
 	MessageReaction,
 	PartialMessageReaction,
 	PartialUser,
@@ -74,10 +75,13 @@ function isEmojiMatch(
 }
 
 /**
- * Sends a private direct message (DM) feedback to the user regarding reaction role changes.
+ * Sends feedback to the user regarding reaction role changes.
+ * Attempts DM with human-readable role/guild names first; falls back to an auto-deleting channel message if DMs are disabled.
  */
 async function sendReactionFeedback(
 	user: User | PartialUser,
+	channel: TextChannel,
+	_guild: Guild,
 	type: "added" | "removed" | "denied" | "invalid",
 	title: string,
 	description: string,
@@ -97,7 +101,29 @@ async function sendReactionFeedback(
 
 		const embed = createBaseEmbed(title, description, color);
 
-		await targetUser.send({ embeds: [embed] }).catch(() => {});
+		let dmSent = false;
+		try {
+			await targetUser.send({ embeds: [embed] });
+			dmSent = true;
+		} catch (_err) {
+			dmSent = false;
+		}
+
+		if (!dmSent && channel) {
+			const channelEmbed = createBaseEmbed(
+				title,
+				`<@${targetUser.id}> ${description}`,
+				color,
+			);
+			const tempMsg = await channel
+				.send({ embeds: [channelEmbed] })
+				.catch(() => null);
+			if (tempMsg) {
+				setTimeout(() => {
+					tempMsg.delete().catch(() => {});
+				}, 5000);
+			}
+		}
 	} catch (err) {
 		logger.warn("Failed to send reaction feedback message:", err);
 	}
@@ -164,11 +190,20 @@ export async function handleReactionRoleAdd(
 
 			if (!hasRequired) {
 				await fullReaction.users.remove(user.id).catch(() => {});
+				const reqRoleNames = requiredRoleIds
+					.map((rid) => {
+						const r = member.guild.roles.cache.get(rid.trim());
+						return r ? `@${r.name}` : `Role ${rid.trim()}`;
+					})
+					.join(", ");
+
 				await sendReactionFeedback(
 					user,
+					channel,
+					member.guild,
 					"denied",
 					"Reaction Role Access Denied",
-					`You must have at least one of the required roles to react: ${requiredRoleIds.map((rid) => `<@&${rid.trim()}>`).join(", ")}`,
+					`You must have at least one of the required roles in **${member.guild.name}** to react: ${reqRoleNames}`,
 				);
 
 				// Audit Log
@@ -199,6 +234,8 @@ export async function handleReactionRoleAdd(
 		// Toggle Role
 		const roleId = mapping.roleId;
 		const hasRole = member.roles.cache.has(roleId);
+		const targetRole = member.guild.roles.cache.get(roleId);
+		const roleDisplayName = targetRole ? `@${targetRole.name}` : "role";
 
 		if (hasRole) {
 			await member.roles.remove(roleId, `Reaction Role: ${emoji}`);
@@ -206,9 +243,11 @@ export async function handleReactionRoleAdd(
 
 			await sendReactionFeedback(
 				user,
+				channel,
+				member.guild,
 				"removed",
 				"Reaction Role Removed",
-				`Removed <@&${roleId}>.`,
+				`Removed **${roleDisplayName}** in **${member.guild.name}**.`,
 			);
 
 			const auditEmbed = createBaseEmbed(
@@ -223,9 +262,11 @@ export async function handleReactionRoleAdd(
 
 			await sendReactionFeedback(
 				user,
+				channel,
+				member.guild,
 				"added",
 				"Reaction Role Assigned",
-				`Added <@&${roleId}>.`,
+				`Assigned **${roleDisplayName}** in **${member.guild.name}**.`,
 			);
 
 			const auditEmbed = createBaseEmbed(

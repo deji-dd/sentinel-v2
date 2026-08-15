@@ -119,6 +119,22 @@ export type IpcVerifyResponseMessage = {
 	data: VerificationResponse;
 };
 
+export type BulkVerificationProgressData = {
+	guildId: string;
+	processed: number;
+	total: number;
+	updated: number;
+	errors: number;
+	status: "running" | "completed" | "failed";
+	message?: string;
+};
+
+export type IpcBulkVerifyProgressMessage = {
+	action: "bulk_verification_progress";
+	requestId: string;
+	data: BulkVerificationProgressData;
+};
+
 export type IpcBulkVerifyRequestMessage = {
 	action: "bulk_verification_request";
 	requestId: string;
@@ -135,6 +151,7 @@ export type IpcBulkVerifyResponseMessage = {
 	data: {
 		guildId: string;
 		processed: number;
+		total: number;
 		updated: number;
 		errors: number;
 	};
@@ -165,6 +182,7 @@ export type IpcMessage =
 	| IpcVerifyRequestMessage
 	| IpcVerifyResponseMessage
 	| IpcBulkVerifyRequestMessage
+	| IpcBulkVerifyProgressMessage
 	| IpcBulkVerifyResponseMessage
 	| IpcSyncReactionRolesMessage
 	| IpcSyncFactionMapMessage;

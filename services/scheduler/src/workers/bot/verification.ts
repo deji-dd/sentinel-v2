@@ -1,5 +1,6 @@
 import { db, eq, guildConfigs } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import { runBulkGuildVerification } from "../../lib/verification";
 import type { WorkerStartOptions } from "../registry";
@@ -22,13 +23,23 @@ export async function runVerificationWorker(): Promise<void> {
 			guild.enabledModules.includes("verification"),
 		);
 
+		if (activeGuilds.length === 0) {
+			logger.info(
+				"No guilds currently have scheduled verification cron enabled.",
+			);
+			finishLog();
+			return;
+		}
+
 		const now = new Date();
 
 		for (const guild of activeGuilds) {
-			const intervalMs = (guild.verifyCronInterval || 24) * 60 * 60 * 1000;
+			const intervalHours = guild.verifyCronInterval || 24;
+			const intervalMs = intervalHours * 60 * 60 * 1000;
 			const lastRun = guild.lastVerifyCronAt?.getTime() || 0;
+			const elapsedMs = now.getTime() - lastRun;
 
-			if (now.getTime() - lastRun >= intervalMs) {
+			if (elapsedMs >= intervalMs) {
 				await db
 					.update(guildConfigs)
 					.set({
@@ -37,13 +48,65 @@ export async function runVerificationWorker(): Promise<void> {
 					})
 					.where(eq(guildConfigs.guildId, guild.guildId));
 
-				// Execute optimized bulk verification sweep for the guild
+				const requestId = `cron-${guild.guildId}-${Date.now()}`;
+				const ipcServer = getActiveIpcServer();
+
 				logger.info(
-					`Running cron verification sweep for guild ${guild.guildId}...`,
+					`[Guild ${guild.guildId}] Starting scheduled verification sweep (Interval: ${intervalHours}h)...`,
 				);
-				const stats = await runBulkGuildVerification(guild.guildId, "cron");
+
+				const stats = await runBulkGuildVerification(
+					guild.guildId,
+					"cron",
+					(progress) => {
+						// Stream progress to Discord Bot over IPC for live audit log updates
+						ipcServer?.broadcast({
+							action: "bulk_verification_progress",
+							requestId,
+							data: progress,
+						});
+
+						if (progress.total === 0) return;
+						const pct = Math.min(
+							100,
+							Math.round((progress.processed / progress.total) * 100),
+						);
+						const barLen = 12;
+						const filled = Math.min(barLen, Math.round((pct / 100) * barLen));
+						const bar = `[${"█".repeat(filled)}${"░".repeat(barLen - filled)}]`;
+
+						if (
+							progress.status === "running" &&
+							(progress.processed % 10 === 0 ||
+								progress.processed === progress.total)
+						) {
+							logger.info(
+								`[Guild ${guild.guildId}] ${bar} ${pct}% (${progress.processed}/${progress.total}) • ${progress.updated} updated • ${progress.errors} errors`,
+							);
+						}
+					},
+				);
+
+				// Broadcast response completion over IPC
+				ipcServer?.broadcast({
+					action: "bulk_verification_response",
+					requestId,
+					data: {
+						guildId: guild.guildId,
+						...stats,
+					},
+				});
+
 				logger.info(
-					`Cron verification completed for guild ${guild.guildId}: ${stats.processed} processed, ${stats.updated} updated, ${stats.errors} errors.`,
+					`[Guild ${guild.guildId}] Scheduled verification completed: ${stats.processed} processed, ${stats.updated} updated, ${stats.errors} errors.`,
+				);
+			} else {
+				const remainingHours = (
+					(intervalMs - elapsedMs) /
+					(60 * 60 * 1000)
+				).toFixed(1);
+				logger.info(
+					`[Guild ${guild.guildId}] Verification cron not due yet. Next run in ~${remainingHours}h (Interval: ${intervalHours}h).`,
 				);
 			}
 		}

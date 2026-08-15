@@ -77,6 +77,13 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 					const result = await runBulkGuildVerification(
 						message.data.guildId,
 						message.data.triggeredBy || "admin",
+						(progress) => {
+							ipcServer.broadcast({
+								action: "bulk_verification_progress",
+								requestId: message.requestId,
+								data: progress,
+							});
+						},
 					);
 					ipcServer.broadcast({
 						action: "bulk_verification_response",
@@ -88,12 +95,28 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 					});
 				} catch (err) {
 					logger.error("Bulk verification job failed via IPC:", err);
+					const errMsg =
+						err instanceof Error ? err.message : "Internal worker error.";
+					ipcServer.broadcast({
+						action: "bulk_verification_progress",
+						requestId: message.requestId,
+						data: {
+							guildId: message.data.guildId,
+							processed: 0,
+							total: 0,
+							updated: 0,
+							errors: 1,
+							status: "failed",
+							message: errMsg,
+						},
+					});
 					ipcServer.broadcast({
 						action: "bulk_verification_response",
 						requestId: message.requestId,
 						data: {
 							guildId: message.data.guildId,
 							processed: 0,
+							total: 0,
 							updated: 0,
 							errors: 1,
 						},

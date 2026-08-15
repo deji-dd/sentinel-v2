@@ -95,14 +95,23 @@ export default function ModulesPage({
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ enabledModules: next }),
 			});
-			if (!res.ok) throw new Error("Failed");
+			if (!res.ok) {
+				const data = (await res.json().catch(() => ({}))) as {
+					error?: string;
+				};
+				throw new Error(data.error ?? "Failed to update module settings");
+			}
 			onModulesChange(next);
 			toast(
 				`Module ${isEnabled ? "disabled" : "enabled"} successfully!`,
 				"success",
 			);
-		} catch {
-			toast("Failed to update module settings.", "error");
+		} catch (err: unknown) {
+			const msg =
+				err instanceof Error
+					? err.message
+					: "Failed to update module settings.";
+			toast(msg, "error");
 		} finally {
 			setSaving(null);
 		}

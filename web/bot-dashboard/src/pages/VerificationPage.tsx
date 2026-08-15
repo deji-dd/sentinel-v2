@@ -16,7 +16,6 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -625,44 +624,45 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 
 			{/* Warning Banner if API key is missing */}
 			{!hasApiKey && (
-				<Alert className="border-amber-500/30 bg-amber-500/10 text-amber-200 rounded-2xl p-4 sm:p-5 shadow-lg">
-					<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-						<div className="flex items-start gap-3">
-							<div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
-								<KeyRound className="size-5" />
-							</div>
-							<div className="space-y-1">
-								<div className="flex items-center gap-2">
-									<span className="font-bold text-sm text-amber-300">
-										Torn API Key Required
-									</span>
-									<Badge
-										variant="outline"
-										className="border-amber-500/40 bg-amber-500/20 text-amber-300 text-[9px] font-mono uppercase"
-									>
-										Action Needed
-									</Badge>
-								</div>
-								<AlertDescription className="text-xs text-amber-200/90 leading-relaxed">
-									Verification requires at least one active, valid Torn API Key
-									registered to this guild to query player profile data and
-									automate role syncs.
-								</AlertDescription>
-							</div>
+				<div
+					role="alert"
+					className="border border-amber-500/30 bg-amber-500/10 text-amber-200 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+				>
+					<div className="flex items-start gap-3.5 min-w-0 flex-1">
+						<div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 shrink-0 mt-0.5 sm:mt-0">
+							<KeyRound className="size-5" />
 						</div>
-
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onClick={() => navigate(`/guilds/${guildId}`)}
-							className="border-amber-500/40 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold rounded-xl shrink-0 gap-1.5 cursor-pointer"
-						>
-							Configure API Key
-							<ChevronRight className="size-3.5" />
-						</Button>
+						<div className="space-y-1 min-w-0 flex-1">
+							<div className="flex items-center gap-2 flex-wrap">
+								<span className="font-bold text-sm text-amber-300">
+									Torn API Key Required
+								</span>
+								<Badge
+									variant="outline"
+									className="border-amber-500/40 bg-amber-500/20 text-amber-300 text-[9px] font-mono uppercase px-1.5 py-0"
+								>
+									Action Needed
+								</Badge>
+							</div>
+							<p className="text-xs text-amber-200/90 leading-relaxed">
+								Verification requires at least one active, valid Torn API Key
+								registered to this guild to query player profile data and
+								automate role syncs.
+							</p>
+						</div>
 					</div>
-				</Alert>
+
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => navigate(`/guilds/${guildId}`)}
+						className="border-amber-500/40 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold rounded-xl shrink-0 gap-1.5 cursor-pointer self-start sm:self-center"
+					>
+						Configure API Key
+						<ChevronRight className="size-3.5" data-icon="inline-end" />
+					</Button>
+				</div>
 			)}
 
 			{/* 1. Verified Member Roles */}

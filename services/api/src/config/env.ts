@@ -26,4 +26,5 @@ export const env = {
 			? "https://sentinel.blasted-labs.tech/api/v1/auth/discord/callback"
 			: "http://bot.localhost:3000/api/v1/auth/discord/callback",
 	DISCORD_TOKEN: process.env.DISCORD_TOKEN ?? "",
+	DISCORD_USER_ID: process.env.DISCORD_USER_ID ?? "",
 };

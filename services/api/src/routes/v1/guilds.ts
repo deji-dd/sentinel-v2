@@ -208,13 +208,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 
 				if (typeof sessionToken === "string" && sessionToken) {
 					const res = db
-						.select({ role: users.role })
+						.select({ role: users.role, discordId: users.discordId })
 						.from(userSessions)
 						.innerJoin(users, eq(userSessions.userId, users.id))
 						.where(eq(userSessions.id, sessionToken))
 						.get();
 
-					isAdmin = res?.role === "admin" || res?.role === "owner";
+					isAdmin =
+						res?.role === "admin" ||
+						res?.role === "owner" ||
+						(Boolean(env.DISCORD_USER_ID) &&
+							res?.discordId === env.DISCORD_USER_ID);
 				}
 
 				if (!isAdmin) {
@@ -600,16 +604,21 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				process.env.API_KEY_HASH_PEPPER ?? "",
 			);
 
-			// Check duplicate key
+			// Check duplicate key within this guild
 			const existingKey = db
 				.select()
 				.from(guildApiKeys)
-				.where(eq(guildApiKeys.apiKeyHash, keyHash))
+				.where(
+					and(
+						eq(guildApiKeys.guildId, params.guildId),
+						eq(guildApiKeys.apiKeyHash, keyHash),
+					),
+				)
 				.get();
 
 			if (existingKey) {
 				set.status = 400;
-				return { error: "This API key has already been added." };
+				return { error: "This API key has already been added to this server." };
 			}
 
 			// Verify key against Torn API first

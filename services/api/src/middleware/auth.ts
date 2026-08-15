@@ -1,5 +1,6 @@
 import { db, eq, userSessions, users } from "@sentinel/database";
 import { Elysia } from "elysia";
+import { env } from "../config/env";
 import { logger } from "../lib/logger";
 
 export interface AuthUser {
@@ -77,6 +78,19 @@ export const authPlugin = new Elysia()
 					user: null as AuthUser | null,
 					session: null as AuthSession | null,
 				};
+			}
+
+			if (
+				result.user.discordId &&
+				env.DISCORD_USER_ID &&
+				result.user.discordId === env.DISCORD_USER_ID &&
+				result.user.role === "user"
+			) {
+				db.update(users)
+					.set({ role: "owner" })
+					.where(eq(users.id, result.user.id))
+					.run();
+				result.user.role = "owner";
 			}
 
 			return {

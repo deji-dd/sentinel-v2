@@ -11,7 +11,9 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 	const token = process.env.DISCORD_TOKEN;
 	const clientId = process.env.DISCORD_CLIENT_ID;
 
-	if (!token || !clientId) return;
+	if (!token || !clientId || !guildId || !/^\d{17,20}$/.test(guildId)) {
+		return;
+	}
 
 	const config = await db.query.guildConfigs.findFirst({
 		where: eq(guildConfigs.guildId, guildId),
