@@ -22,7 +22,7 @@
 		"tt-selector:dev": "bun --filter @sentinel/tt-selector dev",
 		"user-dashboard:build": "bun --filter @sentinel/user-dashboard build",
 		"user-dashboard:dev": "bun --filter @sentinel/user-dashboard dev",
-		"web:build": "bun run bot-dashboard:build && bun run user-dashboard:build && bun run tt-selector:build",
+		"web:build": "bun --filter \"@sentinel/*-dashboard\" --filter \"@sentinel/tt-selector\" --parallel build",
 		"trigger": "bun run services/scheduler/src/scripts/trigger.ts",
 		"refresh:alliances": "bun run scripts/refresh-faction-alliances.ts",
 		"torn-types:generate": "bun --bun openapi-typescript https://www.torn.com/swagger/openapi.json -o packages/schemas/src/torn/swagger.ts",
