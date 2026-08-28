@@ -117,7 +117,7 @@ export class TornApiClient {
 						error.error ||
 						`Error code ${error.code}`;
 
-					if (error.code === 2 && this.onInvalidKey) {
+					if (this.onInvalidKey) {
 						await this.onInvalidKey(apiKey, error.code);
 					}
 
@@ -202,7 +202,7 @@ export class TornApiClient {
 				error.error ||
 				`Error code ${error.code}`;
 
-			if (error.code === 2 && this.onInvalidKey) {
+			if (this.onInvalidKey) {
 				await this.onInvalidKey(apiKey, error.code);
 			}
 

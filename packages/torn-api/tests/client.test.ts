@@ -31,6 +31,32 @@ describe("TornApiClient", () => {
 		fetchSpy.mockRestore();
 	});
 
+	it("triggers onInvalidKey callback when error code 13 (Key temporarily disabled) is returned", async () => {
+		const onInvalidKeyMock = mock(async () => {});
+		const client = new TornApiClient({ onInvalidKey: onInvalidKeyMock });
+
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			(async () =>
+				new Response(
+					JSON.stringify({
+						error: { code: 13, error: "Key temporarily disabled" },
+					}),
+				)) as unknown as typeof fetch,
+		);
+
+		try {
+			await client.get("/user", { apiKey: "tempdisabledkey" });
+		} catch (err: unknown) {
+			expect(err).toBeInstanceOf(TornError);
+			if (err instanceof TornError) {
+				expect(err.code).toBe(13);
+			}
+		}
+
+		expect(onInvalidKeyMock).toHaveBeenCalledWith("tempdisabledkey", 13);
+		fetchSpy.mockRestore();
+	});
+
 	it("includes comment=Sentinel flag in API v2 request URL", async () => {
 		let requestedUrl = "";
 		const client = new TornApiClient();

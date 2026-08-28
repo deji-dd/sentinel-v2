@@ -6,13 +6,15 @@ import type {
 	paths,
 } from "@sentinel/schemas";
 import { and, apiKeys, db, eq } from "../../database";
+import { Logger } from "../../utils";
 import { TornApiClient } from "./client";
 import { decryptApiKey } from "./crypto";
 import { KeyHealthManager } from "./key-health-manager";
-import type { ManagedApiKey } from "./types";
+import { type ManagedApiKey, TornError } from "./types";
 import { UserCooldownManager } from "./user-cooldown";
 import { UserRateLimiter } from "./user-rate-limiter";
 
+const logger = new Logger("TornApiManager");
 let systemKeyIndex = 0;
 
 /**
@@ -42,7 +44,7 @@ export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
 /**
  * Gets the next system API key in a fair, persistent round-robin order across system requests.
  */
-async function getNextSystemKey(): Promise<ManagedApiKey> {
+export async function getNextSystemKey(): Promise<ManagedApiKey> {
 	const keys = await getSystemKeyPool();
 	const key = keys[systemKeyIndex % keys.length];
 	if (!key) {
@@ -92,6 +94,7 @@ export type ManagedTornApiConfig = {
 	maxRequestsPerWindow?: number;
 	pepper?: string;
 	encryptionKey?: string;
+	tempCooldownMs?: number;
 };
 
 /**
@@ -112,7 +115,7 @@ export class ManagedTornApiClient {
 		this.encryptionKey =
 			config.encryptionKey ?? process.env.ENCRYPTION_KEY ?? "";
 
-		this.keyHealthManager = new KeyHealthManager(pepper);
+		this.keyHealthManager = new KeyHealthManager(pepper, config.tempCooldownMs);
 
 		this.client = new TornApiClient({
 			onInvalidKey: async (apiKey, errorCode) => {
@@ -122,9 +125,38 @@ export class ManagedTornApiClient {
 	}
 
 	/**
+	 * Selects the next available system key, filtering out keys currently in temporary disable cooldown.
+	 * If all system keys are temporarily disabled, falls back to available keys with a warning.
+	 */
+	async getNextSystemKey(excludeKeys?: Set<string>): Promise<ManagedApiKey> {
+		const pool = await getSystemKeyPool();
+		let candidates = pool.filter(
+			(k) =>
+				!this.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey) &&
+				!excludeKeys?.has(k.apiKey),
+		);
+
+		if (candidates.length === 0) {
+			candidates = pool.filter((k) => !excludeKeys?.has(k.apiKey));
+		}
+
+		if (candidates.length === 0) {
+			candidates = pool;
+		}
+
+		const key = candidates[systemKeyIndex % candidates.length];
+		if (!key) {
+			throw new Error("No API keys available in key pool.");
+		}
+		systemKeyIndex = (systemKeyIndex + 1) % candidates.length;
+		return key;
+	}
+
+	/**
 	 * High-level managed GET request for OpenAPI v2 paths.
 	 * Automatically selects the next key from the central system pool if apiKey is omitted.
 	 * Enforces per-user rate limiting, cooldown checking, and key health tracking.
+	 * Automatically fails over to another system key if a key error (e.g. code 13, 2, 10, 18) occurs.
 	 */
 	async get<P extends keyof paths>(
 		path: P,
@@ -135,37 +167,86 @@ export class ManagedTornApiClient {
 			queryParams?: OperationQueryParams<PathOperation<P>>;
 		},
 	): Promise<OperationResponse<PathOperation<P>>> {
-		let apiKey = options?.apiKey;
-		let userId = options?.userId;
+		const isSpecificKey = options?.apiKey !== undefined;
 
-		if (!apiKey || userId === undefined) {
-			const systemKey = await getNextSystemKey();
-			apiKey = systemKey.apiKey;
-			userId = systemKey.userId;
+		if (isSpecificKey) {
+			const apiKey = options.apiKey as string;
+			const userId = options.userId ?? 0;
+
+			await this.cooldownManager.waitIfInCooldown(userId);
+			await this.rateLimiter.waitIfNeeded(userId);
+
+			const decryptedKey =
+				apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+
+			const result = await this.client.get(path, {
+				apiKey: decryptedKey,
+				pathParams: options.pathParams,
+				queryParams: {
+					comment: "Sentinel",
+					...options.queryParams,
+				} as unknown as OperationQueryParams<PathOperation<P>>,
+			});
+
+			await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
+			return result;
 		}
 
-		await this.cooldownManager.waitIfInCooldown(userId);
-		await this.rateLimiter.waitIfNeeded(userId);
+		const pool = await getSystemKeyPool();
+		const maxAttempts = Math.min(pool.length, 3);
+		const triedKeys = new Set<string>();
+		let lastError: unknown = null;
 
-		const decryptedKey =
-			apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			const systemKey = await this.getNextSystemKey(triedKeys);
+			const apiKey = systemKey.apiKey;
+			const userId = systemKey.userId;
+			triedKeys.add(apiKey);
 
-		const result = await this.client.get(path, {
-			apiKey: decryptedKey,
-			pathParams: options?.pathParams,
-			queryParams: {
-				comment: "Sentinel",
-				...options?.queryParams,
-			} as unknown as OperationQueryParams<PathOperation<P>>,
-		});
+			await this.cooldownManager.waitIfInCooldown(userId);
+			await this.rateLimiter.waitIfNeeded(userId);
 
-		await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
-		return result;
+			const decryptedKey =
+				apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+
+			try {
+				const result = await this.client.get(path, {
+					apiKey: decryptedKey,
+					pathParams: options?.pathParams,
+					queryParams: {
+						comment: "Sentinel",
+						...options?.queryParams,
+					} as unknown as OperationQueryParams<PathOperation<P>>,
+				});
+
+				await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
+				return result;
+			} catch (error) {
+				lastError = error;
+				const isKeyError =
+					error instanceof TornError &&
+					(error.code === 2 ||
+						error.code === 10 ||
+						error.code === 13 ||
+						error.code === 18);
+
+				if (!isKeyError || attempt === maxAttempts) {
+					throw error;
+				}
+
+				logger.warn(
+					`System key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next system key (attempt ${attempt}/${maxAttempts}).`,
+				);
+			}
+		}
+
+		throw lastError;
 	}
 
 	/**
 	 * Raw GET request for custom non-OpenAPI endpoints (or legacy v1 Torn endpoints).
 	 * Automatically selects the next key from the central system pool if apiKey is omitted.
+	 * Automatically fails over to another system key if a key error (e.g. code 13, 2, 10, 18) occurs.
 	 */
 	async getRaw<T = unknown>(
 		endpoint: string,
@@ -175,31 +256,78 @@ export class ManagedTornApiClient {
 			queryParams?: Record<string, string | number | boolean | undefined>;
 		},
 	): Promise<T> {
-		let apiKey = options?.apiKey;
-		let userId = options?.userId;
+		const isSpecificKey = options?.apiKey !== undefined;
 
-		if (!apiKey || userId === undefined) {
-			const systemKey = await getNextSystemKey();
-			apiKey = systemKey.apiKey;
-			userId = systemKey.userId;
+		if (isSpecificKey) {
+			const apiKey = options.apiKey as string;
+			const userId = options.userId ?? 0;
+
+			await this.cooldownManager.waitIfInCooldown(userId);
+			await this.rateLimiter.waitIfNeeded(userId);
+
+			const decryptedKey =
+				apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+
+			const result = await this.client.getRaw<T>(endpoint, {
+				apiKey: decryptedKey,
+				queryParams: {
+					comment: "Sentinel",
+					...options.queryParams,
+				},
+			});
+
+			await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
+			return result;
 		}
 
-		await this.cooldownManager.waitIfInCooldown(userId);
-		await this.rateLimiter.waitIfNeeded(userId);
+		const pool = await getSystemKeyPool();
+		const maxAttempts = Math.min(pool.length, 3);
+		const triedKeys = new Set<string>();
+		let lastError: unknown = null;
 
-		const decryptedKey =
-			apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			const systemKey = await this.getNextSystemKey(triedKeys);
+			const apiKey = systemKey.apiKey;
+			const userId = systemKey.userId;
+			triedKeys.add(apiKey);
 
-		const result = await this.client.getRaw<T>(endpoint, {
-			apiKey: decryptedKey,
-			queryParams: {
-				comment: "Sentinel",
-				...options?.queryParams,
-			},
-		});
+			await this.cooldownManager.waitIfInCooldown(userId);
+			await this.rateLimiter.waitIfNeeded(userId);
 
-		await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
-		return result;
+			const decryptedKey =
+				apiKey.length > 16 ? decryptApiKey(apiKey, this.encryptionKey) : apiKey;
+
+			try {
+				const result = await this.client.getRaw<T>(endpoint, {
+					apiKey: decryptedKey,
+					queryParams: {
+						comment: "Sentinel",
+						...options?.queryParams,
+					},
+				});
+
+				await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
+				return result;
+			} catch (error) {
+				lastError = error;
+				const isKeyError =
+					error instanceof TornError &&
+					(error.code === 2 ||
+						error.code === 10 ||
+						error.code === 13 ||
+						error.code === 18);
+
+				if (!isKeyError || attempt === maxAttempts) {
+					throw error;
+				}
+
+				logger.warn(
+					`System key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next system key (attempt ${attempt}/${maxAttempts}).`,
+				);
+			}
+		}
+
+		throw lastError;
 	}
 
 	/**
@@ -253,9 +381,17 @@ export class ManagedTornApiClient {
 		},
 		keys?: ManagedApiKey[],
 	): Promise<OperationResponse<PathOperation<P>>[]> {
-		const keyPool = keys && keys.length > 0 ? keys : await getSystemKeyPool();
+		let keyPool = keys && keys.length > 0 ? keys : await getSystemKeyPool();
 		if (keyPool.length === 0) {
 			throw new Error("No API keys provided for batch execution.");
+		}
+
+		// Filter out temporarily disabled keys if active keys remain
+		const activeKeys = keyPool.filter(
+			(k) => !this.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+		);
+		if (activeKeys.length > 0) {
+			keyPool = activeKeys;
 		}
 
 		return Promise.all(
