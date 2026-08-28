@@ -51,10 +51,7 @@ async function main(): Promise<void> {
 		);
 	}
 
-	const apiKey =
-		process.env.TORN_API_KEY ||
-		process.env.VITE_TORN_API_KEY ||
-		"";
+	const apiKey = process.env.TORN_API_KEY || process.env.VITE_TORN_API_KEY;
 
 	if (!apiKey) {
 		throw new Error(
