@@ -64,7 +64,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: .
+          path: web
 
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
@@ -89,6 +89,9 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
             set -e
+            # Terminate any orphaned build/compiler processes from previous hung runs
+            pkill -f "vite|tsc" || true
+
             TARGET_DIR="/opt/sentinel-v2"
 
             if [ ! -d "$TARGET_DIR/.git" ]; then
