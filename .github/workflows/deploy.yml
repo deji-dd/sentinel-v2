@@ -66,11 +66,13 @@ jobs:
       - name: Add Known Hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.GCP_HOST }} >> ~/.ssh/known_hosts
+          for i in {1..5}; do
+            ssh-keyscan -T 10 -H ${{ secrets.GCP_HOST }} >> ~/.ssh/known_hosts && break || sleep 2
+          done
 
       - name: Sync & Deploy Sentinel v2 on VPS
         run: |
-          ssh ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
             set -e
             export PATH="$HOME/.bun/bin:$PATH"
 
