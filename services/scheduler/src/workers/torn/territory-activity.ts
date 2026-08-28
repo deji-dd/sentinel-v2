@@ -11,7 +11,7 @@ import type {
 	IpcWarPayload,
 	TornSchema,
 } from "@sentinel/schemas";
-import { getSystemKeyPool, tornApi } from "@sentinel/torn-api";
+import { getActiveSystemKeyPool, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { trackFactions } from "../../lib/faction-tracker";
 import { dispatchToBot } from "../../lib/ipc";
@@ -504,7 +504,7 @@ export async function executeActivityEngine(): Promise<number> {
 		}
 
 		const totalRequestsPerLoop = 11;
-		const availableKeys = (await getSystemKeyPool()).length;
+		const availableKeys = (await getActiveSystemKeyPool()).length;
 		const nextCadence = calculateOptimalCadence(
 			availableKeys,
 			totalRequestsPerLoop,

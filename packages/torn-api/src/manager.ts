@@ -42,6 +42,18 @@ export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
 }
 
 /**
+ * Fetches active system keys that are not currently in temporary disable cooldown.
+ * If all keys are in cooldown, falls back to the full system key pool.
+ */
+export async function getActiveSystemKeyPool(): Promise<ManagedApiKey[]> {
+	const pool = await getSystemKeyPool();
+	const active = pool.filter(
+		(k) => !tornApi.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+	);
+	return active.length > 0 ? active : pool;
+}
+
+/**
  * Gets the next system API key in a fair, persistent round-robin order across system requests.
  */
 export async function getNextSystemKey(): Promise<ManagedApiKey> {

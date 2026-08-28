@@ -5,7 +5,7 @@ import { Logger } from "@sentinel/utils";
 
 const logger = new Logger("FactionTracker");
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-const BATCH_SIZE = 10; // Max factions to fetch in a single trickle batch
+const BATCH_SIZE = 5; // Max factions to fetch in a single trickle batch
 
 type FactionBasicResponse = TornSchema<"FactionBasicResponse">;
 export type FactionRecord = typeof factions.$inferSelect;
