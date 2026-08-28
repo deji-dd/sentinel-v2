@@ -3,6 +3,7 @@ import {
 	db,
 	eq,
 	like,
+	systemMetrics,
 	travelDestinations,
 	verificationLogs,
 	warLedgers,
@@ -15,6 +16,8 @@ describe("System Maintenance Worker", () => {
 	const TEST_LOG_OLD = "LOG_TEST_OLD_30D";
 	const TEST_LOG_FRESH = "LOG_TEST_FRESH_5D";
 	const TEST_DEST_ID = "TEST_DEST_HAWAII";
+	const TEST_METRIC_OLD = "METRIC_TEST_OLD_14D";
+	const TEST_METRIC_FRESH = "METRIC_TEST_FRESH_2D";
 
 	beforeEach(async () => {
 		// Clean test records
@@ -25,11 +28,16 @@ describe("System Maintenance Worker", () => {
 		await db
 			.delete(travelDestinations)
 			.where(eq(travelDestinations.id, TEST_DEST_ID));
+		await db
+			.delete(systemMetrics)
+			.where(like(systemMetrics.id, "METRIC_TEST_%"));
 
 		const hundredDaysAgo = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000);
 		const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
 		const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
 		const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+		const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+		const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
 
 		// 1. Insert WarLedgers (1 old finished, 1 fresh finished)
 		await db.insert(warLedgers).values([
@@ -89,9 +97,39 @@ describe("System Maintenance Worker", () => {
 				},
 			],
 		});
+
+		// 4. Insert SystemMetrics (1 old > 7d, 1 fresh < 7d)
+		await db.insert(systemMetrics).values([
+			{
+				id: TEST_METRIC_OLD,
+				serviceId: "api",
+				serviceName: "API Gateway",
+				status: "online",
+				cpuUsage: 1.2,
+				memoryRssBytes: 100000,
+				memoryHeapUsedBytes: 50000,
+				memoryHeapTotalBytes: 60000,
+				latencyMs: 1,
+				uptimeSeconds: 1000,
+				createdAt: fourteenDaysAgo,
+			},
+			{
+				id: TEST_METRIC_FRESH,
+				serviceId: "api",
+				serviceName: "API Gateway",
+				status: "online",
+				cpuUsage: 1.5,
+				memoryRssBytes: 100000,
+				memoryHeapUsedBytes: 50000,
+				memoryHeapTotalBytes: 60000,
+				latencyMs: 1,
+				uptimeSeconds: 2000,
+				createdAt: twoDaysAgo,
+			},
+		]);
 	});
 
-	test("prunes WarLedger > 90d, VerificationLogs > 30d, and travel stock history > 24h", async () => {
+	test("prunes WarLedger > 90d, VerificationLogs > 30d, travel stocks > 24h, and systemMetrics > 7d", async () => {
 		await executeMaintenance();
 
 		// Verify old war was pruned, fresh war remains
@@ -129,5 +167,16 @@ describe("System Maintenance Worker", () => {
 			const history = stocks[0]?.history ?? [];
 			expect(history.length).toBe(1);
 		}
+
+		// Verify systemMetrics older than 7d was pruned
+		const oldMetric = await db.query.systemMetrics.findFirst({
+			where: eq(systemMetrics.id, TEST_METRIC_OLD),
+		});
+		const freshMetric = await db.query.systemMetrics.findFirst({
+			where: eq(systemMetrics.id, TEST_METRIC_FRESH),
+		});
+
+		expect(oldMetric).toBeUndefined();
+		expect(freshMetric).toBeDefined();
 	});
 });

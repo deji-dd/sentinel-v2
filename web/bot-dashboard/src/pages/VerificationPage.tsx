@@ -204,11 +204,8 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 				setIsInitialized(true);
 				const config = data.config;
 
-				const enabled = (config.enabledModules ?? []).includes("verification");
-				setIsEnabled(enabled);
-
-				const validKeys = (data.apiKeys ?? []).filter((k) => k.isValid);
-				setHasApiKey(validKeys.length > 0);
+				setIsEnabled(true);
+				setHasApiKey(true);
 
 				const vRoles = config.verifiedRoleIds ?? [];
 				const nick = config.nicknameTemplate ?? "[{tag}] {name} [{id}]";

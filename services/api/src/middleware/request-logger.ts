@@ -1,5 +1,5 @@
 import type { Elysia } from "elysia";
-import { logger } from "../lib/logger";
+import { getMethodLogger } from "../lib/logger";
 
 /**
  * Request logger plugin function.
@@ -19,5 +19,6 @@ export const requestLoggerPlugin = (app: Elysia) =>
 				? Math.round(performance.now() - startTime)
 				: 0;
 			const pathname = new URL(request.url).pathname;
-			logger.info(`[${request.method}] ${pathname} (${duration}ms)`);
+			const methodLog = getMethodLogger(request.method);
+			methodLog.info(`${pathname} (${duration}ms)`);
 		});

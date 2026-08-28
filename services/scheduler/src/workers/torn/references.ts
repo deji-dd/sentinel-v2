@@ -17,7 +17,7 @@ import {
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "torn:reference_sync";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "References");
 
 type ApiGym = {
 	name: string;
@@ -56,17 +56,17 @@ type PointsMarketResponse = {
 /**
  * Syncs static public reference data from Torn (Items, Crimes, Stocks, Properties, Gyms, Points Market Price).
  */
-async function runTornReferenceSync(): Promise<number> {
+export async function runTornReferenceSync(): Promise<number> {
 	const finishSync = logger.time();
 
 	try {
 		const [res, marketRes] = (await Promise.all([
-			tornApi.get("/torn", {
+			tornApi.getPersonal("/torn", {
 				queryParams: {
 					selections: ["items", "crimes", "stocks", "properties", "gyms"],
 				},
 			}),
-			tornApi.get("/market", {
+			tornApi.getPersonal("/market", {
 				queryParams: { selections: ["pointsmarket"] },
 			}),
 		])) as [TornFullReferenceResponse, PointsMarketResponse];
@@ -165,9 +165,35 @@ async function runTornReferenceSync(): Promise<number> {
 			);
 
 			if (validCrimes.length > 0) {
+				const enrichedCrimes = await Promise.all(
+					validCrimes.map(async (crime) => {
+						try {
+							const subRes = (await tornApi.getPersonal(
+								"/torn/{crimeId}/subcrimes",
+								{
+									pathParams: { crimeId: crime.id },
+								},
+							)) as { subcrimes?: TornSchema<"TornSubcrime">[] };
+
+							return {
+								...crime,
+								subcrimes: subRes?.subcrimes ?? [],
+							};
+						} catch (err) {
+							logger.warn(
+								`Failed to fetch subcrimes for crime ${crime.id}: ${err instanceof Error ? err.message : String(err)}`,
+							);
+							return {
+								...crime,
+								subcrimes: [],
+							};
+						}
+					}),
+				);
+
 				const chunkSize = 100;
-				for (let i = 0; i < validCrimes.length; i += chunkSize) {
-					const chunk = validCrimes.slice(i, i + chunkSize);
+				for (let i = 0; i < enrichedCrimes.length; i += chunkSize) {
+					const chunk = enrichedCrimes.slice(i, i + chunkSize);
 					await db.transaction(async (tx) => {
 						for (const crime of chunk) {
 							await tx
@@ -190,7 +216,9 @@ async function runTornReferenceSync(): Promise<number> {
 						}
 					});
 				}
-				logger.info(`Synced ${validCrimes.length} Torn Crimes to SQLite.`);
+				logger.info(
+					`Synced ${enrichedCrimes.length} Torn Crimes with subcrimes to SQLite.`,
+				);
 			}
 		}
 
@@ -280,44 +308,67 @@ async function runTornReferenceSync(): Promise<number> {
 		}
 
 		if (res.gyms) {
-			const gymEntries = Object.entries(res.gyms);
-			if (gymEntries.length > 0) {
+			const gymsList: Array<Record<string, unknown>> = Array.isArray(res.gyms)
+				? (res.gyms as Array<Record<string, unknown>>)
+				: Object.values(res.gyms as Record<string, Record<string, unknown>>);
+
+			if (gymsList.length > 0) {
 				await db.transaction(async (tx) => {
-					for (const [idStr, gym] of gymEntries) {
+					for (const gym of gymsList) {
+						const gymId = String(gym.id ?? "");
+						if (!gymId) continue;
+
+						const modifiers = (gym.modifiers ?? {}) as {
+							strength?: number;
+							speed?: number;
+							defense?: number;
+							dexterity?: number;
+						};
+
+						const gymName = (gym.name as string | undefined) ?? `Gym ${gymId}`;
+						const stageVal = Number(gym.stage ?? 0);
+						const costVal = Number(gym.cost ?? 0);
+						const energyVal = Number(gym.energy_cost ?? gym.energy ?? 0);
+						const strVal = Number(modifiers.strength ?? gym.strength ?? 0);
+						const spdVal = Number(modifiers.speed ?? gym.speed ?? 0);
+						const defVal = Number(modifiers.defense ?? gym.defense ?? 0);
+						const dexVal = Number(modifiers.dexterity ?? gym.dexterity ?? 0);
+						const noteVal = (gym.note as string | null | undefined) ?? null;
+
 						await tx
 							.insert(tornGyms)
 							.values({
-								id: idStr,
-								name: gym.name ?? `Gym ${idStr}`,
-								stage: gym.stage ?? 0,
-								cost: gym.cost ?? 0,
-								energy: gym.energy ?? 0,
-								strength: gym.strength ?? 0,
-								speed: gym.speed ?? 0,
-								defense: gym.defense ?? 0,
-								dexterity: gym.dexterity ?? 0,
-								note: gym.note ?? null,
+								id: gymId,
+								name: gymName,
+								stage: stageVal,
+								cost: costVal,
+								energy: energyVal,
+								strength: strVal,
+								speed: spdVal,
+								defense: defVal,
+								dexterity: dexVal,
+								note: noteVal,
 								createdAt: now,
 								updatedAt: now,
 							})
 							.onConflictDoUpdate({
 								target: tornGyms.id,
 								set: {
-									name: gym.name ?? `Gym ${idStr}`,
-									stage: gym.stage ?? 0,
-									cost: gym.cost ?? 0,
-									energy: gym.energy ?? 0,
-									strength: gym.strength ?? 0,
-									speed: gym.speed ?? 0,
-									defense: gym.defense ?? 0,
-									dexterity: gym.dexterity ?? 0,
-									note: gym.note ?? null,
+									name: gymName,
+									stage: stageVal,
+									cost: costVal,
+									energy: energyVal,
+									strength: strVal,
+									speed: spdVal,
+									defense: defVal,
+									dexterity: dexVal,
+									note: noteVal,
 									updatedAt: now,
 								},
 							});
 					}
 				});
-				logger.info(`Synced ${gymEntries.length} Torn Gyms to SQLite.`);
+				logger.info(`Synced ${gymsList.length} Torn Gyms to SQLite.`);
 			}
 		}
 

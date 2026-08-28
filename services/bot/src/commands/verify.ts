@@ -16,12 +16,12 @@ export const verifyCommand = {
 	data: new SlashCommandBuilder()
 		.setName("verify")
 		.setDescription(
-			"Verifies a Discord user against Torn profile and faction role mappings.",
+			"Verify your Torn account or verify another member in this server.",
 		)
 		.addUserOption((option) =>
 			option
 				.setName("user")
-				.setDescription("Optional user to verify (requires admin permissions)")
+				.setDescription("Discord member to verify (Admin/Server Managers only)")
 				.setRequired(false),
 		),
 
@@ -30,8 +30,8 @@ export const verifyCommand = {
 			await interaction.reply({
 				embeds: [
 					createErrorEmbed(
-						"Error",
-						"This command can only be used in a server.",
+						"Command Restricted",
+						"This command can only be used within a server.",
 					),
 				],
 				flags: MessageFlags.Ephemeral,
@@ -41,34 +41,22 @@ export const verifyCommand = {
 
 		const guildId = interaction.guildId;
 
-		// 1. Check if Verification module is enabled for guild via Drizzle ORM
-		const config = await db.query.guildConfigs.findFirst({
-			where: eq(guildConfigs.guildId, guildId),
-		});
-
-		if (!config?.enabledModules.includes("verification")) {
-			await interaction.reply({
-				embeds: [
-					createErrorEmbed(
-						"Module Disabled",
-						"The Verification module is currently disabled for this server.",
-					),
-				],
-				flags: MessageFlags.Ephemeral,
-			});
-			return;
-		}
-
 		const targetUserOption = interaction.options.getUser("user");
 		const executorMember = interaction.member as GuildMember;
 		const targetUserId = targetUserOption
 			? targetUserOption.id
 			: interaction.user.id;
 
+		// Fetch guild configuration
+		const config = await db.query.guildConfigs.findFirst({
+			where: eq(guildConfigs.guildId, guildId),
+		});
+
 		// 2. Permission check if verifying another user
 		if (targetUserOption && targetUserOption.id !== interaction.user.id) {
+			const adminRoles = config?.adminRoleIds ?? [];
 			const hasAdminRole = executorMember.roles.cache.some((role) =>
-				config.adminRoleIds.includes(role.id),
+				adminRoles.includes(role.id),
 			);
 			const hasPermission =
 				executorMember.permissions.has(PermissionFlagsBits.Administrator) ||
@@ -154,7 +142,10 @@ export const verifyCommand = {
 			let nicknameChanged = false;
 			if (result.newNickname !== null) {
 				try {
-					await targetMember.setNickname(result.newNickname);
+					const nick = result.newNickname
+						? result.newNickname.slice(0, 32)
+						: null;
+					await targetMember.setNickname(nick);
 					nicknameChanged = true;
 				} catch (err) {
 					failures.push("Failed to set nickname (hierarchy or bot permission)");

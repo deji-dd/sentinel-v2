@@ -41,6 +41,13 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		let appDir = "web/bot-dashboard/dist";
 
 		if (
+			host.includes("tt-selector") ||
+			host.startsWith("tt.") ||
+			origin.includes("tt-selector")
+		) {
+			appDir = "web/tt-selector/dist";
+		} else if (
+			host.includes("user-dashboard") ||
 			host.includes("ayodejib.dev") ||
 			host.startsWith("user.") ||
 			origin.includes("user-dashboard")
@@ -49,17 +56,26 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		}
 
 		const rootDir = join(import.meta.dir, "../../../..", appDir);
+		const sharedDir = join(import.meta.dir, "../../../../web/shared-assets");
 		const relativePath = url.pathname.slice(1);
 		const filePath = join(rootDir, relativePath);
+		const sharedFilePath = join(sharedDir, relativePath);
 
-		// Serve static asset file if it exists (e.g. index-xyz.js, favicon.ico, logo-xyz.png)
-		if (
+		// Serve static asset file if it exists in app dist or in web/shared-assets
+		const targetFile =
 			relativePath &&
 			existsSync(filePath) &&
 			(await Bun.file(filePath).exists())
-		) {
-			const file = Bun.file(filePath);
-			const ext = extname(filePath).toLowerCase();
+				? filePath
+				: relativePath &&
+						existsSync(sharedFilePath) &&
+						(await Bun.file(sharedFilePath).exists())
+					? sharedFilePath
+					: null;
+
+		if (targetFile) {
+			const file = Bun.file(targetFile);
+			const ext = extname(targetFile).toLowerCase();
 			const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
 
 			return new Response(file, {

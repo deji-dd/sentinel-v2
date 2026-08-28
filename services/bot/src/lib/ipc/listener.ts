@@ -62,6 +62,17 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 			if (pending) {
 				clearTimeout(pending.timer);
 
+				if (pending.onProgress) {
+					try {
+						void pending.onProgress(message.data);
+					} catch (err) {
+						logger.error(
+							"Error in onProgress callback for bulk verification:",
+							err,
+						);
+					}
+				}
+
 				if (message.data.status === "failed") {
 					pendingBulkRequests.delete(message.requestId);
 					pending.reject(
@@ -85,17 +96,6 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 							),
 						);
 					}, pending.inactivityTimeoutMs);
-				}
-
-				if (pending.onProgress) {
-					try {
-						void pending.onProgress(message.data);
-					} catch (err) {
-						logger.error(
-							"Error in onProgress callback for bulk verification:",
-							err,
-						);
-					}
 				}
 			}
 		}
@@ -127,6 +127,33 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 
 export const ipcClient = workerIpcClient;
 
+import os from "node:os";
+import { Logger } from "@sentinel/utils";
+
+const NUM_CORES = os.cpus()?.length || 1;
+let lastCpuCheck = process.cpuUsage();
+let lastCpuTime = performance.now();
+let lastCalculatedPercent = 0.5;
+
+function getProcessCpuUsage(): number {
+	const currentTime = performance.now();
+	const elapsedMs = currentTime - lastCpuTime;
+	if (elapsedMs < 250) {
+		return lastCalculatedPercent;
+	}
+
+	const currentCpu = process.cpuUsage(lastCpuCheck);
+	lastCpuCheck = process.cpuUsage();
+	lastCpuTime = currentTime;
+
+	const totalMicrosec = currentCpu.user + currentCpu.system;
+	const rawPercent = (totalMicrosec / (elapsedMs * 1000 * NUM_CORES)) * 100;
+	lastCalculatedPercent = Number(
+		Math.max(0.1, Math.min(100, rawPercent)).toFixed(1),
+	);
+	return lastCalculatedPercent;
+}
+
 // Bot Socket Server listening for direct incoming requests on bot.sock
 export const botIpcServer = new IpcServer<IpcMessage>(
 	IPC_SOCKET_PATHS.bot,
@@ -140,18 +167,28 @@ export const botIpcServer = new IpcServer<IpcMessage>(
 					pid: process.pid,
 					status: "online",
 					uptimeSeconds: Math.round(process.uptime()),
+					cpuUsage: getProcessCpuUsage(),
 					memory: {
 						rssBytes: botMem.rss,
 						heapTotalBytes: botMem.heapTotal,
 						heapUsedBytes: botMem.heapUsed,
 						externalBytes: botMem.external,
 					},
+					recentLogs: Logger.getRecentLogs(30),
 				},
 			};
 			botIpcServer.broadcast(response);
 		}
 	},
 );
+
+// Stream live logs to IPC subscribers
+Logger.addLogSink((entry) => {
+	botIpcServer.broadcast({
+		action: "log_event",
+		data: entry,
+	});
+});
 
 botIpcServer.start();
 

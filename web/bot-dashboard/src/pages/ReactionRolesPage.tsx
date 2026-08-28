@@ -134,10 +134,7 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 				}
 
 				setIsInitialized(true);
-				const enabled = (data.config.enabledModules ?? []).includes(
-					"reaction_role",
-				);
-				setIsEnabled(enabled);
+				setIsEnabled(true);
 			}
 
 			if (channelsRes.data && "channels" in channelsRes.data) {

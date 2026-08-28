@@ -8,6 +8,7 @@ export interface AuthUser {
 	discordId: string | null;
 	tornId: number | null;
 	username: string;
+	avatar: string | null;
 	role: string;
 }
 
@@ -20,8 +21,8 @@ export interface AuthSession {
 /**
  * Auth plugin for session cookie extraction & database validation.
  */
-export const authPlugin = new Elysia()
-	.derive(async ({ cookie }) => {
+export const authPlugin = new Elysia({ name: "authPlugin" })
+	.derive({ as: "scoped" }, async ({ cookie }) => {
 		const sessionToken = cookie.session?.value;
 
 		if (typeof sessionToken !== "string" || !sessionToken) {
@@ -39,6 +40,7 @@ export const authPlugin = new Elysia()
 						discordId: users.discordId,
 						tornId: users.tornId,
 						username: users.username,
+						avatar: users.avatar,
 						role: users.role,
 					},
 					session: {
@@ -47,6 +49,7 @@ export const authPlugin = new Elysia()
 						expiresAt: userSessions.expiresAt,
 					},
 				})
+
 				.from(userSessions)
 				.innerJoin(users, eq(userSessions.userId, users.id))
 				.where(eq(userSessions.id, sessionToken))

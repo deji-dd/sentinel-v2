@@ -9,7 +9,7 @@ import {
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "torn:territory_data";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "TerritoryData");
 
 type SingleTerritory = TornSchema<"TornTerritory">;
 

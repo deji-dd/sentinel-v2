@@ -1,0 +1,39 @@
+{
+	"name": "@sentinel/user-dashboard",
+	"module": "src/main.tsx",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc --noEmit && vite build"
+	},
+	"dependencies": {
+		"@elysiajs/eden": "latest",
+		"@fontsource/jetbrains-mono": "latest",
+		"@fontsource/outfit": "latest",
+		"@fontsource/space-grotesk": "latest",
+		"@sentinel/schemas": "workspace:*",
+		"@sentinel/utils": "workspace:*",
+		"class-variance-authority": "latest",
+		"clsx": "latest",
+		"date-fns": "latest",
+		"lucide-react": "latest",
+		"next-themes": "latest",
+		"radix-ui": "latest",
+		"react": "latest",
+		"react-day-picker": "latest",
+		"react-dom": "latest",
+		"recharts": "latest",
+		"sonner": "latest",
+		"tailwind-merge": "latest",
+		"tw-animate-css": "latest"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "latest",
+		"@types/react": "latest",
+		"@types/react-dom": "latest",
+		"@vitejs/plugin-react": "latest",
+		"tailwindcss": "latest",
+		"vite": "latest"
+	}
+}

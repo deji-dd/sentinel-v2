@@ -13,6 +13,7 @@ export interface AuthUser {
 	discordId: string | null;
 	tornId: number | null;
 	username: string;
+	avatar?: string | null;
 	role: string;
 }
 
@@ -38,6 +39,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const refresh = useCallback(async () => {
 		try {
+			// Check if token was passed in URL hash/search during dev cross-subdomain redirect
+			const urlObj = new URL(window.location.href);
+			let token =
+				urlObj.searchParams.get("token") || urlObj.searchParams.get("session");
+
+			if (!token && window.location.hash.includes("token=")) {
+				const hashParams = new URLSearchParams(
+					window.location.hash.split("?")[1] || "",
+				);
+				token = hashParams.get("token") || hashParams.get("session");
+			}
+
+			if (token) {
+				// biome-ignore lint/suspicious/noDocumentCookie: client session token handover across dev subdomains
+				document.cookie = `session=${token}; path=/; max-age=${7 * 86400}; SameSite=Lax`;
+				const cleanPath = window.location.pathname;
+
+				window.history.replaceState(
+					null,
+					"",
+					cleanPath === "/login" ? "/" : cleanPath,
+				);
+			}
+
 			const res = await api.api.v1.auth.me.get();
 			if (res.data && typeof res.data === "object" && "user" in res.data) {
 				const data = res.data as {

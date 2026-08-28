@@ -1,12 +1,12 @@
 import { db, eq, guildConfigs } from "@sentinel/database";
-import { Logger } from "@sentinel/utils";
+import { isTargetGuild, Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import { runBulkGuildVerification } from "../../lib/verification";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "bot:verification";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "Verification");
 
 /**
  * Periodically checks for guilds with `verifyCron` enabled and triggers verification runs.
@@ -19,13 +19,11 @@ export async function runVerificationWorker(): Promise<void> {
 			where: eq(guildConfigs.verifyCron, true),
 		});
 
-		const activeGuilds = guilds.filter((guild) =>
-			guild.enabledModules.includes("verification"),
-		);
+		const activeGuilds = guilds.filter((guild) => isTargetGuild(guild.guildId));
 
 		if (activeGuilds.length === 0) {
 			logger.info(
-				"No guilds currently have scheduled verification cron enabled.",
+				"No target guilds currently have scheduled verification cron enabled.",
 			);
 			finishLog();
 			return;

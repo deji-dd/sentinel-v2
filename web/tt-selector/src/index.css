@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+@layer base {
+	:root {
+		--font-sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+		--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+		--background: #07090e;
+		--foreground: #f4f4f5;
+		--card: #0d1117;
+		--card-foreground: #f4f4f5;
+		--popover: #0d1117;
+		--popover-foreground: #f4f4f5;
+		--primary: #f59e0b;
+		--primary-foreground: #07090e;
+		--secondary: #181c24;
+		--secondary-foreground: #e4e4e7;
+		--muted: #151921;
+		--muted-foreground: #8b949e;
+		--accent: #1e2430;
+		--accent-foreground: #f4f4f5;
+		--destructive: #ef4444;
+		--destructive-foreground: #f4f4f5;
+		--border: #21262d;
+		--input: #21262d;
+		--ring: #f59e0b;
+	}
+
+	body {
+		font-family: var(--font-sans);
+		background-color: var(--background);
+		color: var(--foreground);
+	}
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+::-webkit-scrollbar-track {
+	background: #090c12;
+}
+::-webkit-scrollbar-thumb {
+	background: #21262d;
+	border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #30363d;
+}
+
+/* Tactical Background Grid Pattern */
+.bg-tactical-grid {
+	background-size: 32px 32px;
+	background-image: 
+		linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+		linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+/* Leaflet Map Overrides */
+.leaflet-container {
+	background: #07090e !important;
+	font-family: var(--font-sans) !important;
+	width: 100%;
+	height: 100%;
+	outline: none;
+}
+
+.leaflet-control-zoom {
+	border: 1px solid #21262d !important;
+	background: #0d1117cc !important;
+	backdrop-filter: blur(12px) !important;
+	border-radius: 12px !important;
+	overflow: hidden;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-control-zoom a {
+	background: transparent !important;
+	color: #c9d1d9 !important;
+	border-bottom: 1px solid #21262d !important;
+	width: 32px !important;
+	height: 32px !important;
+	line-height: 32px !important;
+	transition: all 0.15s ease;
+}
+
+.leaflet-control-zoom a:hover {
+	background: #1f242c !important;
+	color: #f59e0b !important;
+}
+
+/* Centroid Faction Map Label on Leaflet Canvas */
+.map-factions-label {
+	background: transparent;
+	border: none;
+	pointer-events: none !important;
+}
+
+.map-factions-label-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 8px;
+	font-size: 11px;
+	font-weight: 700;
+	font-family: var(--font-mono);
+	letter-spacing: 0.05em;
+	background-color: #0b0e17;
+	color: #ffffff;
+	border: 1.5px solid rgba(255, 255, 255, 0.2);
+	white-space: nowrap;
+	pointer-events: none;
+	text-transform: uppercase;
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.95);
+}
+
+.map-faction-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.map-faction-name {
+	color: #ffffff;
+	font-weight: 800;
+	text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.map-faction-count {
+	font-size: 10px;
+	font-weight: 800;
+	padding: 1px 5px;
+	border-radius: 4px;
+	line-height: 1.2;
+}
+
+
+.racket-glow {
+	pointer-events: none;
+}
+

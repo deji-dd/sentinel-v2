@@ -1,4 +1,9 @@
-import { recordBootAlert } from "@sentinel/database";
+import {
+	ensureTargetGuildConfigs,
+	getTargetGuildIds,
+	isTargetGuild,
+	recordBootAlert,
+} from "@sentinel/database";
 import { ActivityType, type Client, Events } from "discord.js";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
@@ -16,6 +21,24 @@ export const readyEvent = {
 			type: ActivityType.Watching,
 		});
 
+		// Auto-provision configs for all configured target guilds
+		await ensureTargetGuildConfigs();
+
+		// Auto-leave any unauthorized guilds
+		const targetIds = getTargetGuildIds();
+		if (targetIds.length > 0) {
+			for (const [id, guild] of client.guilds.cache) {
+				if (!isTargetGuild(id)) {
+					logger.warn(
+						`Leaving unauthorized guild ${guild.name} (${id}). Target guilds: ${targetIds.join(", ")}`,
+					);
+					await guild.leave().catch((err) => {
+						logger.error(`Failed to leave unauthorized guild ${id}:`, err);
+					});
+				}
+			}
+		}
+
 		// Record bot boot event
 		await recordBootAlert("bot");
 
@@ -25,7 +48,7 @@ export const readyEvent = {
 		// Synchronize and start background periodic loop for reaction role messages (every 15s)
 		startReactionRoleSyncLoop(client, 15000);
 
-		// Synchronize Faction Map / Directory Channels across all guilds
+		// Synchronize Faction Map / Directory Channels across target guilds
 		await updateFactionMapChannel(client);
 	},
 } as const;

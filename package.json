@@ -15,8 +15,14 @@
 		"bot:dev": "NODE_ENV=development bun --watch run services/bot/index.ts",
 		"api:start": "NODE_ENV=production bun run services/api/index.ts",
 		"api:dev": "NODE_ENV=development bun --watch run services/api/index.ts",
+		"services:dev": "bun --parallel run api:dev scheduler:dev bot:dev",
 		"bot-dashboard:build": "bun --filter @sentinel/bot-dashboard build",
 		"bot-dashboard:dev": "bun --filter @sentinel/bot-dashboard dev",
+		"tt-selector:build": "bun --filter @sentinel/tt-selector build",
+		"tt-selector:dev": "bun --filter @sentinel/tt-selector dev",
+		"user-dashboard:build": "bun --filter @sentinel/user-dashboard build",
+		"user-dashboard:dev": "bun --filter @sentinel/user-dashboard dev",
+		"web:build": "bun --filter \"@sentinel/*-dashboard\" --filter \"@sentinel/tt-selector\" --parallel build",
 		"trigger": "bun run services/scheduler/src/scripts/trigger.ts",
 		"refresh:alliances": "bun run scripts/refresh-faction-alliances.ts",
 		"torn-types:generate": "bun --bun openapi-typescript https://www.torn.com/swagger/openapi.json -o packages/schemas/src/torn/swagger.ts",
@@ -31,7 +37,7 @@
 		"@biomejs/biome": "latest",
 		"@types/bun": "latest",
 		"openapi-typescript": "latest",
-		"typescript": "^6.0.0"
+		"typescript": "latest"
 	},
 	"peerDependencies": {}
 }

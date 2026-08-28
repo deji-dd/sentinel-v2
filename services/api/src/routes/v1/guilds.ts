@@ -4,17 +4,14 @@ import {
 	eq,
 	factionRoleMappings,
 	factions,
-	guildApiKeys,
+	getTargetGuildIds,
 	guildConfigs,
 	inArray,
 	like,
 	reactionRoleMappings,
 	reactionRoleMessages,
 	territoryBlueprints,
-	userSessions,
-	users,
 } from "@sentinel/database";
-import { encryptApiKey, hashApiKey, TornApiClient } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 
@@ -59,10 +56,10 @@ async function fetchDiscordApi<T>(
 /**
  * Guild management routes for the bot dashboard.
  * Fetches live data from Discord API using bot token + user access token,
- * and manages guild configuration & API key state in SQLite.
+ * and manages guild configuration in SQLite.
  */
 export const guildRoutes = new Elysia({ prefix: "/guilds" })
-	// GET /api/v1/guilds — mutual guilds between user and bot
+	// GET /api/v1/guilds — mutual target guilds between user and bot
 	.get(
 		"/",
 		async ({ request }) => {
@@ -104,7 +101,12 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			const botGuildIds = new Set(botGuilds.map((g) => g.id));
-			const mutual = userGuilds.filter((g) => botGuildIds.has(g.id));
+			const targetIds = getTargetGuildIds();
+			const mutual = userGuilds.filter(
+				(g) =>
+					botGuildIds.has(g.id) &&
+					(targetIds.length === 0 || targetIds.includes(g.id)),
+			);
 
 			return { guilds: mutual };
 		},
@@ -116,7 +118,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			},
 		},
 	)
-	// GET /api/v1/guilds/:guildId/config — get guild configuration & API keys
+	// GET /api/v1/guilds/:guildId/config — get guild configuration & faction mappings
 	.get(
 		"/:guildId/config",
 		async ({ params }) => {
@@ -125,17 +127,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				.from(guildConfigs)
 				.where(eq(guildConfigs.guildId, params.guildId))
 				.get();
-
-			const keys = db
-				.select({
-					id: guildApiKeys.id,
-					providedBy: guildApiKeys.providedBy,
-					isValid: guildApiKeys.isValid,
-					createdAt: guildApiKeys.createdAt,
-				})
-				.from(guildApiKeys)
-				.where(eq(guildApiKeys.guildId, params.guildId))
-				.all();
 
 			const mappings = db
 				.select()
@@ -171,7 +162,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			return {
 				initialized: Boolean(config),
 				config: config ?? null,
-				apiKeys: keys,
 				factionRoleMappings: enrichedMappings,
 			};
 		},
@@ -179,15 +169,14 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			params: t.Object({ guildId: t.String() }),
 			detail: {
 				summary: "Get Guild Config",
-				description:
-					"Returns guild configuration, registered API keys, and faction mappings.",
+				description: "Returns guild configuration and faction mappings.",
 			},
 		},
 	)
 	// PUT /api/v1/guilds/:guildId/config — update guild configuration
 	.put(
 		"/:guildId/config",
-		async ({ params, body, set, cookie }) => {
+		async ({ params, body, set }) => {
 			const existing = db
 				.select()
 				.from(guildConfigs)
@@ -202,34 +191,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				};
 			}
 
-			if (body.enabledModules !== undefined) {
-				const sessionToken = cookie.session?.value;
-				let isAdmin = false;
-
-				if (typeof sessionToken === "string" && sessionToken) {
-					const res = db
-						.select({ role: users.role, discordId: users.discordId })
-						.from(userSessions)
-						.innerJoin(users, eq(userSessions.userId, users.id))
-						.where(eq(userSessions.id, sessionToken))
-						.get();
-
-					isAdmin =
-						res?.role === "admin" ||
-						res?.role === "owner" ||
-						(Boolean(env.DISCORD_USER_ID) &&
-							res?.discordId === env.DISCORD_USER_ID);
-				}
-
-				if (!isAdmin) {
-					set.status = 403;
-					return {
-						error:
-							"Enabling or disabling modules can only be performed by a Sentinel administrator.",
-					};
-				}
-			}
-
 			db.update(guildConfigs)
 				.set({
 					...(body.logChannelId !== undefined
@@ -237,9 +198,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: {}),
 					...(body.adminRoleIds !== undefined
 						? { adminRoleIds: body.adminRoleIds }
-						: {}),
-					...(body.enabledModules !== undefined
-						? { enabledModules: body.enabledModules }
 						: {}),
 					...(body.verifiedRoleIds !== undefined
 						? { verifiedRoleIds: body.verifiedRoleIds }
@@ -286,7 +244,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			body: t.Object({
 				logChannelId: t.Optional(t.Nullable(t.String())),
 				adminRoleIds: t.Optional(t.Array(t.String())),
-				enabledModules: t.Optional(t.Array(t.String())),
 				verifiedRoleIds: t.Optional(t.Array(t.String())),
 				nicknameTemplate: t.Optional(t.Nullable(t.String())),
 				verifyOnJoin: t.Optional(t.Boolean()),
@@ -469,48 +426,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				};
 			}
 
-			// 2. Fetch from Torn API using any valid guild API key
+			// 2. Fetch from Torn API using centralized key pool
 			try {
-				const anyKey = db
-					.select({ apiKeyEncrypted: guildApiKeys.apiKeyEncrypted })
-					.from(guildApiKeys)
-					.where(eq(guildApiKeys.isValid, true))
-					.get();
-
-				if (!anyKey) {
-					if (existing) {
-						return {
-							faction: {
-								id: existing.id,
-								name: existing.name,
-								tag: existing.tag,
-								tagImage: existing.tagImage,
-							},
-						};
-					}
-					set.status = 404;
-					return {
-						error: "Faction not found locally and no API key available.",
-					};
-				}
-
-				const { decryptApiKey } = await import("@sentinel/torn-api");
-				const rawKey = decryptApiKey(
-					anyKey.apiKeyEncrypted,
-					process.env.ENCRYPTION_KEY ?? "",
-				);
-
-				const client = new TornApiClient();
-				const res = await client.getRaw<{
+				const { tornApi } = await import("@sentinel/torn-api");
+				const basic = await tornApi.getRaw<{
 					name?: string;
 					tag?: string;
 					tag_image?: string;
 				}>(`faction/${factionIdNum}`, {
-					apiKey: rawKey,
 					queryParams: { selections: "basic" },
 				});
 
-				const basic = res;
 				if (!basic?.name) {
 					if (existing) {
 						return {
@@ -583,122 +509,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "Lookup Faction",
 				description:
 					"Resolves a faction ID to name and tag using database or Torn API.",
-			},
-		},
-	)
-	// POST /api/v1/guilds/:guildId/api-keys — register a new Torn API key for the guild
-	.post(
-		"/:guildId/api-keys",
-		async ({ params, body, set }) => {
-			const trimmedKey = body.apiKey.trim();
-			if (trimmedKey.length !== 16) {
-				set.status = 400;
-				return {
-					error:
-						"Invalid Torn API key format. Key must be a 16-character string.",
-				};
-			}
-
-			const keyHash = hashApiKey(
-				trimmedKey,
-				process.env.API_KEY_HASH_PEPPER ?? "",
-			);
-
-			// Check duplicate key within this guild
-			const existingKey = db
-				.select()
-				.from(guildApiKeys)
-				.where(
-					and(
-						eq(guildApiKeys.guildId, params.guildId),
-						eq(guildApiKeys.apiKeyHash, keyHash),
-					),
-				)
-				.get();
-
-			if (existingKey) {
-				set.status = 400;
-				return { error: "This API key has already been added to this server." };
-			}
-
-			// Verify key against Torn API first
-			let tornUserId: number | null = null;
-			try {
-				const client = new TornApiClient();
-				const profile = await client.getRaw<{ player_id?: number }>("user/", {
-					apiKey: trimmedKey,
-					queryParams: { selections: "profile" },
-				});
-				tornUserId = profile?.player_id ?? null;
-				if (!tornUserId) {
-					set.status = 400;
-					return {
-						error: "Failed to extract valid Torn Player ID from Torn API key.",
-					};
-				}
-			} catch (err) {
-				const errorMessage =
-					err instanceof Error ? err.message : "Torn API verification failed.";
-				set.status = 400;
-				return {
-					error: `Torn API Verification Failed: ${errorMessage}`,
-				};
-			}
-
-			const keyEncrypted = encryptApiKey(
-				trimmedKey,
-				process.env.ENCRYPTION_KEY ?? "",
-			);
-
-			db.insert(guildApiKeys)
-				.values({
-					guildId: params.guildId,
-					userId: tornUserId,
-					apiKeyEncrypted: keyEncrypted,
-					apiKeyHash: keyHash,
-					providedBy: body.providedBy ?? "Dashboard Admin",
-					isValid: true,
-				})
-				.run();
-
-			return { success: true };
-		},
-		{
-			params: t.Object({ guildId: t.String() }),
-			body: t.Object({
-				apiKey: t.String(),
-				providedBy: t.Optional(t.String()),
-			}),
-			detail: {
-				summary: "Register Guild API Key",
-				description:
-					"Verifies with Torn API, encrypts, and stores a new Torn API key for the guild.",
-			},
-		},
-	)
-	// DELETE /api/v1/guilds/:guildId/api-keys/:keyId — remove a registered API key
-	.delete(
-		"/:guildId/api-keys/:keyId",
-		async ({ params }) => {
-			db.delete(guildApiKeys)
-				.where(
-					and(
-						eq(guildApiKeys.id, params.keyId),
-						eq(guildApiKeys.guildId, params.guildId),
-					),
-				)
-				.run();
-
-			return { success: true };
-		},
-		{
-			params: t.Object({
-				guildId: t.String(),
-				keyId: t.String(),
-			}),
-			detail: {
-				summary: "Delete Guild API Key",
-				description: "Deletes a registered API key for a guild.",
 			},
 		},
 	)

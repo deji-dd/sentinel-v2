@@ -6,6 +6,7 @@ import {
 	Partials,
 } from "discord.js";
 import { buildCommandsCollection } from "./src/commands";
+import { guildCreateEvent } from "./src/events/guild-create";
 import { guildMemberAddEvent } from "./src/events/guild-member-add";
 import { interactionCreateEvent } from "./src/events/interaction-create";
 import { readyEvent } from "./src/events/ready";
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
 	client.on(Events.InteractionCreate, (interaction: Interaction) =>
 		interactionCreateEvent.execute(interaction, commands),
 	);
+	client.on(Events.GuildCreate, (guild) => guildCreateEvent.execute(guild));
 	client.on(Events.GuildMemberAdd, (member) =>
 		guildMemberAddEvent.execute(member),
 	);

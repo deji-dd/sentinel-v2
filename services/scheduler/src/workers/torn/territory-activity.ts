@@ -19,7 +19,7 @@ import { startEventDrivenRunner } from "../../lib/scheduler.js";
 import type { WorkerStartOptions } from "../registry.js";
 
 const WORKER_NAME = "torn:territory_activity";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "TerritoryActivity");
 
 let dbStatesCache: Map<string, CompactTerritoryState> | null = null;
 let dbActiveWarsCache: Map<string, IpcWarPayload> | null = null;

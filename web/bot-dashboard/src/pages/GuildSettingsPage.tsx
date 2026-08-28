@@ -1,27 +1,5 @@
-import {
-	AlertCircle,
-	CheckCircle2,
-	Loader2,
-	Plus,
-	RotateCcw,
-	Save,
-	Trash2,
-	X,
-} from "lucide-react";
-import type React from "react";
+import { Loader2, Plus, RotateCcw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-	AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +14,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotInitializedView from "../components/NotInitializedView";
-import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 
@@ -50,12 +27,6 @@ interface Role {
 	name: string;
 	color: number;
 }
-interface ApiKey {
-	id: string;
-	providedBy: string | null;
-	isValid: boolean;
-	createdAt: string;
-}
 
 interface GuildSettingsPageProps {
 	guildId: string;
@@ -63,11 +34,9 @@ interface GuildSettingsPageProps {
 
 export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 	const { toast } = useToast();
-	const { user } = useAuth();
 
 	const [channels, setChannels] = useState<Channel[]>([]);
 	const [roles, setRoles] = useState<Role[]>([]);
-	const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [isInitialized, setIsInitialized] = useState(true);
 
@@ -76,10 +45,7 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 	const [adminRoles, setAdminRoles] = useState<string[]>([]);
 	const [initialAdminRoles, setInitialAdminRoles] = useState<string[]>([]);
 	const [roleInput, setRoleInput] = useState("");
-	const [newApiKey, setNewApiKey] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
-	const [isAddingKey, setIsAddingKey] = useState(false);
-	const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
 
 	const isDirty =
 		logChannelId !== initialLogChannel ||
@@ -110,14 +76,6 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 				setInitialLogChannel(config.logChannelId ?? "");
 				setAdminRoles(config.adminRoleIds ?? []);
 				setInitialAdminRoles(config.adminRoleIds ?? []);
-				setApiKeys(
-					(data.apiKeys ?? []).map((k) => ({
-						id: k.id,
-						providedBy: k.providedBy,
-						isValid: k.isValid,
-						createdAt: k.createdAt ? new Date(k.createdAt).toISOString() : "",
-					})),
-				);
 			}
 
 			if (channelsRes.data && "channels" in channelsRes.data) {
@@ -171,82 +129,6 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 		}
 		setAdminRoles([...adminRoles, roleInput]);
 		setRoleInput("");
-	};
-
-	const handleAddApiKey = async (e: React.FormEvent) => {
-		e.preventDefault();
-		const trimmed = newApiKey.trim();
-		if (!trimmed) {
-			toast("Please enter a Torn API key.", "error");
-			return;
-		}
-		if (trimmed.length !== 16) {
-			toast(
-				"Invalid Torn API key format. Key must be a 16-character string.",
-				"error",
-			);
-			return;
-		}
-		setIsAddingKey(true);
-		try {
-			const guildRoute = api.api.v1.guilds[guildId];
-			if (!guildRoute) return;
-
-			const res = await guildRoute["api-keys"].post({
-				apiKey: trimmed,
-				providedBy: user?.username ? `@${user.username}` : "Dashboard Admin",
-			});
-
-			if (res.error) {
-				const errObj = res.error as unknown;
-				let errMsg = "Failed to register API key.";
-				if (typeof errObj === "object" && errObj !== null) {
-					if (
-						"value" in errObj &&
-						typeof (errObj as { value: unknown }).value === "object"
-					) {
-						const val = (errObj as { value: Record<string, unknown> }).value;
-						if (val && typeof val.error === "string") errMsg = val.error;
-						else if (val && typeof val.message === "string")
-							errMsg = val.message;
-					} else if (
-						"error" in errObj &&
-						typeof (errObj as { error: unknown }).error === "string"
-					) {
-						errMsg = (errObj as { error: string }).error;
-					}
-				}
-				toast(errMsg, "error");
-				return;
-			}
-
-			toast("API key verified & registered!", "success");
-			setNewApiKey("");
-			await fetchConfig();
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : "Failed to add API key.";
-			toast(msg, "error");
-		} finally {
-			setIsAddingKey(false);
-		}
-	};
-
-	const handleDeleteKey = async (keyId: string) => {
-		setDeletingKeyId(keyId);
-		try {
-			const guildRoute = api.api.v1.guilds[guildId];
-			const apiKeysRoute = guildRoute?.["api-keys"];
-			const keyRoute = apiKeysRoute?.[keyId];
-			if (!keyRoute) return;
-
-			await keyRoute.delete();
-			toast("API key deleted.", "success");
-			await fetchConfig();
-		} catch {
-			toast("Failed to delete API key.", "error");
-		} finally {
-			setDeletingKeyId(null);
-		}
 	};
 
 	if (loading) {
@@ -438,144 +320,6 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 									</Badge>
 								);
 							})
-						)}
-					</div>
-				</CardContent>
-			</Card>
-
-			<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
-				<CardHeader className="border-b border-border/40">
-					<div className="flex items-center gap-2.5">
-						<div>
-							<CardTitle className="text-lg font-semibold tracking-tight">
-								API Credentials
-							</CardTitle>
-						</div>
-					</div>
-				</CardHeader>
-				<CardContent className="space-y-6">
-					<form
-						onSubmit={(e) => void handleAddApiKey(e)}
-						className="flex gap-2.5 max-w-md items-center"
-					>
-						<Input
-							id="api-key-input"
-							type="password"
-							value={newApiKey}
-							onChange={(e) => setNewApiKey(e.target.value)}
-							maxLength={16}
-							disabled={isAddingKey}
-							placeholder="Enter 16-character Torn API Key..."
-							className="flex-1 font-mono text-xs rounded-xl"
-						/>
-						<Button
-							type="submit"
-							disabled={isAddingKey || !newApiKey.trim()}
-							className="h-10 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer gap-1.5"
-						>
-							{isAddingKey ? (
-								<>
-									<Loader2
-										className="size-4 animate-spin"
-										data-icon="inline-start"
-									/>
-									<span>Verifying...</span>
-								</>
-							) : (
-								<>
-									<Plus className="size-4" data-icon="inline-start" />
-									<span>Register Key</span>
-								</>
-							)}
-						</Button>
-					</form>
-
-					<div className="space-y-3">
-						{apiKeys.length === 0 ? (
-							<Alert className="border-border/60 bg-background/50 text-xs">
-								<AlertDescription className="text-muted-foreground text-center">
-									No Torn API keys registered for this server yet.
-								</AlertDescription>
-							</Alert>
-						) : (
-							apiKeys.map((key) => (
-								<div
-									key={key.id}
-									className="p-4 rounded-xl bg-background/60 border border-border/80 flex items-center justify-between gap-4 text-xs"
-								>
-									<div className="flex items-center gap-3.5 min-w-0">
-										{key.isValid ? (
-											<div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 shrink-0">
-												<CheckCircle2 className="size-4" />
-											</div>
-										) : (
-											<div className="p-2 rounded-xl bg-destructive/10 text-destructive border border-destructive/20 shrink-0">
-												<AlertCircle className="size-4" />
-											</div>
-										)}
-
-										<div className="min-w-0">
-											<div className="flex items-center gap-2">
-												<span className="font-mono text-foreground font-semibold block tracking-widest text-xs">
-													••••••••••••••••
-												</span>
-												<Badge
-													variant={key.isValid ? "default" : "destructive"}
-													className="text-[9px] font-mono px-1.5 py-0 uppercase font-semibold"
-												>
-													{key.isValid ? "VALID" : "INVALID"}
-												</Badge>
-											</div>
-											<span className="text-muted-foreground text-[11px] block mt-0.5 truncate">
-												Provided by: {key.providedBy ?? "System Admin"} • Added{" "}
-												{new Date(key.createdAt).toLocaleDateString()}
-											</span>
-										</div>
-									</div>
-
-									<AlertDialog>
-										<AlertDialogTrigger asChild>
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon"
-												disabled={deletingKeyId === key.id}
-												className="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl cursor-pointer shrink-0"
-												title="Delete API Key"
-											>
-												{deletingKeyId === key.id ? (
-													<Loader2 className="size-4 animate-spin" />
-												) : (
-													<Trash2 className="size-4" />
-												)}
-											</Button>
-										</AlertDialogTrigger>
-										<AlertDialogContent className="rounded-2xl border-border bg-card">
-											<AlertDialogHeader>
-												<AlertDialogTitle className="text-lg font-bold">
-													Delete API Key?
-												</AlertDialogTitle>
-												<AlertDialogDescription className="text-xs text-muted-foreground">
-													Are you sure you want to remove this Torn API key from
-													this server? Background sync operations relying on
-													this key will be interrupted.
-												</AlertDialogDescription>
-											</AlertDialogHeader>
-											<AlertDialogFooter className="mt-4 flex gap-2">
-												<AlertDialogCancel className="rounded-xl text-xs font-semibold">
-													Cancel
-												</AlertDialogCancel>
-												<AlertDialogAction
-													onClick={() => void handleDeleteKey(key.id)}
-													className="rounded-xl text-xs font-semibold bg-destructive text-white hover:bg-destructive/90"
-												>
-													Delete Key
-												</AlertDialogAction>
-											</AlertDialogFooter>
-										</AlertDialogContent>
-									</AlertDialog>
-								</div>
-							))
 						)}
 					</div>
 				</CardContent>

@@ -48,6 +48,23 @@ export type IpcTerritoryMessage = {
 
 export type IpcBotMessage = IpcWarMessage | IpcTerritoryMessage;
 
+export type LogLevel = "info" | "warn" | "error" | "debug";
+
+export type LogEntry = {
+	id: string;
+	timestamp: string;
+	service: "api" | "bot" | "scheduler";
+	context: string;
+	subContext?: string;
+	level: LogLevel;
+	message: string;
+};
+
+export type IpcLogEventMessage = {
+	action: "log_event";
+	data: LogEntry;
+};
+
 export type IpcTelemetryRequestMessage = {
 	action: "get_telemetry";
 	requestId?: string;
@@ -60,12 +77,14 @@ export type IpcTelemetryResponseMessage = {
 		pid: number;
 		status: "online" | "offline";
 		uptimeSeconds: number;
+		cpuUsage?: number;
 		memory: {
 			rssBytes: number;
 			heapTotalBytes: number;
 			heapUsedBytes: number;
 			externalBytes: number;
 		};
+		recentLogs?: LogEntry[];
 	};
 };
 
@@ -74,6 +93,10 @@ export type IpcForceWorkerMessage = {
 	data: {
 		workerName: string;
 	};
+};
+
+export type IpcResetLogManagerMessage = {
+	action: "reset_log_manager";
 };
 
 export type VerificationTrigger = "user" | "admin" | "join" | "cron";
@@ -119,6 +142,19 @@ export type IpcVerifyResponseMessage = {
 	data: VerificationResponse;
 };
 
+export type MemberVerificationAction = {
+	discordId: string;
+	rolesToAdd: string[] | null;
+	rolesToRemove: string[] | null;
+	newNickname: string | null;
+};
+
+export type GuildMemberVerificationInput = {
+	discordId: string;
+	currentRoleIds: string[];
+	currentNickname: string | null;
+};
+
 export type BulkVerificationProgressData = {
 	guildId: string;
 	processed: number;
@@ -127,12 +163,7 @@ export type BulkVerificationProgressData = {
 	errors: number;
 	status: "running" | "completed" | "failed";
 	message?: string;
-};
-
-export type IpcBulkVerifyProgressMessage = {
-	action: "bulk_verification_progress";
-	requestId: string;
-	data: BulkVerificationProgressData;
+	actions?: MemberVerificationAction[];
 };
 
 export type IpcBulkVerifyRequestMessage = {
@@ -142,7 +173,14 @@ export type IpcBulkVerifyRequestMessage = {
 		guildId: string;
 		channelId?: string;
 		triggeredBy?: "user" | "admin" | "cron";
+		members?: GuildMemberVerificationInput[];
 	};
+};
+
+export type IpcBulkVerifyProgressMessage = {
+	action: "bulk_verification_progress";
+	requestId: string;
+	data: BulkVerificationProgressData;
 };
 
 export type IpcBulkVerifyResponseMessage = {
@@ -171,6 +209,113 @@ export type IpcSyncFactionMapMessage = {
 	};
 };
 
+export type IpcReinitializeCrimeLedgerMessage = {
+	action: "reinitialize_crime_ledger";
+	data?: Record<string, unknown>;
+};
+
+export type IpcCrimeLedgerStateUpdatedMessage = {
+	action: "crime_ledger_state_updated";
+	data: {
+		status: "idle" | "running" | "completed" | "error";
+		totalIndexedCrimes?: number;
+		lastProcessedTimestamp?: number | null;
+		lastError?: string | null;
+		updatedAt?: string;
+	};
+};
+
+export type IpcReinitializeGymLedgerMessage = {
+	action: "reinitialize_gym_ledger";
+	data?: Record<string, unknown>;
+};
+
+export type IpcGymLedgerStateUpdatedMessage = {
+	action: "gym_ledger_state_updated";
+	data: {
+		status: "idle" | "running" | "completed" | "error";
+		totalIndexedLogs?: number;
+		lastProcessedTimestamp?: number | null;
+		lastError?: string | null;
+		updatedAt?: string;
+	};
+};
+
+export type IpcReinitializeBattlestatsLedgerMessage = {
+	action: "reinitialize_battlestats_ledger";
+	data?: Record<string, unknown>;
+};
+
+export type IpcBattlestatsLedgerStateUpdatedMessage = {
+	action: "battlestats_ledger_state_updated";
+	data: {
+		status: "idle" | "running" | "completed" | "error";
+		totalIndexedLogs?: number;
+		lastProcessedTimestamp?: number | null;
+		lastError?: string | null;
+		updatedAt?: string;
+	};
+};
+
+export type IpcReinitializeStocksLedgerMessage = {
+	action: "reinitialize_stocks_ledger";
+	data?: Record<string, unknown>;
+};
+
+export type IpcStocksLedgerStateUpdatedMessage = {
+	action: "stocks_ledger_state_updated";
+	data: {
+		status: "idle" | "running" | "completed" | "error";
+		totalIndexedLogs?: number;
+		lastProcessedTimestamp?: number | null;
+		lastError?: string | null;
+		updatedAt?: string;
+	};
+};
+
+export type IpcCompanySyncStateUpdatedMessage = {
+	action: "company_sync_state_updated";
+	data: {
+		status: "idle" | "running" | "completed" | "error";
+		lastInflow?: number;
+		lastOutflow?: number;
+		lastProfit?: number;
+		lastSyncTimestamp?: number | null;
+		lastError?: string | null;
+		updatedAt?: string;
+	};
+};
+
+export type IpcReinitializeWealthMessage = {
+	action: "reinitialize_wealth";
+	data?: {
+		timestamp?: number;
+	};
+};
+
+export type IpcWealthStateUpdatedMessage = {
+	action: "wealth_state_updated";
+	data: {
+		init: boolean;
+		initTimestamp: number | null;
+		status: "idle" | "running" | "completed" | "error";
+		lastSyncTimestamp: number | null;
+		lastError: string | null;
+		updatedAt: string;
+		totals: {
+			totalInflow: number;
+			totalOutflow: number;
+			netProfit: number;
+			crimesInflow: number;
+			stocksInflow: number;
+			companyInflow: number;
+			companyOutflow: number;
+			otherInflow: number;
+		};
+		totalEventsIndexed: number;
+	};
+};
+
 /**
  * Discriminated union of ALL strongly-typed IPC messages in Sentinel V2.
  */
@@ -178,11 +323,24 @@ export type IpcMessage =
 	| IpcBotMessage
 	| IpcTelemetryRequestMessage
 	| IpcTelemetryResponseMessage
+	| IpcLogEventMessage
 	| IpcForceWorkerMessage
+	| IpcResetLogManagerMessage
 	| IpcVerifyRequestMessage
 	| IpcVerifyResponseMessage
 	| IpcBulkVerifyRequestMessage
 	| IpcBulkVerifyProgressMessage
 	| IpcBulkVerifyResponseMessage
 	| IpcSyncReactionRolesMessage
-	| IpcSyncFactionMapMessage;
+	| IpcSyncFactionMapMessage
+	| IpcReinitializeCrimeLedgerMessage
+	| IpcCrimeLedgerStateUpdatedMessage
+	| IpcReinitializeGymLedgerMessage
+	| IpcGymLedgerStateUpdatedMessage
+	| IpcReinitializeBattlestatsLedgerMessage
+	| IpcBattlestatsLedgerStateUpdatedMessage
+	| IpcReinitializeStocksLedgerMessage
+	| IpcStocksLedgerStateUpdatedMessage
+	| IpcCompanySyncStateUpdatedMessage
+	| IpcReinitializeWealthMessage
+	| IpcWealthStateUpdatedMessage;

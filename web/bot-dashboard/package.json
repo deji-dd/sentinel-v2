@@ -4,9 +4,8 @@
 	"type": "module",
 	"private": true,
 	"scripts": {
-		"build:css": "bunx tailwindcss -i src/index.css -o src/tailwind.css --minify",
-		"build": "bun run build:css && NODE_ENV=production bun build index.html --outdir ./dist --target browser --production",
-		"dev": "bunx tailwindcss -i src/index.css -o src/tailwind.css --watch & NODE_ENV=development bun build index.html --outdir ./dist --target browser --watch"
+		"dev": "vite",
+		"build": "tsc --noEmit && vite build"
 	},
 	"dependencies": {
 		"@elysiajs/eden": "latest",
@@ -16,7 +15,7 @@
 		"class-variance-authority": "latest",
 		"clsx": "latest",
 		"lucide-react": "latest",
-		"next-themes": "^0.4.6",
+		"next-themes": "latest",
 		"radix-ui": "latest",
 		"react": "latest",
 		"react-dom": "latest",
@@ -26,11 +25,11 @@
 		"tw-animate-css": "latest"
 	},
 	"devDependencies": {
-		"@tailwindcss/cli": "latest",
-		"@tailwindcss/postcss": "latest",
+		"@tailwindcss/vite": "latest",
 		"@types/react": "latest",
 		"@types/react-dom": "latest",
-		"postcss": "latest",
-		"tailwindcss": "latest"
+		"@vitejs/plugin-react": "latest",
+		"tailwindcss": "latest",
+		"vite": "latest"
 	}
 }

@@ -1,4 +1,4 @@
-import { db, eq, guildConfigs } from "@sentinel/database";
+import { db, eq, guildConfigs, isTargetGuild } from "@sentinel/database";
 import { Events, type GuildMember } from "discord.js";
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { sendGuildAuditLog } from "../lib/guild-logger";
@@ -12,14 +12,13 @@ export const guildMemberAddEvent = {
 
 		try {
 			const guildId = member.guild.id;
+			if (!isTargetGuild(guildId)) return;
+
 			const config = await db.query.guildConfigs.findFirst({
 				where: eq(guildConfigs.guildId, guildId),
 			});
 
-			if (
-				!config?.verifyOnJoin ||
-				!config.enabledModules.includes("verification")
-			) {
+			if (!config?.verifyOnJoin) {
 				return;
 			}
 
@@ -80,7 +79,10 @@ export const guildMemberAddEvent = {
 			let nicknameChanged = false;
 			if (result.newNickname !== null) {
 				try {
-					await member.setNickname(result.newNickname);
+					const nick = result.newNickname
+						? result.newNickname.slice(0, 32)
+						: null;
+					await member.setNickname(nick);
 					nicknameChanged = true;
 				} catch (_err) {
 					failures.push("Failed to update nickname");

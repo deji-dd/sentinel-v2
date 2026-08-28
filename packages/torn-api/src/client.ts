@@ -83,12 +83,13 @@ export class TornApiClient {
 		);
 
 		url.searchParams.append("key", apiKey);
+		url.searchParams.append("comment", "Sentinel");
 		url.searchParams.append("timestamp", String(Math.floor(Date.now() / 1000)));
 
 		if (queryParams) {
 			for (const [key, value] of Object.entries(queryParams)) {
 				if (value !== undefined && value !== null && value !== "") {
-					url.searchParams.append(
+					url.searchParams.set(
 						key,
 						Array.isArray(value) ? value.join(",") : String(value),
 					);
@@ -174,11 +175,12 @@ export class TornApiClient {
 		const cleanPath = path.startsWith("/") ? path : `/${path}`;
 		const url = new URL(`${TORN_API_V1_BASE}${cleanPath}`);
 		url.searchParams.append("key", apiKey);
+		url.searchParams.append("comment", "Sentinel");
 
 		if (queryParams) {
 			for (const [key, value] of Object.entries(queryParams)) {
 				if (value !== undefined && value !== null && value !== "") {
-					url.searchParams.append(
+					url.searchParams.set(
 						key,
 						Array.isArray(value) ? value.join(",") : String(value),
 					);

@@ -8,7 +8,7 @@ import {
 import { Logger } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
 
-const logger = new Logger("PondRoutes");
+const logger = new Logger("API", "Pond");
 
 export const pondRoutes = new Elysia({ prefix: "/pond" })
 	.post(

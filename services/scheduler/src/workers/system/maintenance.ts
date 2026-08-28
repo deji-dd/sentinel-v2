@@ -4,6 +4,7 @@ import {
 	eq,
 	isNotNull,
 	lt,
+	systemMetrics,
 	travelDestinations,
 	verificationLogs,
 	warLedgers,
@@ -14,7 +15,7 @@ import type { WorkerStartOptions } from "../registry";
 import type { TravelStockItem } from "../torn/abroad-stocks";
 
 const WORKER_NAME = "system:maintenance";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "Maintenance");
 
 /**
  * Daily system cleanup and retention manager.
@@ -100,6 +101,19 @@ export async function executeMaintenance(): Promise<void> {
 		if (prunedStockPointsCount > 0) {
 			logger.info(
 				`Pruned ${prunedStockPointsCount} travel stock history points older than 24 hours.`,
+			);
+		}
+
+		// 4. Prune system telemetry metrics older than 7 days
+		const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		const prunedMetrics = await db
+			.delete(systemMetrics)
+			.where(lt(systemMetrics.createdAt, sevenDaysAgo))
+			.returning({ id: systemMetrics.id });
+
+		if (prunedMetrics.length > 0) {
+			logger.info(
+				`Pruned ${prunedMetrics.length} SystemMetrics records older than 7 days.`,
 			);
 		}
 

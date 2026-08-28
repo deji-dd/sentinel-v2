@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useAuth } from "./contexts/AuthContext";
 import GuildShell from "./layouts/GuildShell";
+import AdminKeysPage from "./pages/AdminKeysPage";
 import LoginPage from "./pages/LoginPage";
 import ServerSelectorPage from "./pages/ServerSelectorPage";
 
@@ -125,6 +126,9 @@ export function Router() {
 	useEffect(() => {
 		if (!loading) {
 			if (!authenticated && path !== "/login") {
+				if (path !== "/") {
+					sessionStorage.setItem("sentinel_redirect_to", path);
+				}
 				navigate("/login");
 			} else if (authenticated && path === "/login") {
 				navigate("/");
@@ -138,6 +142,14 @@ export function Router() {
 
 	if (!authenticated) {
 		return <LoginPage />;
+	}
+
+	if (
+		path === "/admin/keys" ||
+		path === "/admin" ||
+		path.startsWith("/admin/")
+	) {
+		return <AdminKeysPage />;
 	}
 
 	const isGuildRoute =

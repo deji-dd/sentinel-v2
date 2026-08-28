@@ -79,7 +79,11 @@ export class IpcServer<T = unknown> {
 				}
 			});
 
-			socket.on("error", (err) => {
+			socket.on("error", (err: Error & { code?: string }) => {
+				if (err.code === "EPIPE" || err.code === "ECONNRESET") {
+					logger.debug(`IPC Socket closed: ${err.message}`);
+					return;
+				}
 				logger.error(`IPC Socket Error: ${err.message}`);
 			});
 
@@ -142,8 +146,12 @@ export class IpcServer<T = unknown> {
 	broadcast(payload: T): void {
 		const data = `${JSON.stringify(payload)}\n`;
 		for (const socket of this.activeSockets) {
-			if (!socket.destroyed) {
-				socket.write(data);
+			if (socket.writable && !socket.destroyed) {
+				socket.write(data, (err) => {
+					if (err && (err as { code?: string }).code !== "EPIPE") {
+						logger.debug(`IPC broadcast write error: ${err.message}`);
+					}
+				});
 			}
 		}
 	}

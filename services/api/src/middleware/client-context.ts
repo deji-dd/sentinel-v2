@@ -1,6 +1,10 @@
 import { Elysia } from "elysia";
 
-export type ClientAppType = "bot-dashboard" | "user-dashboard" | "unknown";
+export type ClientAppType =
+	| "tt-selector"
+	| "bot-dashboard"
+	| "user-dashboard"
+	| "unknown";
 
 /**
  * Client context derive plugin. Identifies which UI app sent the request.
@@ -15,19 +19,21 @@ export const clientContextPlugin = new Elysia({
 	let clientApp: ClientAppType = "unknown";
 
 	if (
+		clientHeader === "tt-selector" ||
+		host.startsWith("tt-selector.blasted-labs.tech") ||
+		origin.startsWith("https://tt-selector.blasted-labs.tech")
+	) {
+		clientApp = "tt-selector";
+	} else if (
 		clientHeader === "bot-dashboard" ||
-		origin.includes("blasted-labs.tech") ||
-		host.includes("blasted-labs.tech") ||
-		origin.includes("bot-dashboard") ||
-		host.startsWith("bot.")
+		host.startsWith("sentinel.blasted-labs.tech") ||
+		origin.startsWith("https://sentinel.blasted-labs.tech")
 	) {
 		clientApp = "bot-dashboard";
 	} else if (
 		clientHeader === "user-dashboard" ||
-		origin.includes("ayodejib.dev") ||
-		host.includes("ayodejib.dev") ||
-		origin.includes("user-dashboard") ||
-		host.startsWith("user.")
+		host.startsWith("sentinel.ayodejib.dev") ||
+		origin.startsWith("https://sentinel.ayodejib.dev")
 	) {
 		clientApp = "user-dashboard";
 	}

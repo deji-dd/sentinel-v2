@@ -6,6 +6,7 @@ export const users = sqliteTable("users", {
 	discordId: text("discord_id").unique(),
 	tornId: integer("torn_id").unique(),
 	username: text("username").notNull(),
+	avatar: text("avatar"),
 	role: text("role").default("user").notNull(),
 	createdAt: integer("created_at", { mode: "timestamp" })
 		.default(sql`(strftime('%s', 'now'))`)

@@ -34,11 +34,32 @@ export default function LoginPage() {
 		return null;
 	})();
 
+	const redirectTo = (() => {
+		const searchParams = new URLSearchParams(window.location.search);
+		if (searchParams.has("redirect_to")) return searchParams.get("redirect_to");
+		const hash = window.location.hash;
+		const qIdx = hash.indexOf("?");
+		if (qIdx !== -1) {
+			const params = new URLSearchParams(hash.slice(qIdx + 1));
+			if (params.has("redirect_to")) return params.get("redirect_to");
+		}
+		const stored = sessionStorage.getItem("sentinel_redirect_to");
+		if (stored && stored !== "/login") return stored;
+		return "/";
+	})();
+
+	const loginUrl =
+		redirectTo && redirectTo !== "/"
+			? `/api/v1/auth/discord?redirect_to=${encodeURIComponent(redirectTo)}`
+			: "/api/v1/auth/discord";
+
 	useEffect(() => {
 		if (!loading && authenticated) {
-			navigate("/");
+			const destination = redirectTo && redirectTo !== "/" ? redirectTo : "/";
+			sessionStorage.removeItem("sentinel_redirect_to");
+			navigate(destination);
 		}
-	}, [loading, authenticated, navigate]);
+	}, [loading, authenticated, navigate, redirectTo]);
 
 	return (
 		<div className="min-h-screen w-full flex flex-col items-center justify-center p-4 bg-background text-foreground font-sans relative overflow-hidden">
@@ -125,7 +146,7 @@ export default function LoginPage() {
 							size="lg"
 							className="w-full h-12 text-sm font-semibold bg-[#5865f2] hover:bg-[#4752c4] text-white shadow-lg cursor-pointer rounded-xl transition-all"
 						>
-							<a href="/api/v1/auth/discord" id="discord-login-btn">
+							<a href={loginUrl} id="discord-login-btn">
 								<svg
 									width="20"
 									height="20"

@@ -1,9 +1,9 @@
-import { db, eq, factions, tornItems } from "@sentinel/database";
+import { db, eq, factions, isTargetGuild, tornItems } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import type { Client, EmbedBuilder, TextChannel } from "discord.js";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 
-const logger = new Logger("TerritoryAlertDistributor");
+const logger = new Logger("Discord Bot", "TerritoryAlerts");
 
 const itemNameCache = new Map<number, string>();
 
@@ -66,11 +66,11 @@ export async function handleTerritoryAlert(
 	data: Record<string, unknown>,
 ): Promise<void> {
 	try {
-		// Query all guilds with the territory module enabled and at least one alert channel configured
+		// Query all guilds with at least one alert channel configured
 		const allConfigs = await db.query.guildConfigs.findMany();
 		const configs = allConfigs.filter(
 			(cfg) =>
-				cfg.enabledModules.includes("territory") &&
+				isTargetGuild(cfg.guildId) &&
 				(cfg.ttFullChannelId !== null || cfg.ttFilteredChannelId !== null),
 		);
 

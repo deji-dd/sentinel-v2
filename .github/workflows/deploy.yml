@@ -36,8 +36,8 @@ jobs:
       - name: Run Linter
         run: bun run lint
 
-      - name: Build Bot Dashboard
-        run: bun run bot-dashboard:build
+      - name: Build Web Dashboards
+        run: bun run web:build
 
       - name: Run Unit Tests
         run: bun test
@@ -90,11 +90,12 @@ jobs:
             echo "Installing dependencies..."
             bun install --production
 
-            echo "Building Bot Dashboard..."
-            bun run bot-dashboard:build
+            echo "Building Web Dashboards..."
+            bun run web:build
 
             echo "Running SQLite Database Migrations..."
             bun run db:migrate
+
 
             echo "Updating Systemd Services..."
             sudo cp .systemd/*.service /etc/systemd/system/

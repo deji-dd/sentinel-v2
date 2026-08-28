@@ -42,6 +42,8 @@ export class ScheduledRunner {
 	private activeTimer: NodeJS.Timeout | null = null;
 	private isExecuting = false;
 	private isStopped = false;
+	/** Set when triggerNow() fires while a cycle is already executing. */
+	private forceRunQueued = false;
 	private cadenceMs: number;
 
 	private lastPersistedAt = 0;
@@ -136,7 +138,17 @@ export class ScheduledRunner {
 			this.isExecuting = false;
 
 			if (!this.isStopped) {
-				const nextRunTimeMs = customNextRunMs ?? Date.now() + this.cadenceMs;
+				let nextRunTimeMs = customNextRunMs ?? Date.now() + this.cadenceMs;
+
+				// A force-run arrived while this cycle was executing: re-run
+				// immediately instead of waiting out the full cadence.
+				if (this.forceRunQueued) {
+					this.forceRunQueued = false;
+					nextRunTimeMs = Date.now();
+					this.logger.info(
+						"Force-run was queued during execution; re-running immediately.",
+					);
+				}
 
 				const shouldPersist =
 					!this.lastPersistedAt || startTime - this.lastPersistedAt >= 60000;
@@ -177,15 +189,16 @@ export class ScheduledRunner {
 
 	/**
 	 * Immediately triggers execution of the worker handler, clearing any pending schedule timer.
+	 * If a cycle is already executing, the trigger is queued and consumed right
+	 * after the in-flight cycle finishes instead of being silently dropped
+	 * (which previously also cancelled the pending schedule timer).
 	 */
 	triggerNow(): void {
-		if (this.activeTimer) {
-			clearTimeout(this.activeTimer);
-			this.activeTimer = null;
+		if (this.isExecuting) {
+			this.forceRunQueued = true;
+			return;
 		}
-		this.executeAndReschedule().catch((err) =>
-			this.logger.error("Error executing forced worker run:", err),
-		);
+		this.scheduleNext(0);
 	}
 
 	/**

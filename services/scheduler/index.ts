@@ -1,4 +1,8 @@
-import { closeDatabase, recordBootAlert } from "@sentinel/database";
+import {
+	closeDatabase,
+	ensureTargetGuildConfigs,
+	recordBootAlert,
+} from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { setupSchedulerIpc } from "./src/lib/ipc";
 import { startRegisteredWorkers } from "./src/workers/registry";
@@ -8,11 +12,14 @@ const logger = new Logger("Scheduler");
 async function main() {
 	logger.info("Initializing Sentinel Scheduler...");
 
-	// 1. Setup & Start IPC Server
+	// 1. Auto-provision target guild configs
+	await ensureTargetGuildConfigs();
+
+	// 2. Setup & Start IPC Server
 	const ipcServer = await setupSchedulerIpc();
 	await ipcServer.start();
 
-	// 2. Record boot alert in database
+	// 3. Record boot alert in database
 	await recordBootAlert("scheduler");
 
 	// 3. Start registered background workers with staggered boot

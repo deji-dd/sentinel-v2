@@ -14,6 +14,10 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(typeof data.timestamp).toBe("string");
 		expect(typeof data.uptime).toBe("number");
 		expect(typeof data.environment).toBe("string");
+		expect(typeof data.host).toBe("string");
+		expect(typeof data.platform).toBe("string");
+		expect(typeof data.arch).toBe("string");
+		expect(typeof data.bunVersion).toBe("string");
 	});
 
 	it("GET / serves index.html static SPA asset", async () => {
@@ -27,7 +31,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 	it("GET bundled JS asset returns 200 OK with javascript content-type", async () => {
 		const htmlResponse = await app.handle(new Request("http://localhost/"));
 		const html = await htmlResponse.text();
-		const jsMatch = html.match(/src="\.\/([^"]+\.js)"/);
+		const jsMatch = html.match(/src="(?:\.\/|\/)?([^"]+\.js)"/);
 		const jsFile = jsMatch ? jsMatch[1] : "";
 		expect(jsFile).not.toBe("");
 

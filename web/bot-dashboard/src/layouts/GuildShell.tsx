@@ -2,19 +2,13 @@ import { Loader2, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "../contexts/AuthContext";
-import { api } from "../lib/api";
+import AdminKeysPage from "../pages/AdminKeysPage";
 import GeneralSettingsPage from "../pages/GuildSettingsPage";
-import ModulesPage from "../pages/ModulesPage";
 import ReactionRolesPage from "../pages/ReactionRolesPage";
 import TerritoryPage from "../pages/TerritoryPage";
 import VerificationPage from "../pages/VerificationPage";
 import { useRouter } from "../router";
 import { GuildSidebar } from "./GuildSidebar";
-
-interface GuildConfig {
-	enabledModules: string[];
-	[key: string]: unknown;
-}
 
 function PageFallback() {
 	return (
@@ -47,12 +41,11 @@ function extractSubPath(path: string, guildId: string): string {
 
 export default function GuildShell() {
 	const { path, navigate } = useRouter();
-	const { authenticated, loading: authLoading, user } = useAuth();
+	const { authenticated, loading: authLoading } = useAuth();
 
 	const guildId = extractGuildId(path);
 	const subPath = guildId ? extractSubPath(path, guildId) : "/";
 
-	const [guildConfig, setGuildConfig] = useState<GuildConfig | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	// Auth guard
@@ -62,49 +55,24 @@ export default function GuildShell() {
 		}
 	}, [authLoading, authenticated, navigate]);
 
-	// Fetch guild config for sidebar module states
-	useEffect(() => {
-		if (!guildId) return;
-		void (async () => {
-			try {
-				const guildRoute = api.api.v1.guilds[guildId];
-				if (!guildRoute) return;
-				const res = await guildRoute.config.get();
-				if (res.data && typeof res.data === "object" && "config" in res.data) {
-					const data = res.data as { config: GuildConfig | null };
-					if (data.config) setGuildConfig(data.config);
-				}
-			} catch {
-				// ignore — sidebar will show all modules as locked
-			}
-		})();
-	}, [guildId]);
-
 	if (authLoading || !authenticated || !guildId) {
 		return <PageFallback />;
 	}
 
-	const enabledModules = guildConfig?.enabledModules ?? [];
-	const isBotOwner = user?.role === "admin" || user?.role === "owner";
-
 	const renderPage = () => {
 		if (subPath === "/" || subPath === "")
 			return <GeneralSettingsPage guildId={guildId} />;
-		if (subPath === "/modules")
-			return (
-				<ModulesPage
-					guildId={guildId}
-					enabledModules={enabledModules}
-					onModulesChange={(m) =>
-						setGuildConfig((c) => (c ? { ...c, enabledModules: m } : c))
-					}
-				/>
-			);
 		if (subPath === "/verification")
 			return <VerificationPage guildId={guildId} />;
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/reaction-roles")
 			return <ReactionRolesPage guildId={guildId} />;
+		if (
+			subPath === "/keys" ||
+			subPath === "/admin/keys" ||
+			subPath === "/admin"
+		)
+			return <AdminKeysPage isInsideShell={true} />;
 
 		return <div className="p-8 text-muted-foreground">Page not found.</div>;
 	};
@@ -132,8 +100,6 @@ export default function GuildShell() {
 			>
 				<GuildSidebar
 					guildId={guildId}
-					enabledModules={enabledModules}
-					isBotOwner={isBotOwner}
 					onNavigate={() => setSidebarOpen(false)}
 				/>
 			</div>

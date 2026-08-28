@@ -69,3 +69,21 @@ export const deviceControls = sqliteTable("device_controls", {
 		.default(sql`(strftime('%s', 'now'))`)
 		.notNull(),
 });
+
+export const systemMetrics = sqliteTable("system_metrics", {
+	id: text("id")
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	serviceId: text("service_id").notNull(),
+	serviceName: text("service_name").notNull(),
+	status: text("status").notNull(),
+	cpuUsage: real("cpu_usage").notNull(),
+	memoryRssBytes: integer("memory_rss_bytes").notNull(),
+	memoryHeapUsedBytes: integer("memory_heap_used_bytes").notNull(),
+	memoryHeapTotalBytes: integer("memory_heap_total_bytes").notNull(),
+	latencyMs: integer("latency_ms").notNull(),
+	uptimeSeconds: integer("uptime_seconds").notNull(),
+	createdAt: integer("created_at", { mode: "timestamp" })
+		.default(sql`(strftime('%s', 'now'))`)
+		.notNull(),
+});

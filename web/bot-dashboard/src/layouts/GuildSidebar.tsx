@@ -1,12 +1,12 @@
 import {
 	ArrowLeft,
 	ChevronRight,
+	KeyRound,
 	Lock,
 	LogOut,
 	MapPin,
 	Moon,
 	Settings,
-	Sliders,
 	Smile,
 	Sun,
 	UserCheck,
@@ -36,22 +36,13 @@ interface NavSection {
 
 interface GuildSidebarProps {
 	guildId: string;
-	enabledModules: string[];
-	isBotOwner: boolean;
 	onNavigate?: () => void;
 }
 
-export function GuildSidebar({
-	guildId,
-	enabledModules,
-	isBotOwner,
-	onNavigate,
-}: GuildSidebarProps) {
+export function GuildSidebar({ guildId, onNavigate }: GuildSidebarProps) {
 	const { path, navigate } = useRouter();
 	const { user, authenticated, logout } = useAuth();
 	const { theme, toggle } = useTheme();
-
-	const isModuleEnabled = (key: string) => enabledModules.includes(key);
 
 	const avatarUrl = (() => {
 		try {
@@ -80,40 +71,38 @@ export function GuildSidebar({
 			],
 		},
 		{
-			title: "Modules",
+			title: "Features",
 			items: [
 				{
 					label: "Verification",
 					href: `/guilds/${guildId}/verification`,
 					icon: UserCheck,
 					accent: "text-blue-400",
-					locked: !isModuleEnabled("verification"),
 				},
 				{
 					label: "Territory",
 					href: `/guilds/${guildId}/territory`,
 					icon: MapPin,
 					accent: "text-purple-400",
-					locked: !isModuleEnabled("territory"),
 				},
 				{
 					label: "Reaction Roles",
 					href: `/guilds/${guildId}/reaction-roles`,
 					icon: Smile,
 					accent: "text-amber-400",
-					locked: !isModuleEnabled("reaction_role"),
 				},
 			],
 		},
-		...(isBotOwner
+		...(user?.role === "admin" || user?.role === "owner"
 			? [
 					{
-						title: "System Administration",
+						title: "Administration",
 						items: [
 							{
-								label: "Module Manager",
-								href: `/guilds/${guildId}/modules`,
-								icon: Sliders,
+								label: "System API Keys",
+								href: `/guilds/${guildId}/keys`,
+								icon: KeyRound,
+								accent: "text-primary",
 							},
 						],
 					},

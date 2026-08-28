@@ -16,7 +16,7 @@ export const personalLogs = sqliteTable("personal_logs", {
 		.notNull(),
 });
 
-export const gymLedgers = sqliteTable("gym_ledgers", {
+export const battlestatsLedgers = sqliteTable("gym_ledgers", {
 	id: text("id").primaryKey(),
 	timestamp: integer("timestamp", { mode: "timestamp" }).notNull(),
 	statType: text("stat_type").notNull(),
@@ -33,6 +33,8 @@ export const gymLedgers = sqliteTable("gym_ledgers", {
 		.default(sql`(strftime('%s', 'now'))`)
 		.notNull(),
 });
+
+export const gymLedgers = battlestatsLedgers;
 
 export const crimeLogs = sqliteTable("crime_logs", {
 	id: text("id").primaryKey(),

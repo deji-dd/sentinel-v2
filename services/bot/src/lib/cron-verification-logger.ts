@@ -7,12 +7,12 @@ import { logger } from "./logger";
 interface ActiveCronMessage {
 	message: Message;
 	lastEditTime: number;
+	highestProcessed: number;
 }
 
 const activeCronMessages = new Map<string, ActiveCronMessage>();
 
 function createProgressEmbed(
-	_guildId: string,
 	processed: number,
 	total: number,
 	updated: number,
@@ -37,7 +37,6 @@ function createProgressEmbed(
 }
 
 function createCompleteEmbed(
-	_guildId: string,
 	processed: number,
 	total: number,
 	updated: number,
@@ -62,6 +61,34 @@ export async function handleCronVerificationProgress(
 	try {
 		const guildId = progress.guildId;
 		if (!guildId) return;
+
+		// Apply real-time Discord role additions/removals and nickname changes
+		if (progress.actions && progress.actions.length > 0) {
+			const guild =
+				client.guilds.cache.get(guildId) ||
+				(await client.guilds.fetch(guildId).catch(() => null));
+			if (guild) {
+				for (const action of progress.actions) {
+					const member =
+						guild.members.cache.get(action.discordId) ||
+						(await guild.members.fetch(action.discordId).catch(() => null));
+					if (member) {
+						if (action.rolesToAdd && action.rolesToAdd.length > 0) {
+							await member.roles.add(action.rolesToAdd).catch(() => {});
+						}
+						if (action.rolesToRemove && action.rolesToRemove.length > 0) {
+							await member.roles.remove(action.rolesToRemove).catch(() => {});
+						}
+						if (action.newNickname !== null) {
+							const nick = action.newNickname
+								? action.newNickname.slice(0, 32)
+								: null;
+							await member.setNickname(nick).catch(() => {});
+						}
+					}
+				}
+			}
+		}
 
 		const active = activeCronMessages.get(requestId);
 
@@ -91,7 +118,6 @@ export async function handleCronVerificationProgress(
 
 		if (progress.status === "completed") {
 			const completeEmbed = createCompleteEmbed(
-				guildId,
 				progress.processed,
 				progress.total,
 				progress.updated,
@@ -119,6 +145,11 @@ export async function handleCronVerificationProgress(
 		// Running state
 		const now = Date.now();
 		if (active) {
+			if (progress.processed < active.highestProcessed) {
+				return;
+			}
+			active.highestProcessed = progress.processed;
+
 			const THROTTLE_MS = 2000;
 			if (
 				now - active.lastEditTime >= THROTTLE_MS ||
@@ -126,7 +157,6 @@ export async function handleCronVerificationProgress(
 			) {
 				active.lastEditTime = now;
 				const embed = createProgressEmbed(
-					guildId,
 					progress.processed,
 					progress.total,
 					progress.updated,
@@ -146,7 +176,6 @@ export async function handleCronVerificationProgress(
 				.catch(() => null);
 			if (channel instanceof TextChannel) {
 				const embed = createProgressEmbed(
-					guildId,
 					progress.processed,
 					progress.total,
 					progress.updated,
@@ -159,6 +188,7 @@ export async function handleCronVerificationProgress(
 					activeCronMessages.set(requestId, {
 						message: sentMessage,
 						lastEditTime: now,
+						highestProcessed: progress.processed,
 					});
 				}
 			}

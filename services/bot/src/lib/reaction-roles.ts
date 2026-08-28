@@ -1,11 +1,11 @@
 import {
 	db,
 	eq,
-	guildConfigs,
+	isTargetGuild,
 	reactionRoleMappings,
 	reactionRoleMessages,
 } from "@sentinel/database";
-import { isModuleEnabled, Logger } from "@sentinel/utils";
+import { Logger } from "@sentinel/utils";
 import type {
 	Client,
 	Guild,
@@ -18,7 +18,7 @@ import type {
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { sendGuildAuditLog } from "./guild-logger";
 
-const logger = new Logger("ReactionRoles");
+const logger = new Logger("Discord Bot", "ReactionRoles");
 
 const REACTION_EVENT_LOCK_MS = 4000;
 const reactionProcessingLock = new Map<string, number>();
@@ -149,19 +149,11 @@ export async function handleReactionRoleAdd(
 		}
 
 		const guildId = fullReaction.message.guildId;
-		if (!guildId) return;
+		if (!guildId || !isTargetGuild(guildId)) return;
 
 		const messageId = fullReaction.message.id;
 		const emoji = fullReaction.emoji.toString();
 		const reactionKey = getReactionKey(messageId, user.id, emoji);
-
-		// Fetch GuildConfig via Drizzle ORM
-		const config = await db.query.guildConfigs.findFirst({
-			where: eq(guildConfigs.guildId, guildId),
-		});
-
-		const enabled = isModuleEnabled(config?.enabledModules, "reaction_role");
-		if (!enabled) return;
 
 		if (!beginReactionProcessing(reactionKey)) return;
 
@@ -330,16 +322,7 @@ export async function syncReactionRoleMessages(
 		});
 
 		for (const msgRecord of rrMessages) {
-			const guildConfig = await db.query.guildConfigs.findFirst({
-				where: eq(guildConfigs.guildId, msgRecord.guildId),
-			});
-
-			const enabled = isModuleEnabled(
-				guildConfig?.enabledModules,
-				"reaction_role",
-			);
-
-			if (!enabled || !msgRecord.channelId) continue;
+			if (!isTargetGuild(msgRecord.guildId) || !msgRecord.channelId) continue;
 
 			try {
 				const channel = (await client.channels

@@ -1,0 +1,34 @@
+{
+	"name": "@sentinel/tt-selector",
+	"module": "src/main.tsx",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc --noEmit && vite build"
+	},
+	"dependencies": {
+		"@elysiajs/eden": "latest",
+		"@sentinel/api": "workspace:*",
+		"@sentinel/database": "workspace:*",
+		"@sentinel/schemas": "workspace:*",
+		"@sentinel/utils": "workspace:*",
+		"class-variance-authority": "latest",
+		"clsx": "latest",
+		"leaflet": "latest",
+		"lucide-react": "latest",
+		"react": "latest",
+		"react-dom": "latest",
+		"sonner": "latest",
+		"tailwind-merge": "latest"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "latest",
+		"@types/leaflet": "latest",
+		"@types/react": "latest",
+		"@types/react-dom": "latest",
+		"@vitejs/plugin-react": "latest",
+		"tailwindcss": "latest",
+		"vite": "latest"
+	}
+}

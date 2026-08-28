@@ -1,6 +1,7 @@
 import { db, eq, userSessions, users } from "@sentinel/database";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
+import { verifyUserSharesGuildWithBot } from "../../lib/discord-auth";
 import type { AuthSession, AuthUser } from "../../middleware/auth";
 
 export const authRoutes = new Elysia({ prefix: "/auth" })
@@ -22,6 +23,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 						discordId: users.discordId,
 						tornId: users.tornId,
 						username: users.username,
+						avatar: users.avatar,
 						role: users.role,
 					},
 					session: {
@@ -128,12 +130,32 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 	// ─── Discord OAuth2 ───────────────────────────────────────────────────────
 	.get(
 		"/discord",
-		({ redirect }) => {
+		({ query, redirect, request }) => {
+			const redirectTo = query.redirect_to ?? "/";
+			const url = new URL(request.url);
+			const host = request.headers.get("host") ?? "localhost:3000";
+			const protocol =
+				url.protocol ||
+				(request.headers.get("x-forwarded-proto")
+					? `${request.headers.get("x-forwarded-proto")}:`
+					: "http:");
+
+			// If DISCORD_REDIRECT_URI is explicitly set, use it; otherwise compute based on current host
+			const redirectUri =
+				env.DISCORD_REDIRECT_URI ||
+				`${protocol}//${host}/api/v1/auth/discord/callback`;
+
+			const statePayload = JSON.stringify({
+				returnTo: redirectTo,
+				redirectUri,
+			});
+
 			const params = new URLSearchParams({
 				client_id: env.DISCORD_CLIENT_ID,
-				redirect_uri: env.DISCORD_REDIRECT_URI,
+				redirect_uri: redirectUri,
 				response_type: "code",
 				scope: "identify guilds",
+				state: Buffer.from(statePayload).toString("base64url"),
 			});
 
 			return redirect(
@@ -142,6 +164,9 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 			);
 		},
 		{
+			query: t.Object({
+				redirect_to: t.Optional(t.String()),
+			}),
 			detail: {
 				summary: "Discord OAuth2 Redirect",
 				description: "Redirects the user to Discord OAuth2 authorization page.",
@@ -150,9 +175,28 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 	)
 	.get(
 		"/discord/callback",
-		async ({ query, cookie, redirect }) => {
+		async ({ query, cookie, redirect, request }) => {
 			const code = query.code;
 			const error = query.error;
+
+			let returnTo = "/";
+			let redirectUri = env.DISCORD_REDIRECT_URI;
+
+			if (query.state) {
+				try {
+					const decoded = Buffer.from(query.state, "base64url").toString(
+						"utf-8",
+					);
+					const parsed = JSON.parse(decoded) as {
+						returnTo?: string;
+						redirectUri?: string;
+					};
+					if (parsed.returnTo) returnTo = parsed.returnTo;
+					if (parsed.redirectUri) redirectUri = parsed.redirectUri;
+				} catch {
+					returnTo = decodeURIComponent(query.state);
+				}
+			}
 
 			if (error || !code) {
 				return redirect("/#/login?error=access_denied", 302);
@@ -167,7 +211,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					client_secret: env.DISCORD_CLIENT_SECRET,
 					grant_type: "authorization_code",
 					code,
-					redirect_uri: env.DISCORD_REDIRECT_URI,
+					redirect_uri: redirectUri,
 				}),
 			});
 
@@ -204,6 +248,29 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				env.DISCORD_USER_ID && discordUser.id === env.DISCORD_USER_ID,
 			);
 
+			// Enforce server membership restriction: User must share a Discord server with Sentinel
+			if (!isOwner) {
+				const hasMutualGuild = await verifyUserSharesGuildWithBot(
+					tokens.access_token,
+					discordUser.id,
+				);
+
+				if (!hasMutualGuild) {
+					const target =
+						returnTo.startsWith("http://") || returnTo.startsWith("https://")
+							? returnTo
+							: returnTo.startsWith("/")
+								? returnTo
+								: `/${returnTo}`;
+					const baseWithoutHash = target.split("#")[0];
+					const separator = baseWithoutHash?.includes("?") ? "&" : "?";
+					return redirect(
+						`${baseWithoutHash}#/login${separator}error=no_mutual_server`,
+						302,
+					);
+				}
+			}
+
 			// Upsert user in our DB by discordId
 			let user = db
 				.select()
@@ -222,6 +289,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					.values({
 						discordId: discordUser.id,
 						username: displayName,
+						avatar: avatarUrl,
 						role: isOwner ? "owner" : "user",
 					})
 					.returning()
@@ -231,6 +299,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				db.update(users)
 					.set({
 						username: displayName,
+						avatar: avatarUrl,
 						...(isOwner && user.role !== "owner" && user.role !== "admin"
 							? { role: "owner" }
 							: {}),
@@ -249,11 +318,17 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				.values({
 					userId: user.id,
 					expiresAt,
-					// We temporarily store discordAccessToken in ipAddress column as workaround
-					// until a proper column is added — revisit when schema is updated
 				})
 				.returning()
 				.get();
+
+			const host = request.headers.get("host") ?? "";
+			const cookieDomain =
+				env.NODE_ENV === "production"
+					? ".blasted-labs.tech"
+					: host.includes(".localhost")
+						? ".localhost"
+						: undefined;
 
 			if (cookie.session) {
 				cookie.session.set({
@@ -262,6 +337,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					secure: env.NODE_ENV === "production",
 					sameSite: "lax",
 					path: "/",
+					domain: cookieDomain,
 					maxAge: 7 * 86400,
 				});
 			}
@@ -277,12 +353,37 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					secure: env.NODE_ENV === "production",
 					sameSite: "lax",
 					path: "/",
+					domain: cookieDomain,
 					maxAge: 7 * 86400,
 				});
 			}
 
-			return redirect("/", 302);
+			let targetRedirect = returnTo;
+			if (
+				!targetRedirect.startsWith("http://") &&
+				!targetRedirect.startsWith("https://")
+			) {
+				targetRedirect = targetRedirect.startsWith("/")
+					? targetRedirect
+					: `/${targetRedirect}`;
+			}
+
+			if (targetRedirect.includes("#/login")) {
+				targetRedirect = targetRedirect.replace(/#\/login.*/, "#/");
+			}
+
+			if (env.NODE_ENV !== "production") {
+				const separator = targetRedirect.includes("#")
+					? targetRedirect.includes("?")
+						? "&"
+						: "?"
+					: "#/?";
+				targetRedirect = `${targetRedirect}${separator}token=${newSession.id}`;
+			}
+
+			return redirect(targetRedirect, 302);
 		},
+
 		{
 			query: t.Object({
 				code: t.Optional(t.String()),
@@ -343,6 +444,10 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					secure: process.env.NODE_ENV === "production",
 					sameSite: "lax",
 					path: "/",
+					domain:
+						process.env.NODE_ENV === "production"
+							? ".blasted-labs.tech"
+							: undefined,
 					maxAge: 7 * 86400,
 				});
 			}
@@ -354,8 +459,10 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					username: user.username,
 					role: user.role,
 					discordId: user.discordId,
+					avatar: user.avatar,
 					tornId: user.tornId,
 				},
+
 				sessionId: newSession.id,
 			};
 		},

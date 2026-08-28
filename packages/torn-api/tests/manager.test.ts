@@ -1,18 +1,28 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { apiKeys, db } from "../../database";
+import { apiKeys, db, eq, inArray } from "../../database";
 import { getPersonalKey, getSystemKeyPool, hashApiKey } from "../index";
 
 describe("Torn API Manager - Key Pool Manager", () => {
+	const TEST_USER_IDS = [2001, 2002, 3001];
 	const keyHash1 = hashApiKey("sys_key_1", "pepper");
 	const keyHash2 = hashApiKey("sys_key_2", "pepper");
 	const keyHashPersonal = hashApiKey("personal_key_1", "pepper");
 
+	let savedPersonalKeys: (typeof apiKeys.$inferSelect)[] = [];
+
 	beforeEach(async () => {
-		await db.delete(apiKeys);
+		savedPersonalKeys = await db.query.apiKeys.findMany({
+			where: eq(apiKeys.keyType, "personal"),
+		});
+		await db.delete(apiKeys).where(eq(apiKeys.keyType, "personal"));
+		await db.delete(apiKeys).where(inArray(apiKeys.userId, TEST_USER_IDS));
 	});
 
 	afterEach(async () => {
-		await db.delete(apiKeys);
+		await db.delete(apiKeys).where(inArray(apiKeys.userId, TEST_USER_IDS));
+		if (savedPersonalKeys.length > 0) {
+			await db.insert(apiKeys).values(savedPersonalKeys);
+		}
 	});
 
 	test("fetches active system key pool from database", async () => {
@@ -56,5 +66,28 @@ describe("Torn API Manager - Key Pool Manager", () => {
 		expect(personalKey?.userId).toBe(3001);
 		expect(personalKey?.apiKey).toBe("personal_key_1");
 		expect(personalKey?.keyType).toBe("personal");
+	});
+
+	test("excludes personal keys from getSystemKeyPool", async () => {
+		await db.insert(apiKeys).values([
+			{
+				userId: 2001,
+				apiKeyEncrypted: "sys_key_1",
+				apiKeyHash: keyHash1,
+				keyType: "system",
+				isValid: true,
+			},
+			{
+				userId: 3001,
+				apiKeyEncrypted: "personal_key_1",
+				apiKeyHash: keyHashPersonal,
+				keyType: "personal",
+				isValid: true,
+			},
+		]);
+
+		const pool = await getSystemKeyPool();
+		expect(pool.some((k) => k.userId === 2001)).toBe(true);
+		expect(pool.some((k) => k.userId === 3001)).toBe(false);
 	});
 });

@@ -13,7 +13,6 @@ import { streamBulkVerificationRequest } from "../lib/ipc";
 import { logger } from "../lib/logger";
 
 function createProgressEmbed(
-	guildId: string,
 	processed: number,
 	total: number,
 	updated: number,
@@ -28,7 +27,7 @@ function createProgressEmbed(
 
 	return createBaseEmbed(
 		"Bulk Verification In Progress",
-		`Running verification check for guild **${guildId}**...\n\n\`${progressBar}\``,
+		`Running verification check for all members...\n\n\`${progressBar}\``,
 		EMBED_COLORS.PRIMARY,
 	).addFields(
 		{ name: "Progress", value: `${processed} / ${total}`, inline: true },
@@ -36,6 +35,8 @@ function createProgressEmbed(
 		{ name: "Errors / Skipped", value: `${errors}`, inline: true },
 	);
 }
+
+const activeGuildBulkVerifications = new Set<string>();
 
 export const verifyallCommand = {
 	data: new SlashCommandBuilder()
@@ -60,17 +61,13 @@ export const verifyallCommand = {
 
 		const guildId = interaction.guildId;
 
-		// 1. Fetch guild configuration once via Drizzle ORM
-		const config = await db.query.guildConfigs.findFirst({
-			where: eq(guildConfigs.guildId, guildId),
-		});
-
-		if (!config?.enabledModules.includes("verification")) {
+		// 1. Concurrency Guard: Check if a bulk verification run is already active for this guild
+		if (activeGuildBulkVerifications.has(guildId)) {
 			await interaction.reply({
 				embeds: [
 					createErrorEmbed(
-						"Module Disabled",
-						"The Verification module is currently disabled for this server.",
+						"Verification In Progress",
+						"A bulk verification check is already currently running for this server. Please wait for it to complete.",
 					),
 				],
 				flags: MessageFlags.Ephemeral,
@@ -78,10 +75,15 @@ export const verifyallCommand = {
 			return;
 		}
 
-		// 2. Permission Check
+		// 2. Fetch guild configuration once via Drizzle ORM
+		const config = await db.query.guildConfigs.findFirst({
+			where: eq(guildConfigs.guildId, guildId),
+		});
+
+		// 3. Permission Check
 		const executorMember = interaction.member as GuildMember;
 		const hasAdminRole = executorMember.roles.cache.some((role) =>
-			config.adminRoleIds.includes(role.id),
+			(config?.adminRoleIds ?? []).includes(role.id),
 		);
 		const hasPermission =
 			executorMember.permissions.has(PermissionFlagsBits.Administrator) ||
@@ -100,51 +102,145 @@ export const verifyallCommand = {
 			return;
 		}
 
+		// Mark guild as actively running bulk verification
+		activeGuildBulkVerifications.add(guildId);
+
 		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
 		try {
+			// 4. Fetch all members in the Discord guild (excluding bot accounts)
+			const guildMembers = await interaction.guild.members.fetch();
+			const humanMembers = guildMembers.filter((m) => !m.user.bot);
+
+			// Send initiation audit log to guild log channel if configured
+			const startLogEmbed = createBaseEmbed(
+				"Bulk Verification Started",
+				`Bulk verification run initiated by <@${interaction.user.id}> for **${humanMembers.size}** members.`,
+				EMBED_COLORS.PRIMARY,
+			);
+
+			await sendGuildAuditLog(interaction.client, guildId, startLogEmbed);
+
+			const membersInput = humanMembers.map((member) => ({
+				discordId: member.id,
+				currentRoleIds: Array.from(member.roles.cache.keys()),
+				currentNickname: member.nickname,
+			}));
+
+			const applyMemberActions = async (
+				actions?: BulkVerificationProgressData["actions"],
+			) => {
+				if (!actions || actions.length === 0) return;
+				for (const action of actions) {
+					const member = guildMembers.get(action.discordId);
+					if (!member) continue;
+
+					if (action.rolesToAdd && action.rolesToAdd.length > 0) {
+						try {
+							await member.roles.add(action.rolesToAdd);
+						} catch (err) {
+							logger.warn(`Failed to add roles to member ${member.id}:`, err);
+						}
+					}
+
+					if (action.rolesToRemove && action.rolesToRemove.length > 0) {
+						try {
+							await member.roles.remove(action.rolesToRemove);
+						} catch (err) {
+							logger.warn(
+								`Failed to remove roles from member ${member.id}:`,
+								err,
+							);
+						}
+					}
+
+					if (action.newNickname !== null) {
+						try {
+							const nick = action.newNickname
+								? action.newNickname.slice(0, 32)
+								: null;
+							await member.setNickname(nick);
+						} catch (err) {
+							logger.warn(
+								`Failed to update nickname for member ${member.id}:`,
+								err,
+							);
+						}
+					}
+				}
+			};
+
 			let lastDiscordUpdate = 0;
+			let isFinished = false;
+			let highestProcessed = 0;
+			let editQueue = Promise.resolve();
 			const THROTTLE_MS = 2000;
 
 			const onProgress = async (progress: BulkVerificationProgressData) => {
+				// Apply real-time Discord role additions/removals and nickname changes
+				if (progress.actions && progress.actions.length > 0) {
+					await applyMemberActions(progress.actions);
+				}
+
+				// Only render progress embeds for active running chunks before completion
+				if (isFinished || progress.status !== "running") {
+					return;
+				}
+
+				// Monotonic progression: Never let progress bar regress to a lower count
+				if (progress.processed < highestProcessed) {
+					return;
+				}
+				highestProcessed = progress.processed;
+
 				const now = Date.now();
 				if (
-					progress.status === "running" &&
-					now - lastDiscordUpdate < THROTTLE_MS
+					now - lastDiscordUpdate < THROTTLE_MS &&
+					progress.processed < progress.total
 				) {
 					return;
 				}
 				lastDiscordUpdate = now;
 
-				try {
-					const progressEmbed = createProgressEmbed(
-						guildId,
-						progress.processed,
-						progress.total,
-						progress.updated,
-						progress.errors,
-					);
-					await interaction.editReply({ embeds: [progressEmbed] });
-				} catch (err) {
-					logger.warn("Failed to update verifyall live progress:", err);
-				}
+				const progressEmbed = createProgressEmbed(
+					progress.processed,
+					progress.total,
+					progress.updated,
+					progress.errors,
+				);
+
+				// Serialize editReply calls in order to prevent network race conditions
+				editQueue = editQueue.then(async () => {
+					if (isFinished) return;
+					try {
+						await interaction.editReply({ embeds: [progressEmbed] });
+					} catch (err) {
+						logger.warn("Failed to update verifyall live progress:", err);
+					}
+				});
 			};
 
-			// Send streaming bulk verification IPC request to worker engine.
+			// Send streaming bulk verification IPC request to worker engine with full guild members list.
 			// Worker engine streams real-time progress chunks and resets sliding heartbeat inactivity timer.
 			const result = await streamBulkVerificationRequest(
 				{
 					guildId,
 					channelId: interaction.channelId,
 					triggeredBy: "admin",
+					members: membersInput,
 				},
 				onProgress,
 				60000,
 			);
 
+			// Mark as finished to discard any trailing progress callbacks
+			isFinished = true;
+			// Await all queued progress edits before rendering the final completion embed
+			await editQueue;
+
 			const embed = createBaseEmbed(
 				"Bulk Verification Complete",
-				`Bulk verification run completed for guild **${guildId}**.`,
+				"Bulk verification check completed successfully for all members.",
 				EMBED_COLORS.SUCCESS,
 			).addFields(
 				{
@@ -154,6 +250,11 @@ export const verifyallCommand = {
 				},
 				{ name: "Members Updated", value: `${result.updated}`, inline: true },
 				{ name: "Errors / Skipped", value: `${result.errors}`, inline: true },
+				{
+					name: "Triggered By",
+					value: `<@${interaction.user.id}>`,
+					inline: true,
+				},
 			);
 
 			await interaction.editReply({ embeds: [embed] });
@@ -164,6 +265,8 @@ export const verifyallCommand = {
 			const errorEmbed = createErrorEmbed("Bulk Verification Error", errMsg);
 			await interaction.editReply({ embeds: [errorEmbed] });
 			await sendGuildAuditLog(interaction.client, guildId, errorEmbed);
+		} finally {
+			activeGuildBulkVerifications.delete(guildId);
 		}
 	},
 };

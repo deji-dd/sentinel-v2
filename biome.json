@@ -15,9 +15,12 @@
 			"!**/tailwind.css",
 			"!**/index.css",
 			"!**/assets/torn-territory-map.svg",
-			"!**/assets/torn-territory-map.ts"
+			"!**/assets/torn-territory-map.ts",
+			"!**/public/torn-territory-map.svg",
+			"!**/*.svg"
 		]
 	},
+
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab"

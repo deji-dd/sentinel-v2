@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	BulkVerificationProgressData,
+	GuildMemberVerificationInput,
 	VerificationRequest,
 	VerificationResponse,
 } from "@sentinel/schemas";
@@ -53,6 +54,7 @@ export async function streamBulkVerificationRequest(
 		guildId: string;
 		channelId?: string;
 		triggeredBy?: "admin" | "cron" | "user";
+		members?: GuildMemberVerificationInput[];
 	},
 	onProgress?: BulkVerificationProgressCallback,
 	inactivityTimeoutMs = 60000,
@@ -89,7 +91,12 @@ export async function streamBulkVerificationRequest(
  * Sends a bulk guild verification request directly over UDS to the worker engine.
  */
 export async function sendBulkVerificationRequest(
-	data: { guildId: string; channelId?: string; triggeredBy?: "admin" | "cron" },
+	data: {
+		guildId: string;
+		channelId?: string;
+		triggeredBy?: "admin" | "cron";
+		members?: GuildMemberVerificationInput[];
+	},
 	timeoutMs = 60000,
 ): Promise<BulkVerificationResult> {
 	return streamBulkVerificationRequest(data, undefined, timeoutMs);

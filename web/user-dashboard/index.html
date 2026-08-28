@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<base href="/" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Sentinel</title>
+		<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<script>
+			(() => {
+				try {
+					const stored = localStorage.getItem("sentinel-user-theme");
+					const theme =
+						stored === "light" || stored === "dark"
+							? stored
+							: window.matchMedia?.("(prefers-color-scheme: light)")?.matches
+								? "light"
+								: "dark";
+					document.documentElement.setAttribute("data-theme", theme);
+					if (theme === "dark") {
+						document.documentElement.classList.add("dark");
+					} else {
+						document.documentElement.classList.remove("dark");
+					}
+				} catch {}
+			})();
+		</script>
+		<style>
+			:root {
+				--init-bg: #060913;
+				--init-card: rgba(11, 17, 32, 0.8);
+				--init-border: rgba(56, 189, 248, 0.16);
+				--init-text: #f8fafc;
+				--init-muted: #94a3b8;
+				--init-primary: #38bdf8;
+				--init-glow: rgba(56, 189, 248, 0.12);
+			}
+			[data-theme="light"] {
+				--init-bg: #f8fafc;
+				--init-card: rgba(255, 255, 255, 0.85);
+				--init-border: rgba(2, 132, 199, 0.18);
+				--init-text: #0f172a;
+				--init-muted: #64748b;
+				--init-primary: #0284c7;
+				--init-glow: rgba(2, 132, 199, 0.12);
+			}
+			.sentinel-init-screen {
+				display: flex;
+				height: 100vh;
+				width: 100vw;
+				align-items: center;
+				justify-content: center;
+				background-color: var(--init-bg);
+				color: var(--init-text);
+				font-family: 'Space Grotesk', system-ui, sans-serif;
+				position: fixed;
+				inset: 0;
+				z-index: 99999;
+				backdrop-filter: blur(20px);
+			}
+			.sentinel-init-card {
+				position: relative;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 20px;
+				border-radius: 24px;
+				background-color: var(--init-card);
+				border: 1px solid var(--init-border);
+				box-shadow: 0 20px 45px -10px var(--init-glow);
+				backdrop-filter: blur(20px);
+				width: 280px;
+				height: 180px;
+				max-width: calc(100vw - 32px);
+				box-sizing: border-box;
+				user-select: none;
+			}
+			.sentinel-init-laser {
+				position: absolute;
+				top: 0;
+				left: 24px;
+				right: 24px;
+				height: 2px;
+				background: linear-gradient(90deg, transparent, var(--init-primary), transparent);
+				animation: sentinel-pulse 2s ease-in-out infinite;
+			}
+			.sentinel-init-radar {
+				position: relative;
+				width: 64px;
+				height: 64px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.sentinel-init-ring-outer {
+				position: absolute;
+				inset: 0;
+				border-radius: 50%;
+				border: 2px dashed var(--init-border);
+				animation: sentinel-spin-rev 6s linear infinite;
+			}
+			.sentinel-init-ring-inner {
+				position: absolute;
+				inset: 8px;
+				border-radius: 50%;
+				border: 2px solid transparent;
+				border-top-color: var(--init-primary);
+				border-right-color: #818cf8;
+				animation: sentinel-pulse-spin 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+			}
+			.sentinel-init-core {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				background-color: var(--init-primary);
+				box-shadow: 0 0 12px var(--init-primary);
+				animation: sentinel-core-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+			}
+			.sentinel-init-title-box {
+				height: 20px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.sentinel-init-title {
+				font-size: 14px;
+				line-height: 20px;
+				font-weight: 700;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+				font-family: 'JetBrains Mono', monospace;
+				color: var(--init-text);
+			}
+			@keyframes sentinel-pulse-spin {
+				0% { transform: rotate(0deg) scale(0.96); }
+				50% { transform: rotate(180deg) scale(1.04); }
+				100% { transform: rotate(360deg) scale(0.96); }
+			}
+			@keyframes sentinel-spin-rev {
+				0% { transform: rotate(360deg); }
+				100% { transform: rotate(0deg); }
+			}
+			@keyframes sentinel-core-ping {
+				0% { transform: scale(0.85); opacity: 1; }
+				50% { transform: scale(1.3); opacity: 0.6; }
+				100% { transform: scale(0.85); opacity: 1; }
+			}
+			@keyframes sentinel-pulse {
+				0%, 100% { opacity: 0.4; }
+				50% { opacity: 1; }
+			}
+		</style>
+	</head>
+	<body class="bg-background text-foreground antialiased selection:bg-primary/25 selection:text-primary min-h-screen">
+		<div id="root">
+			<div class="sentinel-init-screen">
+				<div class="sentinel-init-card">
+					<div class="sentinel-init-laser"></div>
+					<div class="sentinel-init-radar">
+						<div class="sentinel-init-ring-outer"></div>
+						<div class="sentinel-init-ring-inner"></div>
+						<div class="sentinel-init-core"></div>
+					</div>
+					<div class="sentinel-init-title-box">
+						<span class="sentinel-init-title">SENTINEL</span>
+					</div>
+				</div>
+			</div>
+		</div>
+		<script type="module" src="./src/main.tsx"></script>
+	</body>
+</html>

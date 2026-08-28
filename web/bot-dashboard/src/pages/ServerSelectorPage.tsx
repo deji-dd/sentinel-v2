@@ -1,11 +1,10 @@
 import {
 	AlertCircle,
 	ArrowRight,
-	ExternalLink,
+	KeyRound,
 	Loader2,
 	LogOut,
 	Moon,
-	Plus,
 	RotateCw,
 	Search,
 	Server,
@@ -84,9 +83,6 @@ export default function ServerSelectorPage() {
 		if (!authenticated) return;
 		void fetchGuilds();
 	}, [authenticated]);
-
-	const DISCORD_CLIENT_ID = "1465437709693747280";
-	const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&permissions=8&integration_type=0&scope=bot`;
 
 	const filtered = guilds.filter(
 		(g) =>
@@ -216,17 +212,25 @@ export default function ServerSelectorPage() {
 									/>
 									Refresh
 								</Button>
-								<Button
-									asChild
-									size="sm"
-									className="h-9 px-3 text-xs gap-1.5 bg-[#5865f2] hover:bg-[#4752c4] text-white shadow-xs cursor-pointer rounded-xl font-medium"
-								>
-									<a href={inviteUrl} target="_blank" rel="noopener noreferrer">
-										<Plus className="size-3.5" data-icon="inline-start" />
-										Add to Server
-										<ExternalLink className="size-3 text-white/80 ml-0.5" />
-									</a>
-								</Button>
+
+								{(user?.role === "admin" || user?.role === "owner") && (
+									<Button
+										size="sm"
+										onClick={() => {
+											const targetGuild = guilds[0]?.id;
+											navigate(
+												targetGuild
+													? `/guilds/${targetGuild}/keys`
+													: "/admin/keys",
+											);
+										}}
+										className="h-9 px-3 text-xs gap-1.5 cursor-pointer rounded-xl font-medium"
+										title="Manage System API Keys"
+									>
+										<KeyRound className="size-3.5" data-icon="inline-start" />
+										System Keys
+									</Button>
+								)}
 							</div>
 						</div>
 
@@ -302,25 +306,9 @@ export default function ServerSelectorPage() {
 									<p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
 										{search
 											? `No mutual servers match "${search}". Try another search query.`
-											: "You don't share any authorized servers with Sentinel yet. Invite the bot to get started."}
+											: "You don't share any authorized target servers with Sentinel."}
 									</p>
 								</div>
-								{!search && (
-									<Button
-										asChild
-										size="sm"
-										className="mt-2 bg-[#5865f2] hover:bg-[#4752c4] text-white rounded-xl"
-									>
-										<a
-											href={inviteUrl}
-											target="_blank"
-											rel="noopener noreferrer"
-										>
-											<Plus className="size-4" data-icon="inline-start" />
-											Invite Sentinel
-										</a>
-									</Button>
-								)}
 							</div>
 						)}
 

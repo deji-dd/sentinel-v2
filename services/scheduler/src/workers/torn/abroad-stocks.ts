@@ -4,7 +4,7 @@ import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "torn:abroad_stocks";
-const logger = new Logger(WORKER_NAME);
+const logger = new Logger("Scheduler", "AbroadStocks");
 
 // Cadence: Run every 5 minutes (300 seconds) to track YATA item depletion
 const CADENCE_SEC = 300;

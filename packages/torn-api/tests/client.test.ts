@@ -30,4 +30,42 @@ describe("TornApiClient", () => {
 		// Restore original fetch implementation
 		fetchSpy.mockRestore();
 	});
+
+	it("includes comment=Sentinel flag in API v2 request URL", async () => {
+		let requestedUrl = "";
+		const client = new TornApiClient();
+
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL,
+		) => {
+			requestedUrl = url.toString();
+			return new Response(JSON.stringify({ success: true }));
+		}) as unknown as typeof fetch);
+
+		await client.get("/user", { apiKey: "test_key" });
+
+		const parsedUrl = new URL(requestedUrl);
+		expect(parsedUrl.searchParams.get("comment")).toBe("Sentinel");
+
+		fetchSpy.mockRestore();
+	});
+
+	it("includes comment=Sentinel flag in API v1 raw request URL", async () => {
+		let requestedUrl = "";
+		const client = new TornApiClient();
+
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL,
+		) => {
+			requestedUrl = url.toString();
+			return new Response(JSON.stringify({ success: true }));
+		}) as unknown as typeof fetch);
+
+		await client.getRaw("user/", { apiKey: "test_key" });
+
+		const parsedUrl = new URL(requestedUrl);
+		expect(parsedUrl.searchParams.get("comment")).toBe("Sentinel");
+
+		fetchSpy.mockRestore();
+	});
 });

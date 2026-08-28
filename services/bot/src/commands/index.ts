@@ -1,4 +1,3 @@
-import type { ModuleKey } from "@sentinel/utils";
 import {
 	type ChatInputCommandInteraction,
 	Collection,
@@ -10,9 +9,9 @@ import { allianceMapCommand } from "./alliance-map";
 import { assaultCheckCommand } from "./assault-check";
 import { burnMapCommand } from "./burn-map";
 import { configCommand } from "./config";
-import { inviteCommand } from "./invite";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
+import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
@@ -24,19 +23,18 @@ export type BotCommandData =
 export type BotCommand = {
 	data: BotCommandData;
 	execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
-	module?: ModuleKey;
 };
 
 export const commandsList: BotCommand[] = [
-	{ ...pingCommand, module: undefined },
-	{ ...inviteCommand, module: undefined },
-	{ ...configCommand, module: undefined },
-	{ ...purgeCommand, module: undefined },
-	{ ...verifyCommand, module: "verification" },
-	{ ...verifyallCommand, module: "verification" },
-	{ ...assaultCheckCommand, module: "territory" },
-	{ ...allianceMapCommand, module: "territory" },
-	{ ...burnMapCommand, module: "territory" },
+	pingCommand,
+	configCommand,
+	ttSelectorCommand,
+	purgeCommand,
+	verifyCommand,
+	verifyallCommand,
+	assaultCheckCommand,
+	allianceMapCommand,
+	burnMapCommand,
 ];
 
 export function buildCommandsCollection(): Collection<string, BotCommand> {

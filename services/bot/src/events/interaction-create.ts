@@ -1,3 +1,4 @@
+import { isTargetGuild } from "@sentinel/database";
 import {
 	type Collection,
 	Events,
@@ -15,6 +16,19 @@ export const interactionCreateEvent = {
 		interaction: Interaction,
 		commands: Collection<string, BotCommand>,
 	): Promise<void> {
+		if (interaction.guildId && !isTargetGuild(interaction.guildId)) {
+			if (interaction.isRepliable()) {
+				await interaction
+					.reply({
+						content:
+							"This bot is private and restricted to authorized target servers.",
+						flags: MessageFlags.Ephemeral,
+					})
+					.catch(() => {});
+			}
+			return;
+		}
+
 		if (interaction.isButton()) {
 			if (interaction.customId.startsWith("faction_dir_page:")) {
 				await handleFactionDirectoryButton(interaction);

@@ -1,7 +1,14 @@
-import { recordBootAlert } from "@sentinel/database";
+import { ensureTargetGuildConfigs, recordBootAlert } from "@sentinel/database";
 import { app } from "./src/app";
 import { env } from "./src/config/env";
 import { logger } from "./src/lib/logger";
+import { initSchedulerIpcListener } from "./src/lib/scheduler-ipc";
+import { startTelemetrySampler } from "./src/lib/telemetry";
+
+await ensureTargetGuildConfigs();
+await recordBootAlert("api");
+initSchedulerIpcListener();
+startTelemetrySampler(30_000);
 
 app.listen(env.PORT, () => {
 	logger.info(
@@ -11,8 +18,6 @@ app.listen(env.PORT, () => {
 		`Swagger Documentation available at http://${app.server?.hostname}:${app.server?.port}/swagger`,
 	);
 });
-
-await recordBootAlert("api");
 
 const shutdown = (signal: string) => {
 	logger.info(`Received ${signal}. Gracefully stopping server...`);

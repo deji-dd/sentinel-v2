@@ -36,6 +36,13 @@
 			"when": 1786142576625,
 			"tag": "0004_nappy_golden_guardian",
 			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "6",
+			"when": 1786816406131,
+			"tag": "0005_abnormal_red_ghost",
+			"breakpoints": true
 		}
 	]
 }

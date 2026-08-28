@@ -16,12 +16,13 @@ import { UserRateLimiter } from "./user-rate-limiter";
 let systemKeyIndex = 0;
 
 /**
- * Fetches all active API keys (both system and personal) to form the full request pool.
+ * Fetches all active system API keys in the database (keyType = 'system').
+ * Isolates personal keys so they are never consumed by general background tasks.
  */
 export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 	const keysInDb = await db.query.apiKeys.findMany({
-		where: eq(apiKeys.isValid, true),
+		where: and(eq(apiKeys.isValid, true), eq(apiKeys.keyType, "system")),
 	});
 
 	if (keysInDb.length > 0) {
@@ -35,12 +36,7 @@ export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
 		}));
 	}
 
-	const envKey = process.env.TORN_API_KEY;
-	if (envKey) {
-		return [{ apiKey: envKey, userId: 0, keyType: "system" }];
-	}
-
-	throw new Error("No valid API keys available in database or environment.");
+	throw new Error("No valid system API keys available in database.");
 }
 
 /**
@@ -57,11 +53,14 @@ async function getNextSystemKey(): Promise<ManagedApiKey> {
 }
 
 /**
- * Returns the personal API key record for the repository owner (keyType === "personal").
+ * Returns the personal API key record for the repository owner.
+ * Checks the database first for an active key marked as 'personal',
+ * and falls back to process.env.TORN_API_KEY.
  */
 export async function getPersonalKey(): Promise<ManagedApiKey | null> {
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 
+	// 1. Check database for registered personal key
 	const personalKey = await db.query.apiKeys.findFirst({
 		where: and(eq(apiKeys.keyType, "personal"), eq(apiKeys.isValid, true)),
 	});
@@ -75,6 +74,12 @@ export async function getPersonalKey(): Promise<ManagedApiKey | null> {
 			userId: personalKey.userId,
 			keyType: personalKey.keyType,
 		};
+	}
+
+	// 2. Fall back to environment variable
+	const envKey = process.env.TORN_API_KEY;
+	if (envKey) {
+		return { apiKey: envKey, userId: 0, keyType: "personal" };
 	}
 
 	return null;
@@ -148,7 +153,10 @@ export class ManagedTornApiClient {
 		const result = await this.client.get(path, {
 			apiKey: decryptedKey,
 			pathParams: options?.pathParams,
-			queryParams: options?.queryParams,
+			queryParams: {
+				comment: "Sentinel",
+				...options?.queryParams,
+			} as unknown as OperationQueryParams<PathOperation<P>>,
 		});
 
 		await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
@@ -184,7 +192,10 @@ export class ManagedTornApiClient {
 
 		const result = await this.client.getRaw<T>(endpoint, {
 			apiKey: decryptedKey,
-			queryParams: options?.queryParams,
+			queryParams: {
+				comment: "Sentinel",
+				...options?.queryParams,
+			},
 		});
 
 		await this.keyHealthManager.recordSuccessfulUse(decryptedKey);
@@ -207,6 +218,24 @@ export class ManagedTornApiClient {
 			apiKey: personalKey.apiKey,
 			userId: personalKey.userId,
 			pathParams: options?.pathParams,
+			queryParams: options?.queryParams,
+		});
+	}
+
+	/**
+	 * Executes a raw GET request strictly using the personal key of the system owner.
+	 * Falls back to central system key pool if no personal key is currently registered.
+	 */
+	async getPersonalRaw<T = unknown>(
+		endpoint: string,
+		options?: {
+			queryParams?: Record<string, string | number | boolean | undefined>;
+		},
+	): Promise<T> {
+		const personalKey = (await getPersonalKey()) ?? (await getNextSystemKey());
+		return this.getRaw<T>(endpoint, {
+			apiKey: personalKey.apiKey,
+			userId: personalKey.userId,
 			queryParams: options?.queryParams,
 		});
 	}

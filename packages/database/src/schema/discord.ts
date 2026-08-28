@@ -1,19 +1,10 @@
 import { sql } from "drizzle-orm";
-import {
-	integer,
-	sqliteTable,
-	text,
-	uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const guildConfigs = sqliteTable("guild_configs", {
 	guildId: text("guild_id").primaryKey(),
 	logChannelId: text("log_channel_id"),
 	adminRoleIds: text("admin_role_ids", { mode: "json" })
-		.$type<string[]>()
-		.default([])
-		.notNull(),
-	enabledModules: text("enabled_modules", { mode: "json" })
 		.$type<string[]>()
 		.default([])
 		.notNull(),
@@ -89,33 +80,6 @@ export const reactionRoleMappings = sqliteTable("reaction_role_mappings", {
 		.default(sql`(strftime('%s', 'now'))`)
 		.notNull(),
 });
-
-export const guildApiKeys = sqliteTable(
-	"guild_api_keys",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => crypto.randomUUID()),
-		guildId: text("guild_id").notNull(),
-		userId: integer("user_id"),
-		apiKeyEncrypted: text("api_key_encrypted").notNull(),
-		apiKeyHash: text("api_key_hash").notNull(),
-		providedBy: text("provided_by"),
-		isValid: integer("is_valid", { mode: "boolean" }).default(true).notNull(),
-		createdAt: integer("created_at", { mode: "timestamp" })
-			.default(sql`(strftime('%s', 'now'))`)
-			.notNull(),
-		updatedAt: integer("updated_at", { mode: "timestamp" })
-			.default(sql`(strftime('%s', 'now'))`)
-			.notNull(),
-	},
-	(table) => ({
-		guildKeyIdx: uniqueIndex("guild_api_keys_guild_id_api_key_hash_unique").on(
-			table.guildId,
-			table.apiKeyHash,
-		),
-	}),
-);
 
 export const factionRoleMappings = sqliteTable("faction_role_mappings", {
 	id: text("id")

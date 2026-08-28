@@ -2,19 +2,20 @@ import {
 	db,
 	eq,
 	factionRoleMappings,
-	guildApiKeys,
 	guildConfigs,
 	verificationLogs,
 	verifiedUsers,
 } from "@sentinel/database";
 import type {
 	BulkVerificationProgressData,
+	GuildMemberVerificationInput,
+	MemberVerificationAction,
 	TornSchema,
 	VerificationFailureResponse,
 	VerificationRequest,
 	VerificationSuccessResponse,
 } from "@sentinel/schemas";
-import { type ManagedApiKey, tornApi } from "@sentinel/torn-api";
+import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 
 const logger = new Logger("Verification");
@@ -63,48 +64,12 @@ export async function runVerificationJob(
 			return errRes;
 		}
 
-		// Fetch active API keys and enabled faction mappings for guild
-		const [activeApiKeys, activeFactionMappings] = await Promise.all([
-			db.query.guildApiKeys.findMany({
-				where: eq(guildApiKeys.guildId, job.guildId),
-			}),
-			db.query.factionRoleMappings.findMany({
-				where: eq(factionRoleMappings.guildId, job.guildId),
-			}),
-		]);
+		// Fetch enabled faction mappings for guild
+		const activeFactionMappings = await db.query.factionRoleMappings.findMany({
+			where: eq(factionRoleMappings.guildId, job.guildId),
+		});
 
-		const validGuildKeys = activeApiKeys.filter((k) => k.isValid);
 		const enabledMappings = activeFactionMappings.filter((m) => m.enabled);
-
-		const managedKeys: ManagedApiKey[] = validGuildKeys.map((k) => ({
-			apiKey: k.apiKeyEncrypted,
-			userId: k.userId ?? 0,
-			keyType: "guild",
-		}));
-
-		if (!apiKeyOverride && managedKeys.length === 0) {
-			finishLog();
-			const errRes: VerificationFailureResponse = {
-				guildId: job.guildId,
-				channelId: job.channelId,
-				discordId: job.discordId,
-				error: { message: "No valid API key available for this guild." },
-			};
-			await db
-				.insert(verificationLogs)
-				.values({
-					guildId: job.guildId,
-					discordId: job.discordId,
-					status: "failure",
-					triggeredBy: job.triggeredBy || "user",
-					rolesAdded: [],
-					rolesRemoved: [],
-					oldNickname: job.currentNickname,
-					error: errRes.error.message,
-				})
-				.catch(() => {});
-			return errRes;
-		}
 
 		// 2. Compile Managed & Protected Roles
 		const managedRoles = new Set<string>();
@@ -123,12 +88,11 @@ export async function runVerificationJob(
 			}
 		}
 
-		// 3. Fetch User via Centralized Torn API Client (using managed API keys)
+		// 3. Fetch User via Centralized Torn API Client (using central key pool)
 		let response: UserGenericResponse;
 		try {
-			const targetKey = apiKeyOverride || managedKeys[0]?.apiKey;
 			response = (await tornApi.get("/user", {
-				apiKey: targetKey,
+				apiKey: apiKeyOverride,
 				queryParams: {
 					selections: ["discord", "faction", "profile"],
 					id: job.discordId,
@@ -302,7 +266,8 @@ export async function runVerificationJob(
 			.replace("{name}", tornName)
 			.replace("{id}", tornId.toString())
 			.replace(/\s+/g, " ")
-			.trim();
+			.trim()
+			.slice(0, 32);
 
 		// 7. Calculate Diff
 		const rolesToAdd = Array.from(targetRoles).filter(
@@ -375,13 +340,14 @@ export async function runVerificationJob(
 /**
  * Optimised bulk guild verification run.
  * Leverages `tornApi.executeBatch` to fetch mapped faction member lists in parallel across all registered guild API keys.
- * Uses Staggered Soft-Expiry (oldest-first priority, up to 15 stale users re-verified per run) to detect unlinked accounts without overwhelming API keys.
- * Emits real-time progress callbacks for streaming back over IPC.
+ * Processes ALL members (from Discord guild or DB fallback), calculating role additions/removals and nickname updates.
+ * Emits real-time progress callbacks and member action batches for streaming back over IPC.
  */
 export async function runBulkGuildVerification(
 	guildId: string,
 	triggeredBy: "cron" | "admin" | "user" = "cron",
 	onProgress?: (progress: BulkVerificationProgressData) => Promise<void> | void,
+	membersListInput?: GuildMemberVerificationInput[],
 ): Promise<{
 	processed: number;
 	total: number;
@@ -395,21 +361,15 @@ export async function runBulkGuildVerification(
 			where: eq(guildConfigs.guildId, guildId),
 		});
 
-		const [activeApiKeys, activeFactionMappings] = await Promise.all([
-			db.query.guildApiKeys.findMany({
-				where: eq(guildApiKeys.guildId, guildId),
-			}),
-			db.query.factionRoleMappings.findMany({
-				where: eq(factionRoleMappings.guildId, guildId),
-			}),
-		]);
+		const activeFactionMappings = await db.query.factionRoleMappings.findMany({
+			where: eq(factionRoleMappings.guildId, guildId),
+		});
 
-		const validGuildKeys = activeApiKeys.filter((k) => k.isValid);
 		const enabledMappings = activeFactionMappings.filter((m) => m.enabled);
 
-		if (!config || validGuildKeys.length === 0) {
+		if (!config) {
 			logger.warn(
-				`No valid API keys found for bulk verification of guild ${guildId}`,
+				`Guild configuration not found for bulk verification of guild ${guildId}`,
 			);
 			await onProgress?.({
 				guildId,
@@ -418,22 +378,34 @@ export async function runBulkGuildVerification(
 				updated: 0,
 				errors: 1,
 				status: "failed",
-				message: "No valid API keys found for bulk verification of this guild.",
+				message:
+					"Guild configuration not found for bulk verification of this guild.",
 			});
 			return { processed: 0, total: 0, updated: 0, errors: 1 };
 		}
 
-		const managedKeys: ManagedApiKey[] = validGuildKeys.map((k) => ({
-			apiKey: k.apiKeyEncrypted,
-			userId: k.userId ?? 0,
-			keyType: "guild",
-		}));
+		// Compile Managed & Protected Roles for the guild
+		const managedRoles = new Set<string>();
+		for (const id of config.verifiedRoleIds) {
+			managedRoles.add(id);
+		}
+		for (const id of config.protectedRoleIds) {
+			managedRoles.add(id);
+		}
+		for (const mapping of enabledMappings) {
+			for (const id of mapping.memberRoleIds) {
+				managedRoles.add(id);
+			}
+			for (const id of mapping.leaderRoleIds) {
+				managedRoles.add(id);
+			}
+		}
 
 		// Map: factionId -> Set of member Torn IDs, Map: factionId -> Set of Leader/Co-leader Torn IDs
 		const factionMembersMap = new Map<number, Set<number>>();
 		const factionLeadersMap = new Map<number, Set<number>>();
 
-		// Fetch all mapped factions in parallel using tornApi.executeBatch across all guild API keys!
+		// Fetch all mapped factions in parallel using tornApi.executeBatch across central key pool
 		try {
 			const factionResults = (await tornApi.executeBatch(
 				"/faction",
@@ -444,7 +416,6 @@ export async function runBulkGuildVerification(
 						id: mapping.factionId,
 					},
 				}),
-				managedKeys,
 			)) as Array<{ members?: Record<string, { position?: string }> }>;
 
 			for (let i = 0; i < enabledMappings.length; i++) {
@@ -479,12 +450,31 @@ export async function runBulkGuildVerification(
 			);
 		}
 
-		// Fetch all verified users in DB
-		const verifiedUsersList = await db.query.verifiedUsers.findMany();
-		const total = verifiedUsersList.length;
+		// Fetch all verified users in DB into a Map for O(1) lookups
+		const dbVerifiedUsers = await db.query.verifiedUsers.findMany();
+		const verifiedUsersMap = new Map<
+			string,
+			(typeof dbVerifiedUsers)[number]
+		>();
+		for (const u of dbVerifiedUsers) {
+			verifiedUsersMap.set(u.discordId, u);
+		}
+
+		// Determine target member list (all guild members passed in, or DB fallback)
+		const targetMembers: GuildMemberVerificationInput[] =
+			membersListInput && membersListInput.length > 0
+				? membersListInput
+				: dbVerifiedUsers.map((u) => ({
+						discordId: u.discordId,
+						currentRoleIds: [],
+						currentNickname: u.tornName,
+					}));
+
+		const total = targetMembers.length;
 		let processed = 0;
 		let updated = 0;
 		let errors = 0;
+		let pendingActions: MemberVerificationAction[] = [];
 
 		// Emit initial progress event
 		await onProgress?.({
@@ -497,89 +487,183 @@ export async function runBulkGuildVerification(
 			message: `Starting bulk verification of ${total} members...`,
 		});
 
-		// Staggered Soft-Expiry: Priority-sort users whose link check is older than 7 days (oldest checked / un-checked first)
 		const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 		const now = Date.now();
-		const MAX_TRICKLE = 15;
 
-		const staleUsersList = verifiedUsersList
-			.filter((u) => {
-				const checkedAt = u.lastCheckedAt
-					? new Date(u.lastCheckedAt).getTime()
-					: 0;
-				return now - checkedAt > SEVEN_DAYS_MS;
-			})
-			.sort((a, b) => {
-				const timeA = a.lastCheckedAt ? new Date(a.lastCheckedAt).getTime() : 0;
-				const timeB = b.lastCheckedAt ? new Date(b.lastCheckedAt).getTime() : 0;
-				return timeA - timeB; // Oldest / never checked first
-			})
-			.slice(0, MAX_TRICKLE);
-
-		const staleUserIds = new Set(staleUsersList.map((u) => u.discordId));
-
-		for (const user of verifiedUsersList) {
+		for (const member of targetMembers) {
 			processed++;
 			try {
-				// If user cache is stale (>7 days), perform full re-verification against Torn API /user?selections=discord
-				if (staleUserIds.has(user.discordId)) {
+				const userInDb = verifiedUsersMap.get(member.discordId);
+				const checkedAt = userInDb?.lastCheckedAt
+					? new Date(userInDb.lastCheckedAt).getTime()
+					: 0;
+				const isStale = !userInDb || now - checkedAt > SEVEN_DAYS_MS;
+
+				// If user is not in DB or link check is stale (>7 days), do full Torn API verification
+				if (!userInDb || isStale) {
 					const res = await runVerificationJob({
 						guildId,
 						channelId: "",
-						discordId: user.discordId,
-						currentRoleIds: [],
-						currentNickname: user.tornName,
+						discordId: member.discordId,
+						currentRoleIds: member.currentRoleIds,
+						currentNickname: member.currentNickname,
 						triggeredBy,
 					});
 
 					if ("error" in res && res.error) {
 						errors++;
-					} else {
-						updated++;
+					} else if ("rolesToAdd" in res) {
+						const hasChanges =
+							(res.rolesToAdd && res.rolesToAdd.length > 0) ||
+							(res.rolesToRemove && res.rolesToRemove.length > 0) ||
+							res.newNickname !== null;
+
+						if (hasChanges) {
+							updated++;
+							pendingActions.push({
+								discordId: member.discordId,
+								rolesToAdd: res.rolesToAdd,
+								rolesToRemove: res.rolesToRemove,
+								newNickname: res.newNickname,
+							});
+						}
 					}
 				} else {
-					// Otherwise use fast in-memory faction member check
+					// Fast in-memory verification using cached verified user data & pre-fetched faction maps
 					let userFactionId: number | null = null;
+					let isLeaderOrCoLeader = false;
 
 					for (const [factionId, membersSet] of factionMembersMap) {
-						if (membersSet.has(user.tornId)) {
+						if (membersSet.has(userInDb.tornId)) {
 							userFactionId = factionId;
+							const leadersSet = factionLeadersMap.get(factionId);
+							if (leadersSet?.has(userInDb.tornId)) {
+								isLeaderOrCoLeader = true;
+							}
 							break;
 						}
 					}
 
-					// If faction changed, update verifiedUsers table
-					if (user.factionId !== userFactionId) {
+					// Compute target roles
+					const targetRoles = new Set<string>();
+					for (const id of config.verifiedRoleIds) {
+						targetRoles.add(id);
+					}
+
+					let isInMappedFaction = false;
+					if (userFactionId) {
+						const mapping = enabledMappings.find(
+							(m) => m.factionId === userFactionId,
+						);
+						if (mapping) {
+							isInMappedFaction = true;
+							for (const id of mapping.memberRoleIds) {
+								targetRoles.add(id);
+							}
+							if (isLeaderOrCoLeader) {
+								for (const id of mapping.leaderRoleIds) {
+									targetRoles.add(id);
+								}
+							}
+						}
+					}
+
+					// Protected roles: keep protected roles if user is in a mapped faction
+					if (isInMappedFaction) {
+						for (const roleId of config.protectedRoleIds) {
+							if (member.currentRoleIds.includes(roleId)) {
+								targetRoles.add(roleId);
+							}
+						}
+					}
+
+					// Format nickname
+					let template = config.nicknameTemplate || "[{tag}] {name} [{id}]";
+					if (!userInDb.factionTag) {
+						template = template
+							.replace("[{tag}]", "")
+							.replace("{tag}", "")
+							.trim();
+					} else {
+						template = template.replace("{tag}", userInDb.factionTag);
+					}
+					const formattedNickname = template
+						.replace("{name}", userInDb.tornName)
+						.replace("{id}", userInDb.tornId.toString())
+						.replace(/\s+/g, " ")
+						.trim()
+						.slice(0, 32);
+
+					// Calculate diffs
+					const rolesToAdd = Array.from(targetRoles).filter(
+						(roleId) => !member.currentRoleIds.includes(roleId),
+					);
+					const rolesToRemove = Array.from(managedRoles).filter(
+						(roleId) =>
+							!targetRoles.has(roleId) &&
+							member.currentRoleIds.includes(roleId),
+					);
+					const newNickname =
+						formattedNickname === member.currentNickname
+							? null
+							: formattedNickname;
+
+					let factionChanged = false;
+					if (userInDb.factionId !== userFactionId) {
 						await db
 							.update(verifiedUsers)
 							.set({
 								factionId: userFactionId,
 								updatedAt: new Date(),
 							})
-							.where(eq(verifiedUsers.discordId, user.discordId));
-						updated++;
+							.where(eq(verifiedUsers.discordId, userInDb.discordId));
+						factionChanged = true;
 					}
 
-					await db
-						.insert(verificationLogs)
-						.values({
-							guildId,
-							discordId: user.discordId,
-							status: "success",
-							triggeredBy,
-							rolesAdded: [],
-							rolesRemoved: [],
-							oldNickname: user.tornName,
-							newNickname: user.tornName,
-						})
-						.catch(() => {});
+					const hasChanges =
+						rolesToAdd.length > 0 ||
+						rolesToRemove.length > 0 ||
+						newNickname !== null ||
+						factionChanged;
+
+					if (hasChanges) {
+						updated++;
+						pendingActions.push({
+							discordId: member.discordId,
+							rolesToAdd: rolesToAdd.length > 0 ? rolesToAdd : null,
+							rolesToRemove: rolesToRemove.length > 0 ? rolesToRemove : null,
+							newNickname,
+						});
+
+						await db
+							.insert(verificationLogs)
+							.values({
+								guildId,
+								discordId: member.discordId,
+								status: "success",
+								triggeredBy,
+								rolesAdded: rolesToAdd,
+								rolesRemoved: rolesToRemove,
+								oldNickname: member.currentNickname,
+								newNickname,
+							})
+							.catch(() => {});
+					}
 				}
-			} catch (_err) {
+			} catch (memberErr) {
+				logger.error(
+					`Error bulk verifying member ${member.discordId}:`,
+					memberErr,
+				);
 				errors++;
 			}
 
 			// Stream progress update every 10 users or upon reaching the end
 			if (processed % 10 === 0 || processed === total) {
+				const actionsToSend =
+					pendingActions.length > 0 ? [...pendingActions] : undefined;
+				pendingActions = [];
+
 				await onProgress?.({
 					guildId,
 					processed,
@@ -587,11 +671,15 @@ export async function runBulkGuildVerification(
 					updated,
 					errors,
 					status: "running",
+					actions: actionsToSend,
 				});
 			}
 		}
 
-		// Emit completed event
+		// Emit completed event with any remaining actions
+		const finalActions =
+			pendingActions.length > 0 ? [...pendingActions] : undefined;
+
 		await onProgress?.({
 			guildId,
 			processed,
@@ -599,6 +687,7 @@ export async function runBulkGuildVerification(
 			updated,
 			errors,
 			status: "completed",
+			actions: finalActions,
 			message: `Bulk verification completed: ${processed} processed, ${updated} updated, ${errors} errors.`,
 		});
 
