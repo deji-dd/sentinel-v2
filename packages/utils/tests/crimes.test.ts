@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildCrimeRulesFromDefinitions,
 	calculateCrimeLogValue,
+	DEFAULT_CRIME_DEFINITIONS,
+	DEFAULT_CRIME_RULES,
 	extractCrimeDataPayload,
 	extractItemMarketPrice,
 	getCrimeIdFromAction,
@@ -244,6 +246,29 @@ describe("crimes utility", () => {
 			expect(getCrimeIdFromAction("   ", rules)).toBe(0);
 			expect(getCrimeIdFromAction("invalid action text", rules)).toBe(0);
 			expect(getCrimeIdFromAction("Search the trash", [])).toBe(0);
+		});
+
+		test("should use DEFAULT_CRIME_DEFINITIONS when definitions is empty or omitted", () => {
+			expect(DEFAULT_CRIME_DEFINITIONS.length).toBe(13);
+			expect(DEFAULT_CRIME_RULES.length).toBeGreaterThanOrEqual(13);
+
+			// Fallback when called with no arguments or empty array
+			const defaultRulesNoArgs = buildCrimeRulesFromDefinitions();
+			expect(defaultRulesNoArgs.length).toBeGreaterThanOrEqual(13);
+			expect(getCrimeIdFromAction("Search the trash", defaultRulesNoArgs)).toBe(
+				1,
+			);
+
+			const defaultRulesEmptyArr = buildCrimeRulesFromDefinitions([]);
+			expect(defaultRulesEmptyArr.length).toBeGreaterThanOrEqual(13);
+			expect(
+				getCrimeIdFromAction("Search the trash", defaultRulesEmptyArr),
+			).toBe(1);
+
+			// Calling getCrimeIdFromAction without rules argument uses DEFAULT_CRIME_RULES
+			expect(getCrimeIdFromAction("Search the trash")).toBe(1);
+			expect(getCrimeIdFromAction("Burgle a house")).toBe(7);
+			expect(getCrimeIdFromAction("Commit arson")).toBe(13);
 		});
 	});
 
