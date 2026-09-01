@@ -1,11 +1,19 @@
 import { db, eq, guildConfigs } from "@sentinel/database";
 import type { BulkVerificationProgressData } from "@sentinel/schemas";
-import { type Client, type Message, TextChannel } from "discord.js";
+import {
+	type Client,
+	type EmbedBuilder,
+	type Message,
+	TextChannel,
+} from "discord.js";
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 
 interface ActiveCronMessage {
-	message: Message;
+	message?: Message;
+	isSending?: boolean;
+	completed?: boolean;
+	pendingEmbed?: EmbedBuilder;
 	lastEditTime: number;
 	highestProcessed: number;
 }
@@ -73,17 +81,32 @@ export async function handleCronVerificationProgress(
 						guild.members.cache.get(action.discordId) ||
 						(await guild.members.fetch(action.discordId).catch(() => null));
 					if (member) {
-						if (action.rolesToAdd && action.rolesToAdd.length > 0) {
-							await member.roles.add(action.rolesToAdd).catch(() => {});
+						// Only hit Discord API for roles the member does not already possess
+						const actualRolesToAdd =
+							action.rolesToAdd?.filter(
+								(roleId) => !member.roles.cache.has(roleId),
+							) ?? [];
+						if (actualRolesToAdd.length > 0) {
+							await member.roles.add(actualRolesToAdd).catch(() => {});
 						}
-						if (action.rolesToRemove && action.rolesToRemove.length > 0) {
-							await member.roles.remove(action.rolesToRemove).catch(() => {});
+
+						// Only hit Discord API for roles the member actually possesses
+						const actualRolesToRemove =
+							action.rolesToRemove?.filter((roleId) =>
+								member.roles.cache.has(roleId),
+							) ?? [];
+						if (actualRolesToRemove.length > 0) {
+							await member.roles.remove(actualRolesToRemove).catch(() => {});
 						}
+
+						// Only update nickname if it actually changed
 						if (action.newNickname !== null) {
 							const nick = action.newNickname
 								? action.newNickname.slice(0, 32)
 								: null;
-							await member.setNickname(nick).catch(() => {});
+							if (member.nickname !== nick) {
+								await member.setNickname(nick).catch(() => {});
+							}
 						}
 					}
 				}
@@ -93,14 +116,24 @@ export async function handleCronVerificationProgress(
 		const active = activeCronMessages.get(requestId);
 
 		if (progress.status === "failed") {
+			if (active?.completed) return;
 			const errorEmbed = createErrorEmbed(
 				"Scheduled Verification Sweep Failed",
 				progress.message || "An error occurred during scheduled verification.",
 			);
 			if (active) {
-				await active.message.edit({ embeds: [errorEmbed] }).catch(() => {});
-				activeCronMessages.delete(requestId);
+				active.completed = true;
+				if (active.message) {
+					await active.message.edit({ embeds: [errorEmbed] }).catch(() => {});
+				} else if (active.isSending) {
+					active.pendingEmbed = errorEmbed;
+				}
 			} else {
+				activeCronMessages.set(requestId, {
+					lastEditTime: Date.now(),
+					highestProcessed: progress.processed,
+					completed: true,
+				});
 				const config = await db.query.guildConfigs.findFirst({
 					where: eq(guildConfigs.guildId, guildId),
 				});
@@ -113,10 +146,12 @@ export async function handleCronVerificationProgress(
 					}
 				}
 			}
+			setTimeout(() => activeCronMessages.delete(requestId), 5 * 60 * 1000);
 			return;
 		}
 
 		if (progress.status === "completed") {
+			if (active?.completed) return;
 			const completeEmbed = createCompleteEmbed(
 				progress.processed,
 				progress.total,
@@ -124,9 +159,20 @@ export async function handleCronVerificationProgress(
 				progress.errors,
 			);
 			if (active) {
-				await active.message.edit({ embeds: [completeEmbed] }).catch(() => {});
-				activeCronMessages.delete(requestId);
+				active.completed = true;
+				if (active.message) {
+					await active.message
+						.edit({ embeds: [completeEmbed] })
+						.catch(() => {});
+				} else if (active.isSending) {
+					active.pendingEmbed = completeEmbed;
+				}
 			} else {
+				activeCronMessages.set(requestId, {
+					lastEditTime: Date.now(),
+					highestProcessed: progress.processed,
+					completed: true,
+				});
 				const config = await db.query.guildConfigs.findFirst({
 					where: eq(guildConfigs.guildId, guildId),
 				});
@@ -139,10 +185,15 @@ export async function handleCronVerificationProgress(
 					}
 				}
 			}
+			setTimeout(() => activeCronMessages.delete(requestId), 5 * 60 * 1000);
 			return;
 		}
 
-		// Running state
+		// Running state — discard late progress chunks if sweep already completed
+		if (active?.completed) {
+			return;
+		}
+
 		const now = Date.now();
 		if (active) {
 			if (progress.processed < active.highestProcessed) {
@@ -152,8 +203,9 @@ export async function handleCronVerificationProgress(
 
 			const THROTTLE_MS = 2000;
 			if (
-				now - active.lastEditTime >= THROTTLE_MS ||
-				progress.processed === progress.total
+				active.message &&
+				(now - active.lastEditTime >= THROTTLE_MS ||
+					progress.processed === progress.total)
 			) {
 				active.lastEditTime = now;
 				const embed = createProgressEmbed(
@@ -165,11 +217,21 @@ export async function handleCronVerificationProgress(
 				await active.message.edit({ embeds: [embed] }).catch(() => {});
 			}
 		} else {
-			// First progress update: send message to log channel and store in activeCronMessages
+			// First progress update: reserve requestId immediately to prevent duplicate sends
+			activeCronMessages.set(requestId, {
+				lastEditTime: now,
+				highestProcessed: progress.processed,
+				isSending: true,
+				completed: false,
+			});
+
 			const config = await db.query.guildConfigs.findFirst({
 				where: eq(guildConfigs.guildId, guildId),
 			});
-			if (!config?.logChannelId) return;
+			if (!config?.logChannelId) {
+				activeCronMessages.delete(requestId);
+				return;
+			}
 
 			const channel = await client.channels
 				.fetch(config.logChannelId)
@@ -184,13 +246,20 @@ export async function handleCronVerificationProgress(
 				const sentMessage = await channel
 					.send({ embeds: [embed] })
 					.catch(() => null);
-				if (sentMessage) {
-					activeCronMessages.set(requestId, {
-						message: sentMessage,
-						lastEditTime: now,
-						highestProcessed: progress.processed,
-					});
+
+				const entry = activeCronMessages.get(requestId);
+				if (entry) {
+					entry.isSending = false;
+					entry.message = sentMessage ?? undefined;
+					if (entry.pendingEmbed && entry.message) {
+						await entry.message
+							.edit({ embeds: [entry.pendingEmbed] })
+							.catch(() => {});
+						entry.pendingEmbed = undefined;
+					}
 				}
+			} else {
+				activeCronMessages.delete(requestId);
 			}
 		}
 	} catch (err) {

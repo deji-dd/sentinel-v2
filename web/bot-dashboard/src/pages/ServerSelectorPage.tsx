@@ -66,7 +66,10 @@ export default function ServerSelectorPage() {
 		try {
 			const res = await api.api.v1.guilds.get();
 			if (res.data && typeof res.data === "object" && "guilds" in res.data) {
-				const data = res.data as { guilds: DiscordGuild[]; error?: string };
+				const data = res.data as unknown as {
+					guilds: DiscordGuild[];
+					error?: string;
+				};
 				setGuilds(data.guilds);
 				if (data.error) setError(data.error);
 			}

@@ -23,13 +23,12 @@ import { Elysia, t } from "elysia";
 import { requestBattlestatsLedgerReinitialize } from "../../lib/scheduler-ipc";
 
 export async function getBattlestatsLedgerStateObject() {
-	const record = db
+	const [record] = await db
 		.select()
 		.from(systemStates)
-		.where(eq(systemStates.id, "personal:battlestats_ledger"))
-		.get();
+		.where(eq(systemStates.id, "personal:battlestats_ledger"));
 
-	const totals = db
+	const [totals] = await db
 		.select({
 			totalInDb: count(battlestatsLedgers.id),
 			totalStatGained: sql<number>`COALESCE(sum(${battlestatsLedgers.statGained}), 0)`,
@@ -38,16 +37,14 @@ export async function getBattlestatsLedgerStateObject() {
 			minTimestamp: sql<number | null>`min(${battlestatsLedgers.timestamp})`,
 			maxTimestamp: sql<number | null>`max(${battlestatsLedgers.timestamp})`,
 		})
-		.from(battlestatsLedgers)
-		.get();
+		.from(battlestatsLedgers);
 
-	const personalLogsCount = db
+	const [personalLogsCount] = await db
 		.select({ count: count(personalLogs.id) })
 		.from(personalLogs)
-		.where(inArray(personalLogs.log, STAT_GAIN_LOG_IDS))
-		.get();
+		.where(inArray(personalLogs.log, STAT_GAIN_LOG_IDS));
 
-	const statTypeRows = db
+	const statTypeRows = await db
 		.select({
 			statType: battlestatsLedgers.statType,
 			count: count(battlestatsLedgers.id),
@@ -56,10 +53,9 @@ export async function getBattlestatsLedgerStateObject() {
 			energy: sql<number>`COALESCE(sum(${battlestatsLedgers.energyUsed}), 0)`,
 		})
 		.from(battlestatsLedgers)
-		.groupBy(battlestatsLedgers.statType)
-		.all();
+		.groupBy(battlestatsLedgers.statType);
 
-	const sourceRows = db
+	const sourceRows = await db
 		.select({
 			source: battlestatsLedgers.source,
 			count: count(battlestatsLedgers.id),
@@ -68,8 +64,7 @@ export async function getBattlestatsLedgerStateObject() {
 			energy: sql<number>`COALESCE(sum(${battlestatsLedgers.energyUsed}), 0)`,
 		})
 		.from(battlestatsLedgers)
-		.groupBy(battlestatsLedgers.source)
-		.all();
+		.groupBy(battlestatsLedgers.source);
 
 	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
 	const allTimeTotalGained = Number(totals?.totalStatGained ?? 0);
@@ -97,26 +92,25 @@ export async function getBattlestatsLedgerStateObject() {
 		};
 	});
 
-	const allTimeSources = sourceRows.map((sr) => {
-		const srCount = Number(sr.count);
-		const srGained = Number(sr.gained);
+	const allTimeSources = sourceRows.map((src) => {
+		const srcCount = Number(src.count);
+		const srcGained = Number(src.gained);
+		const srcEnergy = Number(src.energy);
+		const srcTrains = Number(src.trains);
 		const percentage =
 			allTimeTotalGained > 0
-				? Number(((srGained / allTimeTotalGained) * 100).toFixed(1))
+				? Number(((srcGained / allTimeTotalGained) * 100).toFixed(1))
 				: 0;
 
 		return {
-			source: sr.source,
-			count: srCount,
-			gained: srGained,
-			trains: Number(sr.trains),
-			energy: Number(sr.energy),
+			source: src.source,
+			count: srcCount,
+			gained: srcGained,
+			trains: srcTrains,
+			energy: srcEnergy,
 			percentage,
 		};
 	});
-
-	const topStatCategory =
-		[...allTimeStats].sort((a, b) => b.gained - a.gained)[0] ?? null;
 
 	return {
 		status: (rawData.status as string) ?? "idle",
@@ -131,39 +125,37 @@ export async function getBattlestatsLedgerStateObject() {
 			(record?.updatedAt
 				? new Date(record.updatedAt).toISOString()
 				: new Date().toISOString()),
-		isInitialized: record?.init ?? false,
-		totals: {
-			totalInDb: totals?.totalInDb ?? 0,
-			totalStatGained: allTimeTotalGained,
-			totalTrains: Number(totals?.totalTrains ?? 0),
-			totalEnergyUsed: Number(totals?.totalEnergyUsed ?? 0),
-			avgGainPerTrain:
-				Number(totals?.totalTrains ?? 0) > 0
-					? Number(
-							(allTimeTotalGained / Number(totals?.totalTrains ?? 1)).toFixed(
-								2,
-							),
-						)
-					: 0,
-			avgGainPerEnergy:
-				Number(totals?.totalEnergyUsed ?? 0) > 0
-					? Number(
-							(
-								allTimeTotalGained / Number(totals?.totalEnergyUsed ?? 1)
-							).toFixed(2),
-						)
-					: 0,
-			minTimestamp: totals?.minTimestamp ?? null,
-			maxTimestamp: totals?.maxTimestamp ?? null,
-			matchingPersonalLogs: personalLogsCount?.count ?? 0,
-		},
+		totalInDb: totals?.totalInDb ?? 0,
+		totalStatGained: allTimeTotalGained,
+		totalTrains: Number(totals?.totalTrains ?? 0),
+		totalEnergyUsed: Number(totals?.totalEnergyUsed ?? 0),
+		overallEfficiency:
+			Number(totals?.totalEnergyUsed ?? 0) > 0
+				? Number(
+						(allTimeTotalGained / Number(totals?.totalEnergyUsed ?? 1)).toFixed(
+							2,
+						),
+					)
+				: 0,
+		totalPersonalLogsCount: personalLogsCount?.count ?? 0,
+		dbOldestDate: totals?.minTimestamp
+			? new Date(
+					typeof totals.minTimestamp === "number" && totals.minTimestamp < 1e11
+						? totals.minTimestamp * 1000
+						: totals.minTimestamp,
+				).toISOString()
+			: null,
+		dbNewestDate: totals?.maxTimestamp
+			? new Date(
+					typeof totals.maxTimestamp === "number" && totals.maxTimestamp < 1e11
+						? totals.maxTimestamp * 1000
+						: totals.maxTimestamp,
+				).toISOString()
+			: null,
 		allTimeStats,
 		allTimeSources,
-		topStatCategory,
 	};
 }
-
-export const getGymLedgerStateObject = getBattlestatsLedgerStateObject;
 
 export const battlestatsLedgerRoutes = new Elysia({
 	prefix: "/battlestats-ledger",
@@ -172,47 +164,28 @@ export const battlestatsLedgerRoutes = new Elysia({
 	.get(
 		"/state",
 		async () => {
-			return await getBattlestatsLedgerStateObject();
+			return getBattlestatsLedgerStateObject();
 		},
 		{
 			detail: {
 				summary: "Get Battlestats Ledger State",
 				description:
-					"Returns the current operational state, total indexed records, all-time stat/source aggregates, and data bounds.",
+					"Returns the synchronization status, overall stat gains, efficiency, and database bounds.",
 			},
 		},
 	)
-	// GET /api/v1/system/battlestats-ledger/logs — paginated logs with filtering & search
+	// GET /api/v1/system/battlestats-ledger/logs — paginated logs
 	.get(
 		"/logs",
 		async ({ query }) => {
-			const page = Number(query.page ?? 1);
-			const pageSize = Math.min(Number(query.pageSize ?? 50), 200);
+			const page = Math.max(1, Number(query.page ?? 1) || 1);
+			const pageSize = Math.min(
+				Math.max(1, Number(query.pageSize ?? 50) || 50),
+				100,
+			);
 			const offset = (page - 1) * pageSize;
 
 			const conditions: SQL[] = [];
-
-			if (query.from) {
-				const fromDate = new Date(query.from);
-				if (!Number.isNaN(fromDate.getTime())) {
-					conditions.push(gte(battlestatsLedgers.timestamp, fromDate));
-				}
-			}
-
-			if (query.to) {
-				const toDate = new Date(query.to);
-				if (!Number.isNaN(toDate.getTime())) {
-					conditions.push(lte(battlestatsLedgers.timestamp, toDate));
-				}
-			}
-
-			if (!query.from && !query.to && query.days && query.days !== "all") {
-				const days = Number(query.days);
-				if (!Number.isNaN(days) && days > 0) {
-					const cutoff = new Date(Date.now() - days * 86400 * 1000);
-					conditions.push(gte(battlestatsLedgers.timestamp, cutoff));
-				}
-			}
 
 			if (query.statType && query.statType !== "all") {
 				conditions.push(eq(battlestatsLedgers.statType, query.statType));
@@ -222,21 +195,79 @@ export const battlestatsLedgerRoutes = new Elysia({
 				conditions.push(eq(battlestatsLedgers.source, query.source));
 			}
 
-			if (query.search?.trim()) {
-				const searchVal = query.search.trim();
+			if (query.date) {
+				const dayStart = new Date(`${query.date}T00:00:00Z`);
+				const dayEnd = new Date(`${query.date}T23:59:59Z`);
+				if (
+					!Number.isNaN(dayStart.getTime()) &&
+					!Number.isNaN(dayEnd.getTime())
+				) {
+					conditions.push(
+						and(
+							gte(battlestatsLedgers.timestamp, dayStart),
+							lte(battlestatsLedgers.timestamp, dayEnd),
+						) as SQL,
+					);
+				}
+			} else if (query.from || query.to) {
+				if (query.from) {
+					const fromDate = new Date(
+						query.from.includes("T") ? query.from : `${query.from}T00:00:00Z`,
+					);
+					if (!Number.isNaN(fromDate.getTime())) {
+						conditions.push(gte(battlestatsLedgers.timestamp, fromDate) as SQL);
+					}
+				}
+				if (query.to) {
+					const toDate = new Date(
+						query.to.includes("T") ? query.to : `${query.to}T23:59:59Z`,
+					);
+					if (!Number.isNaN(toDate.getTime())) {
+						conditions.push(lte(battlestatsLedgers.timestamp, toDate) as SQL);
+					}
+				}
+			} else if (query.days && query.days !== "all") {
+				const numDays = Math.max(1, Number(query.days) || 30);
+				const now = new Date();
+				const todayUtcStart = new Date(
+					Date.UTC(
+						now.getUTCFullYear(),
+						now.getUTCMonth(),
+						now.getUTCDate(),
+						0,
+						0,
+						0,
+					),
+				);
+				const cutoff = new Date(
+					todayUtcStart.getTime() - (numDays - 1) * 86400 * 1000,
+				);
+				conditions.push(gte(battlestatsLedgers.timestamp, cutoff) as SQL);
+			}
+
+			if (query.search) {
+				const pattern = `%${query.search.trim()}%`;
 				conditions.push(
 					or(
-						eq(battlestatsLedgers.id, searchVal),
-						like(battlestatsLedgers.statType, `%${searchVal}%`),
-						like(battlestatsLedgers.source, `%${searchVal}%`),
+						like(battlestatsLedgers.id, pattern),
+						like(battlestatsLedgers.statType, pattern),
+						like(battlestatsLedgers.source, pattern),
 					) as SQL,
 				);
+			}
+
+			if (query.minGain) {
+				const minG = Number(query.minGain);
+				if (!Number.isNaN(minG)) {
+					conditions.push(gte(battlestatsLedgers.statGained, minG));
+				}
 			}
 
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			let orderByClause = desc(battlestatsLedgers.timestamp);
+			let orderByClause: SQL = desc(battlestatsLedgers.timestamp);
+
 			if (query.sortBy === "timestamp") {
 				orderByClause =
 					query.sortOrder === "asc"
@@ -247,26 +278,16 @@ export const battlestatsLedgerRoutes = new Elysia({
 					query.sortOrder === "asc"
 						? asc(battlestatsLedgers.statGained)
 						: desc(battlestatsLedgers.statGained);
-			} else if (query.sortBy === "energyUsed") {
-				orderByClause =
-					query.sortOrder === "asc"
-						? asc(battlestatsLedgers.energyUsed)
-						: desc(battlestatsLedgers.energyUsed);
 			} else if (query.sortBy === "statType") {
 				orderByClause =
 					query.sortOrder === "asc"
 						? asc(battlestatsLedgers.statType)
 						: desc(battlestatsLedgers.statType);
-			} else if (query.sortBy === "source") {
+			} else if (query.sortBy === "energyUsed") {
 				orderByClause =
 					query.sortOrder === "asc"
-						? asc(battlestatsLedgers.source)
-						: desc(battlestatsLedgers.source);
-			} else if (query.sortBy === "trains") {
-				orderByClause =
-					query.sortOrder === "asc"
-						? asc(battlestatsLedgers.trains)
-						: desc(battlestatsLedgers.trains);
+						? asc(battlestatsLedgers.energyUsed)
+						: desc(battlestatsLedgers.energyUsed);
 			} else if (query.sortBy === "statBefore") {
 				orderByClause =
 					query.sortOrder === "asc"
@@ -279,20 +300,18 @@ export const battlestatsLedgerRoutes = new Elysia({
 						: desc(battlestatsLedgers.statAfter);
 			}
 
-			const [totalCountResult, rows] = await Promise.all([
+			const [[totalCountResult], rows] = await Promise.all([
 				db
 					.select({ count: count(battlestatsLedgers.id) })
 					.from(battlestatsLedgers)
-					.where(whereClause)
-					.get(),
+					.where(whereClause),
 				db
 					.select()
 					.from(battlestatsLedgers)
 					.where(whereClause)
 					.orderBy(orderByClause)
 					.limit(pageSize)
-					.offset(offset)
-					.all(),
+					.offset(offset),
 			]);
 
 			const total = totalCountResult?.count ?? 0;
@@ -331,12 +350,14 @@ export const battlestatsLedgerRoutes = new Elysia({
 			query: t.Object({
 				page: t.Optional(t.String()),
 				pageSize: t.Optional(t.String()),
+				date: t.Optional(t.String()),
 				days: t.Optional(t.String()),
 				from: t.Optional(t.String()),
 				to: t.Optional(t.String()),
 				statType: t.Optional(t.String()),
 				source: t.Optional(t.String()),
 				search: t.Optional(t.String()),
+				minGain: t.Optional(t.String()),
 				sortBy: t.Optional(t.String()),
 				sortOrder: t.Optional(t.String()),
 			}),
@@ -387,7 +408,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 				conditions.length > 0 ? and(...conditions) : undefined;
 
 			// Aggregate overall metrics for selected filter range
-			const summaryResult = db
+			const [summaryResult] = await db
 				.select({
 					totalLogs: count(battlestatsLedgers.id),
 					totalGained: sql<number>`COALESCE(sum(${battlestatsLedgers.statGained}), 0)`,
@@ -395,8 +416,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 					totalEnergyUsed: sql<number>`COALESCE(sum(${battlestatsLedgers.energyUsed}), 0)`,
 				})
 				.from(battlestatsLedgers)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const totalGained = Number(summaryResult?.totalGained ?? 0);
 			const totalLogs = summaryResult?.totalLogs ?? 0;
@@ -404,7 +424,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 			const totalEnergyUsed = Number(summaryResult?.totalEnergyUsed ?? 0);
 
 			// Stat breakdown (Strength, Defense, Speed, Dexterity)
-			const statRows = db
+			const statRows = await db
 				.select({
 					statType: battlestatsLedgers.statType,
 					count: count(battlestatsLedgers.id),
@@ -414,8 +434,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 				})
 				.from(battlestatsLedgers)
 				.where(whereClause)
-				.groupBy(battlestatsLedgers.statType)
-				.all();
+				.groupBy(battlestatsLedgers.statType);
 
 			const statBreakdown = statRows.map((sr) => {
 				const srGained = Number(sr.gained);
@@ -440,7 +459,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 			});
 
 			// Source breakdown (gym vs item vs book vs company)
-			const sourceRows = db
+			const sourceRows = await db
 				.select({
 					source: battlestatsLedgers.source,
 					count: count(battlestatsLedgers.id),
@@ -450,8 +469,7 @@ export const battlestatsLedgerRoutes = new Elysia({
 				})
 				.from(battlestatsLedgers)
 				.where(whereClause)
-				.groupBy(battlestatsLedgers.source)
-				.all();
+				.groupBy(battlestatsLedgers.source);
 
 			const sourceBreakdown = sourceRows.map((src) => {
 				const srcGained = Number(src.gained);
@@ -471,9 +489,9 @@ export const battlestatsLedgerRoutes = new Elysia({
 			});
 
 			// Daily timeline aggregation (strength, defense, speed, dexterity, totalGained, energyUsed)
-			const timelineRows = db
+			const timelineRows = await db
 				.select({
-					date: sql<string>`strftime('%Y-%m-%d', datetime(${battlestatsLedgers.timestamp}, 'unixepoch'))`,
+					date: sql<string>`to_char(${battlestatsLedgers.timestamp}, 'YYYY-MM-DD')`,
 					statType: battlestatsLedgers.statType,
 					dailyGained: sql<number>`COALESCE(sum(${battlestatsLedgers.statGained}), 0)`,
 					dailyEnergy: sql<number>`COALESCE(sum(${battlestatsLedgers.energyUsed}), 0)`,
@@ -483,13 +501,12 @@ export const battlestatsLedgerRoutes = new Elysia({
 				.from(battlestatsLedgers)
 				.where(whereClause)
 				.groupBy(
-					sql`strftime('%Y-%m-%d', datetime(${battlestatsLedgers.timestamp}, 'unixepoch'))`,
+					sql`to_char(${battlestatsLedgers.timestamp}, 'YYYY-MM-DD')`,
 					battlestatsLedgers.statType,
 				)
 				.orderBy(
-					sql`strftime('%Y-%m-%d', datetime(${battlestatsLedgers.timestamp}, 'unixepoch')) ASC`,
-				)
-				.all();
+					sql`to_char(${battlestatsLedgers.timestamp}, 'YYYY-MM-DD') ASC`,
+				);
 
 			const timelineMap = new Map<
 				string,
@@ -545,18 +562,17 @@ export const battlestatsLedgerRoutes = new Elysia({
 			const timeline = Array.from(timelineMap.values());
 
 			// Hourly distribution (0-23 UTC)
-			const hourlyRows = db
+			const hourlyRows = await db
 				.select({
-					hour: sql<number>`cast(strftime('%H', datetime(${battlestatsLedgers.timestamp}, 'unixepoch')) as integer)`,
+					hour: sql<number>`cast(to_char(${battlestatsLedgers.timestamp}, 'HH24') as integer)`,
 					totalGained: sql<number>`COALESCE(sum(${battlestatsLedgers.statGained}), 0)`,
 					count: count(battlestatsLedgers.id),
 				})
 				.from(battlestatsLedgers)
 				.where(whereClause)
 				.groupBy(
-					sql`cast(strftime('%H', datetime(${battlestatsLedgers.timestamp}, 'unixepoch')) as integer)`,
-				)
-				.all();
+					sql`cast(to_char(${battlestatsLedgers.timestamp}, 'HH24') as integer)`,
+				);
 
 			const hourlyMap = new Map<
 				number,
@@ -582,27 +598,27 @@ export const battlestatsLedgerRoutes = new Elysia({
 			);
 
 			// Top single stat gain events
-			const topEvents = db
+			const topEventRows = await db
 				.select()
 				.from(battlestatsLedgers)
 				.where(whereClause)
 				.orderBy(desc(battlestatsLedgers.statGained))
-				.limit(10)
-				.all()
-				.map((r) => ({
-					id: r.id,
-					timestamp:
-						r.timestamp instanceof Date
-							? r.timestamp.toISOString()
-							: new Date(r.timestamp).toISOString(),
-					statType: r.statType,
-					source: r.source,
-					trains: r.trains,
-					energyUsed: r.energyUsed,
-					statGained: r.statGained,
-					statBefore: r.statBefore,
-					statAfter: r.statAfter,
-				}));
+				.limit(10);
+
+			const topEvents = topEventRows.map((r) => ({
+				id: r.id,
+				timestamp:
+					r.timestamp instanceof Date
+						? r.timestamp.toISOString()
+						: new Date(r.timestamp).toISOString(),
+				statType: r.statType,
+				source: r.source,
+				trains: r.trains,
+				energyUsed: r.energyUsed,
+				statGained: r.statGained,
+				statBefore: r.statBefore,
+				statAfter: r.statAfter,
+			}));
 
 			return {
 				summary: {
@@ -665,23 +681,20 @@ export const battlestatsLedgerRoutes = new Elysia({
 	.get(
 		"/efficiency-data",
 		async () => {
-			const userStateRecord = db
+			const [userStateRecord] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:live_state"))
-				.get();
+				.where(eq(systemStates.id, "personal:live_state"));
 
-			const perksRecord = db
+			const [perksRecord] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:user_perks"))
-				.get();
+				.where(eq(systemStates.id, "personal:user_perks"));
 
-			const gymUnlocksRecord = db
+			const [gymUnlocksRecord] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:gym_unlocks"))
-				.get();
+				.where(eq(systemStates.id, "personal:gym_unlocks"));
 
 			const userState =
 				(userStateRecord?.data as Record<string, unknown>) ?? {};
@@ -698,11 +711,10 @@ export const battlestatsLedgerRoutes = new Elysia({
 
 			let activeGyms: (typeof tornGyms.$inferSelect)[] = [];
 			if (activeGymIds.length > 0) {
-				activeGyms = db
+				activeGyms = await db
 					.select()
 					.from(tornGyms)
-					.where(inArray(tornGyms.id, activeGymIds.map(String)))
-					.all();
+					.where(inArray(tornGyms.id, activeGymIds.map(String)));
 			}
 
 			let strengthPerk = 1;

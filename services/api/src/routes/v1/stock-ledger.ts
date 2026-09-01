@@ -34,7 +34,7 @@ export const STOCK_GAIN_LOG_IDS = [
 export async function getActiveStockHoldingFloors(): Promise<
 	Map<number, number>
 > {
-	const rows = db.select().from(userStocks).all();
+	const rows = await db.select().from(userStocks);
 	const floors = new Map<number, number>();
 	for (const s of rows) {
 		const stockId = Number(s.id);
@@ -94,16 +94,15 @@ export function buildScopeCondition(
 }
 
 export async function getStockLedgerStateObject(scope: string = "active") {
-	const record = db
+	const [record] = await db
 		.select()
 		.from(systemStates)
-		.where(eq(systemStates.id, "personal:stocks_ledger"))
-		.get();
+		.where(eq(systemStates.id, "personal:stocks_ledger"));
 
 	const activeFloors = await getActiveStockHoldingFloors();
 	const scopeCondition = buildScopeCondition(scope, activeFloors);
 
-	const totals = db
+	const [totals] = await db
 		.select({
 			totalInDb: count(stockLedgers.id),
 			totalValue: sql<number>`COALESCE(sum(${stockLedgers.value}), 0)`,
@@ -111,31 +110,27 @@ export async function getStockLedgerStateObject(scope: string = "active") {
 			maxTimestamp: sql<number | null>`max(${stockLedgers.timestamp})`,
 		})
 		.from(stockLedgers)
-		.where(scopeCondition)
-		.get();
+		.where(scopeCondition);
 
-	const personalLogsCount = db
+	const [personalLogsCount] = await db
 		.select({ count: count(personalLogs.id) })
 		.from(personalLogs)
-		.where(inArray(personalLogs.log, STOCK_GAIN_LOG_IDS))
-		.get();
+		.where(inArray(personalLogs.log, STOCK_GAIN_LOG_IDS));
 
-	const distinctStocks = db
+	const [distinctStocks] = await db
 		.select({ count: sql<number>`count(distinct ${stockLedgers.stockId})` })
 		.from(stockLedgers)
-		.where(scopeCondition)
-		.get();
+		.where(scopeCondition);
 
 	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
 
-	const tornStocksList = db
+	const tornStocksList = await db
 		.select({
 			id: tornStocks.id,
 			name: tornStocks.name,
 			acronym: tornStocks.acronym,
 		})
-		.from(tornStocks)
-		.all();
+		.from(tornStocks);
 
 	const stockNamesMap = new Map<number, { name: string; acronym: string }>();
 	for (const ts of tornStocksList) {
@@ -145,7 +140,7 @@ export async function getStockLedgerStateObject(scope: string = "active") {
 		}
 	}
 
-	const stockRows = db
+	const stockRows = await db
 		.select({
 			stockId: stockLedgers.stockId,
 			count: count(stockLedgers.id),
@@ -153,8 +148,7 @@ export async function getStockLedgerStateObject(scope: string = "active") {
 		})
 		.from(stockLedgers)
 		.where(scopeCondition)
-		.groupBy(stockLedgers.stockId)
-		.all();
+		.groupBy(stockLedgers.stockId);
 
 	const allTimeTotalValue = Number(totals?.totalValue ?? 0);
 	const allTimeTotalCount = Number(totals?.totalInDb ?? 0);
@@ -184,10 +178,9 @@ export async function getStockLedgerStateObject(scope: string = "active") {
 	const topProfitStock =
 		[...allTimeStocks].sort((a, b) => b.value - a.value)[0] ?? null;
 
-	const activeUserStocksCount = db
+	const [activeUserStocksCount] = await db
 		.select({ count: count(userStocks.id) })
-		.from(userStocks)
-		.get();
+		.from(userStocks);
 
 	return {
 		scope,
@@ -339,11 +332,10 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			const totalResult = db
+			const [totalResult] = await db
 				.select({ count: count(stockLedgers.id) })
 				.from(stockLedgers)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const total = totalResult?.count ?? 0;
 
@@ -364,7 +356,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 					: desc(stockLedgers.timestamp);
 			}
 
-			const rawLogs = db
+			const rawLogs = await db
 				.select({
 					id: stockLedgers.id,
 					timestamp: stockLedgers.timestamp,
@@ -378,17 +370,15 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 				.where(whereClause)
 				.orderBy(orderColumn)
 				.limit(limit)
-				.offset(offset)
-				.all();
+				.offset(offset);
 
-			const tornStocksList = db
+			const tornStocksList = await db
 				.select({
 					id: tornStocks.id,
 					name: tornStocks.name,
 					acronym: tornStocks.acronym,
 				})
-				.from(tornStocks)
-				.all();
+				.from(tornStocks);
 
 			const stockMetaMap = new Map<number, { name: string; acronym: string }>();
 			for (const ts of tornStocksList) {
@@ -404,15 +394,14 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 
 			const itemMap = new Map<number, { name: string; value: number }>();
 			if (itemIds.length > 0) {
-				const itemsList = db
+				const itemsList = await db
 					.select({
 						id: tornItems.id,
 						name: tornItems.name,
 						data: tornItems.data,
 					})
 					.from(tornItems)
-					.where(inArray(tornItems.id, itemIds.map(String)))
-					.all();
+					.where(inArray(tornItems.id, itemIds.map(String)));
 
 				for (const item of itemsList) {
 					const numId = Number(item.id);
@@ -547,15 +536,14 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 				conditions.length > 0 ? and(...conditions) : undefined;
 
 			// 1. Overall KPIs
-			const kpiResult = db
+			const [kpiResult] = await db
 				.select({
 					totalDividends: count(stockLedgers.id),
 					totalValue: sql<number>`COALESCE(sum(${stockLedgers.value}), 0)`,
 					distinctStocks: sql<number>`count(distinct ${stockLedgers.stockId})`,
 				})
 				.from(stockLedgers)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const totalDividends = kpiResult?.totalDividends ?? 0;
 			const totalValue = Number(kpiResult?.totalValue ?? 0);
@@ -566,23 +554,16 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 					: 0;
 
 			// 2. Daily Timeline
-			const dailyActivity = db
+			const dailyActivity = await db
 				.select({
-					date: sql<string>`strftime('%Y-%m-%d', datetime(${stockLedgers.timestamp}, 'unixepoch'))`,
+					date: sql<string>`to_char(${stockLedgers.timestamp}, 'YYYY-MM-DD')`,
 					count: count(stockLedgers.id),
 					value: sql<number>`COALESCE(sum(${stockLedgers.value}), 0)`,
 				})
 				.from(stockLedgers)
 				.where(whereClause)
-				.groupBy(
-					sql`strftime('%Y-%m-%d', datetime(${stockLedgers.timestamp}, 'unixepoch'))`,
-				)
-				.orderBy(
-					asc(
-						sql`strftime('%Y-%m-%d', datetime(${stockLedgers.timestamp}, 'unixepoch'))`,
-					),
-				)
-				.all();
+				.groupBy(sql`to_char(${stockLedgers.timestamp}, 'YYYY-MM-DD')`)
+				.orderBy(asc(sql`to_char(${stockLedgers.timestamp}, 'YYYY-MM-DD')`));
 
 			const timeline = dailyActivity.map((d) => ({
 				date: d.date,
@@ -591,14 +572,13 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 			}));
 
 			// 3. Stock Breakdown
-			const tornStocksList = db
+			const tornStocksList = await db
 				.select({
 					id: tornStocks.id,
 					name: tornStocks.name,
 					acronym: tornStocks.acronym,
 				})
-				.from(tornStocks)
-				.all();
+				.from(tornStocks);
 
 			const stockMetaMap = new Map<number, { name: string; acronym: string }>();
 			for (const ts of tornStocksList) {
@@ -608,7 +588,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 				}
 			}
 
-			const stockRows = db
+			const stockRows = await db
 				.select({
 					stockId: stockLedgers.stockId,
 					count: count(stockLedgers.id),
@@ -617,8 +597,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 				.from(stockLedgers)
 				.where(whereClause)
 				.groupBy(stockLedgers.stockId)
-				.orderBy(desc(sql`COALESCE(sum(${stockLedgers.value}), 0)`))
-				.all();
+				.orderBy(desc(sql`COALESCE(sum(${stockLedgers.value}), 0)`));
 
 			const stocks = stockRows.map((st) => {
 				const stCount = Number(st.count);
@@ -643,7 +622,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 			});
 
 			// 4. Top Yield Single Events
-			const topYieldRows = db
+			const topYieldRows = await db
 				.select({
 					id: stockLedgers.id,
 					stockId: stockLedgers.stockId,
@@ -655,8 +634,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 				.from(stockLedgers)
 				.where(whereClause)
 				.orderBy(desc(stockLedgers.value))
-				.limit(10)
-				.all();
+				.limit(10);
 
 			const topYieldEvents = topYieldRows.map((row) => {
 				const meta = stockMetaMap.get(row.stockId);
@@ -702,18 +680,17 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 		async ({ query }) => {
 			const targetScope = query?.scope === "all_time" ? "all_time" : "active";
 
-			const stocks = db.select().from(tornStocks).all();
-			const items = db.select().from(tornItems).all();
-			const uStocks = db.select().from(userStocks).all();
+			const stocks = await db.select().from(tornStocks);
+			const items = await db.select().from(tornItems);
+			const uStocks = await db.select().from(userStocks);
 
 			const userSharesMap = new Map(
 				uStocks.map((u) => [Number(u.id), u.shares ?? 0]),
 			);
-			const pointsRow = db
+			const [pointsRow] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "points_market_price"))
-				.get();
+				.where(eq(systemStates.id, "points_market_price"));
 			const pointPrice =
 				typeof pointsRow?.data === "object" &&
 				pointsRow?.data !== null &&
@@ -725,11 +702,10 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 			const activeFloors = await getActiveStockHoldingFloors();
 			const scopeCondition = buildScopeCondition(targetScope, activeFloors);
 
-			const ledgers = db
+			const ledgers = await db
 				.select()
 				.from(stockLedgers)
-				.where(scopeCondition)
-				.all();
+				.where(scopeCondition);
 
 			const divEarningsMap = new Map<number, number>();
 			for (const l of ledgers) {
@@ -749,7 +725,7 @@ export const stockLedgerRoutes = new Elysia({ prefix: "/stock-ledger" })
 			}
 
 			// Build dynamic property average value from tornProperties database table
-			const props = db.select().from(tornProperties).all();
+			const props = await db.select().from(tornProperties);
 			const standardProps = props.filter(
 				(p) => Number(p.id) >= 1 && Number(p.id) <= 13,
 			);

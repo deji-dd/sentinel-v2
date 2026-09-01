@@ -2,20 +2,18 @@ import { db, eq, personalLogs, sql, systemStates } from "@sentinel/database";
 import { Elysia, t } from "elysia";
 
 export async function getLogManagerSnapshot() {
-	const stateRecord = db
+	const [stateRecord] = await db
 		.select()
 		.from(systemStates)
-		.where(eq(systemStates.id, "personal:log_manager"))
-		.get();
+		.where(eq(systemStates.id, "personal:log_manager"));
 
-	const stats = db
+	const [stats] = await db
 		.select({
 			totalInDb: sql<number>`count(${personalLogs.id})`,
 			oldestTimestamp: sql<number>`min(${personalLogs.timestamp})`,
 			newestTimestamp: sql<number>`max(${personalLogs.timestamp})`,
 		})
-		.from(personalLogs)
-		.get();
+		.from(personalLogs);
 
 	const defaultState = {
 		status: "idle",

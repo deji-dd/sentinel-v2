@@ -33,7 +33,7 @@ export const authPlugin = new Elysia({ name: "authPlugin" })
 		}
 
 		try {
-			const result = db
+			const [result] = await db
 				.select({
 					user: {
 						id: users.id,
@@ -49,11 +49,9 @@ export const authPlugin = new Elysia({ name: "authPlugin" })
 						expiresAt: userSessions.expiresAt,
 					},
 				})
-
 				.from(userSessions)
 				.innerJoin(users, eq(userSessions.userId, users.id))
-				.where(eq(userSessions.id, sessionToken))
-				.get();
+				.where(eq(userSessions.id, sessionToken));
 
 			if (!result) {
 				return {
@@ -74,7 +72,7 @@ export const authPlugin = new Elysia({ name: "authPlugin" })
 
 			if (expiresAtMs < Date.now()) {
 				// Expired session cleanup
-				db.delete(userSessions).where(eq(userSessions.id, sessionToken)).run();
+				await db.delete(userSessions).where(eq(userSessions.id, sessionToken));
 				cookie.session?.remove();
 
 				return {
@@ -89,10 +87,10 @@ export const authPlugin = new Elysia({ name: "authPlugin" })
 				result.user.discordId === env.DISCORD_USER_ID &&
 				result.user.role === "user"
 			) {
-				db.update(users)
+				await db
+					.update(users)
 					.set({ role: "owner" })
-					.where(eq(users.id, result.user.id))
-					.run();
+					.where(eq(users.id, result.user.id));
 				result.user.role = "owner";
 			}
 
@@ -121,7 +119,7 @@ export const authPlugin = new Elysia({ name: "authPlugin" })
 					};
 				}
 
-				if (role && user.role !== role) {
+				if (role && user.role !== role && user.role !== "owner") {
 					set.status = 403;
 					return {
 						success: false,

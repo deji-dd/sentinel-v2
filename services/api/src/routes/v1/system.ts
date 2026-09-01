@@ -23,14 +23,22 @@ import {
 	requestLogManagerReset,
 	triggerLogManagerSync,
 } from "../../lib/scheduler-ipc";
-import type { AuthUser } from "../../middleware/auth";
 import { battlestatsLedgerRoutes } from "./battlestats-ledger";
 import { crimeLedgerRoutes } from "./crime-ledger";
 import { gymLedgerRoutes } from "./gym-ledger";
 import { stockLedgerRoutes } from "./stock-ledger";
 import { wealthRoutes } from "./wealth";
 
-export const RESYNC_STATE_ID = "personal:log_manager_resync";
+export interface AuthUser {
+	id: number;
+	discordId: string | null;
+	tornId: number | null;
+	username: string | null;
+	avatar: string | null;
+	role: string;
+}
+
+const RESYNC_STATE_ID = "personal:log_manager:resync_job";
 
 export const systemRoutes = new Elysia({ prefix: "/system" })
 	.use(crimeLedgerRoutes)
@@ -38,10 +46,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.use(gymLedgerRoutes)
 	.use(stockLedgerRoutes)
 	.use(wealthRoutes)
-
 	.derive(async ({ cookie }) => {
-		const sessionToken = cookie.session?.value;
-
+		const sessionToken = cookie.sentinel_session?.value;
 		if (typeof sessionToken !== "string" || !sessionToken) {
 			return {
 				user: null as AuthUser | null,
@@ -49,7 +55,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 		}
 
 		try {
-			const result = db
+			const [result] = await db
 				.select({
 					id: users.id,
 					discordId: users.discordId,
@@ -60,8 +66,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				})
 				.from(userSessions)
 				.innerJoin(users, eq(userSessions.userId, users.id))
-				.where(eq(userSessions.id, sessionToken))
-				.get();
+				.where(eq(userSessions.id, sessionToken));
 
 			return {
 				user: (result ?? null) as AuthUser | null,
@@ -93,7 +98,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.get(
 		"/keys",
 		async () => {
-			const keys = db
+			const keys = await db
 				.select({
 					id: apiKeys.id,
 					userId: apiKeys.userId,
@@ -105,8 +110,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 					createdAt: apiKeys.createdAt,
 				})
 				.from(apiKeys)
-				.orderBy(desc(apiKeys.createdAt))
-				.all();
+				.orderBy(desc(apiKeys.createdAt));
 
 			return { keys };
 		},
@@ -136,11 +140,10 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 			);
 
 			// Check duplicate key
-			const existingKey = db
+			const [existingKey] = await db
 				.select()
 				.from(apiKeys)
-				.where(eq(apiKeys.apiKeyHash, keyHash))
-				.get();
+				.where(eq(apiKeys.apiKeyHash, keyHash));
 
 			if (existingKey) {
 				set.status = 400;
@@ -184,7 +187,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 			);
 			const keyType = body.keyType ?? "system";
 
-			const inserted = db
+			const [inserted] = await db
 				.insert(apiKeys)
 				.values({
 					userId: tornUserId,
@@ -200,8 +203,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 					keyType: apiKeys.keyType,
 					isValid: apiKeys.isValid,
 					createdAt: apiKeys.createdAt,
-				})
-				.get();
+				});
 
 			return {
 				success: true,
@@ -227,18 +229,17 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.delete(
 		"/keys/:keyId",
 		async ({ params, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(apiKeys)
-				.where(eq(apiKeys.id, params.keyId))
-				.get();
+				.where(eq(apiKeys.id, params.keyId));
 
 			if (!existing) {
 				set.status = 404;
 				return { error: "API key not found." };
 			}
 
-			db.delete(apiKeys).where(eq(apiKeys.id, params.keyId)).run();
+			await db.delete(apiKeys).where(eq(apiKeys.id, params.keyId));
 
 			return { success: true };
 		},
@@ -256,25 +257,24 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.patch(
 		"/keys/:keyId",
 		async ({ params, body, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(apiKeys)
-				.where(eq(apiKeys.id, params.keyId))
-				.get();
+				.where(eq(apiKeys.id, params.keyId));
 
 			if (!existing) {
 				set.status = 404;
 				return { error: "API key not found." };
 			}
 
-			db.update(apiKeys)
+			await db
+				.update(apiKeys)
 				.set({
 					...(body.isValid !== undefined ? { isValid: body.isValid } : {}),
 					...(body.resetErrors ? { invalidCount: 0, lastInvalidAt: null } : {}),
 					updatedAt: new Date(),
 				})
-				.where(eq(apiKeys.id, params.keyId))
-				.run();
+				.where(eq(apiKeys.id, params.keyId));
 
 			return { success: true };
 		},
@@ -296,20 +296,18 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.get(
 		"/log-manager/state",
 		async () => {
-			const stateRecord = db
+			const [stateRecord] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:log_manager"))
-				.get();
+				.where(eq(systemStates.id, "personal:log_manager"));
 
-			const stats = db
+			const [stats] = await db
 				.select({
 					totalInDb: sql<number>`count(${personalLogs.id})`,
 					oldestTimestamp: sql<number>`min(${personalLogs.timestamp})`,
 					newestTimestamp: sql<number>`max(${personalLogs.timestamp})`,
 				})
-				.from(personalLogs)
-				.get();
+				.from(personalLogs);
 
 			const defaultState = {
 				status: "idle",
@@ -336,10 +334,20 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 					...state,
 					totalInDb: stats?.totalInDb ?? 0,
 					dbOldestDate: stats?.oldestTimestamp
-						? new Date(stats.oldestTimestamp * 1000).toISOString()
+						? new Date(
+								typeof stats.oldestTimestamp === "number" &&
+									stats.oldestTimestamp < 1e11
+									? stats.oldestTimestamp * 1000
+									: stats.oldestTimestamp,
+							).toISOString()
 						: null,
 					dbNewestDate: stats?.newestTimestamp
-						? new Date(stats.newestTimestamp * 1000).toISOString()
+						? new Date(
+								typeof stats.newestTimestamp === "number" &&
+									stats.newestTimestamp < 1e11
+									? stats.newestTimestamp * 1000
+									: stats.newestTimestamp,
+							).toISOString()
 						: null,
 				},
 			};
@@ -356,11 +364,10 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.post(
 		"/log-manager/pause",
 		async ({ body }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:log_manager"))
-				.get();
+				.where(eq(systemStates.id, "personal:log_manager"));
 
 			const currentData = (existing?.data as Record<string, unknown>) ?? {};
 			const nextBackfillStatus = body.paused ? "paused" : "in_progress";
@@ -371,7 +378,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				updatedAt: new Date().toISOString(),
 			};
 
-			db.insert(systemStates)
+			await db
+				.insert(systemStates)
 				.values({
 					id: "personal:log_manager",
 					init: false,
@@ -385,8 +393,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						data: updatedData,
 						updatedAt: new Date(),
 					},
-				})
-				.run();
+				});
 
 			// Nudge the scheduler so it picks up the pause/resume immediately.
 			void triggerLogManagerSync();
@@ -404,10 +411,6 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 		},
 	)
 	// POST /api/v1/system/log-manager/reset — reset log manager state
-	// Destructive-ish operation: flips backfill back to in_progress. Progress
-	// cursors are preserved (and self-healed by the worker), so this resumes/
-	// rescans the backfill instead of re-pulling full history. Requires an
-	// explicit confirm flag and is refused while a resync job is active.
 	.post(
 		"/log-manager/reset",
 		async ({ body, set }) => {
@@ -420,13 +423,10 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				};
 			}
 
-			// Refuse while a manual range resync job is queued/running so the
-			// reset cannot interfere with an active repair job.
-			const resyncRecord = db
+			const [resyncRecord] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, RESYNC_STATE_ID))
-				.get();
+				.where(eq(systemStates.id, RESYNC_STATE_ID));
 			const resyncJob = (resyncRecord?.data as Record<string, unknown>) ?? {};
 			if (resyncJob.status === "pending" || resyncJob.status === "running") {
 				set.status = 409;
@@ -437,17 +437,13 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				};
 			}
 
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "personal:log_manager"))
-				.get();
+				.where(eq(systemStates.id, "personal:log_manager"));
 			const currentData =
 				(existing?.data as Record<string, unknown> | undefined) ?? {};
 
-			// Reset backfill cursor to now (oldestTimestampReached: null) so the backfill
-			// restarts from the present time and paginates backward across full history to reparse
-			// and insert any missed logs into SQLite without deleting existing records.
 			const resetData = {
 				status: "idle",
 				backfillStatus: "in_progress",
@@ -467,7 +463,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				updatedAt: new Date().toISOString(),
 			};
 
-			db.insert(systemStates)
+			await db
+				.insert(systemStates)
 				.values({
 					id: "personal:log_manager",
 					init: false,
@@ -482,13 +479,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						data: resetData,
 						updatedAt: new Date(),
 					},
-				})
-				.run();
+				});
 
-			// Ask the scheduler worker to apply the same reset to its in-memory
-			// state at the start of its next cycle. Without this, the running
-			// worker would clobber the DB write above with its stale in-memory
-			// state on its next persist.
 			const schedulerTriggered = await requestLogManagerReset();
 
 			return { success: true, schedulerTriggered, state: resetData };
@@ -589,22 +581,20 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			const totalResult = db
+			const [totalResult] = await db
 				.select({ count: sql<number>`count(${personalLogs.id})` })
 				.from(personalLogs)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const total = totalResult?.count ?? 0;
 
-			const logs = db
+			const logs = await db
 				.select()
 				.from(personalLogs)
 				.where(whereClause)
 				.orderBy(desc(personalLogs.timestamp))
 				.limit(limit)
-				.offset(offset)
-				.all();
+				.offset(offset);
 
 			return {
 				logs,
@@ -681,9 +671,9 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			const dayExpr = sql<string>`strftime('%Y-%m-%d', datetime(${personalLogs.timestamp}, 'unixepoch'))`;
+			const dayExpr = sql<string>`to_char(${personalLogs.timestamp}, 'YYYY-MM-DD')`;
 
-			const days = db
+			const days = await db
 				.select({
 					date: dayExpr,
 					count: sql<number>`count(${personalLogs.id})`,
@@ -691,11 +681,9 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				.from(personalLogs)
 				.where(whereClause)
 				.groupBy(dayExpr)
-				.orderBy(asc(dayExpr))
-				.all();
+				.orderBy(asc(dayExpr));
 
-			// Zero-fill the requested range so missing days render as 0 instead of
-			// collapsing the graph to only the days that have data.
+			// Zero-fill the requested range
 			const now = new Date();
 			const todayUtcStart = new Date(
 				Date.UTC(
@@ -724,7 +712,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 
 			let filled = days;
 			if (fillStartMs !== null) {
-				const countByDate = new Map(days.map((d) => [d.date, d.count]));
+				const countByDate = new Map(days.map((d) => [d.date, Number(d.count)]));
 				filled = [];
 				let fillEndMs = todayUtcStart.getTime();
 				if (query.to) {
@@ -741,7 +729,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				}
 			}
 
-			const totalLogs = filled.reduce((acc, d) => acc + d.count, 0);
+			const totalLogs = filled.reduce((acc, d) => acc + Number(d.count), 0);
 
 			return {
 				days: filled,
@@ -767,7 +755,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.get(
 		"/log-manager/categories",
 		async ({ query }) => {
-			const conditions = [];
+			const conditions: SQL[] = [];
 
 			if (query.date) {
 				const dayStart = new Date(`${query.date}T00:00:00Z`);
@@ -780,7 +768,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						and(
 							gte(personalLogs.timestamp, dayStart),
 							lte(personalLogs.timestamp, dayEnd),
-						),
+						) as SQL,
 					);
 				}
 			} else if (query.from || query.to) {
@@ -789,7 +777,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						query.from.includes("T") ? query.from : `${query.from}T00:00:00Z`,
 					);
 					if (!Number.isNaN(fromDate.getTime())) {
-						conditions.push(gte(personalLogs.timestamp, fromDate));
+						conditions.push(gte(personalLogs.timestamp, fromDate) as SQL);
 					}
 				}
 				if (query.to) {
@@ -797,7 +785,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						query.to.includes("T") ? query.to : `${query.to}T23:59:59Z`,
 					);
 					if (!Number.isNaN(toDate.getTime())) {
-						conditions.push(lte(personalLogs.timestamp, toDate));
+						conditions.push(lte(personalLogs.timestamp, toDate) as SQL);
 					}
 				}
 			} else if (query.days && query.days !== "all") {
@@ -816,13 +804,13 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				const cutoff = new Date(
 					todayUtcStart.getTime() - (numDays - 1) * 86400 * 1000,
 				);
-				conditions.push(gte(personalLogs.timestamp, cutoff));
+				conditions.push(gte(personalLogs.timestamp, cutoff) as SQL);
 			}
 
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			const categories = db
+			const categories = await db
 				.select({
 					category: personalLogs.category,
 					count: sql<number>`count(${personalLogs.id})`,
@@ -830,8 +818,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				.from(personalLogs)
 				.where(whereClause)
 				.groupBy(personalLogs.category)
-				.orderBy(desc(sql`count(${personalLogs.id})`))
-				.all();
+				.orderBy(desc(sql`count(${personalLogs.id})`));
 
 			return { categories };
 		},
@@ -853,11 +840,10 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.post(
 		"/log-manager/resync",
 		async ({ body, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, RESYNC_STATE_ID))
-				.get();
+				.where(eq(systemStates.id, RESYNC_STATE_ID));
 
 			const currentJob = (existing?.data as Record<string, unknown>) ?? {};
 			if (currentJob.status === "pending" || currentJob.status === "running") {
@@ -890,7 +876,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 				updatedAt: new Date().toISOString(),
 			};
 
-			db.insert(systemStates)
+			await db
+				.insert(systemStates)
 				.values({
 					id: RESYNC_STATE_ID,
 					init: false,
@@ -904,12 +891,8 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 						data: job,
 						updatedAt: new Date(),
 					},
-				})
-				.run();
+				});
 
-			// The job is persisted in DB (survives restarts), but nudge the
-			// scheduler via IPC so processing starts immediately instead of
-			// waiting for the next scheduled cycle.
 			const triggered = await triggerLogManagerSync();
 
 			return {
@@ -932,12 +915,11 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 		},
 	)
 	// GET /api/v1/system/log-manager/resync — progress of the latest resync job
-	.get("/log-manager/resync", () => {
-		const record = db
+	.get("/log-manager/resync", async () => {
+		const [record] = await db
 			.select()
 			.from(systemStates)
-			.where(eq(systemStates.id, RESYNC_STATE_ID))
-			.get();
+			.where(eq(systemStates.id, RESYNC_STATE_ID));
 
 		return { success: true, job: record?.data ?? null };
 	});

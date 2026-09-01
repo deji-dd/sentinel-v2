@@ -1,5 +1,11 @@
-import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+	boolean,
+	integer,
+	jsonb,
+	pgTable,
+	text,
+	timestamp,
+} from "drizzle-orm/pg-core";
 import { users } from "./auth";
 
 export interface MapLabel {
@@ -13,7 +19,7 @@ export interface MapLabel {
 	rackets: number;
 }
 
-export const userMaps = sqliteTable("user_maps", {
+export const userMaps = pgTable("user_maps", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
@@ -21,19 +27,16 @@ export const userMaps = sqliteTable("user_maps", {
 		.references(() => users.id, { onDelete: "cascade" })
 		.notNull(),
 	name: text("name").notNull(),
-	labels: text("labels", { mode: "json" })
-		.$type<MapLabel[]>()
-		.default([])
-		.notNull(),
-	assignments: text("assignments", { mode: "json" })
+	labels: jsonb("labels").$type<MapLabel[]>().default([]).notNull(),
+	assignments: jsonb("assignments")
 		.$type<Record<string, string>>()
 		.default({})
 		.notNull(),
-	isPublic: integer("is_public", { mode: "boolean" }).default(false).notNull(),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	isPublic: boolean("is_public").default(false).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });

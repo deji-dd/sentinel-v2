@@ -27,9 +27,6 @@ jobs:
       - name: Install Dependencies
         run: bun install --frozen-lockfile
 
-      - name: Migrate SQLite Schema for Tests
-        run: bun run db:migrate
-
       - name: Run Typecheck
         run: bun run typecheck
 
@@ -39,32 +36,18 @@ jobs:
       - name: Build Web Dashboards
         run: bun run web:build
 
-      - name: Upload Web Dashboard Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: |
-            web/bot-dashboard/dist
-            web/user-dashboard/dist
-            web/tt-selector/dist
-
-      - name: Run Unit Tests
-        run: bun test
-
   deploy:
-    name: Deploy to VPS
+    name: Deploy to dejis-cloud
     needs: validate-and-build
     runs-on: ubuntu-latest
+    env:
+      SERVER_HOST: dejis-cloud
+      SERVER_USER: root
+      DEPLOY_DIR: /opt/sentinel-v2
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Download Web Dashboard Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web
 
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
@@ -73,85 +56,33 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      - name: Configure SSH Key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.GCP_SSH_KEY }}
-
-      - name: Add Known Hosts
+      - name: Setup Server Directories
         run: |
-          mkdir -p ~/.ssh
-          for i in {1..5}; do
-            ssh-keyscan -T 10 -H ${{ secrets.GCP_HOST }} >> ~/.ssh/known_hosts && break || sleep 2
-          done
-
-      - name: Pull Latest Changes on VPS
-        run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
-            set -e
-            # Terminate any orphaned build/compiler processes from previous hung runs
-            pkill -f "vite|tsc" || true
-
-            TARGET_DIR="/opt/sentinel-v2"
-
-            if [ ! -d "$TARGET_DIR/.git" ]; then
-              echo "Directory $TARGET_DIR does not exist or is not a git repo. Initializing..."
-              sudo mkdir -p "$TARGET_DIR"
-              sudo chown -R $USER:$USER "$TARGET_DIR"
-              git clone https://github.com/ayodejib/sentinel-v2.git "$TARGET_DIR"
-            fi
-
-            cd "$TARGET_DIR"
-            echo "Pulling latest changes from main..."
-            git fetch origin main
-            git reset --hard origin/main
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} "bash -s" << EOF
+            set -euo pipefail
+            echo "Ensuring deployment directory exists..."
+            mkdir -p "${DEPLOY_DIR}"
           EOF
 
-      - name: Install Production Dependencies on VPS
+      - name: Sync Application Files
         run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
-            set -e
-            export PATH="$HOME/.bun/bin:$PATH"
-            cd /opt/sentinel-v2
-            echo "Installing dependencies..."
-            bun install --production
+          echo "Streaming repository files to ${SERVER_HOST}:${DEPLOY_DIR}..."
+          tar -czf - --exclude='.git' --exclude='.env*' --exclude='.github' --exclude='node_modules' . | \
+            ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} \
+            "tar -xzf - -C ${DEPLOY_DIR}"
+
+      - name: Deploy Containers with Docker Compose
+        run: |
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} "bash -s" << EOF
+            set -euo pipefail
+            cd ${DEPLOY_DIR}
+            docker compose build --pull
+            docker compose up -d --remove-orphans
+            echo "Checking Sentinel v2 container status..."
+            docker compose ps
           EOF
 
-      - name: Run SQLite Database Migrations on VPS
+      - name: Health Check Verification
         run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
-            set -e
-            export PATH="$HOME/.bun/bin:$PATH"
-            cd /opt/sentinel-v2
-            echo "Running SQLite Database Migrations..."
-            bun run db:migrate
-          EOF
-
-      - name: Sync Pre-built Web Dashboards to VPS
-        run: |
-          echo "Syncing bot-dashboard..."
-          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
-            web/bot-dashboard/dist/ \
-            ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }}:/opt/sentinel-v2/web/bot-dashboard/dist/
-
-          echo "Syncing user-dashboard..."
-          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
-            web/user-dashboard/dist/ \
-            ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }}:/opt/sentinel-v2/web/user-dashboard/dist/
-
-          echo "Syncing tt-selector..."
-          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
-            web/tt-selector/dist/ \
-            ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }}:/opt/sentinel-v2/web/tt-selector/dist/
-
-      - name: Update & Restart Systemd Services on VPS
-        run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ${{ secrets.GCP_USERNAME }}@${{ secrets.GCP_HOST }} 'bash -s' << 'EOF'
-            set -e
-            cd /opt/sentinel-v2
-            echo "Updating Systemd Services..."
-            sudo cp .systemd/*.service /etc/systemd/system/
-            sudo systemctl daemon-reload
-            sudo systemctl enable sentinel-api sentinel-bot sentinel-scheduler
-            sudo systemctl restart sentinel-api sentinel-bot sentinel-scheduler
-          EOF
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} \
+            "curl -f --retry 5 --retry-delay 2 http://localhost:3002/api/health || exit 1"

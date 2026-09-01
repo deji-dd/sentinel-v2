@@ -101,7 +101,7 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 	const fetchConfig = useCallback(async () => {
 		setLoading(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			const [configRes, channelsRes] = await Promise.all([
@@ -277,7 +277,7 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 	const handleSave = async () => {
 		setIsSaving(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			const res = await guildRoute.config.put({

@@ -40,11 +40,10 @@ export type WealthStateData = {
 };
 
 export async function getWealthStateObject(): Promise<WealthStateData> {
-	const record = db
+	const [record] = await db
 		.select()
 		.from(systemStates)
-		.where(eq(systemStates.id, WEALTH_STATE_ID))
-		.get();
+		.where(eq(systemStates.id, WEALTH_STATE_ID));
 
 	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
 	const init = Boolean(record?.init ?? rawData.init ?? false);
@@ -63,7 +62,7 @@ export async function getWealthStateObject(): Promise<WealthStateData> {
 		const initDate = new Date(initTimestamp * 1000);
 
 		// Aggregate ledger_events since init
-		const eventRows = db
+		const eventRows = await db
 			.select({
 				type: ledgerEvents.type,
 				totalPnl: sql<number>`COALESCE(sum(${ledgerEvents.realizedPnl}), 0)`,
@@ -71,8 +70,7 @@ export async function getWealthStateObject(): Promise<WealthStateData> {
 			})
 			.from(ledgerEvents)
 			.where(gte(ledgerEvents.timestamp, initDate))
-			.groupBy(ledgerEvents.type)
-			.all();
+			.groupBy(ledgerEvents.type);
 
 		for (const row of eventRows) {
 			const pnl = Number(row.totalPnl);
@@ -90,14 +88,13 @@ export async function getWealthStateObject(): Promise<WealthStateData> {
 		}
 
 		// Company profit since init
-		const companyRows = db
+		const [companyRows] = await db
 			.select({
 				inflow: sql<number>`COALESCE(sum(${companyDailyProfits.inflow}), 0)`,
 				outflow: sql<number>`COALESCE(sum(${companyDailyProfits.outflow}), 0)`,
 			})
 			.from(companyDailyProfits)
-			.where(gte(companyDailyProfits.timestamp, initDate))
-			.get();
+			.where(gte(companyDailyProfits.timestamp, initDate));
 
 		companyInflow = Number(companyRows?.inflow ?? 0);
 		companyOutflow = Number(companyRows?.outflow ?? 0);
@@ -138,31 +135,39 @@ export const wealthRoutes = new Elysia({ prefix: "/wealth" })
 	.get(
 		"/state",
 		async () => {
-			return getWealthStateObject();
+			const state = await getWealthStateObject();
+			return {
+				success: true,
+				data: state,
+			};
 		},
 		{
 			detail: {
 				summary: "Get Wealth Tracking State",
 				description:
-					"Returns whether wealth tracking is active, its initTimestamp, and net inflow/outflow totals.",
+					"Returns whether wealth tracking is initialized, the init timestamp, status, and aggregated financial totals.",
 			},
 		},
 	)
-	// POST /api/v1/system/wealth/init — initializes or resets wealth tracking from a given timestamp
+	// POST /api/v1/system/wealth/init — initialize wealth tracking from a user-specified timestamp
 	.post(
 		"/init",
-		async ({ body }) => {
-			const currentSec = Math.floor(Date.now() / 1000);
-			const initTimestamp = body?.timestamp
-				? Number(body.timestamp)
-				: currentSec;
-			const now = new Date();
+		async ({ body, set }) => {
+			const initTimestamp = Number(body.initTimestamp);
+			if (!initTimestamp || Number.isNaN(initTimestamp) || initTimestamp <= 0) {
+				set.status = 400;
+				return {
+					success: false,
+					error: "Invalid initTimestamp provided. Must be a positive integer.",
+				};
+			}
 
-			const stateData: WealthStateData = {
+			const now = new Date();
+			const stateData = {
 				init: true,
 				initTimestamp,
-				status: "idle",
-				lastSyncTimestamp: currentSec,
+				status: "syncing",
+				lastSyncTimestamp: null,
 				lastError: null,
 				updatedAt: now.toISOString(),
 				totals: {
@@ -178,7 +183,8 @@ export const wealthRoutes = new Elysia({ prefix: "/wealth" })
 				totalEventsIndexed: 0,
 			};
 
-			db.insert(systemStates)
+			await db
+				.insert(systemStates)
 				.values({
 					id: WEALTH_STATE_ID,
 					init: true,
@@ -192,31 +198,35 @@ export const wealthRoutes = new Elysia({ prefix: "/wealth" })
 						data: stateData,
 						updatedAt: now,
 					},
-				})
-				.run();
+				});
 
 			await requestWealthInit(initTimestamp);
 
 			return {
 				success: true,
-				message: `Wealth tracking initialized from ${new Date(initTimestamp * 1000).toISOString()}`,
-				state: stateData,
+				message: `Wealth tracking initialized from timestamp ${initTimestamp}. Backfill in progress.`,
+				data: {
+					init: true,
+					initTimestamp,
+					status: "syncing",
+				},
 			};
 		},
 		{
-			body: t.Optional(
-				t.Object({
-					timestamp: t.Optional(t.Number()),
+			body: t.Object({
+				initTimestamp: t.Number({
+					description:
+						"Unix timestamp (in seconds) to start wealth tracking from.",
 				}),
-			),
+			}),
 			detail: {
 				summary: "Initialize Wealth Tracking",
 				description:
-					"Marks wealth tracking as initialized and sets the starting timestamp cut-off.",
+					"Sets the init timestamp and triggers background backfill for personal logs, crimes, stocks, and gym ledgers.",
 			},
 		},
 	)
-	// GET /api/v1/system/wealth/timeline — returns daily financial timeline of inflows/outflows since init
+	// GET /api/v1/system/wealth/timeline — daily wealth accumulation timeline
 	.get(
 		"/timeline",
 		async () => {
@@ -228,24 +238,17 @@ export const wealthRoutes = new Elysia({ prefix: "/wealth" })
 			const initDate = new Date(state.initTimestamp * 1000);
 
 			// Aggregate daily events from ledgerEvents
-			const dailyEvents = db
+			const dailyEvents = await db
 				.select({
-					date: sql<string>`strftime('%Y-%m-%d', datetime(${ledgerEvents.timestamp}, 'unixepoch'))`,
+					date: sql<string>`to_char(${ledgerEvents.timestamp}, 'YYYY-MM-DD')`,
 					cashFlow: sql<number>`COALESCE(sum(${ledgerEvents.cashFlow}), 0)`,
 					realizedPnl: sql<number>`COALESCE(sum(${ledgerEvents.realizedPnl}), 0)`,
 					count: count(ledgerEvents.id),
 				})
 				.from(ledgerEvents)
 				.where(gte(ledgerEvents.timestamp, initDate))
-				.groupBy(
-					sql`strftime('%Y-%m-%d', datetime(${ledgerEvents.timestamp}, 'unixepoch'))`,
-				)
-				.orderBy(
-					asc(
-						sql`strftime('%Y-%m-%d', datetime(${ledgerEvents.timestamp}, 'unixepoch'))`,
-					),
-				)
-				.all();
+				.groupBy(sql`to_char(${ledgerEvents.timestamp}, 'YYYY-MM-DD')`)
+				.orderBy(asc(sql`to_char(${ledgerEvents.timestamp}, 'YYYY-MM-DD')`));
 
 			let runningCumulative = 0;
 			const timeline = dailyEvents.map((d) => {
@@ -309,22 +312,20 @@ export const wealthRoutes = new Elysia({ prefix: "/wealth" })
 
 			const whereClause = and(...conditions);
 
-			const totalResult = db
+			const [totalResult] = await db
 				.select({ count: count(ledgerEvents.id) })
 				.from(ledgerEvents)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const total = totalResult?.count ?? 0;
 
-			const events = db
+			const events = await db
 				.select()
 				.from(ledgerEvents)
 				.where(whereClause)
 				.orderBy(desc(ledgerEvents.timestamp))
 				.limit(limit)
-				.offset(offset)
-				.all();
+				.offset(offset);
 
 			return {
 				events,

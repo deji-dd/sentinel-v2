@@ -4,7 +4,6 @@ import {
 	eq,
 	factionRoleMappings,
 	factions,
-	getTargetGuildIds,
 	guildConfigs,
 	inArray,
 	like,
@@ -14,8 +13,7 @@ import {
 } from "@sentinel/database";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
-
-const DISCORD_API = "https://discord.com/api/v10";
+import { authPlugin } from "../../middleware/auth";
 
 interface DiscordGuild {
 	id: string;
@@ -23,28 +21,35 @@ interface DiscordGuild {
 	icon: string | null;
 	owner: boolean;
 	permissions: string;
-	features: string[];
 }
 
 interface DiscordChannel {
 	id: string;
 	name: string;
 	type: number;
+	position: number;
+	parent_id: string | null;
 }
 
 interface DiscordRole {
 	id: string;
 	name: string;
 	color: number;
+	position: number;
+	permissions: string;
+	managed: boolean;
 }
+
+const MANAGE_GUILD = 0x20;
+const ADMINISTRATOR = 0x8;
 
 async function fetchDiscordApi<T>(
 	endpoint: string,
-	authorization: string,
+	authHeader: string,
 ): Promise<T | null> {
 	try {
-		const res = await fetch(`${DISCORD_API}${endpoint}`, {
-			headers: { Authorization: authorization },
+		const res = await fetch(`https://discord.com/api/v10${endpoint}`, {
+			headers: { Authorization: authHeader },
 		});
 		if (!res.ok) return null;
 		return (await res.json()) as T;
@@ -53,68 +58,91 @@ async function fetchDiscordApi<T>(
 	}
 }
 
-/**
- * Guild management routes for the bot dashboard.
- * Fetches live data from Discord API using bot token + user access token,
- * and manages guild configuration in SQLite.
- */
 export const guildRoutes = new Elysia({ prefix: "/guilds" })
-	// GET /api/v1/guilds — mutual target guilds between user and bot
+	.use(authPlugin)
+	// GET /api/v1/guilds — list guilds manageable by the current user
 	.get(
 		"/",
-		async ({ request }) => {
-			const cookieHeader = request.headers.get("cookie") ?? "";
-			const discordMetaMatch = cookieHeader.match(/discord_meta=([^;]+)/);
+		async ({ cookie, user }) => {
+			const discordMetaCookie = cookie.discord_meta?.value;
 			let userAccessToken: string | null = null;
 
-			if (discordMetaMatch?.[1]) {
+			if (discordMetaCookie) {
 				try {
-					const meta = JSON.parse(
-						decodeURIComponent(discordMetaMatch[1]),
-					) as Record<string, unknown>;
-					userAccessToken =
-						typeof meta.accessToken === "string" ? meta.accessToken : null;
+					if (typeof discordMetaCookie === "string") {
+						const parsed = JSON.parse(discordMetaCookie) as {
+							accessToken?: string;
+						};
+						userAccessToken = parsed.accessToken ?? null;
+					} else if (
+						typeof discordMetaCookie === "object" &&
+						discordMetaCookie !== null
+					) {
+						const parsed = discordMetaCookie as { accessToken?: string };
+						userAccessToken = parsed.accessToken ?? null;
+					}
 				} catch {
-					userAccessToken = null;
+					// Fallback to null
 				}
 			}
 
-			if (!userAccessToken) {
-				return {
-					guilds: [],
-					error: "No Discord access token found. Please log in with Discord.",
-				};
+			const botToken = env.DISCORD_TOKEN;
+			if (!botToken) {
+				return { guilds: [] };
 			}
 
-			const botToken = env.DISCORD_TOKEN;
-
 			const [userGuilds, botGuilds] = await Promise.all([
-				fetchDiscordApi<DiscordGuild[]>(
-					"/users/@me/guilds",
-					`Bearer ${userAccessToken}`,
-				),
+				userAccessToken
+					? fetchDiscordApi<DiscordGuild[]>(
+							"/users/@me/guilds",
+							`Bearer ${userAccessToken}`,
+						)
+					: Promise.resolve(null),
 				fetchDiscordApi<DiscordGuild[]>("/users/@me/guilds", `Bot ${botToken}`),
 			]);
 
-			if (!userGuilds || !botGuilds) {
-				return { guilds: [], error: "Failed to fetch guilds from Discord." };
-			}
-
-			const botGuildIds = new Set(botGuilds.map((g) => g.id));
-			const targetIds = getTargetGuildIds();
-			const mutual = userGuilds.filter(
-				(g) =>
-					botGuildIds.has(g.id) &&
-					(targetIds.length === 0 || targetIds.includes(g.id)),
+			const botGuildMap = new Map(
+				(botGuilds ?? []).map((g) => [g.id, { ...g, botInGuild: true }]),
 			);
 
-			return { guilds: mutual };
+			const isSentinelOwner = user?.role === "owner" || user?.role === "admin";
+
+			if (isSentinelOwner) {
+				const userGuildMap = new Map((userGuilds ?? []).map((g) => [g.id, g]));
+				const result = (botGuilds ?? []).map((g) => ({
+					...g,
+					botInGuild: true,
+					manageable: true,
+					userInGuild: userGuildMap.has(g.id),
+				}));
+				return { guilds: result };
+			}
+
+			if (!userGuilds) {
+				return { guilds: [] };
+			}
+
+			const manageable = userGuilds
+				.filter((g) => {
+					const perms = BigInt(g.permissions);
+					const hasAdmin = (perms & BigInt(ADMINISTRATOR)) !== 0n;
+					const hasManageGuild = (perms & BigInt(MANAGE_GUILD)) !== 0n;
+					return g.owner || hasAdmin || hasManageGuild;
+				})
+				.map((g) => ({
+					...g,
+					botInGuild: botGuildMap.has(g.id),
+					manageable: true,
+					userInGuild: true,
+				}));
+
+			return { guilds: manageable };
 		},
 		{
 			detail: {
-				summary: "Mutual Guilds",
+				summary: "List Guilds",
 				description:
-					"Returns guilds shared between the logged-in user and the bot.",
+					"Returns mutual guilds where the user has administrative permissions and Sentinel is installed.",
 			},
 		},
 	)
@@ -122,22 +150,20 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.get(
 		"/:guildId/config",
 		async ({ params }) => {
-			const config = db
+			const [config] = await db
 				.select()
 				.from(guildConfigs)
-				.where(eq(guildConfigs.guildId, params.guildId))
-				.get();
+				.where(eq(guildConfigs.guildId, params.guildId));
 
-			const mappings = db
+			const mappings = await db
 				.select()
 				.from(factionRoleMappings)
-				.where(eq(factionRoleMappings.guildId, params.guildId))
-				.all();
+				.where(eq(factionRoleMappings.guildId, params.guildId));
 
 			const factionIds = Array.from(new Set(mappings.map((m) => m.factionId)));
 			const factionRows =
 				factionIds.length > 0
-					? db
+					? await db
 							.select({
 								id: factions.id,
 								tag: factions.tag,
@@ -145,7 +171,6 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 							})
 							.from(factions)
 							.where(inArray(factions.id, factionIds))
-							.all()
 					: [];
 
 			const factionMetaMap = new Map(factionRows.map((f) => [f.id, f]));
@@ -177,11 +202,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.put(
 		"/:guildId/config",
 		async ({ params, body, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(guildConfigs)
-				.where(eq(guildConfigs.guildId, params.guildId))
-				.get();
+				.where(eq(guildConfigs.guildId, params.guildId));
 
 			if (!existing) {
 				set.status = 403;
@@ -191,7 +215,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				};
 			}
 
-			db.update(guildConfigs)
+			await db
+				.update(guildConfigs)
 				.set({
 					...(body.logChannelId !== undefined
 						? { logChannelId: body.logChannelId }
@@ -234,8 +259,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: {}),
 					updatedAt: new Date(),
 				})
-				.where(eq(guildConfigs.guildId, params.guildId))
-				.run();
+				.where(eq(guildConfigs.guildId, params.guildId));
 
 			return { success: true };
 		},
@@ -272,11 +296,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				return { error: "Invalid faction ID." };
 			}
 
-			const existingConfig = db
+			const [existingConfig] = await db
 				.select()
 				.from(guildConfigs)
-				.where(eq(guildConfigs.guildId, params.guildId))
-				.get();
+				.where(eq(guildConfigs.guildId, params.guildId));
 
 			if (!existingConfig) {
 				set.status = 403;
@@ -287,23 +310,20 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			const newId = crypto.randomUUID();
-			db.insert(factionRoleMappings)
-				.values({
-					id: newId,
-					guildId: params.guildId,
-					factionId: body.factionId,
-					factionName: body.factionName ?? null,
-					memberRoleIds: body.memberRoleIds ?? [],
-					leaderRoleIds: body.leaderRoleIds ?? [],
-					enabled: true,
-				})
-				.run();
+			await db.insert(factionRoleMappings).values({
+				id: newId,
+				guildId: params.guildId,
+				factionId: body.factionId,
+				factionName: body.factionName ?? null,
+				memberRoleIds: body.memberRoleIds ?? [],
+				leaderRoleIds: body.leaderRoleIds ?? [],
+				enabled: true,
+			});
 
-			const created = db
+			const [created] = await db
 				.select()
 				.from(factionRoleMappings)
-				.where(eq(factionRoleMappings.id, newId))
-				.get();
+				.where(eq(factionRoleMappings.id, newId));
 
 			return { success: true, mapping: created };
 		},
@@ -325,7 +345,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.put(
 		"/:guildId/faction-mappings/:mappingId",
 		async ({ params, body }) => {
-			db.update(factionRoleMappings)
+			await db
+				.update(factionRoleMappings)
 				.set({
 					...(body.factionId !== undefined
 						? { factionId: body.factionId }
@@ -337,14 +358,12 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					leaderRoleIds: body.leaderRoleIds ?? [],
 					updatedAt: new Date(),
 				})
-				.where(eq(factionRoleMappings.id, params.mappingId))
-				.run();
+				.where(eq(factionRoleMappings.id, params.mappingId));
 
-			const updated = db
+			const [updated] = await db
 				.select()
 				.from(factionRoleMappings)
-				.where(eq(factionRoleMappings.id, params.mappingId))
-				.get();
+				.where(eq(factionRoleMappings.id, params.mappingId));
 
 			return { success: true, mapping: updated };
 		},
@@ -369,9 +388,9 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.delete(
 		"/:guildId/faction-mappings/:mappingId",
 		async ({ params }) => {
-			db.delete(factionRoleMappings)
-				.where(eq(factionRoleMappings.id, params.mappingId))
-				.run();
+			await db
+				.delete(factionRoleMappings)
+				.where(eq(factionRoleMappings.id, params.mappingId));
 
 			return { success: true };
 		},
@@ -397,7 +416,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			// 1. Check local DB
-			const existing = db
+			const [existing] = await db
 				.select({
 					id: factions.id,
 					name: factions.name,
@@ -406,8 +425,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					updatedAt: factions.updatedAt,
 				})
 				.from(factions)
-				.where(eq(factions.id, factionIdNum))
-				.get();
+				.where(eq(factions.id, factionIdNum));
 
 			const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 			const isStale =
@@ -457,24 +475,22 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				const tagImage = basic.tag_image ?? null;
 
 				if (existing) {
-					db.update(factions)
+					await db
+						.update(factions)
 						.set({
 							name,
 							tag,
 							tagImage,
 							updatedAt: new Date(),
 						})
-						.where(eq(factions.id, factionIdNum))
-						.run();
+						.where(eq(factions.id, factionIdNum));
 				} else {
-					db.insert(factions)
-						.values({
-							id: factionIdNum,
-							name,
-							tag,
-							tagImage,
-						})
-						.run();
+					await db.insert(factions).values({
+						id: factionIdNum,
+						name,
+						tag,
+						tagImage,
+					});
 				}
 
 				return {
@@ -568,7 +584,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				Number.isNaN(limitNum) || limitNum < 1 ? 20 : Math.min(limitNum, 100);
 
 			if (search) {
-				const blueprints = db
+				const blueprints = await db
 					.select({
 						id: territoryBlueprints.id,
 						sector: territoryBlueprints.sector,
@@ -578,13 +594,12 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					})
 					.from(territoryBlueprints)
 					.where(like(territoryBlueprints.id, `%${search.toUpperCase()}%`))
-					.limit(maxLimit)
-					.all();
+					.limit(maxLimit);
 
 				return { territories: blueprints };
 			}
 
-			const blueprints = db
+			const blueprints = await db
 				.select({
 					id: territoryBlueprints.id,
 					sector: territoryBlueprints.sector,
@@ -593,8 +608,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					slots: territoryBlueprints.slots,
 				})
 				.from(territoryBlueprints)
-				.limit(maxLimit)
-				.all();
+				.limit(maxLimit);
 
 			return { territories: blueprints };
 		},
@@ -615,20 +629,18 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.get(
 		"/:guildId/reaction-roles",
 		async ({ params }) => {
-			const messages = db
+			const messages = await db
 				.select()
 				.from(reactionRoleMessages)
-				.where(eq(reactionRoleMessages.guildId, params.guildId))
-				.all();
+				.where(eq(reactionRoleMessages.guildId, params.guildId));
 
 			const messageIds = messages.map((m) => m.id);
 			const mappings =
 				messageIds.length > 0
-					? db
+					? await db
 							.select()
 							.from(reactionRoleMappings)
 							.where(inArray(reactionRoleMappings.messageId, messageIds))
-							.all()
 					: [];
 
 			const mappingsByMessageId = new Map<string, typeof mappings>();
@@ -668,39 +680,33 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			const messageId = crypto.randomUUID();
-			db.insert(reactionRoleMessages)
-				.values({
-					id: messageId,
-					guildId: params.guildId,
-					title: body.title.trim(),
-					channelId: body.channelId,
-					requiredRoleId: body.requiredRoleId ?? null,
-				})
-				.run();
+			await db.insert(reactionRoleMessages).values({
+				id: messageId,
+				guildId: params.guildId,
+				title: body.title.trim(),
+				channelId: body.channelId,
+				requiredRoleId: body.requiredRoleId ?? null,
+			});
 
 			for (const m of body.mappings) {
-				db.insert(reactionRoleMappings)
-					.values({
-						id: crypto.randomUUID(),
-						messageId: messageId,
-						emoji: m.emoji.trim(),
-						roleId: m.roleId.trim(),
-						description: m.description?.trim() ?? null,
-					})
-					.run();
+				await db.insert(reactionRoleMappings).values({
+					id: crypto.randomUUID(),
+					messageId: messageId,
+					emoji: m.emoji.trim(),
+					roleId: m.roleId.trim(),
+					description: m.description?.trim() ?? null,
+				});
 			}
 
-			const createdMessage = db
+			const [createdMessage] = await db
 				.select()
 				.from(reactionRoleMessages)
-				.where(eq(reactionRoleMessages.id, messageId))
-				.get();
+				.where(eq(reactionRoleMessages.id, messageId));
 
-			const createdMappings = db
+			const createdMappings = await db
 				.select()
 				.from(reactionRoleMappings)
-				.where(eq(reactionRoleMappings.messageId, messageId))
-				.all();
+				.where(eq(reactionRoleMappings.messageId, messageId));
 
 			return {
 				success: true,
@@ -733,7 +739,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.put(
 		"/:guildId/reaction-roles/:messageId",
 		async ({ params, body, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(reactionRoleMessages)
 				.where(
@@ -741,15 +747,15 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						eq(reactionRoleMessages.id, params.messageId),
 						eq(reactionRoleMessages.guildId, params.guildId),
 					),
-				)
-				.get();
+				);
 
 			if (!existing) {
 				set.status = 404;
 				return { error: "Reaction role message not found." };
 			}
 
-			db.update(reactionRoleMessages)
+			await db
+				.update(reactionRoleMessages)
 				.set({
 					...(body.title !== undefined ? { title: body.title.trim() } : {}),
 					...(body.channelId !== undefined
@@ -760,38 +766,33 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: {}),
 					updatedAt: new Date(),
 				})
-				.where(eq(reactionRoleMessages.id, params.messageId))
-				.run();
+				.where(eq(reactionRoleMessages.id, params.messageId));
 
 			if (body.mappings !== undefined) {
-				db.delete(reactionRoleMappings)
-					.where(eq(reactionRoleMappings.messageId, params.messageId))
-					.run();
+				await db
+					.delete(reactionRoleMappings)
+					.where(eq(reactionRoleMappings.messageId, params.messageId));
 
 				for (const m of body.mappings) {
-					db.insert(reactionRoleMappings)
-						.values({
-							id: crypto.randomUUID(),
-							messageId: params.messageId,
-							emoji: m.emoji.trim(),
-							roleId: m.roleId.trim(),
-							description: m.description?.trim() ?? null,
-						})
-						.run();
+					await db.insert(reactionRoleMappings).values({
+						id: crypto.randomUUID(),
+						messageId: params.messageId,
+						emoji: m.emoji.trim(),
+						roleId: m.roleId.trim(),
+						description: m.description?.trim() ?? null,
+					});
 				}
 			}
 
-			const updatedMessage = db
+			const [updatedMessage] = await db
 				.select()
 				.from(reactionRoleMessages)
-				.where(eq(reactionRoleMessages.id, params.messageId))
-				.get();
+				.where(eq(reactionRoleMessages.id, params.messageId));
 
-			const updatedMappings = db
+			const updatedMappings = await db
 				.select()
 				.from(reactionRoleMappings)
-				.where(eq(reactionRoleMappings.messageId, params.messageId))
-				.all();
+				.where(eq(reactionRoleMappings.messageId, params.messageId));
 
 			return {
 				success: true,
@@ -829,7 +830,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	.delete(
 		"/:guildId/reaction-roles/:messageId",
 		async ({ params, set }) => {
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(reactionRoleMessages)
 				.where(
@@ -837,21 +838,20 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						eq(reactionRoleMessages.id, params.messageId),
 						eq(reactionRoleMessages.guildId, params.guildId),
 					),
-				)
-				.get();
+				);
 
 			if (!existing) {
 				set.status = 404;
 				return { error: "Reaction role message not found." };
 			}
 
-			db.delete(reactionRoleMappings)
-				.where(eq(reactionRoleMappings.messageId, params.messageId))
-				.run();
+			await db
+				.delete(reactionRoleMappings)
+				.where(eq(reactionRoleMappings.messageId, params.messageId));
 
-			db.delete(reactionRoleMessages)
-				.where(eq(reactionRoleMessages.id, params.messageId))
-				.run();
+			await db
+				.delete(reactionRoleMessages)
+				.where(eq(reactionRoleMessages.id, params.messageId));
 
 			return { success: true };
 		},

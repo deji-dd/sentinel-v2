@@ -4,6 +4,7 @@ import {
 	GatewayIntentBits,
 	type Interaction,
 	Partials,
+	Status,
 } from "discord.js";
 import { buildCommandsCollection } from "./src/commands";
 import { guildCreateEvent } from "./src/events/guild-create";
@@ -69,8 +70,31 @@ async function main(): Promise<void> {
 	// Register IPC event listeners for real-time dashboard dispatches
 	setupBotIpcListeners(client);
 
+	// Start lightweight internal healthcheck server
+	const healthPort = Number(process.env.PORT) || 3000;
+	const healthServer = Bun.serve({
+		port: healthPort,
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/health" || url.pathname === "/") {
+				const isReady = client.isReady() && client.ws.status === Status.Ready;
+				return isReady
+					? Response.json({
+							status: "ok",
+							service: "sentinel-bot",
+							ping: client.ws.ping,
+							uptime: process.uptime(),
+						})
+					: new Response("Bot gateway disconnected", { status: 503 });
+			}
+			return new Response("Not Found", { status: 404 });
+		},
+	});
+	logger.info(`Lightweight healthcheck server listening on port ${healthPort}`);
+
 	const shutdown = (signal: string) => {
 		logger.info(`Received ${signal}. Shutting down Discord bot client...`);
+		healthServer.stop();
 		client.destroy();
 		process.exit(0);
 	};

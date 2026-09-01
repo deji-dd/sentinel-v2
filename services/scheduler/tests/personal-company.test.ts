@@ -27,11 +27,10 @@ describe("Personal Company Sync Worker", () => {
 		// Clean up fixtures
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
-		await db.delete(companyDailyProfits).run();
+		await db.delete(companyDailyProfits);
 		await db
 			.delete(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"))
-			.run();
+			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 
 		// Insert personal API key fixture
 		await db.insert(apiKeys).values({
@@ -55,11 +54,10 @@ describe("Personal Company Sync Worker", () => {
 		}
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
-		await db.delete(companyDailyProfits).run();
+		await db.delete(companyDailyProfits);
 		await db
 			.delete(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"))
-			.run();
+			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 	});
 
 	test("initializes default state and loads state from database", async () => {
@@ -134,7 +132,7 @@ describe("Personal Company Sync Worker", () => {
 		expect(state.lastProfit).toBe(9050000);
 
 		// Verify database insertion in companyDailyProfits
-		const snapshots = await db.select().from(companyDailyProfits).all();
+		const snapshots = await db.select().from(companyDailyProfits);
 		expect(snapshots.length).toBe(1);
 		const snapshot = snapshots[0];
 		expect(snapshot?.inflow).toBe(10000000);
@@ -145,8 +143,7 @@ describe("Personal Company Sync Worker", () => {
 		const events = await db
 			.select()
 			.from(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"))
-			.all();
+			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 		expect(events.length).toBe(1);
 		const ev = events[0];
 		expect(ev?.realizedPnl).toBe(9050000);
@@ -187,8 +184,7 @@ describe("Personal Company Sync Worker", () => {
 		const events = await db
 			.select()
 			.from(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"))
-			.all();
+			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 		expect(events.length).toBe(1);
 		expect(events[0]?.type).toBe("loss");
 		expect(events[0]?.realizedPnl).toBe(-250000);

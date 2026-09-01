@@ -3,9 +3,10 @@ import { db, territoryBlueprints, users } from "@sentinel/database";
 import { app } from "../src/app";
 
 describe("Elysia API Server - TT-Selector Routes", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
 		// Insert mock blueprint
-		db.insert(territoryBlueprints)
+		await db
+			.insert(territoryBlueprints)
 			.values({
 				id: "TEST_TT_1",
 				sector: 1,
@@ -14,17 +15,16 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 				slots: 5,
 				data: { respect: 500 },
 			})
-			.onConflictDoNothing()
-			.run();
+			.onConflictDoNothing();
 
 		// Insert mock test user
-		db.insert(users)
+		await db
+			.insert(users)
 			.values({
 				username: "tt_test_commander",
 				role: "user",
 			})
-			.onConflictDoNothing()
-			.run();
+			.onConflictDoNothing();
 	});
 
 	it("GET /api/v1/tt/metadata returns territory blueprints and price data", async () => {

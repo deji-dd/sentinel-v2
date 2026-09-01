@@ -420,12 +420,15 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 			// Trigger backfill completed event
 			schedulerEvents.emit("log_backfill_completed");
 
-			// Wait briefly for asynchronous execution
-			await new Promise((resolve) => setTimeout(resolve, 50));
-
-			const gymState = await db.query.systemStates.findFirst({
-				where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
-			});
+			// Wait for asynchronous execution
+			let gymState: typeof systemStates.$inferSelect | undefined;
+			for (let i = 0; i < 30; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				gymState = await db.query.systemStates.findFirst({
+					where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
+				});
+				if (gymState) break;
+			}
 
 			expect(gymState).toBeDefined();
 		});

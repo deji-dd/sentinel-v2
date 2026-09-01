@@ -1,54 +1,53 @@
-import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+	boolean,
+	integer,
+	jsonb,
+	pgTable,
+	text,
+	timestamp,
+} from "drizzle-orm/pg-core";
 
-export const guildConfigs = sqliteTable("guild_configs", {
+export const guildConfigs = pgTable("guild_configs", {
 	guildId: text("guild_id").primaryKey(),
 	logChannelId: text("log_channel_id"),
-	adminRoleIds: text("admin_role_ids", { mode: "json" })
-		.$type<string[]>()
-		.default([])
-		.notNull(),
-	verifiedRoleIds: text("verified_role_ids", { mode: "json" })
+	adminRoleIds: jsonb("admin_role_ids").$type<string[]>().default([]).notNull(),
+	verifiedRoleIds: jsonb("verified_role_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
 	nicknameTemplate: text("nickname_template").default("[{tag}] {name} [{id}]"),
-	verifyOnJoin: integer("verify_on_join", { mode: "boolean" })
-		.default(false)
-		.notNull(),
-	verifyCron: integer("verify_cron", { mode: "boolean" })
-		.default(false)
-		.notNull(),
+	verifyOnJoin: boolean("verify_on_join").default(false).notNull(),
+	verifyCron: boolean("verify_cron").default(false).notNull(),
 	verifyCronInterval: integer("verify_cron_interval").default(24).notNull(),
-	lastVerifyCronAt: integer("last_verify_cron_at", { mode: "timestamp" }),
-	protectedRoleIds: text("protected_role_ids", { mode: "json" })
+	lastVerifyCronAt: timestamp("last_verify_cron_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	protectedRoleIds: jsonb("protected_role_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
 	factionListChannelId: text("faction_list_channel_id"),
-	factionListMessageIds: text("faction_list_message_ids", { mode: "json" })
+	factionListMessageIds: jsonb("faction_list_message_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
 	ttFullChannelId: text("tt_full_channel_id"),
 	ttFilteredChannelId: text("tt_filtered_channel_id"),
-	ttTerritoryIds: text("tt_territory_ids", { mode: "json" })
+	ttTerritoryIds: jsonb("tt_territory_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
-	ttFactionIds: text("tt_faction_ids", { mode: "json" })
-		.$type<number[]>()
-		.default([])
+	ttFactionIds: jsonb("tt_faction_ids").$type<number[]>().default([]).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
-		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });
 
-export const reactionRoleMessages = sqliteTable("reaction_role_messages", {
+export const reactionRoleMessages = pgTable("reaction_role_messages", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
@@ -57,15 +56,15 @@ export const reactionRoleMessages = sqliteTable("reaction_role_messages", {
 	channelId: text("channel_id").notNull(),
 	messageId: text("message_id").unique(),
 	requiredRoleId: text("required_role_id"),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });
 
-export const reactionRoleMappings = sqliteTable("reaction_role_mappings", {
+export const reactionRoleMappings = pgTable("reaction_role_mappings", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
@@ -73,50 +72,63 @@ export const reactionRoleMappings = sqliteTable("reaction_role_mappings", {
 	emoji: text("emoji").notNull(),
 	roleId: text("role_id").notNull(),
 	description: text("description"),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });
 
-export const factionRoleMappings = sqliteTable("faction_role_mappings", {
+export const factionRoleMappings = pgTable("faction_role_mappings", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
 	guildId: text("guild_id").notNull(),
 	factionId: integer("faction_id").notNull(),
 	factionName: text("faction_name"),
-	memberRoleIds: text("member_role_ids", { mode: "json" })
+	memberRoleIds: jsonb("member_role_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
-	leaderRoleIds: text("leader_role_ids", { mode: "json" })
+	leaderRoleIds: jsonb("leader_role_ids")
 		.$type<string[]>()
 		.default([])
 		.notNull(),
-	enabled: integer("enabled", { mode: "boolean" }).default(true).notNull(),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	enabled: boolean("enabled").default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });
 
-export const verifiedUsers = sqliteTable("verified_users", {
+export const verifiedUsers = pgTable("verified_users", {
 	discordId: text("discord_id").primaryKey(),
 	tornId: integer("torn_id").notNull(),
 	tornName: text("torn_name").notNull(),
 	factionId: integer("faction_id"),
 	factionTag: text("faction_tag"),
-	lastCheckedAt: integer("last_checked_at", { mode: "timestamp" }),
-	createdAt: integer("created_at", { mode: "timestamp" }),
-	updatedAt: integer("updated_at", { mode: "timestamp" }),
+	lastCheckedAt: timestamp("last_checked_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	createdAt: timestamp("created_at", {
+		withTimezone: true,
+		mode: "date",
+	})
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", {
+		withTimezone: true,
+		mode: "date",
+	})
+		.defaultNow()
+		.notNull(),
 });
 
-export const verificationLogs = sqliteTable("verification_logs", {
+export const verificationLogs = pgTable("verification_logs", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
@@ -124,18 +136,12 @@ export const verificationLogs = sqliteTable("verification_logs", {
 	discordId: text("discord_id").notNull(),
 	status: text("status").notNull(),
 	triggeredBy: text("triggered_by").default("user").notNull(),
-	rolesAdded: text("roles_added", { mode: "json" })
-		.$type<string[]>()
-		.default([])
-		.notNull(),
-	rolesRemoved: text("roles_removed", { mode: "json" })
-		.$type<string[]>()
-		.default([])
-		.notNull(),
+	rolesAdded: jsonb("roles_added").$type<string[]>().default([]).notNull(),
+	rolesRemoved: jsonb("roles_removed").$type<string[]>().default([]).notNull(),
 	oldNickname: text("old_nickname"),
 	newNickname: text("new_nickname"),
 	error: text("error"),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });

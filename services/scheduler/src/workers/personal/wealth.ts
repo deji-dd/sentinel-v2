@@ -151,10 +151,7 @@ import { getPersonalKey, tornApi } from "@sentinel/torn-api";
  * Fetches all unique item categories dynamically from `torn_items` in SQLite.
  */
 export async function getUniqueItemCategories(): Promise<string[]> {
-	const allItems = await db
-		.select({ data: tornItems.data })
-		.from(tornItems)
-		.all();
+	const allItems = await db.select({ data: tornItems.data }).from(tornItems);
 
 	const categoriesSet = new Set<string>();
 	for (const item of allItems) {
@@ -207,8 +204,8 @@ export async function initWealthTracking(
 		logger.info("Snapshotting baseline assets from Torn API...");
 
 		// 1. Wipe previous baseline assets and ledger events
-		await db.delete(assets).all();
-		await db.delete(ledgerEvents).all();
+		await db.delete(assets);
+		await db.delete(ledgerEvents);
 
 		// 2. Fetch baseline data from /user (money, bazaar, display)
 		const userRes = (await tornApi.get("/user", {
@@ -297,11 +294,10 @@ export async function initWealthTracking(
 						});
 				} else {
 					const assetKey = `item_${itemId}_${location}`;
-					const existing = await db
+					const [existing] = await db
 						.select()
 						.from(assets)
-						.where(eq(assets.id, assetKey))
-						.get();
+						.where(eq(assets.id, assetKey));
 
 					if (existing) {
 						const newQty = existing.quantity + qty;
@@ -525,8 +521,7 @@ export function extractMoneyFlow(data: Record<string, unknown>): number {
 export async function fetchItemPricesMap(): Promise<Map<string, number>> {
 	const allItems = await db
 		.select({ id: tornItems.id, data: tornItems.data })
-		.from(tornItems)
-		.all();
+		.from(tornItems);
 
 	const map = new Map<string, number>();
 	for (const item of allItems) {
@@ -586,11 +581,10 @@ export async function processWealthLog(
 		const isUid = !!(item.uid && typeof item.uid !== "boolean");
 		const assetKey = isUid ? `uid_${item.uid}` : `item_${item.id}_inventory`;
 
-		const existing = await db
+		const [existing] = await db
 			.select()
 			.from(assets)
-			.where(eq(assets.id, assetKey))
-			.get();
+			.where(eq(assets.id, assetKey));
 
 		const systemPrice = itemPrices.get(String(item.id)) ?? 0;
 
@@ -765,8 +759,7 @@ export async function recalculateWealthTotals(
 		})
 		.from(ledgerEvents)
 		.where(gte(ledgerEvents.timestamp, initDate))
-		.groupBy(ledgerEvents.type)
-		.all();
+		.groupBy(ledgerEvents.type);
 
 	let crimesInflow = 0;
 	let stocksInflow = 0;
@@ -788,14 +781,13 @@ export async function recalculateWealthTotals(
 	}
 
 	// Company daily profits since initDate
-	const companyRows = await db
+	const [companyRows] = await db
 		.select({
 			inflow: sql<number>`COALESCE(sum(${companyDailyProfits.inflow}), 0)`,
 			outflow: sql<number>`COALESCE(sum(${companyDailyProfits.outflow}), 0)`,
 		})
 		.from(companyDailyProfits)
-		.where(gte(companyDailyProfits.timestamp, initDate))
-		.get();
+		.where(gte(companyDailyProfits.timestamp, initDate));
 
 	const companyInflow = Number(companyRows?.inflow ?? 0);
 	const companyOutflow = Number(companyRows?.outflow ?? 0);
@@ -881,8 +873,7 @@ export async function reconcileWealthTracker(): Promise<void> {
 			})
 			.from(personalLogs)
 			.where(gte(personalLogs.timestamp, initDate))
-			.orderBy(personalLogs.timestamp)
-			.all();
+			.orderBy(personalLogs.timestamp);
 
 		if (logsToProcess.length > 0) {
 			const itemPrices = await fetchItemPricesMap();

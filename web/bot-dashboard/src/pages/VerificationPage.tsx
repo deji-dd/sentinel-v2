@@ -184,7 +184,7 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 	const fetchConfig = useCallback(async () => {
 		setLoading(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			const [configRes, channelsRes, rolesRes] = await Promise.all([
@@ -462,7 +462,7 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 	const handleSaveChanges = async () => {
 		setIsSaving(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			// 1. Update general verification config
@@ -485,7 +485,7 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 
 			// 2. Process pending deletes
 			for (const mappingId of pendingDeletes) {
-				const mappingRoute = guildRoute["faction-mappings"][mappingId];
+				const mappingRoute = guildRoute["faction-mappings"]({ mappingId });
 				if (mappingRoute) {
 					const deleteRes = await mappingRoute.delete();
 					if (deleteRes.error) {
@@ -496,7 +496,7 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 
 			// 3. Process pending updates
 			for (const [mappingId, updateObj] of Object.entries(pendingUpdates)) {
-				const mappingRoute = guildRoute["faction-mappings"][mappingId];
+				const mappingRoute = guildRoute["faction-mappings"]({ mappingId });
 				if (mappingRoute) {
 					const putRes = await mappingRoute.put({
 						memberRoleIds: updateObj.memberRoleIds,

@@ -29,7 +29,7 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"sync:env": "rsync -avz .env.production deji@100.96.215.46:/opt/sentinel-v2/.env.production"
+		"sync:env": "rsync -avz .env.production root@dejis-cloud:/opt/sentinel-v2/.env.production"
 	},
 	"type": "module",
 	"private": true,
@@ -37,6 +37,7 @@
 		"@biomejs/biome": "latest",
 		"@types/bun": "latest",
 		"openapi-typescript": "latest",
+		"postgres": "latest",
 		"typescript": "latest"
 	},
 	"peerDependencies": {}

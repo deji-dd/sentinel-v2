@@ -44,13 +44,12 @@ export const DEFAULT_CRIME_NAMES: Record<number, string> = {
 };
 
 export async function getCrimeLedgerStateObject() {
-	const record = db
+	const [record] = await db
 		.select()
 		.from(systemStates)
-		.where(eq(systemStates.id, "personal:crimes_ledger"))
-		.get();
+		.where(eq(systemStates.id, "personal:crimes_ledger"));
 
-	const totals = db
+	const [totals] = await db
 		.select({
 			totalInDb: count(crimeLogs.id),
 			totalNerveSpent: sql<number>`COALESCE(sum(${crimeLogs.nerve}), 0)`,
@@ -58,29 +57,25 @@ export async function getCrimeLedgerStateObject() {
 			minTimestamp: sql<number | null>`min(${crimeLogs.timestamp})`,
 			maxTimestamp: sql<number | null>`max(${crimeLogs.timestamp})`,
 		})
-		.from(crimeLogs)
-		.get();
+		.from(crimeLogs);
 
-	const personalLogsCount = db
+	const [personalLogsCount] = await db
 		.select({ count: count(personalLogs.id) })
 		.from(personalLogs)
-		.where(inArray(personalLogs.log, CRIME_LOG_IDS))
-		.get();
+		.where(inArray(personalLogs.log, CRIME_LOG_IDS));
 
-	const distinctCrimes = db
+	const [distinctCrimes] = await db
 		.select({ count: sql<number>`count(distinct ${crimeLogs.crimeId})` })
-		.from(crimeLogs)
-		.get();
+		.from(crimeLogs);
 
 	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
 
-	const tornCrimesList = db
+	const tornCrimesList = await db
 		.select({
 			id: tornCrimes.id,
 			name: tornCrimes.name,
 		})
-		.from(tornCrimes)
-		.all();
+		.from(tornCrimes);
 
 	const crimeNamesMap = new Map<number, string>();
 	for (const tc of tornCrimesList) {
@@ -90,7 +85,7 @@ export async function getCrimeLedgerStateObject() {
 		}
 	}
 
-	const categoryRows = db
+	const categoryRows = await db
 		.select({
 			crimeId: crimeLogs.crimeId,
 			count: count(crimeLogs.id),
@@ -98,8 +93,7 @@ export async function getCrimeLedgerStateObject() {
 			value: sql<number>`COALESCE(sum(${crimeLogs.value}), 0)`,
 		})
 		.from(crimeLogs)
-		.groupBy(crimeLogs.crimeId)
-		.all();
+		.groupBy(crimeLogs.crimeId);
 
 	const allTimeTotalCrimes = totals?.totalInDb ?? 0;
 	const allTimeCategories = categoryRows.map((cat) => {
@@ -283,11 +277,10 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 			const whereClause =
 				conditions.length > 0 ? and(...conditions) : undefined;
 
-			const totalResult = db
+			const [totalResult] = await db
 				.select({ count: count(crimeLogs.id) })
 				.from(crimeLogs)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const total = totalResult?.count ?? 0;
 
@@ -309,7 +302,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 					: desc(crimeLogs.timestamp);
 			}
 
-			const rawLogs = db
+			const rawLogs = await db
 				.select({
 					id: crimeLogs.id,
 					crimeId: crimeLogs.crimeId,
@@ -323,17 +316,15 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				.where(whereClause)
 				.orderBy(orderColumn)
 				.limit(limit)
-				.offset(offset)
-				.all();
+				.offset(offset);
 
 			// Fetch Torn crime names map
-			const tornCrimesList = db
+			const tornCrimesList = await db
 				.select({
 					id: tornCrimes.id,
 					name: tornCrimes.name,
 				})
-				.from(tornCrimes)
-				.all();
+				.from(tornCrimes);
 
 			const crimeNamesMap = new Map<number, string>();
 			for (const tc of tornCrimesList) {
@@ -452,7 +443,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				conditions.length > 0 ? and(...conditions) : undefined;
 
 			// 1. Overall KPIs
-			const kpiResult = db
+			const [kpiResult] = await db
 				.select({
 					totalCrimes: count(crimeLogs.id),
 					totalNerve: sql<number>`COALESCE(sum(${crimeLogs.nerve}), 0)`,
@@ -460,8 +451,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 					distinctCrimes: sql<number>`count(distinct ${crimeLogs.crimeId})`,
 				})
 				.from(crimeLogs)
-				.where(whereClause)
-				.get();
+				.where(whereClause);
 
 			const totalCrimes = kpiResult?.totalCrimes ?? 0;
 			const totalNerve = Number(kpiResult?.totalNerve ?? 0);
@@ -476,24 +466,17 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				totalNerve > 0 ? Number((totalValue / totalNerve).toFixed(2)) : 0;
 
 			// 2. Daily Timeline Activity
-			const dailyActivity = db
+			const dailyActivity = await db
 				.select({
-					date: sql<string>`strftime('%Y-%m-%d', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
+					date: sql<string>`to_char(${crimeLogs.timestamp}, 'YYYY-MM-DD')`,
 					count: count(crimeLogs.id),
 					nerve: sql<number>`COALESCE(sum(${crimeLogs.nerve}), 0)`,
 					value: sql<number>`COALESCE(sum(${crimeLogs.value}), 0)`,
 				})
 				.from(crimeLogs)
 				.where(whereClause)
-				.groupBy(
-					sql`strftime('%Y-%m-%d', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
-				)
-				.orderBy(
-					asc(
-						sql`strftime('%Y-%m-%d', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
-					),
-				)
-				.all();
+				.groupBy(sql`to_char(${crimeLogs.timestamp}, 'YYYY-MM-DD')`)
+				.orderBy(asc(sql`to_char(${crimeLogs.timestamp}, 'YYYY-MM-DD')`));
 
 			const timeline = dailyActivity.map((d) => {
 				const dayCount = Number(d.count);
@@ -512,13 +495,12 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 			});
 
 			// 3. Category Breakdown
-			const tornCrimesList = db
+			const tornCrimesList = await db
 				.select({
 					id: tornCrimes.id,
 					name: tornCrimes.name,
 				})
-				.from(tornCrimes)
-				.all();
+				.from(tornCrimes);
 
 			const crimeNamesMap = new Map<number, string>();
 			for (const tc of tornCrimesList) {
@@ -528,7 +510,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				}
 			}
 
-			const categoryRows = db
+			const categoryRows = await db
 				.select({
 					crimeId: crimeLogs.crimeId,
 					count: count(crimeLogs.id),
@@ -538,8 +520,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				.from(crimeLogs)
 				.where(whereClause)
 				.groupBy(crimeLogs.crimeId)
-				.orderBy(desc(count(crimeLogs.id)))
-				.all();
+				.orderBy(desc(count(crimeLogs.id)));
 
 			const categories = categoryRows.map((cat) => {
 				const catCount = Number(cat.count);
@@ -569,23 +550,16 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 			});
 
 			// 4. Hourly Distribution (0-23 hours UTC)
-			const hourlyRows = db
+			const hourlyRows = await db
 				.select({
-					hour: sql<string>`strftime('%H', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
+					hour: sql<string>`to_char(${crimeLogs.timestamp}, 'HH24')`,
 					count: count(crimeLogs.id),
 					nerve: sql<number>`COALESCE(sum(${crimeLogs.nerve}), 0)`,
 				})
 				.from(crimeLogs)
 				.where(whereClause)
-				.groupBy(
-					sql`strftime('%H', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
-				)
-				.orderBy(
-					asc(
-						sql`strftime('%H', datetime(${crimeLogs.timestamp}, 'unixepoch'))`,
-					),
-				)
-				.all();
+				.groupBy(sql`to_char(${crimeLogs.timestamp}, 'HH24')`)
+				.orderBy(asc(sql`to_char(${crimeLogs.timestamp}, 'HH24')`));
 
 			const hourlyMap = new Map<number, { count: number; nerve: number }>();
 			for (const h of hourlyRows) {
@@ -605,7 +579,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 			}));
 
 			// 5. Top 10 High-Yield Single Loot Events
-			const topLootRows = db
+			const topLootRows = await db
 				.select({
 					id: crimeLogs.id,
 					crimeId: crimeLogs.crimeId,
@@ -617,8 +591,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				.from(crimeLogs)
 				.where(whereClause)
 				.orderBy(desc(crimeLogs.value))
-				.limit(10)
-				.all();
+				.limit(10);
 
 			const topLootEvents = topLootRows.map((row) => ({
 				...row,
@@ -674,7 +647,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				};
 			}
 
-			const actionRows = db
+			const actionRows = await db
 				.select({
 					action: crimeLogs.action,
 					count: count(crimeLogs.id),
@@ -685,8 +658,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 				.from(crimeLogs)
 				.where(eq(crimeLogs.crimeId, crimeId))
 				.groupBy(crimeLogs.action)
-				.orderBy(desc(count(crimeLogs.id)))
-				.all();
+				.orderBy(desc(count(crimeLogs.id)));
 
 			const totalCategoryCount = actionRows.reduce(
 				(sum, r) => sum + Number(r.count),
@@ -745,14 +717,13 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 	.get(
 		"/definitions",
 		async () => {
-			const tornList = db
+			const tornList = await db
 				.select({
 					id: tornCrimes.id,
 					name: tornCrimes.name,
 					data: tornCrimes.data,
 				})
-				.from(tornCrimes)
-				.all();
+				.from(tornCrimes);
 
 			const definitions = tornList.map((c) => ({
 				id: Number(c.id),
@@ -788,7 +759,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 	.get(
 		"/mappings",
 		async () => {
-			const mappings = db.select().from(crimeActionMappings).all();
+			const mappings = await db.select().from(crimeActionMappings);
 			return { mappings };
 		},
 		{
@@ -806,7 +777,8 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 			const crimeId = Number(body.crimeId);
 
 			const now = new Date();
-			db.insert(crimeActionMappings)
+			await db
+				.insert(crimeActionMappings)
 				.values({
 					id: actionId,
 					crimeId,
@@ -819,8 +791,7 @@ export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 						crimeId,
 						updatedAt: now,
 					},
-				})
-				.run();
+				});
 
 			return {
 				success: true,

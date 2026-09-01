@@ -3,7 +3,7 @@
  */
 
 export const env = {
-	PORT: 3000,
+	PORT: process.env.PORT ? Number(process.env.PORT) : 3002,
 	NODE_ENV: process.env.NODE_ENV ?? "development",
 	ALLOWED_ORIGINS: [
 		"https://sentinel.blasted-labs.tech",

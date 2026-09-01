@@ -6,14 +6,12 @@ import { requestLoggerPlugin } from "./middleware/request-logger";
 import { staticSpaPlugin } from "./middleware/static-spa";
 import { healthRoutes } from "./routes/health";
 import { pondRoutes } from "./routes/pond";
-import { telemetryRoutes } from "./routes/telemetry";
 import { v1Routes } from "./routes/v1";
 import { wsBattlestatsLedgerRoutes } from "./routes/ws-battlestats-ledger";
 import { wsCrimeLedgerRoutes } from "./routes/ws-crime-ledger";
 import { wsGymLedgerRoutes } from "./routes/ws-gym-ledger";
 import { wsLogManagerRoutes } from "./routes/ws-log-manager";
 import { wsStockLedgerRoutes } from "./routes/ws-stocks-ledger";
-import { wsTelemetryRoutes } from "./routes/ws-telemetry";
 
 export const app = new Elysia()
 	.use(corsPlugin)
@@ -32,8 +30,6 @@ export const app = new Elysia()
 		}),
 	)
 	.use(healthRoutes)
-	.use(telemetryRoutes)
-	.use(wsTelemetryRoutes)
 	.use(wsLogManagerRoutes)
 	.use(wsCrimeLedgerRoutes)
 	.use(wsBattlestatsLedgerRoutes)

@@ -313,11 +313,10 @@ export async function syncGymUnlocks(): Promise<void> {
 	const logs = await db
 		.select()
 		.from(personalLogs)
-		.where(sql`${personalLogs.log} IN (5320, 5321)`)
-		.all();
+		.where(sql`${personalLogs.log} IN (5320, 5321)`);
 
 	type TornGym = typeof tornGyms.$inferSelect;
-	const tornGymsList: TornGym[] = await db.select().from(tornGyms).all();
+	const tornGymsList: TornGym[] = await db.select().from(tornGyms);
 
 	const unlockedGymIds = new Set<number>([1]); // Everyone has gym 1 by default
 	let maxStandardGym = 1;

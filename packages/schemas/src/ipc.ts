@@ -65,29 +65,6 @@ export type IpcLogEventMessage = {
 	data: LogEntry;
 };
 
-export type IpcTelemetryRequestMessage = {
-	action: "get_telemetry";
-	requestId?: string;
-};
-
-export type IpcTelemetryResponseMessage = {
-	action: "get_telemetry_response";
-	requestId?: string;
-	data: {
-		pid: number;
-		status: "online" | "offline";
-		uptimeSeconds: number;
-		cpuUsage?: number;
-		memory: {
-			rssBytes: number;
-			heapTotalBytes: number;
-			heapUsedBytes: number;
-			externalBytes: number;
-		};
-		recentLogs?: LogEntry[];
-	};
-};
-
 export type IpcForceWorkerMessage = {
 	action: "force_run_worker";
 	data: {
@@ -321,8 +298,6 @@ export type IpcWealthStateUpdatedMessage = {
  */
 export type IpcMessage =
 	| IpcBotMessage
-	| IpcTelemetryRequestMessage
-	| IpcTelemetryResponseMessage
 	| IpcLogEventMessage
 	| IpcForceWorkerMessage
 	| IpcResetLogManagerMessage

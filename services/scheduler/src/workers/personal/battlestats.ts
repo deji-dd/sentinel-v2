@@ -222,7 +222,7 @@ export async function reconcileHistoricalBattlestatsLogs(options?: {
 		);
 
 		if (options?.wipeAndRebuild) {
-			await db.delete(battlestatsLedgers).run();
+			await db.delete(battlestatsLedgers);
 			state.lastProcessedTimestamp = null;
 			state.totalIndexedLogs = 0;
 		}
@@ -245,8 +245,7 @@ export async function reconcileHistoricalBattlestatsLogs(options?: {
 				})
 				.from(personalLogs)
 				.where(inArray(personalLogs.log, STAT_GAIN_LOG_IDS))
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = historicalLogs;
 		} else {
 			// Anti-join: query only unindexed personal_logs (immune to timestamp drift or stutter windows)
@@ -268,8 +267,7 @@ export async function reconcileHistoricalBattlestatsLogs(options?: {
 						isNull(battlestatsLedgers.id),
 					),
 				)
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = missingLogs;
 		}
 
@@ -347,10 +345,9 @@ export async function reconcileHistoricalBattlestatsLogs(options?: {
 		}
 
 		// Count total indexed records
-		const totalStats = await db
+		const [totalStats] = await db
 			.select({ count: count(battlestatsLedgers.id) })
-			.from(battlestatsLedgers)
-			.get();
+			.from(battlestatsLedgers);
 
 		state.totalIndexedLogs =
 			totalStats?.count ?? state.totalIndexedLogs + replayed;
@@ -402,8 +399,7 @@ export async function getBattlestatsTotals(statType?: StatType): Promise<
 		})
 		.from(battlestatsLedgers)
 		.where(whereClause)
-		.groupBy(battlestatsLedgers.statType)
-		.all();
+		.groupBy(battlestatsLedgers.statType);
 
 	return groups.map((g) => ({
 		statType: g.statType,

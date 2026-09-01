@@ -23,7 +23,7 @@ import {
 	Sidebar as SidebarPrimitive,
 	SidebarRail,
 } from "@/components/ui/sidebar";
-import { useHostTelemetry } from "@/hooks/useHostTelemetry";
+import { useSystemHealth } from "@/hooks/useSystemHealth";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { useRouter } from "@/router";
@@ -84,7 +84,7 @@ const navGroups: NavGroup[] = [
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { path, navigate } = useRouter();
 	const { theme, toggle } = useTheme();
-	const telemetry = useHostTelemetry();
+	const health = useSystemHealth();
 
 	const isActive = (item: NavItem) => {
 		if (item.exact) {
@@ -213,30 +213,30 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 						<div
 							className="flex h-10 w-full min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-border/60 bg-background/50 backdrop-blur-md px-2.5 cursor-default"
 							title={
-								telemetry.status === "online"
-									? `HOST: ${telemetry.host} (RTT ${telemetry.rtt}ms • Bun v${telemetry.bunVersion})`
-									: telemetry.status === "connecting"
-										? "Connecting to /api/ws/telemetry..."
+								health.status === "online"
+									? `HOST: ${health.host} (RTT ${health.rtt}ms • Bun v${health.bunVersion})`
+									: health.status === "connecting"
+										? "Connecting to /api/health..."
 										: "API Service Offline"
 							}
 						>
 							<div className="flex min-w-0 flex-col">
 								<span className="truncate font-mono text-[10px] font-semibold text-foreground">
-									{telemetry.status === "online"
-										? `HOST: ${telemetry.host ?? "MAC-ARM64"}`
-										: telemetry.status === "connecting"
+									{health.status === "online"
+										? `HOST: ${health.host ?? "MAC-ARM64"}`
+										: health.status === "connecting"
 											? "HOST: CONNECTING..."
-											: telemetry.status === "degraded"
-												? `HOST: ${telemetry.host ?? "DEGRADED"}`
+											: health.status === "degraded"
+												? `HOST: ${health.host ?? "DEGRADED"}`
 												: "HOST: UNREACHABLE"}
 								</span>
 								<span className="truncate font-mono text-[9px] text-muted-foreground">
-									{telemetry.status === "online"
-										? `RTT ${telemetry.rtt}ms • Bun v${telemetry.bunVersion}`
-										: telemetry.status === "connecting"
+									{health.status === "online"
+										? `RTT ${health.rtt}ms • Bun v${health.bunVersion}`
+										: health.status === "connecting"
 											? "Probing /api/health..."
-											: telemetry.status === "degraded"
-												? `${telemetry.rtt !== null ? `RTT ${telemetry.rtt}ms • ` : ""}API Degraded`
+											: health.status === "degraded"
+												? `${health.rtt !== null ? `RTT ${health.rtt}ms • ` : ""}API Degraded`
 												: "API Service Offline"}
 								</span>
 							</div>

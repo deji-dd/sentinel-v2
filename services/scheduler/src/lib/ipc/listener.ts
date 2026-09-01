@@ -1,4 +1,3 @@
-import os from "node:os";
 import { db, workerSchedules } from "@sentinel/database";
 import type { IpcMessage } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
@@ -15,30 +14,6 @@ import { setActiveIpcServer } from "./server";
 
 const logger = new Logger("SchedulerIPC");
 
-const NUM_CORES = os.cpus()?.length || 1;
-let lastCpuCheck = process.cpuUsage();
-let lastCpuTime = performance.now();
-let lastCalculatedPercent = 0.5;
-
-function getProcessCpuUsage(): number {
-	const currentTime = performance.now();
-	const elapsedMs = currentTime - lastCpuTime;
-	if (elapsedMs < 250) {
-		return lastCalculatedPercent;
-	}
-
-	const currentCpu = process.cpuUsage(lastCpuCheck);
-	lastCpuCheck = process.cpuUsage();
-	lastCpuTime = currentTime;
-
-	const totalMicrosec = currentCpu.user + currentCpu.system;
-	const rawPercent = (totalMicrosec / (elapsedMs * 1000 * NUM_CORES)) * 100;
-	lastCalculatedPercent = Number(
-		Math.max(0.1, Math.min(100, rawPercent)).toFixed(1),
-	);
-	return lastCalculatedPercent;
-}
-
 /**
  * Initializes and configures the Unix Domain Socket (IPC) server for the Scheduler service.
  */
@@ -50,28 +25,6 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 		async (rawMessage: unknown) => {
 			const message = rawMessage as IpcMessage;
 			if (!message || typeof message !== "object" || !("action" in message)) {
-				return;
-			}
-
-			if (message.action === "get_telemetry") {
-				const workerMem = process.memoryUsage();
-				ipcServer.broadcast({
-					action: "get_telemetry_response",
-					requestId: message.requestId,
-					data: {
-						pid: process.pid,
-						status: "online",
-						uptimeSeconds: Math.round(process.uptime()),
-						cpuUsage: getProcessCpuUsage(),
-						memory: {
-							rssBytes: workerMem.rss,
-							heapTotalBytes: workerMem.heapTotal,
-							heapUsedBytes: workerMem.heapUsed,
-							externalBytes: workerMem.external,
-						},
-						recentLogs: Logger.getRecentLogs(30),
-					},
-				});
 				return;
 			}
 

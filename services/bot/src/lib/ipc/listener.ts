@@ -1,7 +1,6 @@
 import type {
 	BulkVerificationProgressData,
 	IpcMessage,
-	IpcTelemetryResponseMessage,
 	VerificationResponse,
 } from "@sentinel/schemas";
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
@@ -127,59 +126,12 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 
 export const ipcClient = workerIpcClient;
 
-import os from "node:os";
 import { Logger } from "@sentinel/utils";
-
-const NUM_CORES = os.cpus()?.length || 1;
-let lastCpuCheck = process.cpuUsage();
-let lastCpuTime = performance.now();
-let lastCalculatedPercent = 0.5;
-
-function getProcessCpuUsage(): number {
-	const currentTime = performance.now();
-	const elapsedMs = currentTime - lastCpuTime;
-	if (elapsedMs < 250) {
-		return lastCalculatedPercent;
-	}
-
-	const currentCpu = process.cpuUsage(lastCpuCheck);
-	lastCpuCheck = process.cpuUsage();
-	lastCpuTime = currentTime;
-
-	const totalMicrosec = currentCpu.user + currentCpu.system;
-	const rawPercent = (totalMicrosec / (elapsedMs * 1000 * NUM_CORES)) * 100;
-	lastCalculatedPercent = Number(
-		Math.max(0.1, Math.min(100, rawPercent)).toFixed(1),
-	);
-	return lastCalculatedPercent;
-}
 
 // Bot Socket Server listening for direct incoming requests on bot.sock
 export const botIpcServer = new IpcServer<IpcMessage>(
 	IPC_SOCKET_PATHS.bot,
-	(message) => {
-		if (message.action === "get_telemetry") {
-			const botMem = process.memoryUsage();
-			const response: IpcTelemetryResponseMessage = {
-				action: "get_telemetry_response",
-				requestId: message.requestId,
-				data: {
-					pid: process.pid,
-					status: "online",
-					uptimeSeconds: Math.round(process.uptime()),
-					cpuUsage: getProcessCpuUsage(),
-					memory: {
-						rssBytes: botMem.rss,
-						heapTotalBytes: botMem.heapTotal,
-						heapUsedBytes: botMem.heapUsed,
-						externalBytes: botMem.external,
-					},
-					recentLogs: Logger.getRecentLogs(30),
-				},
-			};
-			botIpcServer.broadcast(response);
-		}
-	},
+	() => {},
 );
 
 // Stream live logs to IPC subscribers

@@ -181,9 +181,9 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(getData.mappings.some((m) => m.id === testAction)).toBe(true);
 
 		// Cleanup
-		db.delete(crimeActionMappings)
-			.where(eq(crimeActionMappings.id, testAction))
-			.run();
+		await db
+			.delete(crimeActionMappings)
+			.where(eq(crimeActionMappings.id, testAction));
 	});
 
 	it("POST /api/v1/system/crime-ledger/reconcile dispatches re-initialization to scheduler", async () => {

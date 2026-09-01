@@ -188,7 +188,7 @@ export default function AdminKeysPage({
 	const handleDeleteKey = async (keyId: string) => {
 		setDeletingKeyId(keyId);
 		try {
-			const keyRoute = api.api.v1.system.keys[keyId];
+			const keyRoute = api.api.v1.system.keys({ keyId });
 			if (!keyRoute) return;
 
 			const res = await keyRoute.delete();
@@ -209,7 +209,7 @@ export default function AdminKeysPage({
 	const handleToggleValidity = async (keyId: string, currentValid: boolean) => {
 		setTogglingKeyId(keyId);
 		try {
-			const keyRoute = api.api.v1.system.keys[keyId];
+			const keyRoute = api.api.v1.system.keys({ keyId });
 			if (!keyRoute) return;
 
 			const res = await keyRoute.patch({
@@ -231,7 +231,7 @@ export default function AdminKeysPage({
 
 	const handleResetErrors = async (keyId: string) => {
 		try {
-			const keyRoute = api.api.v1.system.keys[keyId];
+			const keyRoute = api.api.v1.system.keys({ keyId });
 			if (!keyRoute) return;
 
 			const res = await keyRoute.patch({

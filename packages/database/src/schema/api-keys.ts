@@ -1,7 +1,12 @@
-import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+	boolean,
+	integer,
+	pgTable,
+	text,
+	timestamp,
+} from "drizzle-orm/pg-core";
 
-export const apiKeys = sqliteTable("api_keys", {
+export const apiKeys = pgTable("api_keys", {
 	id: text("id")
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
@@ -9,14 +14,17 @@ export const apiKeys = sqliteTable("api_keys", {
 	apiKeyEncrypted: text("api_key_encrypted").notNull(),
 	apiKeyHash: text("api_key_hash").notNull().unique(),
 	keyType: text("key_type").default("personal").notNull(),
-	isValid: integer("is_valid", { mode: "boolean" }).default(true).notNull(),
+	isValid: boolean("is_valid").default(true).notNull(),
 	invalidCount: integer("invalid_count").default(0).notNull(),
-	lastInvalidAt: integer("last_invalid_at", { mode: "timestamp" }),
-	lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
-	createdAt: integer("created_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	lastInvalidAt: timestamp("last_invalid_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
-	updatedAt: integer("updated_at", { mode: "timestamp" })
-		.default(sql`(strftime('%s', 'now'))`)
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
 		.notNull(),
 });

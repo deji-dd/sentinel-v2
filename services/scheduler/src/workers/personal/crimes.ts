@@ -133,8 +133,7 @@ export async function loadItemMarketPrices(): Promise<Map<string, number>> {
 				id: tornItems.id,
 				data: tornItems.data,
 			})
-			.from(tornItems)
-			.all();
+			.from(tornItems);
 
 		const priceMap = new Map<string, number>();
 		for (const it of items) {
@@ -173,7 +172,7 @@ export async function processCrimeLogsBatch(
 
 	// 2. Fetch custom crime action mappings for override resolution, item market prices & Torn crime definitions
 	const [customMappings, itemPrices, tornCrimesList] = await Promise.all([
-		db.select().from(crimeActionMappings).all(),
+		db.select().from(crimeActionMappings),
 		loadItemMarketPrices(),
 		db
 			.select({
@@ -181,8 +180,7 @@ export async function processCrimeLogsBatch(
 				name: tornCrimes.name,
 				data: tornCrimes.data,
 			})
-			.from(tornCrimes)
-			.all(),
+			.from(tornCrimes),
 	]);
 	const customMappingMap = new Map<string, number>(
 		customMappings.map((m: CrimeActionMapping) => [
@@ -324,11 +322,10 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 		logger.info("Starting Crimes Ledger reconciliation from personal_logs...");
 
 		if (options?.wipeAndRebuild) {
-			await db.delete(crimeLogs).run();
+			await db.delete(crimeLogs);
 			await db
 				.delete(ledgerEvents)
-				.where(eq(ledgerEvents.type, "crime_reward"))
-				.run();
+				.where(eq(ledgerEvents.type, "crime_reward"));
 			state.lastProcessedTimestamp = null;
 			state.totalIndexedCrimes = 0;
 		}
@@ -351,8 +348,7 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 				})
 				.from(personalLogs)
 				.where(inArray(personalLogs.log, CRIME_LOG_IDS))
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = historicalLogs;
 		} else {
 			// Anti-join: query only unindexed personal_logs (immune to timestamp drift or stutter windows)
@@ -368,8 +364,7 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 				.where(
 					and(inArray(personalLogs.log, CRIME_LOG_IDS), isNull(crimeLogs.id)),
 				)
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = missingLogs;
 		}
 
@@ -385,7 +380,7 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 		}
 
 		const [customMappings, itemPrices, tornCrimesList] = await Promise.all([
-			db.select().from(crimeActionMappings).all(),
+			db.select().from(crimeActionMappings),
 			loadItemMarketPrices(),
 			db
 				.select({
@@ -393,8 +388,7 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 					name: tornCrimes.name,
 					data: tornCrimes.data,
 				})
-				.from(tornCrimes)
-				.all(),
+				.from(tornCrimes),
 		]);
 		const customMappingMap = new Map<string, number>(
 			customMappings.map((m: CrimeActionMapping) => [
@@ -473,10 +467,9 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 		}
 
 		// Count total indexed records
-		const totalStats = await db
+		const [totalStats] = await db
 			.select({ count: count(crimeLogs.id) })
-			.from(crimeLogs)
-			.get();
+			.from(crimeLogs);
 
 		state.totalIndexedCrimes =
 			totalStats?.count ?? state.totalIndexedCrimes + replayed;
@@ -522,8 +515,7 @@ export async function getCrimeTotals(crimeId?: number): Promise<
 		})
 		.from(crimeLogs)
 		.where(whereClause)
-		.groupBy(crimeLogs.crimeId)
-		.all();
+		.groupBy(crimeLogs.crimeId);
 
 	return groups.map(
 		(g: {

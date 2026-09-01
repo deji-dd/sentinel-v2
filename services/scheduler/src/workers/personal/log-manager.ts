@@ -278,23 +278,26 @@ export async function loadStateFromDb(): Promise<LogManagerState> {
 		}
 
 		// Sync with existing personal_logs in database if state cursors are empty
-		const stats = await db
+		const [stats] = await db
 			.select({
-				total: sql<number>`count(${personalLogs.id})`,
-				minTs: sql<number>`min(${personalLogs.timestamp})`,
-				maxTs: sql<number>`max(${personalLogs.timestamp})`,
+				total: sql<number>`count(${personalLogs.id})::int`,
+				minTs: sql<
+					number | null
+				>`floor(extract(epoch from min(${personalLogs.timestamp})))::int`,
+				maxTs: sql<
+					number | null
+				>`floor(extract(epoch from max(${personalLogs.timestamp})))::int`,
 			})
-			.from(personalLogs)
-			.get();
+			.from(personalLogs);
 
-		if (stats?.total) {
-			inMemoryState.totalLogsRecorded = stats.total;
+		if (stats?.total !== undefined && stats.total !== null) {
+			inMemoryState.totalLogsRecorded = Number(stats.total);
 		}
 		if (!record && stats?.minTs && !inMemoryState.oldestTimestampReached) {
-			inMemoryState.oldestTimestampReached = stats.minTs;
+			inMemoryState.oldestTimestampReached = Number(stats.minTs);
 		}
 		if (!record && stats?.maxTs && !inMemoryState.newestTimestampReached) {
-			inMemoryState.newestTimestampReached = stats.maxTs;
+			inMemoryState.newestTimestampReached = Number(stats.maxTs);
 		}
 
 		await persistStateToDb();
@@ -380,12 +383,11 @@ async function saveLogsToDatabase(logs: UserLog[]): Promise<void> {
 		},
 	);
 
-	const stats = db
-		.select({ count: sql<number>`count(${personalLogs.id})` })
-		.from(personalLogs)
-		.get();
-	if (stats?.count !== undefined) {
-		inMemoryState.totalLogsRecorded = stats.count;
+	const [stats] = await db
+		.select({ count: sql<number>`count(${personalLogs.id})::int` })
+		.from(personalLogs);
+	if (stats?.count !== undefined && stats.count !== null) {
+		inMemoryState.totalLogsRecorded = Number(stats.count);
 	}
 
 	schedulerEvents.emit("logs_inserted", logs);
@@ -731,19 +733,20 @@ export async function resetLogManagerState(): Promise<LogManagerState> {
 	};
 
 	try {
-		const stats = await db
+		const [stats] = await db
 			.select({
-				count: sql<number>`count(${personalLogs.id})`,
-				maxTs: sql<number>`max(${personalLogs.timestamp})`,
+				count: sql<number>`count(${personalLogs.id})::int`,
+				maxTs: sql<
+					number | null
+				>`floor(extract(epoch from max(${personalLogs.timestamp})))::int`,
 			})
-			.from(personalLogs)
-			.get();
+			.from(personalLogs);
 
-		if (stats?.count) {
-			nextState.totalLogsRecorded = stats.count;
+		if (stats?.count !== undefined && stats.count !== null) {
+			nextState.totalLogsRecorded = Number(stats.count);
 		}
 		if (!nextState.newestTimestampReached && stats?.maxTs) {
-			nextState.newestTimestampReached = stats.maxTs;
+			nextState.newestTimestampReached = Number(stats.maxTs);
 		}
 	} catch (error) {
 		logger.error("Failed to read log stats during reset:", error);

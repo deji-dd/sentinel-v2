@@ -27,7 +27,7 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 		}
 
 		try {
-			const result = db
+			const [result] = await db
 				.select({
 					user: {
 						id: users.id,
@@ -44,8 +44,7 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 				})
 				.from(userSessions)
 				.innerJoin(users, eq(userSessions.userId, users.id))
-				.where(eq(userSessions.id, sessionToken))
-				.get();
+				.where(eq(userSessions.id, sessionToken));
 
 			if (!result) {
 				return {
@@ -69,14 +68,13 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 	.get(
 		"/metadata",
 		async ({ set }) => {
-			const blueprints = db.select().from(territoryBlueprints).all();
-			const states = db.select().from(territoryStates).all();
-			const items = db.select().from(tornItems).all();
-			const pointsState = db
+			const blueprints = await db.select().from(territoryBlueprints);
+			const states = await db.select().from(territoryStates);
+			const items = await db.select().from(tornItems);
+			const [pointsState] = await db
 				.select()
 				.from(systemStates)
-				.where(eq(systemStates.id, "points_market_price"))
-				.get();
+				.where(eq(systemStates.id, "points_market_price"));
 
 			if (blueprints.length === 0) {
 				set.status = 503;
@@ -121,86 +119,81 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 						price = data.market_price;
 					}
 
-					if (price > 0) {
-						itemPrices[it.id] = price;
-						if (it.name) {
-							itemPrices[it.name] = price;
-						}
-					}
+					itemPrices[it.id] = price;
 				}
 			}
 
-			const territories: Record<
-				string,
-				{
-					sector: number;
-					respect: number;
-					size: number;
-					density: number;
-					slots: number;
-					racket?: {
-						name: string;
-						reward:
-							| string
-							| {
-									type: string;
-									quantity: number;
-									id: number | null;
-							  };
-					};
-				}
-			> = {};
+			// Format territory map matching TT Selector structure
+			const territories: Record<string, unknown> = {};
+			for (const b of blueprints) {
+				const state = statesMap.get(b.id);
+				const bpData = (
+					b.data && typeof b.data === "object" ? b.data : {}
+				) as Record<string, unknown>;
 
-			for (const bp of blueprints) {
-				let respect = 0;
-
-				if (bp.data && typeof bp.data === "object") {
-					const bpData = bp.data as Record<string, unknown>;
-					if (typeof bpData.daily_respect === "number") {
-						respect = bpData.daily_respect;
-					} else if (typeof bpData.respect === "number") {
-						respect = bpData.respect;
+				let neighbors: string[] = [];
+				if (Array.isArray(bpData.neighbors)) {
+					neighbors = bpData.neighbors as string[];
+				} else if (typeof bpData.neighbors === "string") {
+					try {
+						neighbors = JSON.parse(bpData.neighbors) as string[];
+					} catch {
+						neighbors = [];
 					}
 				}
 
-				const state = statesMap.get(bp.id);
-				let racketMeta:
-					| {
-							name: string;
-							reward:
-								| string
-								| {
-										type: string;
-										quantity: number;
-										id: number | null;
-								  };
-					  }
-					| undefined;
+				const racketData = (
+					state?.racket && typeof state.racket === "object"
+						? state.racket
+						: null
+				) as Record<string, unknown> | null;
 
-				if (state?.racket && typeof state.racket === "object") {
-					const r = state.racket as Record<string, unknown>;
-					if (typeof r.name === "string") {
-						racketMeta = {
-							name: r.name,
-							reward:
-								(r.reward as
-									| string
-									| {
-											type: string;
-											quantity: number;
-											id: number | null;
-									  }) ?? `${r.name} reward`,
-						};
-					}
-				}
-
-				territories[bp.id] = {
-					sector: bp.sector ?? 0,
-					respect,
-					size: bp.size ?? 0,
-					density: bp.density ?? 0,
-					slots: bp.slots ?? 0,
-					...(racketMeta ? { racket: racketMeta } : {}),
+				territories[b.id] = {
+					id: b.id,
+					sector: b.sector ?? 0,
+					size: b.size ?? 0,
+					density: b.density ?? 0,
+					slots: b.slots ?? 0,
+					respect:
+						typeof bpData.respect === "number"
+							? bpData.respect
+							: typeof bpData.daily_respect === "number"
+								? bpData.daily_respect
+								: 0,
+					coordinates: {
+						x:
+							typeof bpData.coordinate_x === "number" ? bpData.coordinate_x : 0,
+						y:
+							typeof bpData.coordinate_y === "number" ? bpData.coordinate_y : 0,
+					},
+					neighbors,
+					racket: racketData?.name
+						? {
+								name: String(racketData.name),
+								reward:
+									typeof racketData.reward === "string" ||
+									(typeof racketData.reward === "object" &&
+										racketData.reward !== null)
+										? racketData.reward
+										: `${racketData.name} reward`,
+								level:
+									typeof racketData.level === "number"
+										? racketData.level
+										: null,
+								placementDate:
+									typeof racketData.placement_date === "number"
+										? racketData.placement_date
+										: typeof racketData.placementDate === "number"
+											? racketData.placementDate
+											: null,
+							}
+						: null,
+					war: state?.isWarring
+						? {
+								factionId: state.factionId ?? null,
+							}
+						: null,
+					factionId: state?.factionId ?? null,
 				};
 			}
 
@@ -210,15 +203,86 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 					items: itemPrices,
 					points: pointsPrice,
 				},
+				pointsPrice,
 				itemNames,
+				itemPrices,
+				totalTerritories: Object.keys(territories).length,
+				updatedAt: new Date().toISOString(),
 			};
 		},
-
 		{
 			detail: {
-				summary: "Territory Metadata",
+				summary: "Get TT Selector Metadata",
 				description:
-					"Returns territory blueprints, active rackets, and price metadata for map valuation.",
+					"Fetches all territory blueprints, current racket/war states, and dynamic pricing items.",
+			},
+		},
+	)
+	// ─── GET /api/v1/tt/state ──────────────────────────────────────────────────
+	.get(
+		"/state",
+		async () => {
+			const states = await db.select().from(territoryStates);
+			const territories: Record<
+				string,
+				{
+					factionId: number | null;
+					racket: {
+						name: string;
+						reward: string | null;
+						level: number | null;
+						placementDate: number | null;
+					} | null;
+					war: {
+						factionId: number | null;
+					} | null;
+				}
+			> = {};
+
+			for (const s of states) {
+				const racketData = (
+					s.racket && typeof s.racket === "object" ? s.racket : null
+				) as Record<string, unknown> | null;
+
+				territories[s.id] = {
+					factionId: s.factionId,
+					racket: racketData?.name
+						? {
+								name: String(racketData.name),
+								reward:
+									typeof racketData.reward === "string"
+										? racketData.reward
+										: null,
+								level:
+									typeof racketData.level === "number"
+										? racketData.level
+										: null,
+								placementDate:
+									typeof racketData.placement_date === "number"
+										? racketData.placement_date
+										: typeof racketData.placementDate === "number"
+											? racketData.placementDate
+											: null,
+							}
+						: null,
+					war: s.isWarring
+						? {
+								factionId: s.factionId,
+							}
+						: null,
+				};
+			}
+
+			return {
+				territories,
+				count: states.length,
+				updatedAt: new Date().toISOString(),
+			};
+		},
+		{
+			detail: {
+				summary: "Get Territory Dynamic States",
+				description: "Returns lightweight territory states and racket info.",
 			},
 		},
 	)
@@ -234,12 +298,11 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 				};
 			}
 
-			const maps = db
+			const maps = await db
 				.select()
 				.from(userMaps)
 				.where(eq(userMaps.userId, user.id))
-				.orderBy(desc(userMaps.updatedAt))
-				.all();
+				.orderBy(desc(userMaps.updatedAt));
 
 			return {
 				maps,
@@ -257,11 +320,10 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 	.get(
 		"/maps/:mapId",
 		async ({ user, params, set }) => {
-			const map = db
+			const [map] = await db
 				.select()
 				.from(userMaps)
-				.where(eq(userMaps.id, params.mapId))
-				.get();
+				.where(eq(userMaps.id, params.mapId));
 
 			if (!map) {
 				set.status = 404;
@@ -297,14 +359,16 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 			const assignments = body.assignments as Record<string, string>;
 
 			if (body.mapId) {
-				const existing = db
+				const [existing] = await db
 					.select()
 					.from(userMaps)
-					.where(and(eq(userMaps.id, body.mapId), eq(userMaps.userId, user.id)))
-					.get();
+					.where(
+						and(eq(userMaps.id, body.mapId), eq(userMaps.userId, user.id)),
+					);
 
 				if (existing) {
-					db.update(userMaps)
+					await db
+						.update(userMaps)
 						.set({
 							name: mapName,
 							labels,
@@ -312,36 +376,31 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 							isPublic: body.isPublic ?? existing.isPublic,
 							updatedAt: new Date(),
 						})
-						.where(eq(userMaps.id, body.mapId))
-						.run();
+						.where(eq(userMaps.id, body.mapId));
 
-					const updated = db
+					const [updated] = await db
 						.select()
 						.from(userMaps)
-						.where(eq(userMaps.id, body.mapId))
-						.get();
+						.where(eq(userMaps.id, body.mapId));
 
 					return { success: true, map: updated };
 				}
 			}
 
 			const newId = crypto.randomUUID();
-			db.insert(userMaps)
-				.values({
-					id: newId,
-					userId: user.id,
-					name: mapName,
-					labels,
-					assignments,
-					isPublic: body.isPublic ?? false,
-				})
-				.run();
+			await db.insert(userMaps).values({
+				id: newId,
+				userId: user.id,
+				name: mapName,
+				labels,
+				assignments,
+				isPublic: body.isPublic ?? false,
+			});
 
-			const created = db
+			const [created] = await db
 				.select()
 				.from(userMaps)
-				.where(eq(userMaps.id, newId))
-				.get();
+				.where(eq(userMaps.id, newId));
 
 			return { success: true, map: created };
 		},
@@ -379,18 +438,19 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 				return { error: "Unauthorized" };
 			}
 
-			const existing = db
+			const [existing] = await db
 				.select()
 				.from(userMaps)
-				.where(and(eq(userMaps.id, params.mapId), eq(userMaps.userId, user.id)))
-				.get();
+				.where(
+					and(eq(userMaps.id, params.mapId), eq(userMaps.userId, user.id)),
+				);
 
 			if (!existing) {
 				set.status = 404;
 				return { error: "Map not found or not owned by user" };
 			}
 
-			db.delete(userMaps).where(eq(userMaps.id, params.mapId)).run();
+			await db.delete(userMaps).where(eq(userMaps.id, params.mapId));
 
 			return { success: true };
 		},

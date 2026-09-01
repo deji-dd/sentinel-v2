@@ -115,7 +115,7 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 	const fetchData = useCallback(async () => {
 		setLoading(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			const [configRes, channelsRes, rolesRes, rrRes] = await Promise.all([

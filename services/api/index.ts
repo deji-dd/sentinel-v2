@@ -3,12 +3,10 @@ import { app } from "./src/app";
 import { env } from "./src/config/env";
 import { logger } from "./src/lib/logger";
 import { initSchedulerIpcListener } from "./src/lib/scheduler-ipc";
-import { startTelemetrySampler } from "./src/lib/telemetry";
 
 await ensureTargetGuildConfigs();
 await recordBootAlert("api");
 initSchedulerIpcListener();
-startTelemetrySampler(30_000);
 
 app.listen(env.PORT, () => {
 	logger.info(

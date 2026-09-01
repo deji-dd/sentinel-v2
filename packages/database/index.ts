@@ -1,65 +1,46 @@
-import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { drizzle } from "drizzle-orm/bun-sqlite";
+import { existsSync } from "node:fs";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import * as schema from "./src/schema";
 
-const dbPath = join(import.meta.dir, "../../data/sentinel.db");
+export function createSqlClient(): postgres.Sql {
+	const customUrl = process.env.DATABASE_URL;
+	const defaultHost = existsSync("/var/run/postgresql")
+		? "/var/run/postgresql"
+		: existsSync("/tmp/.s.PGSQL.5432")
+			? "/tmp"
+			: "localhost";
+	const host = process.env.POSTGRES_HOST || defaultHost;
+	const database = process.env.POSTGRES_DB || "sentinel_db";
+	const username = process.env.POSTGRES_USER || "sentinel_user";
+	const password =
+		process.env.POSTGRES_PASSWORD ||
+		"e63af385d45ae76c4a8b90b995c2cf1d8c0cf6ca444d3985";
+	const port = Number(process.env.POSTGRES_PORT || 5432);
 
-mkdirSync(dirname(dbPath), { recursive: true });
+	if (customUrl) {
+		return postgres(customUrl, { max: 10, idle_timeout: 20 });
+	}
 
-const sqlite = new Database(dbPath);
-
-sqlite.run("PRAGMA journal_mode = WAL;");
-sqlite.run("PRAGMA synchronous = NORMAL;");
-sqlite.run("PRAGMA cache_size = -8000;");
-sqlite.run("PRAGMA temp_store = MEMORY;");
-sqlite.run("PRAGMA mmap_size = 33554432;");
-sqlite.run("PRAGMA busy_timeout = 5000;");
-sqlite.run("PRAGMA foreign_keys = ON;");
-
-// Safe migrations / table creations if not present
-try {
-	sqlite.run("ALTER TABLE users ADD COLUMN avatar TEXT;");
-} catch {
-	// Column already exists
+	return postgres({
+		host,
+		port,
+		database,
+		username,
+		password,
+		max: 10,
+		idle_timeout: 20,
+	});
 }
 
-try {
-	sqlite.run(`
-		CREATE TABLE IF NOT EXISTS system_metrics (
-			id TEXT PRIMARY KEY,
-			service_id TEXT NOT NULL,
-			service_name TEXT NOT NULL,
-			status TEXT NOT NULL,
-			cpu_usage REAL NOT NULL,
-			memory_rss_bytes INTEGER NOT NULL,
-			memory_heap_used_bytes INTEGER NOT NULL,
-			memory_heap_total_bytes INTEGER NOT NULL,
-			latency_ms INTEGER NOT NULL,
-			uptime_seconds INTEGER NOT NULL,
-			created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-		);
-	`);
-	sqlite.run(
-		"CREATE INDEX IF NOT EXISTS idx_system_metrics_created_at ON system_metrics (created_at);",
-	);
-	sqlite.run(
-		"CREATE INDEX IF NOT EXISTS idx_system_metrics_service_created ON system_metrics (service_id, created_at);",
-	);
-} catch {
-	// Table/indexes already exist
-}
-
-// Export active drizzle client
-
-export const db = drizzle(sqlite, { schema });
+export const sqlClient = createSqlClient();
+export const db = drizzle(sqlClient, { schema });
 
 /**
- * Explicitly flushes WAL logs and closes the SQLite database connection.
+ * Gracefully closes the PostgreSQL connection pool.
  */
-export function closeDatabase(): void {
-	sqlite.close();
+export async function closeDatabase(): Promise<void> {
+	await sqlClient.end({ timeout: 5 });
 }
 
 // Re-export common Drizzle query operators to ensure single-version type compatibility
@@ -71,6 +52,7 @@ export {
 	eq,
 	gt,
 	gte,
+	ilike,
 	inArray,
 	isNotNull,
 	isNull,
@@ -81,6 +63,7 @@ export {
 	type SQL,
 	sql,
 } from "drizzle-orm";
+
 // Export schema for queries and types
 export * from "./src/lib/alerts";
 export * from "./src/lib/guilds";

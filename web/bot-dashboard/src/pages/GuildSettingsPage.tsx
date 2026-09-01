@@ -53,7 +53,7 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 
 	const fetchConfig = useCallback(async () => {
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			const [configRes, channelsRes, rolesRes] = await Promise.all([
@@ -99,7 +99,7 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 	const handleSave = async () => {
 		setIsSaving(true);
 		try {
-			const guildRoute = api.api.v1.guilds[guildId];
+			const guildRoute = api.api.v1.guilds({ guildId });
 			if (!guildRoute) return;
 
 			await guildRoute.config.put({

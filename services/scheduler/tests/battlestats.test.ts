@@ -218,8 +218,7 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		const indexed: BattlestatsLedgerEntry[] = await db
 			.select()
 			.from(battlestatsLedgers)
-			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]))
-			.all();
+			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]));
 
 		expect(indexed.length).toBe(2);
 
@@ -277,8 +276,7 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		const indexed = await db
 			.select()
 			.from(battlestatsLedgers)
-			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]))
-			.all();
+			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]));
 
 		expect(indexed.length).toBe(2);
 		const speedLog = indexed.find((r) => r.id === LOG_ID_1);
@@ -354,8 +352,7 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		const indexed = await db
 			.select()
 			.from(battlestatsLedgers)
-			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]))
-			.all();
+			.where(inArray(battlestatsLedgers.id, [LOG_ID_1, LOG_ID_2]));
 
 		expect(indexed.length).toBe(2);
 		const dexLog = indexed.find((r) => r.id === LOG_ID_2);

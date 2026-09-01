@@ -16,7 +16,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 		}
 
 		try {
-			const result = db
+			const [result] = await db
 				.select({
 					user: {
 						id: users.id,
@@ -34,8 +34,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				})
 				.from(userSessions)
 				.innerJoin(users, eq(userSessions.userId, users.id))
-				.where(eq(userSessions.id, sessionToken))
-				.get();
+				.where(eq(userSessions.id, sessionToken));
 
 			if (!result) {
 				return {
@@ -55,7 +54,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 						: 0;
 
 			if (expiresAtMs < Date.now()) {
-				db.delete(userSessions).where(eq(userSessions.id, sessionToken)).run();
+				await db.delete(userSessions).where(eq(userSessions.id, sessionToken));
 				cookie.session?.remove();
 
 				return {
@@ -70,10 +69,10 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				result.user.discordId === env.DISCORD_USER_ID &&
 				result.user.role === "user"
 			) {
-				db.update(users)
+				await db
+					.update(users)
 					.set({ role: "owner" })
-					.where(eq(users.id, result.user.id))
-					.run();
+					.where(eq(users.id, result.user.id));
 				result.user.role = "owner";
 			}
 
@@ -106,9 +105,9 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 	)
 	.post(
 		"/logout",
-		({ session, cookie }) => {
+		async ({ session, cookie }) => {
 			if (session) {
-				db.delete(userSessions).where(eq(userSessions.id, session.id)).run();
+				await db.delete(userSessions).where(eq(userSessions.id, session.id));
 			}
 
 			if (cookie.session) {
@@ -272,19 +271,19 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 			}
 
 			// Upsert user in our DB by discordId
-			let user = db
+			const [existingUser] = await db
 				.select()
 				.from(users)
-				.where(eq(users.discordId, discordUser.id))
-				.get();
+				.where(eq(users.discordId, discordUser.id));
 
+			let user = existingUser;
 			const displayName = discordUser.global_name ?? discordUser.username;
 			const avatarUrl = discordUser.avatar
 				? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
 				: null;
 
 			if (!user) {
-				const inserted = db
+				const [inserted] = await db
 					.insert(users)
 					.values({
 						discordId: discordUser.id,
@@ -292,11 +291,11 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 						avatar: avatarUrl,
 						role: isOwner ? "owner" : "user",
 					})
-					.returning()
-					.get();
+					.returning();
 				user = inserted;
 			} else {
-				db.update(users)
+				await db
+					.update(users)
 					.set({
 						username: displayName,
 						avatar: avatarUrl,
@@ -304,23 +303,29 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 							? { role: "owner" }
 							: {}),
 					})
-					.where(eq(users.discordId, discordUser.id))
-					.run();
+					.where(eq(users.discordId, discordUser.id));
 				if (isOwner && user.role !== "owner" && user.role !== "admin") {
 					user.role = "owner";
 				}
 			}
 
+			if (!user) {
+				return redirect("/#/login?error=user_creation_failed", 302);
+			}
+
 			// Store access token in session for guild fetching later
 			const expiresAt = new Date(Date.now() + 7 * 86400 * 1000);
-			const newSession = db
+			const [newSession] = await db
 				.insert(userSessions)
 				.values({
 					userId: user.id,
 					expiresAt,
 				})
-				.returning()
-				.get();
+				.returning();
+
+			if (!newSession) {
+				return redirect("/#/login?error=session_creation_failed", 302);
+			}
 
 			const host = request.headers.get("host") ?? "";
 			const cookieDomain =
@@ -404,29 +409,33 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 			const username = body.username;
 			const role = body.role ?? "user";
 
-			let user = db
+			const [existingUser] = await db
 				.select()
 				.from(users)
-				.where(eq(users.username, username))
-				.get();
+				.where(eq(users.username, username));
+
+			let user = existingUser;
 
 			if (!user) {
-				const inserted = db
+				const [inserted] = await db
 					.insert(users)
 					.values({
 						username,
 						role,
 					})
-					.returning()
-					.get();
+					.returning();
 				user = inserted;
+			}
+
+			if (!user) {
+				return { success: false, error: "Failed to resolve demo user" };
 			}
 
 			const expiresAt = new Date(Date.now() + 7 * 86400 * 1000);
 			const ipAddress = request.headers.get("x-forwarded-for") ?? "127.0.0.1";
 			const userAgent = request.headers.get("user-agent") ?? "Unknown";
 
-			const newSession = db
+			const [newSession] = await db
 				.insert(userSessions)
 				.values({
 					userId: user.id,
@@ -434,10 +443,9 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					ipAddress,
 					userAgent,
 				})
-				.returning()
-				.get();
+				.returning();
 
-			if (session) {
+			if (session && newSession) {
 				session.set({
 					value: newSession.id,
 					httpOnly: true,
@@ -463,7 +471,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 					tornId: user.tornId,
 				},
 
-				sessionId: newSession.id,
+				sessionId: newSession?.id,
 			};
 		},
 		{

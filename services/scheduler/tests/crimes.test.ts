@@ -141,8 +141,7 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 		const indexed: CrimeLog[] = await db
 			.select()
 			.from(crimeLogs)
-			.where(inArray(crimeLogs.id, [LOG_ID_1, LOG_ID_2]))
-			.all();
+			.where(inArray(crimeLogs.id, [LOG_ID_1, LOG_ID_2]));
 
 		expect(indexed.length).toBe(2);
 
@@ -296,8 +295,7 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 		const indexed = await db
 			.select()
 			.from(crimeLogs)
-			.where(inArray(crimeLogs.id, [LOG_ID_1, LOG_ID_2]))
-			.all();
+			.where(inArray(crimeLogs.id, [LOG_ID_1, LOG_ID_2]));
 
 		expect(indexed.length).toBe(2);
 		const log1 = indexed.find((r) => r.id === LOG_ID_1);

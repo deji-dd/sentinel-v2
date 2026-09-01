@@ -448,11 +448,10 @@ export async function reconcileHistoricalStockLogs(options?: {
 		logger.info("Starting Stocks Ledger reconciliation from personal_logs...");
 
 		if (options?.wipeAndRebuild) {
-			await db.delete(stockLedgers).run();
+			await db.delete(stockLedgers);
 			await db
 				.delete(ledgerEvents)
-				.where(eq(ledgerEvents.type, "stock_dividend"))
-				.run();
+				.where(eq(ledgerEvents.type, "stock_dividend"));
 			state.lastProcessedTimestamp = null;
 			state.totalIndexedLogs = 0;
 		}
@@ -480,8 +479,7 @@ export async function reconcileHistoricalStockLogs(options?: {
 				})
 				.from(personalLogs)
 				.where(inArray(personalLogs.log, STOCK_GAIN_LOG_IDS))
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = historicalLogs;
 		} else {
 			const missingLogs = await db
@@ -501,8 +499,7 @@ export async function reconcileHistoricalStockLogs(options?: {
 						isNull(stockLedgers.id),
 					),
 				)
-				.orderBy(personalLogs.timestamp)
-				.all();
+				.orderBy(personalLogs.timestamp);
 			logsToProcess = missingLogs;
 		}
 
@@ -541,10 +538,9 @@ export async function reconcileHistoricalStockLogs(options?: {
 			}
 		}
 
-		const totalStats = await db
+		const [totalStats] = await db
 			.select({ count: count(stockLedgers.id) })
-			.from(stockLedgers)
-			.get();
+			.from(stockLedgers);
 
 		state.totalIndexedLogs =
 			totalStats?.count ?? state.totalIndexedLogs + replayed;
@@ -588,8 +584,7 @@ export async function getStocksTotals(stockId?: number): Promise<
 		})
 		.from(stockLedgers)
 		.where(whereClause)
-		.groupBy(stockLedgers.stockId)
-		.all();
+		.groupBy(stockLedgers.stockId);
 
 	return groups.map((g) => ({
 		stockId: g.stockId,

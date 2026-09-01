@@ -26,9 +26,29 @@ async function main() {
 	const workerCount = await startRegisteredWorkers();
 	logger.info(`${workerCount} registered workers.`);
 
+	// 4. Start lightweight internal healthcheck server
+	const healthPort = Number(process.env.PORT) || 3001;
+	const healthServer = Bun.serve({
+		port: healthPort,
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/health" || url.pathname === "/") {
+				return Response.json({
+					status: "ok",
+					service: "sentinel-scheduler",
+					uptime: process.uptime(),
+					workerCount,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		},
+	});
+	logger.info(`Lightweight healthcheck server listening on port ${healthPort}`);
+
 	// Graceful shutdown handling
 	const shutdown = async (signal: string) => {
 		logger.warn(`Received ${signal}. Shutting down Scheduler...`);
+		healthServer.stop();
 		await ipcServer.close();
 		closeDatabase();
 		logger.info("Scheduler shutdown complete.");

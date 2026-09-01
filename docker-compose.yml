@@ -1,0 +1,95 @@
+services:
+  sentinel-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentinel-api
+    restart: unless-stopped
+    command: ["bun", "run", "services/api/index.ts"]
+    ports:
+      - "${SENTINEL_PORT:-3002}:3002"
+    env_file:
+      - .env.production
+    environment:
+      PORT: 3002
+      NODE_ENV: production
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /var/run/postgres-sockets:/var/run/postgresql
+      - sentinel_ipc:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3002/api/health || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sentinel-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentinel-bot
+    restart: unless-stopped
+    command: ["bun", "run", "services/bot/index.ts"]
+    env_file:
+      - .env.production
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /var/run/postgres-sockets:/var/run/postgresql
+      - sentinel_ipc:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/health || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      sentinel-api:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sentinel-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentinel-scheduler
+    restart: unless-stopped
+    command: ["bun", "run", "services/scheduler/index.ts"]
+    env_file:
+      - .env.production
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /var/run/postgres-sockets:/var/run/postgresql
+      - sentinel_ipc:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      sentinel-api:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  sentinel_ipc:
