@@ -7,7 +7,17 @@ const ALLIANCE_JSON_URL =
 	"https://raw.githubusercontent.com/Marches0/torn-public/25b7cef36fd0949237b7ce2ee3fa53a9b7e5bc53/factions/alliances/factionAlliances.json";
 
 const rootDir = process.cwd();
-const outputPath = join(rootDir, "data", "faction-alliances.snapshot.json");
+const outputPaths = [
+	join(rootDir, "data", "faction-alliances.snapshot.json"),
+	join(
+		rootDir,
+		"services",
+		"bot",
+		"src",
+		"data",
+		"faction-alliances.snapshot.json",
+	),
+];
 
 type AlliancePayload = {
 	alliances: unknown[];
@@ -43,9 +53,11 @@ async function main(): Promise<void> {
 
 	const pretty = `${JSON.stringify(payload, null, 2)}\n`;
 
-	const bytesWritten = await Bun.write(outputPath, pretty);
+	for (const path of outputPaths) {
+		await Bun.write(path, pretty);
+	}
 
-	logger.info(`Snapshot successfully updated (${bytesWritten} bytes)`);
+	logger.info("Snapshot successfully updated across targets");
 	finish();
 }
 

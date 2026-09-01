@@ -44,7 +44,7 @@ const WORKERS: WorkerStarter[] = [
 	// startWealthModule,
 ];
 
-const DEFAULT_STAGGER_MS = 1000;
+const DEFAULT_STAGGER_MS = 500;
 
 /**
  * Starts all registered background workers with a staggered boot delay
