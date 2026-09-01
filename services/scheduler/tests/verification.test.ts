@@ -326,4 +326,218 @@ describe("Verification Engine", () => {
 			.delete(verifiedUsers)
 			.where(eq(verifiedUsers.discordId, UNVERIFIED_DISCORD_ID));
 	});
+
+	test("runBulkGuildVerification supports Torn API v2 array format and preserves existing roles", async () => {
+		await db.insert(verifiedUsers).values({
+			discordId: TEST_DISCORD_ID,
+			tornId: 2633269,
+			tornName: "Deji",
+			factionId: 999,
+			factionTag: "ALPHA",
+			lastCheckedAt: new Date(),
+		});
+
+		// Torn API v2 returns basic and members as an ARRAY
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("/faction")) {
+				return new Response(
+					JSON.stringify({
+						basic: {
+							id: 999,
+							name: "Alpha Faction",
+							tag: "ALPHA",
+							leader_id: 2633269,
+						},
+						members: [
+							{
+								id: 2633269,
+								name: "Deji",
+								position: "Leader",
+								days_in_faction: 100,
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
+
+		const actionsReceived: BulkVerificationProgressData["actions"] = [];
+		const result = await runBulkGuildVerification(
+			TEST_GUILD_ID,
+			"admin",
+			(p) => {
+				if (p.actions) {
+					actionsReceived.push(...p.actions);
+				}
+			},
+			[
+				{
+					discordId: TEST_DISCORD_ID,
+					// Member already has verified role, alpha member, alpha leader
+					currentRoleIds: [
+						"role_verified",
+						"role_alpha_member",
+						"role_alpha_leader",
+					],
+					currentNickname: "[ALPHA] Deji [2633269]",
+				},
+			],
+		);
+
+		expect(result.processed).toBe(1);
+		expect(result.errors).toBe(0);
+		// Since member already has all required roles, no roles should be removed!
+		const userAction = actionsReceived.find(
+			(a) => a.discordId === TEST_DISCORD_ID,
+		);
+		if (userAction?.rolesToRemove) {
+			expect(userAction.rolesToRemove).toEqual([]);
+		}
+	});
+
+	test("runBulkGuildVerification aborts safely without stripping roles when faction roster fetch fails", async () => {
+		await db.insert(verifiedUsers).values({
+			discordId: TEST_DISCORD_ID,
+			tornId: 2633269,
+			tornName: "Deji",
+			factionId: 999,
+			factionTag: "ALPHA",
+			lastCheckedAt: new Date(),
+		});
+
+		// Simulate non-retryable Torn API error (code 2 = Incorrect key)
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+			return new Response(
+				JSON.stringify({
+					error: { code: 2, error: "Incorrect key" },
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}) as unknown as typeof fetch);
+
+		const actionsReceived: BulkVerificationProgressData["actions"] = [];
+		let failedProgressReceived = false;
+
+		const result = await runBulkGuildVerification(
+			TEST_GUILD_ID,
+			"admin",
+			(p) => {
+				if (p.actions) {
+					actionsReceived.push(...p.actions);
+				}
+				if (p.status === "failed") {
+					failedProgressReceived = true;
+				}
+			},
+			[
+				{
+					discordId: TEST_DISCORD_ID,
+					currentRoleIds: [
+						"role_verified",
+						"role_alpha_member",
+						"role_alpha_leader",
+					],
+					currentNickname: "[ALPHA] Deji [2633269]",
+				},
+			],
+		);
+
+		expect(failedProgressReceived).toBe(true);
+		expect(result.errors).toBe(1);
+		// Critical: No actions should be emitted that remove roles!
+		expect(actionsReceived.length).toBe(0);
+	});
+
+	test("runBulkGuildVerification recovers protected roles recently stripped by a faulty sweep", async () => {
+		// Update guild config to include a protected role
+		await db
+			.update(guildConfigs)
+			.set({ protectedRoleIds: ["role_protected_officer"] })
+			.where(eq(guildConfigs.guildId, TEST_GUILD_ID));
+
+		await db.insert(verifiedUsers).values({
+			discordId: TEST_DISCORD_ID,
+			tornId: 2633269,
+			tornName: "Deji",
+			factionId: 999,
+			factionTag: "ALPHA",
+			lastCheckedAt: new Date(),
+		});
+
+		// Insert a recent log simulating the bad sweep that stripped "role_protected_officer" 15 minutes ago
+		await db.insert(verificationLogs).values({
+			guildId: TEST_GUILD_ID,
+			discordId: TEST_DISCORD_ID,
+			status: "success",
+			triggeredBy: "admin",
+			rolesAdded: [],
+			rolesRemoved: ["role_protected_officer", "role_alpha_member"],
+			createdAt: new Date(Date.now() - 15 * 60 * 1000),
+		});
+
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("/faction")) {
+				return new Response(
+					JSON.stringify({
+						basic: {
+							id: 999,
+							name: "Alpha Faction",
+							tag: "ALPHA",
+							leader_id: 2633269,
+						},
+						members: [
+							{
+								id: 2633269,
+								name: "Deji",
+								position: "Leader",
+								days_in_faction: 100,
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
+
+		const actionsReceived: BulkVerificationProgressData["actions"] = [];
+		const result = await runBulkGuildVerification(
+			TEST_GUILD_ID,
+			"admin",
+			(p) => {
+				if (p.actions) {
+					actionsReceived.push(...p.actions);
+				}
+			},
+			[
+				{
+					discordId: TEST_DISCORD_ID,
+					// Member currently only has role_verified because protected & faction roles were stripped
+					currentRoleIds: ["role_verified"],
+					currentNickname: "[ALPHA] Deji [2633269]",
+				},
+			],
+		);
+
+		expect(result.processed).toBe(1);
+		expect(result.updated).toBe(1);
+
+		const userAction = actionsReceived.find(
+			(a) => a.discordId === TEST_DISCORD_ID,
+		);
+		expect(userAction).toBeDefined();
+		// Both the faction member role, leader role, AND recovered protected role should be added back!
+		expect(userAction?.rolesToAdd).toContain("role_alpha_member");
+		expect(userAction?.rolesToAdd).toContain("role_alpha_leader");
+		expect(userAction?.rolesToAdd).toContain("role_protected_officer");
+	});
 });

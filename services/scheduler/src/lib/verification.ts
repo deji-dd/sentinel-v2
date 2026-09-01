@@ -1,5 +1,6 @@
 import {
 	db,
+	desc,
 	eq,
 	factionRoleMappings,
 	guildConfigs,
@@ -17,12 +18,16 @@ import type {
 } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+import { type FactionRecord, getFactions } from "./faction-tracker";
 
 const logger = new Logger("Verification");
 
 type UserGenericResponse = TornSchema<"UserDiscordResponse"> &
 	TornSchema<"UserFactionResponse"> &
 	TornSchema<"UserProfileResponse">;
+
+type FactionResponse = TornSchema<"FactionBasicResponse"> &
+	TornSchema<"FactionMembersResponse">;
 
 /**
  * Runs verification for a single Discord member in a guild using Drizzle ORM.
@@ -401,52 +406,157 @@ export async function runBulkGuildVerification(
 			}
 		}
 
-		// Map: factionId -> Set of member Torn IDs, Map: factionId -> Set of Leader/Co-leader Torn IDs
+		// Map: factionId -> Set of member Torn IDs, Map: factionId -> Set of Leader/Co-leader Torn IDs, Map: factionId -> tag
 		const factionMembersMap = new Map<number, Set<number>>();
 		const factionLeadersMap = new Map<number, Set<number>>();
+		const factionTagsMap = new Map<number, string>();
+
+		let mappedFactionRecords = new Map<number, FactionRecord>();
+		try {
+			mappedFactionRecords = await getFactions(
+				enabledMappings.map((m) => m.factionId),
+			);
+			for (const [facId, rec] of mappedFactionRecords) {
+				if (rec.tag) {
+					factionTagsMap.set(facId, rec.tag);
+				}
+			}
+		} catch (err) {
+			logger.warn("Failed to fetch mapped faction records from cache/DB:", err);
+		}
 
 		// Fetch all mapped factions in parallel using tornApi.executeBatch across central key pool
+		// Queries both "basic" (metadata, tag, leader IDs) and "members" (member roster) in 1 request per faction
 		try {
 			const factionResults = (await tornApi.executeBatch(
 				"/faction",
 				enabledMappings,
 				(mapping) => ({
 					queryParams: {
-						selections: ["basic"],
+						selections: ["basic", "members"],
 						id: mapping.factionId,
 					},
 				}),
-			)) as Array<{ members?: Record<string, { position?: string }> }>;
+			)) as FactionResponse[];
 
 			for (let i = 0; i < enabledMappings.length; i++) {
 				const mapping = enabledMappings[i];
 				const facRes = factionResults[i];
 
-				if (mapping && facRes?.members) {
-					const membersSet = new Set<number>();
-					const leadersSet = new Set<number>();
-
-					for (const [idStr, memberData] of Object.entries(facRes.members)) {
-						const tornId = parseInt(idStr, 10);
-						if (!Number.isNaN(tornId)) {
-							membersSet.add(tornId);
-							if (
-								memberData.position === "Leader" ||
-								memberData.position === "Co-leader"
-							) {
-								leadersSet.add(tornId);
-							}
-						}
+				if (mapping) {
+					if (facRes?.basic?.tag) {
+						factionTagsMap.set(mapping.factionId, facRes.basic.tag);
 					}
 
-					factionMembersMap.set(mapping.factionId, membersSet);
-					factionLeadersMap.set(mapping.factionId, leadersSet);
+					if (facRes?.members) {
+						const membersSet = new Set<number>();
+						const leadersSet = new Set<number>();
+
+						// Add leader and co-leader from basic selection if available
+						if (facRes.basic?.leader_id) {
+							leadersSet.add(facRes.basic.leader_id);
+						}
+						if (facRes.basic?.co_leader_id) {
+							leadersSet.add(facRes.basic.co_leader_id);
+						}
+
+						// Fallback to database cached leader/co-leader if needed
+						const facRecord = mappedFactionRecords.get(mapping.factionId);
+						if (facRecord?.leaderId) {
+							leadersSet.add(facRecord.leaderId);
+						}
+						if (facRecord?.coLeaderId) {
+							leadersSet.add(facRecord.coLeaderId);
+						}
+
+						if (Array.isArray(facRes.members)) {
+							for (const member of facRes.members) {
+								if (typeof member?.id === "number") {
+									membersSet.add(member.id);
+									if (
+										member.position === "Leader" ||
+										member.position === "Co-leader"
+									) {
+										leadersSet.add(member.id);
+									}
+								}
+							}
+						} else if (
+							typeof facRes.members === "object" &&
+							facRes.members !== null
+						) {
+							for (const [idStr, memberData] of Object.entries(
+								facRes.members as Record<string, { position?: string }>,
+							)) {
+								const tornId = parseInt(idStr, 10);
+								if (!Number.isNaN(tornId)) {
+									membersSet.add(tornId);
+									if (
+										memberData?.position === "Leader" ||
+										memberData?.position === "Co-leader"
+									) {
+										leadersSet.add(tornId);
+									}
+								}
+							}
+						}
+
+						factionMembersMap.set(mapping.factionId, membersSet);
+						factionLeadersMap.set(mapping.factionId, leadersSet);
+					}
 				}
 			}
 		} catch (batchErr) {
 			logger.warn(
 				`Failed to batch fetch faction members for guild ${guildId}:`,
 				batchErr,
+			);
+		}
+
+		// SAFETY GUARD: If mapped factions are configured, but we couldn't fetch member rosters for ANY of them,
+		// abort immediately to prevent stripping faction roles from all users due to API/network errors.
+		if (enabledMappings.length > 0 && factionMembersMap.size === 0) {
+			const errMsg = `Failed to fetch member rosters for any mapped factions (${enabledMappings.map((m) => m.factionId).join(", ")}). Aborting bulk verification to protect member roles.`;
+			logger.error(`[Guild ${guildId}] ${errMsg}`);
+			await onProgress?.({
+				guildId,
+				processed: 0,
+				total: 0,
+				updated: 0,
+				errors: 1,
+				status: "failed",
+				message: errMsg,
+			});
+			finishLog();
+			return { processed: 0, total: 0, updated: 0, errors: 1 };
+		}
+
+		// Query recent verification logs for this guild (last 2 hours) to detect any protected roles
+		// that may have been stripped by a recent faulty sweep and need recovery.
+		const recentlyRemovedRolesMap = new Map<string, Set<string>>();
+		try {
+			const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const recentLogs = await db.query.verificationLogs.findMany({
+				where: eq(verificationLogs.guildId, guildId),
+				orderBy: [desc(verificationLogs.createdAt)],
+				limit: 1000,
+			});
+			for (const log of recentLogs) {
+				if (log.createdAt && log.createdAt >= twoHoursAgo && log.rolesRemoved) {
+					let set = recentlyRemovedRolesMap.get(log.discordId);
+					if (!set) {
+						set = new Set<string>();
+						recentlyRemovedRolesMap.set(log.discordId, set);
+					}
+					for (const r of log.rolesRemoved) {
+						set.add(r);
+					}
+				}
+			}
+		} catch (logErr) {
+			logger.warn(
+				"Failed to inspect recent verification logs for protected role recovery:",
+				logErr,
 			);
 		}
 
@@ -544,6 +654,17 @@ export async function runBulkGuildVerification(
 						}
 					}
 
+					// SAFETY: If user was recorded in a mapped faction, but that specific faction's
+					// roster failed to load in this batch, retain their faction membership rather than stripping roles.
+					if (
+						!userFactionId &&
+						userInDb.factionId &&
+						!factionMembersMap.has(userInDb.factionId) &&
+						enabledMappings.some((m) => m.factionId === userInDb.factionId)
+					) {
+						userFactionId = userInDb.factionId;
+					}
+
 					// Compute target roles
 					const targetRoles = new Set<string>();
 					for (const id of config.verifiedRoleIds) {
@@ -571,21 +692,29 @@ export async function runBulkGuildVerification(
 					// Protected roles: keep protected roles if user is in a mapped faction
 					if (isInMappedFaction) {
 						for (const roleId of config.protectedRoleIds) {
-							if (member.currentRoleIds.includes(roleId)) {
+							const hasRole = member.currentRoleIds.includes(roleId);
+							const recentlyStripped = recentlyRemovedRolesMap
+								.get(member.discordId)
+								?.has(roleId);
+							if (hasRole || recentlyStripped) {
 								targetRoles.add(roleId);
 							}
 						}
 					}
 
 					// Format nickname
+					const effectiveFactionTag =
+						(userFactionId ? factionTagsMap.get(userFactionId) : null) ??
+						userInDb.factionTag;
+
 					let template = config.nicknameTemplate || "[{tag}] {name} [{id}]";
-					if (!userInDb.factionTag) {
+					if (!effectiveFactionTag) {
 						template = template
 							.replace("[{tag}]", "")
 							.replace("{tag}", "")
 							.trim();
 					} else {
-						template = template.replace("{tag}", userInDb.factionTag);
+						template = template.replace("{tag}", effectiveFactionTag);
 					}
 					const formattedNickname = template
 						.replace("{name}", userInDb.tornName)
@@ -601,7 +730,8 @@ export async function runBulkGuildVerification(
 					const rolesToRemove = Array.from(managedRoles).filter(
 						(roleId) =>
 							!targetRoles.has(roleId) &&
-							member.currentRoleIds.includes(roleId),
+							(member.currentRoleIds.length === 0 ||
+								member.currentRoleIds.includes(roleId)),
 					);
 					const newNickname =
 						formattedNickname === member.currentNickname
@@ -609,11 +739,15 @@ export async function runBulkGuildVerification(
 							: formattedNickname;
 
 					let factionChanged = false;
-					if (userInDb.factionId !== userFactionId) {
+					if (
+						userInDb.factionId !== userFactionId ||
+						(effectiveFactionTag && userInDb.factionTag !== effectiveFactionTag)
+					) {
 						await db
 							.update(verifiedUsers)
 							.set({
 								factionId: userFactionId,
+								factionTag: effectiveFactionTag,
 								updatedAt: new Date(),
 							})
 							.where(eq(verifiedUsers.discordId, userInDb.discordId));
