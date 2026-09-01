@@ -29,18 +29,11 @@ COPY . .
 RUN bun run web:build
 
 # Production runner image
-FROM base AS runner
+FROM builder AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3002
-
-# Copy node_modules, source code, and built web dashboards
-COPY --from=dependencies /app/node_modules ./node_modules
-COPY --from=builder /app/web/bot-dashboard/dist ./web/bot-dashboard/dist
-COPY --from=builder /app/web/tt-selector/dist ./web/tt-selector/dist
-COPY --from=builder /app/web/user-dashboard/dist ./web/user-dashboard/dist
-COPY . .
 
 # Expose API port
 EXPOSE 3002

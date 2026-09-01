@@ -84,5 +84,14 @@ jobs:
 
       - name: Health Check Verification
         run: |
-          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} \
-            "curl -f --retry 5 --retry-delay 2 http://localhost:3002/api/health || exit 1"
+          ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} "bash -s" << EOF
+            set -euo pipefail
+            cd ${DEPLOY_DIR}
+            if ! curl -f --retry 10 --retry-delay 2 --retry-connrefused http://localhost:3002/api/health; then
+              echo "Healthcheck failed! Dumping container status and logs:"
+              docker compose ps
+              docker compose logs --tail 50
+              exit 1
+            fi
+            echo "Healthcheck passed successfully!"
+          EOF

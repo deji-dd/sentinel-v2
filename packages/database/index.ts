@@ -19,7 +19,15 @@ export function createSqlClient(): postgres.Sql {
 	const port = Number(process.env.POSTGRES_PORT || 5432);
 
 	if (customUrl) {
-		return postgres(customUrl, { max: 10, idle_timeout: 20 });
+		const socketMatch = customUrl.match(/@(%2[fF][^/]+)/);
+		const socketHost = socketMatch
+			? decodeURIComponent(socketMatch[1] ?? "")
+			: undefined;
+		return postgres(customUrl, {
+			...(socketHost ? { host: socketHost } : {}),
+			max: 10,
+			idle_timeout: 20,
+		});
 	}
 
 	return postgres({

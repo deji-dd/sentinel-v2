@@ -13,10 +13,6 @@ services:
     environment:
       PORT: 3002
       NODE_ENV: production
-      POSTGRES_HOST: /var/run/postgresql
-      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
-      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - /var/run/postgres-sockets:/var/run/postgresql
       - sentinel_ipc:/app/data
@@ -41,10 +37,6 @@ services:
     environment:
       PORT: 3000
       NODE_ENV: production
-      POSTGRES_HOST: /var/run/postgresql
-      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
-      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - /var/run/postgres-sockets:/var/run/postgresql
       - sentinel_ipc:/app/data
@@ -72,10 +64,6 @@ services:
     environment:
       PORT: 3001
       NODE_ENV: production
-      POSTGRES_HOST: /var/run/postgresql
-      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
-      POSTGRES_USER: ${POSTGRES_USER:-sentinel_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - /var/run/postgres-sockets:/var/run/postgresql
       - sentinel_ipc:/app/data
