@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 	setupBotIpcListeners(client);
 
 	// Start lightweight internal healthcheck server
-	const healthPort = Number(process.env.PORT) || 3000;
+	const healthPort = Number(process.env.BOT_HEALTH_PORT) || 3000;
 	const healthServer = Bun.serve({
 		port: healthPort,
 		fetch(req) {

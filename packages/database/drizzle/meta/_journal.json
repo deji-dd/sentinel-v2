@@ -8,6 +8,27 @@
 			"when": 1788247974216,
 			"tag": "0000_nappy_katie_power",
 			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1788371396839,
+			"tag": "0001_ancient_bruce_banner",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1788372358161,
+			"tag": "0002_right_goliath",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1788374049747,
+			"tag": "0003_light_thor_girl",
+			"breakpoints": true
 		}
 	]
 }

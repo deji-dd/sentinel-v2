@@ -6,6 +6,10 @@ import type { components, paths } from "./swagger";
 export type TornSchema<T extends keyof components["schemas"]> =
 	components["schemas"][T];
 
+export type FactionMember = components["schemas"]["FactionMember"];
+export type FactionMembersResponse =
+	components["schemas"]["FactionMembersResponse"];
+
 /**
  * Utility type to extract operation from path
  */

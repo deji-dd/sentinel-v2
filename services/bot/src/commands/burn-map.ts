@@ -18,6 +18,7 @@ import { logger } from "../lib/logger";
 import { getBurnedTerritories } from "../lib/territory-burn-logic";
 
 export const burnMapCommand = {
+	module: "territory" as const,
 	data: new SlashCommandBuilder()
 		.setName("burn-map")
 		.setDescription("Generate a visual burn map for a faction")

@@ -10,6 +10,7 @@ import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { logger } from "../lib/logger";
 
 export const ttSelectorCommand = {
+	module: "territory" as const,
 	data: new SlashCommandBuilder()
 		.setName("tt-selector")
 		.setDescription("Open the interactive territory selector."),

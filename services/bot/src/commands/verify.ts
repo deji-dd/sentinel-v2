@@ -13,6 +13,7 @@ import { sendVerificationRequest } from "../lib/ipc";
 import { logger } from "../lib/logger";
 
 export const verifyCommand = {
+	module: "verification" as const,
 	data: new SlashCommandBuilder()
 		.setName("verify")
 		.setDescription(

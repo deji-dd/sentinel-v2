@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
-import { db } from "../index";
+import {
+	authorizeGuild,
+	db,
+	deauthorizeGuild,
+	getTargetGuildIds,
+	isTargetGuild,
+	isTargetGuildAsync,
+} from "../index";
 
 describe("@sentinel/database Integration Tests", () => {
 	test("database accepts raw queries", async () => {
@@ -24,5 +31,27 @@ describe("@sentinel/database Integration Tests", () => {
 	test("schema query execution smoke test", async () => {
 		const states = await db.query.systemStates.findMany({ limit: 1 });
 		expect(Array.isArray(states)).toBe(true);
+	});
+
+	test("guild authorization lifecycle and target guild helpers", async () => {
+		const testGuildId = "999888777666555444";
+
+		// Authorize guild
+		await authorizeGuild(testGuildId);
+
+		expect(isTargetGuild(testGuildId)).toBe(true);
+		expect(await isTargetGuildAsync(testGuildId)).toBe(true);
+
+		const targetIds = await getTargetGuildIds();
+		expect(targetIds).toContain(testGuildId);
+
+		// Deauthorize guild
+		await deauthorizeGuild(testGuildId);
+
+		expect(isTargetGuild(testGuildId)).toBe(false);
+		expect(await isTargetGuildAsync(testGuildId)).toBe(false);
+
+		const updatedTargetIds = await getTargetGuildIds();
+		expect(updatedTargetIds).not.toContain(testGuildId);
 	});
 });

@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/table";
 import NotInitializedView from "../components/NotInitializedView";
 import VerificationLogsHistory from "../components/VerificationLogsHistory";
+import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
@@ -98,6 +99,7 @@ const MAPPINGS_PER_PAGE = 10;
 export default function VerificationPage({ guildId }: VerificationPageProps) {
 	const { toast } = useToast();
 	const { navigate } = useRouter();
+	const { user } = useAuth();
 	const topFormRef = useRef<HTMLDivElement>(null);
 
 	const [loading, setLoading] = useState(true);
@@ -232,9 +234,11 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 				}
 
 				setIsInitialized(true);
-				const config = data.config;
+				const config = data.config as typeof data.config & {
+					moduleVerification?: boolean;
+				};
 
-				setIsEnabled(true);
+				setIsEnabled(config.moduleVerification ?? true);
 				setHasApiKey(true);
 
 				const vRoles = config.verifiedRoleIds ?? [];
@@ -658,10 +662,20 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 							Module Disabled
 						</CardTitle>
 						<p className="text-muted-foreground text-xs sm:text-sm max-w-md leading-relaxed">
-							The Verification module is turned off for this server. Contact a
-							Sentinel administrator to enable this module.
+							The Verification module is turned off for this server. Contact the
+							Sentinel bot owner to enable this module.
 						</p>
 					</div>
+					{user?.role === "owner" && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => navigate(`/guilds/${guildId}`)}
+							className="mt-2 text-xs rounded-xl cursor-pointer"
+						>
+							Manage in General Settings
+						</Button>
+					)}
 				</Card>
 			</div>
 		);

@@ -67,7 +67,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
 				result.user.discordId &&
 				env.DISCORD_USER_ID &&
 				result.user.discordId === env.DISCORD_USER_ID &&
-				result.user.role === "user"
+				result.user.role !== "owner"
 			) {
 				await db
 					.update(users)

@@ -7,6 +7,7 @@ import {
 import { ActivityType, type Client, Events } from "discord.js";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
+import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
 import { logger } from "../lib/logger";
 import { startReactionRoleSyncLoop } from "../lib/reaction-roles";
 
@@ -25,7 +26,7 @@ export const readyEvent = {
 		await ensureTargetGuildConfigs();
 
 		// Auto-leave any unauthorized guilds
-		const targetIds = getTargetGuildIds();
+		const targetIds = await getTargetGuildIds();
 		if (targetIds.length > 0) {
 			for (const [id, guild] of client.guilds.cache) {
 				if (!isTargetGuild(id)) {
@@ -50,5 +51,8 @@ export const readyEvent = {
 
 		// Synchronize Faction Map / Directory Channels across target guilds
 		await updateFactionMapChannel(client);
+
+		// Synchronize Faction Monitoring Channels across target guilds
+		await updateFactionRevivesChannel(client);
 	},
 } as const;

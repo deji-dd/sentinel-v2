@@ -1,5 +1,6 @@
 import {
 	ensureTargetGuildConfigs,
+	getGuildModules,
 	getTargetGuildIds,
 } from "@sentinel/database";
 import { REST, Routes } from "discord.js";
@@ -7,7 +8,7 @@ import { commandsList } from "../commands";
 import { logger } from "../lib/logger";
 
 /**
- * Deploys all slash commands directly to a specific target guild.
+ * Deploys slash commands directly to a specific target guild, filtering by enabled modules.
  */
 export async function deployGuildCommands(guildId: string): Promise<void> {
 	const token = process.env.DISCORD_TOKEN;
@@ -17,12 +18,21 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 		return;
 	}
 
-	const commandBodies = commandsList.map((cmd) => cmd.data.toJSON());
+	const modules = await getGuildModules(guildId);
+	const enabledCommands = commandsList.filter((cmd) => {
+		if (!cmd.module) return true;
+		if (cmd.module === "verification") return modules.verification;
+		if (cmd.module === "territory") return modules.territory;
+		if (cmd.module === "reaction_roles") return modules.reactionRoles;
+		return false;
+	});
+
+	const commandBodies = enabledCommands.map((cmd) => cmd.data.toJSON());
 	const rest = new REST({ version: "10" }).setToken(token);
 
 	try {
 		logger.info(
-			`Deploying ${commandBodies.length} slash commands directly to Guild ${guildId}...`,
+			`Deploying ${commandBodies.length} active slash commands to Guild ${guildId}...`,
 		);
 
 		await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
@@ -49,10 +59,10 @@ export async function deployCommands(): Promise<void> {
 		return;
 	}
 
-	const targetGuildIds = getTargetGuildIds();
+	const targetGuildIds = await getTargetGuildIds();
 	if (targetGuildIds.length === 0) {
 		logger.warn(
-			"No target guild IDs found in TARGET_GUILD_IDS or DISCORD_GUILD_ID. Please specify target guilds in .env.",
+			"No authorized target guild IDs found in database. Authorize a server via the dashboard.",
 		);
 		return;
 	}

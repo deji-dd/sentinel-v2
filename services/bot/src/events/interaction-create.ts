@@ -1,4 +1,4 @@
-import { isTargetGuild } from "@sentinel/database";
+import { getGuildModules, isTargetGuild } from "@sentinel/database";
 import {
 	type Collection,
 	Events,
@@ -8,6 +8,7 @@ import {
 import type { BotCommand } from "../commands/index";
 import { createErrorEmbed } from "../lib/embeds";
 import { handleFactionDirectoryButton } from "../lib/faction-map-channel";
+import { handleFactionMonitoringButton } from "../lib/faction-monitoring-channel";
 import { logger } from "../lib/logger";
 
 export const interactionCreateEvent = {
@@ -32,6 +33,8 @@ export const interactionCreateEvent = {
 		if (interaction.isButton()) {
 			if (interaction.customId.startsWith("faction_dir_page:")) {
 				await handleFactionDirectoryButton(interaction);
+			} else if (interaction.customId.startsWith("monitoring_revives_page:")) {
+				await handleFactionMonitoringButton(interaction);
 			}
 			return;
 		}
@@ -42,6 +45,26 @@ export const interactionCreateEvent = {
 		if (!command) {
 			logger.warn(`No command matching ${interaction.commandName} was found.`);
 			return;
+		}
+
+		if (interaction.guildId && command.module) {
+			const modules = await getGuildModules(interaction.guildId);
+			const isModuleDisabled =
+				(command.module === "verification" && !modules.verification) ||
+				(command.module === "territory" && !modules.territory) ||
+				(command.module === "reaction_roles" && !modules.reactionRoles) ||
+				(command.module === "monitoring" && !modules.monitoring);
+
+			if (isModuleDisabled) {
+				const moduleLabel =
+					command.module.charAt(0).toUpperCase() +
+					command.module.slice(1).replace("_", " ");
+				await interaction.reply({
+					content: `The **${moduleLabel}** module is currently disabled for this server.`,
+					flags: MessageFlags.Ephemeral,
+				});
+				return;
+			}
 		}
 
 		try {

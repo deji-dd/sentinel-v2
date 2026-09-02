@@ -16,6 +16,7 @@ import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { logger } from "../lib/logger";
 
 export const assaultCheckCommand = {
+	module: "territory" as const,
 	data: new SlashCommandBuilder()
 		.setName("assault-check")
 		.setDescription("Check if a faction can assault a territory")

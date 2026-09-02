@@ -15,6 +15,12 @@ import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
+export type BotModule =
+	| "verification"
+	| "territory"
+	| "reaction_roles"
+	| "monitoring";
+
 export type BotCommandData =
 	| SlashCommandBuilder
 	| SlashCommandOptionsOnlyBuilder
@@ -23,6 +29,7 @@ export type BotCommandData =
 export type BotCommand = {
 	data: BotCommandData;
 	execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+	module?: BotModule;
 };
 
 export const commandsList: BotCommand[] = [

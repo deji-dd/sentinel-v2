@@ -1,6 +1,7 @@
 import {
 	db,
 	eq,
+	getGuildModules,
 	isTargetGuild,
 	reactionRoleMappings,
 	reactionRoleMessages,
@@ -35,23 +36,13 @@ function getReactionKey(
 	return `${messageId}:${userId}:${normalizeEmojiForKey(emoji)}`;
 }
 
-function beginReactionProcessing(key: string): boolean {
+function beginReactionProcessing(reactionKey: string): boolean {
 	const now = Date.now();
-	const existing = reactionProcessingLock.get(key);
-
-	if (existing && now - existing < REACTION_EVENT_LOCK_MS) {
+	const expiresAt = reactionProcessingLock.get(reactionKey);
+	if (expiresAt && expiresAt > now) {
 		return false;
 	}
-
-	reactionProcessingLock.set(key, now);
-
-	setTimeout(() => {
-		const current = reactionProcessingLock.get(key);
-		if (current === now) {
-			reactionProcessingLock.delete(key);
-		}
-	}, REACTION_EVENT_LOCK_MS * 2);
-
+	reactionProcessingLock.set(reactionKey, now + REACTION_EVENT_LOCK_MS);
 	return true;
 }
 
@@ -150,6 +141,9 @@ export async function handleReactionRoleAdd(
 
 		const guildId = fullReaction.message.guildId;
 		if (!guildId || !isTargetGuild(guildId)) return;
+
+		const modules = await getGuildModules(guildId);
+		if (!modules.reactionRoles) return;
 
 		const messageId = fullReaction.message.id;
 		const emoji = fullReaction.emoji.toString();
@@ -323,6 +317,9 @@ export async function syncReactionRoleMessages(
 
 		for (const msgRecord of rrMessages) {
 			if (!isTargetGuild(msgRecord.guildId) || !msgRecord.channelId) continue;
+
+			const modules = await getGuildModules(msgRecord.guildId);
+			if (!modules.reactionRoles) continue;
 
 			try {
 				const channel = (await client.channels

@@ -42,6 +42,7 @@ function colorForAllianceName(name: string): string {
 }
 
 export const allianceMapCommand = {
+	module: "territory" as const,
 	data: new SlashCommandBuilder()
 		.setName("alliance-map")
 		.setDescription("Generate territory map color-coded by alliance control"),

@@ -134,7 +134,10 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 				}
 
 				setIsInitialized(true);
-				setIsEnabled(true);
+				const config = data.config as typeof data.config & {
+					moduleReactionRoles?: boolean;
+				};
+				setIsEnabled(config.moduleReactionRoles ?? true);
 			}
 
 			if (channelsRes.data && "channels" in channelsRes.data) {
@@ -426,8 +429,8 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 							Module Disabled
 						</CardTitle>
 						<p className="text-muted-foreground text-xs sm:text-sm max-w-md leading-relaxed">
-							The Reaction Roles module is turned off for this server. Contact a
-							Sentinel administrator to enable this module.
+							The Reaction Roles module is turned off for this server. Contact
+							the Sentinel bot owner to enable this module.
 						</p>
 					</div>
 					<Button

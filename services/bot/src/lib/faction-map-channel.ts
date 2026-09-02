@@ -215,7 +215,7 @@ export async function updateFactionMapChannel(
 				});
 
 		for (const config of configs) {
-			if (!config.factionListChannelId) continue;
+			if (!config.factionListChannelId || !config.moduleTerritory) continue;
 
 			try {
 				const channel = (await client.channels

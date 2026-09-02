@@ -6,8 +6,10 @@ import type {
 } from "@sentinel/schemas";
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
+import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
 import { updateFactionMapChannel } from "../faction-map-channel";
+import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { logger } from "../logger";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
@@ -132,7 +134,15 @@ import { Logger } from "@sentinel/utils";
 // Bot Socket Server listening for direct incoming requests on bot.sock
 export const botIpcServer = new IpcServer<IpcMessage>(
 	IPC_SOCKET_PATHS.bot,
-	() => {},
+	(message) => {
+		for (const listener of messageListeners) {
+			try {
+				listener(message);
+			} catch (err) {
+				logger.error("Error in Bot IPC message listener:", err);
+			}
+		}
+	},
 );
 
 // Stream live logs to IPC subscribers
@@ -150,10 +160,21 @@ botIpcServer.start();
  */
 export function setupBotIpcListeners(client: Client): void {
 	addIpcMessageListener((message) => {
-		if (message.action === "sync_reaction_roles") {
+		if (message.action === "sync_guild_commands") {
+			const guildId = message.data?.guildId;
+			if (typeof guildId === "string") {
+				void deployGuildCommands(guildId);
+			}
+		} else if (message.action === "sync_reaction_roles") {
 			void syncReactionRoleMessages(client, message.data?.guildId);
 		} else if (message.action === "sync_faction_map") {
 			void updateFactionMapChannel(client, message.data?.guildId);
+		} else if (message.action === "sync_faction_monitoring") {
+			void updateFactionRevivesChannel(
+				client,
+				message.data?.guildId,
+				message.data?.monitorId,
+			);
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

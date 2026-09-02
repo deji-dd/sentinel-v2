@@ -118,9 +118,11 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 				}
 
 				setIsInitialized(true);
-				const config = data.config;
+				const config = data.config as typeof data.config & {
+					moduleTerritory?: boolean;
+				};
 
-				setIsEnabled(true);
+				setIsEnabled(config.moduleTerritory ?? true);
 
 				const fullChan = config.ttFullChannelId ?? null;
 				const filtChan = config.ttFilteredChannelId ?? null;

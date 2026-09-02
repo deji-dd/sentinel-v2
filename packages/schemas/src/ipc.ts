@@ -204,6 +204,22 @@ export type IpcSyncFactionMapMessage = {
 	};
 };
 
+export type IpcSyncFactionMonitoringMessage = {
+	action: "sync_faction_monitoring";
+	data?: {
+		guildId?: string;
+		monitorId?: string;
+		category?: "revives";
+	};
+};
+
+export type IpcSyncGuildCommandsMessage = {
+	action: "sync_guild_commands";
+	data?: {
+		guildId?: string;
+	};
+};
+
 export type IpcReinitializeCrimeLedgerMessage = {
 	action: "reinitialize_crime_ledger";
 	data?: Record<string, unknown>;
@@ -328,6 +344,8 @@ export type IpcMessage =
 	| IpcGuildMembersResponseMessage
 	| IpcSyncReactionRolesMessage
 	| IpcSyncFactionMapMessage
+	| IpcSyncFactionMonitoringMessage
+	| IpcSyncGuildCommandsMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

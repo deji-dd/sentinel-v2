@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@sentinel/database": "workspace:*",
 		"@sentinel/schemas": "workspace:*",
+		"@sentinel/torn-api": "workspace:*",
 		"@sentinel/utils": "workspace:*",
 		"discord.js": "latest",
 		"@resvg/resvg-js": "latest"

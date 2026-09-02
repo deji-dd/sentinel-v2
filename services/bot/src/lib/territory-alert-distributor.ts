@@ -71,6 +71,7 @@ export async function handleTerritoryAlert(
 		const configs = allConfigs.filter(
 			(cfg) =>
 				isTargetGuild(cfg.guildId) &&
+				cfg.moduleTerritory &&
 				(cfg.ttFullChannelId !== null || cfg.ttFilteredChannelId !== null),
 		);
 

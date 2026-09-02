@@ -27,7 +27,7 @@ async function main() {
 	logger.info(`${workerCount} registered workers.`);
 
 	// 4. Start lightweight internal healthcheck server
-	const healthPort = Number(process.env.PORT) || 3001;
+	const healthPort = Number(process.env.SCHEDULER_HEALTH_PORT) || 3001;
 	const healthServer = Bun.serve({
 		port: healthPort,
 		fetch(req) {

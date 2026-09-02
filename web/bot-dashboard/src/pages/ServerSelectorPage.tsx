@@ -1,13 +1,16 @@
 import {
 	AlertCircle,
 	ArrowRight,
+	ExternalLink,
 	KeyRound,
 	Loader2,
 	LogOut,
 	Moon,
+	Plus,
 	RotateCw,
 	Search,
 	Server,
+	ShieldCheck,
 	Sun,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -22,7 +25,22 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import logoImg from "../../public/logo.png";
 import { APP_VERSION } from "../config";
@@ -38,6 +56,10 @@ interface DiscordGuild {
 	owner: boolean;
 	permissions: string;
 	features: string[];
+	botInGuild?: boolean;
+	authorized?: boolean;
+	manageable?: boolean;
+	userInGuild?: boolean;
 }
 
 function guildIconUrl(guild: DiscordGuild): string | null {
@@ -53,6 +75,56 @@ export default function ServerSelectorPage() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [search, setSearch] = useState("");
+
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [selectedGuildToAuthorize, setSelectedGuildToAuthorize] = useState("");
+	const [customGuildId, setCustomGuildId] = useState("");
+	const [authorizing, setAuthorizing] = useState(false);
+	const [actionError, setActionError] = useState<string | null>(null);
+
+	const handleAuthorizeAndInvite = async (guildIdToAuth: string) => {
+		const targetId = guildIdToAuth.trim();
+		if (!targetId || !/^\d{17,20}$/.test(targetId)) {
+			setActionError("Please provide a valid 17-20 digit Discord Guild ID.");
+			return;
+		}
+
+		setAuthorizing(true);
+		setActionError(null);
+		try {
+			const res = await fetch("/api/v1/guilds/authorize", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ guildId: targetId }),
+			});
+			const data = (await res.json()) as {
+				success?: boolean;
+				inviteUrl?: string;
+				error?: string;
+			};
+			if (!res.ok || !data.success) {
+				setActionError(data.error || "Failed to authorize server.");
+				return;
+			}
+
+			if (data.inviteUrl) {
+				window.open(data.inviteUrl, "_blank", "noopener,noreferrer");
+			}
+
+			setDialogOpen(false);
+			setSelectedGuildToAuthorize("");
+			setCustomGuildId("");
+			await fetchGuilds();
+		} catch (err) {
+			setActionError(
+				err instanceof Error ? err.message : "Failed to authorize server.",
+			);
+		} finally {
+			setAuthorizing(false);
+		}
+	};
+
+	const uninstalledGuilds = guilds.filter((g) => g.botInGuild === false);
 
 	useEffect(() => {
 		if (!authLoading && !authenticated) {
@@ -113,27 +185,32 @@ export default function ServerSelectorPage() {
 			{/* Top Header Bar: User Profile & Theme Switcher */}
 			<div className="absolute top-4 right-4 z-20 flex items-center gap-2">
 				{authenticated && user && (
-					<div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border/80 bg-card/80 backdrop-blur-md shadow-xs">
-						<Avatar className="size-5 border border-border">
+					<div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-card/80 backdrop-blur-md border border-border shadow-xs text-xs">
+						<Avatar className="size-6 border border-border">
 							{avatarUrl ? (
 								<AvatarImage src={avatarUrl} alt={user.username} />
 							) : null}
-							<AvatarFallback className="text-[9px] font-mono">
-								{user.username.charAt(0).toUpperCase()}
+							<AvatarFallback className="font-mono text-[10px] bg-primary/10 text-primary">
+								{user.username.slice(0, 2).toUpperCase()}
 							</AvatarFallback>
 						</Avatar>
-						<span className="text-xs font-medium text-foreground">
+						<span className="font-medium text-foreground max-w-[120px] truncate">
 							{user.username}
 						</span>
+						<Badge
+							variant="outline"
+							className="text-[10px] font-mono px-1.5 py-0 uppercase"
+						>
+							{user.role}
+						</Badge>
 						<Button
 							variant="ghost"
 							size="icon"
-							onClick={() => void logout()}
-							title="Sign out"
-							aria-label="Sign out"
-							className="size-6 text-muted-foreground hover:text-foreground rounded-full cursor-pointer ml-0.5"
+							onClick={logout}
+							title="Log out"
+							className="size-6 text-muted-foreground hover:text-foreground cursor-pointer"
 						>
-							<LogOut className="size-3.5" />
+							<LogOut className="size-3" />
 						</Button>
 					</div>
 				)}
@@ -142,9 +219,8 @@ export default function ServerSelectorPage() {
 					variant="ghost"
 					size="icon"
 					onClick={toggle}
-					aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-					title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-					className="size-9 rounded-full cursor-pointer shadow-xs border border-border/60 bg-card/60 backdrop-blur-md"
+					aria-label="Toggle theme"
+					className="size-9 rounded-full bg-card/80 backdrop-blur-md border border-border cursor-pointer shadow-xs"
 				>
 					{theme === "dark" ? (
 						<Sun className="size-4" />
@@ -217,22 +293,42 @@ export default function ServerSelectorPage() {
 								</Button>
 
 								{(user?.role === "admin" || user?.role === "owner") && (
-									<Button
-										size="sm"
-										onClick={() => {
-											const targetGuild = guilds[0]?.id;
-											navigate(
-												targetGuild
-													? `/guilds/${targetGuild}/keys`
-													: "/admin/keys",
-											);
-										}}
-										className="h-9 px-3 text-xs gap-1.5 cursor-pointer rounded-xl font-medium"
-										title="Manage System API Keys"
-									>
-										<KeyRound className="size-3.5" data-icon="inline-start" />
-										System Keys
-									</Button>
+									<>
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() => {
+												setActionError(null);
+												setSelectedGuildToAuthorize(
+													uninstalledGuilds[0]?.id || "",
+												);
+												setCustomGuildId("");
+												setDialogOpen(true);
+											}}
+											className="h-9 px-3 text-xs gap-1.5 cursor-pointer rounded-xl font-medium border-primary/30 hover:border-primary text-primary"
+											title="Authorize and invite Sentinel to a new server"
+										>
+											<Plus className="size-3.5" data-icon="inline-start" />
+											Add Server
+										</Button>
+
+										<Button
+											size="sm"
+											onClick={() => {
+												const targetGuild = guilds[0]?.id;
+												navigate(
+													targetGuild
+														? `/guilds/${targetGuild}/keys`
+														: "/admin/keys",
+												);
+											}}
+											className="h-9 px-3 text-xs gap-1.5 cursor-pointer rounded-xl font-medium"
+											title="Manage System API Keys"
+										>
+											<KeyRound className="size-3.5" data-icon="inline-start" />
+											System Keys
+										</Button>
+									</>
 								)}
 							</div>
 						</div>
@@ -318,59 +414,233 @@ export default function ServerSelectorPage() {
 						{/* Guild Grid */}
 						{!loading && filtered.length > 0 && (
 							<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-								{filtered.map((guild) => (
-									<button
-										key={guild.id}
-										type="button"
-										id={`guild-card-${guild.id}`}
-										onClick={() => navigate(`/guilds/${guild.id}`)}
-										className="group p-4 rounded-xl bg-background/50 hover:bg-accent/40 border border-border/60 hover:border-primary/40 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between gap-4 text-left cursor-pointer"
-									>
-										<div className="flex items-center gap-3">
-											<Avatar className="size-11 border border-border shadow-xs shrink-0 rounded-xl">
-												{guildIconUrl(guild) ? (
-													<AvatarImage
-														src={guildIconUrl(guild) ?? ""}
-														alt={guild.name}
-														className="object-cover"
-													/>
-												) : null}
-												<AvatarFallback className="font-mono font-bold text-sm bg-muted text-muted-foreground">
-													{guild.name.charAt(0).toUpperCase()}
-												</AvatarFallback>
-											</Avatar>
+								{filtered.map((guild) => {
+									const isInstalled = guild.botInGuild !== false;
+									return isInstalled ? (
+										<button
+											type="button"
+											key={guild.id}
+											id={`guild-card-${guild.id}`}
+											onClick={() => navigate(`/guilds/${guild.id}`)}
+											className="group p-4 rounded-xl border shadow-xs transition-all duration-200 flex flex-col justify-between gap-4 text-left bg-background/50 hover:bg-accent/40 border-border/60 hover:border-primary/40 hover:shadow-md cursor-pointer"
+										>
+											<div className="flex items-center gap-3">
+												<Avatar className="size-11 border border-border shadow-xs shrink-0 rounded-xl">
+													{guildIconUrl(guild) ? (
+														<AvatarImage
+															src={guildIconUrl(guild) ?? ""}
+															alt={guild.name}
+															className="object-cover"
+														/>
+													) : null}
+													<AvatarFallback className="font-mono font-bold text-sm bg-muted text-muted-foreground">
+														{guild.name.charAt(0).toUpperCase()}
+													</AvatarFallback>
+												</Avatar>
 
-											<div className="min-w-0 flex-1">
-												<p
-													className="font-semibold text-sm text-foreground truncate group-hover:text-primary transition-colors"
-													title={guild.name}
+												<div className="min-w-0 flex-1">
+													<p
+														className="font-semibold text-sm text-foreground truncate group-hover:text-primary transition-colors"
+														title={guild.name}
+													>
+														{guild.name}
+													</p>
+													<p className="text-[11px] text-muted-foreground font-mono truncate">
+														ID: {guild.id}
+													</p>
+												</div>
+											</div>
+
+											<div className="pt-3 border-t border-border/40 flex items-center justify-between text-xs">
+												<div className="flex items-center gap-1.5">
+													<Badge
+														variant={guild.owner ? "default" : "secondary"}
+														className="text-[9px] font-mono px-1.5 py-0 uppercase font-semibold"
+													>
+														{guild.owner ? "OWNER" : "ADMIN"}
+													</Badge>
+													<Badge
+														variant="outline"
+														className="text-[9px] font-mono px-1.5 py-0 text-emerald-400 border-emerald-500/30"
+													>
+														ACTIVE
+													</Badge>
+												</div>
+
+												<span className="text-xs font-medium text-muted-foreground group-hover:text-primary transition-colors flex items-center gap-1">
+													Manage
+													<ArrowRight className="size-3.5 group-hover:translate-x-0.5 transition-transform" />
+												</span>
+											</div>
+										</button>
+									) : (
+										<div
+											key={guild.id}
+											id={`guild-card-${guild.id}`}
+											className="group p-4 rounded-xl border shadow-xs transition-all duration-200 flex flex-col justify-between gap-4 text-left bg-background/30 border-dashed border-border/60 hover:border-amber-500/40"
+										>
+											<div className="flex items-center gap-3">
+												<Avatar className="size-11 border border-border shadow-xs shrink-0 rounded-xl">
+													{guildIconUrl(guild) ? (
+														<AvatarImage
+															src={guildIconUrl(guild) ?? ""}
+															alt={guild.name}
+															className="object-cover"
+														/>
+													) : null}
+													<AvatarFallback className="font-mono font-bold text-sm bg-muted text-muted-foreground">
+														{guild.name.charAt(0).toUpperCase()}
+													</AvatarFallback>
+												</Avatar>
+
+												<div className="min-w-0 flex-1">
+													<p
+														className="font-semibold text-sm text-foreground truncate group-hover:text-amber-400 transition-colors"
+														title={guild.name}
+													>
+														{guild.name}
+													</p>
+													<p className="text-[11px] text-muted-foreground font-mono truncate">
+														ID: {guild.id}
+													</p>
+												</div>
+											</div>
+
+											<div className="pt-3 border-t border-border/40 flex items-center justify-between text-xs">
+												<div className="flex items-center gap-1.5">
+													<Badge
+														variant={guild.owner ? "default" : "secondary"}
+														className="text-[9px] font-mono px-1.5 py-0 uppercase font-semibold"
+													>
+														{guild.owner ? "OWNER" : "ADMIN"}
+													</Badge>
+													<Badge
+														variant="outline"
+														className="text-[9px] font-mono px-1.5 py-0 text-amber-400 border-amber-500/30"
+													>
+														NOT INSTALLED
+													</Badge>
+												</div>
+
+												<Button
+													size="xs"
+													variant="secondary"
+													onClick={() =>
+														void handleAuthorizeAndInvite(guild.id)
+													}
+													className="h-6 px-2 text-[11px] gap-1 cursor-pointer font-medium"
 												>
-													{guild.name}
-												</p>
-												<p className="text-[11px] text-muted-foreground font-mono truncate">
-													ID: {guild.id}
-												</p>
+													<ExternalLink className="size-3" />
+													Invite Bot
+												</Button>
 											</div>
 										</div>
-
-										<div className="pt-3 border-t border-border/40 flex items-center justify-between text-xs">
-											<Badge
-												variant={guild.owner ? "default" : "secondary"}
-												className="text-[9px] font-mono px-1.5 py-0 uppercase font-semibold"
-											>
-												{guild.owner ? "OWNER" : "ADMIN"}
-											</Badge>
-											<span className="text-xs font-medium text-muted-foreground group-hover:text-primary transition-colors flex items-center gap-1">
-												Manage
-												<ArrowRight className="size-3.5 group-hover:translate-x-0.5 transition-transform" />
-											</span>
-										</div>
-									</button>
-								))}
+									);
+								})}
 							</div>
 						)}
 					</CardContent>
 				</Card>
+
+				{/* Authorize & Invite Server Dialog Modal */}
+				<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+					<DialogContent className="sm:max-w-md">
+						<DialogHeader>
+							<DialogTitle className="flex items-center gap-2">
+								<ShieldCheck className="size-5 text-primary" />
+								Authorize & Invite Server
+							</DialogTitle>
+							<DialogDescription className="text-xs">
+								Authorize a Discord guild in Sentinel and generate an OAuth
+								invite link with full slash command permissions.
+							</DialogDescription>
+						</DialogHeader>
+
+						<div className="space-y-4 py-2">
+							{actionError && (
+								<Alert variant="destructive" className="py-2">
+									<AlertCircle className="size-4" />
+									<AlertDescription className="text-xs">
+										{actionError}
+									</AlertDescription>
+								</Alert>
+							)}
+
+							{uninstalledGuilds.length > 0 && (
+								<div className="space-y-1.5">
+									<span className="text-xs font-medium text-muted-foreground block">
+										Select from your manageable servers
+									</span>
+									<Select
+										value={selectedGuildToAuthorize}
+										onValueChange={(val) => {
+											setSelectedGuildToAuthorize(val);
+											setCustomGuildId("");
+										}}
+									>
+										<SelectTrigger className="w-full h-9 text-xs">
+											<SelectValue placeholder="Choose a server..." />
+										</SelectTrigger>
+										<SelectContent>
+											{uninstalledGuilds.map((g) => (
+												<SelectItem key={g.id} value={g.id} className="text-xs">
+													{g.name} ({g.id})
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+							)}
+
+							<div className="space-y-1.5">
+								<span className="text-xs font-medium text-muted-foreground block">
+									Or enter Discord Guild ID manually
+								</span>
+								<Input
+									id="custom-guild-id-input"
+									value={customGuildId}
+									onChange={(e) => {
+										setCustomGuildId(e.target.value);
+										if (e.target.value) setSelectedGuildToAuthorize("");
+									}}
+									placeholder="e.g. 1096243613681332328"
+									className="h-9 text-xs font-mono"
+								/>
+							</div>
+						</div>
+
+						<DialogFooter className="gap-2 sm:gap-0">
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => setDialogOpen(false)}
+								disabled={authorizing}
+								className="text-xs"
+							>
+								Cancel
+							</Button>
+							<Button
+								size="sm"
+								onClick={() =>
+									handleAuthorizeAndInvite(
+										selectedGuildToAuthorize || customGuildId,
+									)
+								}
+								disabled={
+									authorizing || (!selectedGuildToAuthorize && !customGuildId)
+								}
+								className="text-xs gap-1.5"
+							>
+								{authorizing ? (
+									<Loader2 className="size-3.5 animate-spin" />
+								) : (
+									<ExternalLink className="size-3.5" />
+								)}
+								Authorize & Open Invite
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 
 				{/* Bottom Credits */}
 				<div className="text-center text-xs text-muted-foreground font-mono">

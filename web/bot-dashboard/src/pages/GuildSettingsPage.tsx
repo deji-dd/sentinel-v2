@@ -35,17 +35,20 @@ interface GuildSettingsPageProps {
 export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 	const { toast } = useToast();
 
-	const [channels, setChannels] = useState<Channel[]>([]);
-	const [roles, setRoles] = useState<Role[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [isInitialized, setIsInitialized] = useState(true);
+	const [isSaving, setIsSaving] = useState(false);
 
-	const [logChannelId, setLogChannelId] = useState("");
-	const [initialLogChannel, setInitialLogChannel] = useState("");
+	// Discord Data
+	const [channels, setChannels] = useState<Channel[]>([]);
+	const [roles, setRoles] = useState<Role[]>([]);
+
+	// Form state
+	const [logChannelId, setLogChannelId] = useState<string>("");
+	const [initialLogChannel, setInitialLogChannel] = useState<string>("");
 	const [adminRoles, setAdminRoles] = useState<string[]>([]);
 	const [initialAdminRoles, setInitialAdminRoles] = useState<string[]>([]);
 	const [roleInput, setRoleInput] = useState("");
-	const [isSaving, setIsSaving] = useState(false);
 
 	const isDirty =
 		logChannelId !== initialLogChannel ||
@@ -105,7 +108,7 @@ export default function GuildSettingsPage({ guildId }: GuildSettingsPageProps) {
 			await guildRoute.config.put({
 				logChannelId: logChannelId || null,
 				adminRoleIds: adminRoles,
-			});
+			} as never);
 			toast("Settings saved successfully!", "success");
 			await fetchConfig();
 		} catch {

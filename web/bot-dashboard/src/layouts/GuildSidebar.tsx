@@ -1,8 +1,9 @@
 import {
+	Activity,
 	ArrowLeft,
+	Blocks,
 	ChevronRight,
 	KeyRound,
-	Lock,
 	LogOut,
 	MapPin,
 	Moon,
@@ -12,6 +13,7 @@ import {
 	UserCheck,
 } from "lucide-react";
 import type React from "react";
+import { useEffect, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +21,7 @@ import logoImg from "../../public/logo.png";
 import { APP_VERSION } from "../config";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../hooks/useTheme";
+import { api } from "../lib/api";
 import { useRouter } from "../router";
 
 interface NavItem {
@@ -44,6 +47,48 @@ export function GuildSidebar({ guildId, onNavigate }: GuildSidebarProps) {
 	const { user, authenticated, logout } = useAuth();
 	const { theme, toggle } = useTheme();
 
+	const [modules, setModules] = useState<{
+		verification: boolean;
+		territory: boolean;
+		reactionRoles: boolean;
+		monitoring: boolean;
+	}>({
+		verification: true,
+		territory: true,
+		reactionRoles: true,
+		monitoring: false,
+	});
+
+	useEffect(() => {
+		let isMounted = true;
+		const guildRoute = api.api.v1.guilds({ guildId });
+		if (!guildRoute) return;
+
+		guildRoute.config
+			.get()
+			.then((res) => {
+				if (isMounted && res.data?.config) {
+					const cfg = res.data.config as typeof res.data.config & {
+						moduleVerification?: boolean;
+						moduleTerritory?: boolean;
+						moduleReactionRoles?: boolean;
+						moduleMonitoring?: boolean;
+					};
+					setModules({
+						verification: cfg.moduleVerification ?? true,
+						territory: cfg.moduleTerritory ?? true,
+						reactionRoles: cfg.moduleReactionRoles ?? true,
+						monitoring: cfg.moduleMonitoring ?? false,
+					});
+				}
+			})
+			.catch(() => {});
+
+		return () => {
+			isMounted = false;
+		};
+	}, [guildId]);
+
 	const avatarUrl = (() => {
 		try {
 			const meta = document.cookie.match(/discord_meta=([^;]+)/)?.[1];
@@ -59,6 +104,40 @@ export function GuildSidebar({ guildId, onNavigate }: GuildSidebarProps) {
 		return null;
 	})();
 
+	const featureItems: NavItem[] = [];
+	if (modules.verification) {
+		featureItems.push({
+			label: "Verification",
+			href: `/guilds/${guildId}/verification`,
+			icon: UserCheck,
+			accent: "text-blue-400",
+		});
+	}
+	if (modules.territory) {
+		featureItems.push({
+			label: "Territory",
+			href: `/guilds/${guildId}/territory`,
+			icon: MapPin,
+			accent: "text-purple-400",
+		});
+	}
+	if (modules.reactionRoles) {
+		featureItems.push({
+			label: "Reaction Roles",
+			href: `/guilds/${guildId}/reaction-roles`,
+			icon: Smile,
+			accent: "text-amber-400",
+		});
+	}
+	if (modules.monitoring) {
+		featureItems.push({
+			label: "Monitoring",
+			href: `/guilds/${guildId}/monitoring`,
+			icon: Activity,
+			accent: "text-emerald-400",
+		});
+	}
+
 	const sections: NavSection[] = [
 		{
 			title: "Core",
@@ -70,34 +149,25 @@ export function GuildSidebar({ guildId, onNavigate }: GuildSidebarProps) {
 				},
 			],
 		},
-		{
-			title: "Features",
-			items: [
-				{
-					label: "Verification",
-					href: `/guilds/${guildId}/verification`,
-					icon: UserCheck,
-					accent: "text-blue-400",
-				},
-				{
-					label: "Territory",
-					href: `/guilds/${guildId}/territory`,
-					icon: MapPin,
-					accent: "text-purple-400",
-				},
-				{
-					label: "Reaction Roles",
-					href: `/guilds/${guildId}/reaction-roles`,
-					icon: Smile,
-					accent: "text-amber-400",
-				},
-			],
-		},
+		...(featureItems.length > 0
+			? [
+					{
+						title: "Features",
+						items: featureItems,
+					},
+				]
+			: []),
 		...(user?.role === "admin" || user?.role === "owner"
 			? [
 					{
 						title: "Administration",
 						items: [
+							{
+								label: "Server Modules",
+								href: `/guilds/${guildId}/modules`,
+								icon: Blocks,
+								accent: "text-amber-400",
+							},
 							{
 								label: "System API Keys",
 								href: `/guilds/${guildId}/keys`,
@@ -180,24 +250,6 @@ export function GuildSidebar({ guildId, onNavigate }: GuildSidebarProps) {
 									item.href,
 									item.href === `/guilds/${guildId}`,
 								);
-
-								if (item.locked) {
-									return (
-										<Button
-											key={item.href}
-											variant="ghost"
-											disabled
-											title="Module disabled for this server"
-											className="w-full justify-between h-9 px-3 rounded-xl text-xs font-medium text-muted-foreground/50 cursor-not-allowed select-none bg-background/30 border border-transparent opacity-60"
-										>
-											<div className="flex items-center gap-2.5">
-												<Icon className="size-4 text-muted-foreground/50" />
-												<span>{item.label}</span>
-											</div>
-											<Lock className="size-3.5 text-muted-foreground/50" />
-										</Button>
-									);
-								}
 
 								return (
 									<Button

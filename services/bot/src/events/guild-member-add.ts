@@ -18,7 +18,7 @@ export const guildMemberAddEvent = {
 				where: eq(guildConfigs.guildId, guildId),
 			});
 
-			if (!config?.verifyOnJoin) {
+			if (!config?.verifyOnJoin || !config?.moduleVerification) {
 				return;
 			}
 

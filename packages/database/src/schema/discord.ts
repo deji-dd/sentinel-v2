@@ -5,10 +5,16 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const guildConfigs = pgTable("guild_configs", {
 	guildId: text("guild_id").primaryKey(),
+	authorized: boolean("authorized").default(true).notNull(),
+	moduleVerification: boolean("module_verification").default(true).notNull(),
+	moduleTerritory: boolean("module_territory").default(true).notNull(),
+	moduleReactionRoles: boolean("module_reaction_roles").default(true).notNull(),
+	moduleMonitoring: boolean("module_monitoring").default(false).notNull(),
 	logChannelId: text("log_channel_id"),
 	adminRoleIds: jsonb("admin_role_ids").$type<string[]>().default([]).notNull(),
 	verifiedRoleIds: jsonb("verified_role_ids")
@@ -145,3 +151,38 @@ export const verificationLogs = pgTable("verification_logs", {
 		.defaultNow()
 		.notNull(),
 });
+
+export const guildMonitoredFactions = pgTable(
+	"guild_monitored_factions",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		guildId: text("guild_id").notNull(),
+		factionId: integer("faction_id").notNull(),
+		factionName: text("faction_name"),
+		factionTag: text("faction_tag"),
+		revivesEnabled: boolean("revives_enabled").default(true).notNull(),
+		revivesChannelId: text("revives_channel_id"),
+		revivesMessageIds: jsonb("revives_message_ids")
+			.$type<string[]>()
+			.default([])
+			.notNull(),
+		lastRevivesCheckAt: timestamp("last_revives_check_at", {
+			withTimezone: true,
+			mode: "date",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("guild_monitored_factions_guild_faction_idx").on(
+			table.guildId,
+			table.factionId,
+		),
+	],
+);

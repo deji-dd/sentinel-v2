@@ -1,0 +1,1 @@
+ALTER TABLE "guild_configs" ADD COLUMN "authorized" boolean DEFAULT true NOT NULL;

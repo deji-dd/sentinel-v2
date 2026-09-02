@@ -1,12 +1,15 @@
 import {
 	and,
+	authorizeGuild,
 	count,
 	db,
+	deauthorizeGuild,
 	desc,
 	eq,
 	factionRoleMappings,
 	factions,
 	guildConfigs,
+	guildMonitoredFactions,
 	ilike,
 	inArray,
 	like,
@@ -19,6 +22,10 @@ import {
 } from "@sentinel/database";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
+import {
+	syncFactionMonitoringViaIpc,
+	syncGuildCommandsViaIpc,
+} from "../../lib/bot-ipc";
 import { authPlugin } from "../../middleware/auth";
 
 interface DiscordGuild {
@@ -107,6 +114,12 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				fetchDiscordApi<DiscordGuild[]>("/users/@me/guilds", `Bot ${botToken}`),
 			]);
 
+			const authorizedRows = await db
+				.select({ guildId: guildConfigs.guildId })
+				.from(guildConfigs)
+				.where(eq(guildConfigs.authorized, true));
+			const authorizedSet = new Set(authorizedRows.map((r) => r.guildId));
+
 			const botGuildMap = new Map(
 				(botGuilds ?? []).map((g) => [g.id, { ...g, botInGuild: true }]),
 			);
@@ -115,12 +128,43 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 
 			if (isSentinelOwner) {
 				const userGuildMap = new Map((userGuilds ?? []).map((g) => [g.id, g]));
-				const result = (botGuilds ?? []).map((g) => ({
+				const botGuildIds = new Set((botGuilds ?? []).map((g) => g.id));
+
+				const result: Array<
+					DiscordGuild & {
+						botInGuild: boolean;
+						manageable: boolean;
+						authorized: boolean;
+						userInGuild: boolean;
+					}
+				> = (botGuilds ?? []).map((g) => ({
 					...g,
 					botInGuild: true,
 					manageable: true,
+					authorized: authorizedSet.has(g.id),
 					userInGuild: userGuildMap.has(g.id),
 				}));
+
+				// Also add user's manageable guilds where bot is not installed yet
+				if (userGuilds) {
+					for (const ug of userGuilds) {
+						if (!botGuildIds.has(ug.id)) {
+							const perms = BigInt(ug.permissions);
+							const hasAdmin = (perms & BigInt(ADMINISTRATOR)) !== 0n;
+							const hasManageGuild = (perms & BigInt(MANAGE_GUILD)) !== 0n;
+							if (ug.owner || hasAdmin || hasManageGuild) {
+								result.push({
+									...ug,
+									botInGuild: false,
+									manageable: true,
+									authorized: authorizedSet.has(ug.id),
+									userInGuild: true,
+								});
+							}
+						}
+					}
+				}
+
 				return { guilds: result };
 			}
 
@@ -139,6 +183,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					...g,
 					botInGuild: botGuildMap.has(g.id),
 					manageable: true,
+					authorized: authorizedSet.has(g.id),
 					userInGuild: true,
 				}));
 
@@ -149,6 +194,77 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "List Guilds",
 				description:
 					"Returns mutual guilds where the user has administrative permissions and Sentinel is installed.",
+			},
+		},
+	)
+	// POST /api/v1/guilds/authorize — Authorize a guild and generate an invite link (Admin/Owner only)
+	.post(
+		"/authorize",
+		async ({ body, user, set }) => {
+			if (user?.role !== "owner" && user?.role !== "admin") {
+				set.status = 403;
+				return { error: "Only Sentinel administrators can authorize servers." };
+			}
+
+			const { guildId } = body;
+			if (!guildId || !/^\d{17,20}$/.test(guildId)) {
+				set.status = 400;
+				return { error: "Invalid Discord Guild ID." };
+			}
+
+			await authorizeGuild(guildId);
+
+			const clientId = env.DISCORD_CLIENT_ID;
+			const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot%20applications.commands&guild_id=${guildId}&disable_guild_select=true`;
+
+			return {
+				success: true,
+				guildId,
+				inviteUrl,
+			};
+		},
+		{
+			body: t.Object({
+				guildId: t.String(),
+			}),
+			detail: {
+				summary: "Authorize Guild",
+				description:
+					"Authorizes a Discord server and returns the bot invite URL.",
+			},
+		},
+	)
+	// POST /api/v1/guilds/deauthorize — Deauthorize a guild (Admin/Owner only)
+	.post(
+		"/deauthorize",
+		async ({ body, user, set }) => {
+			if (user?.role !== "owner" && user?.role !== "admin") {
+				set.status = 403;
+				return {
+					error: "Only Sentinel administrators can deauthorize servers.",
+				};
+			}
+
+			const { guildId } = body;
+			if (!guildId || !/^\d{17,20}$/.test(guildId)) {
+				set.status = 400;
+				return { error: "Invalid Discord Guild ID." };
+			}
+
+			await deauthorizeGuild(guildId);
+
+			return {
+				success: true,
+				guildId,
+			};
+		},
+		{
+			body: t.Object({
+				guildId: t.String(),
+			}),
+			detail: {
+				summary: "Deauthorize Guild",
+				description: "Deauthorizes a Discord server from Sentinel.",
 			},
 		},
 	)
@@ -207,7 +323,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 	// PUT /api/v1/guilds/:guildId/config — update guild configuration
 	.put(
 		"/:guildId/config",
-		async ({ params, body, set }) => {
+		async ({ params, body, user, set }) => {
 			const [existing] = await db
 				.select()
 				.from(guildConfigs)
@@ -221,9 +337,35 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				};
 			}
 
+			const hasModuleUpdates =
+				body.moduleVerification !== undefined ||
+				body.moduleTerritory !== undefined ||
+				body.moduleReactionRoles !== undefined ||
+				body.moduleMonitoring !== undefined;
+
+			if (hasModuleUpdates && user?.role !== "owner") {
+				set.status = 403;
+				return {
+					error:
+						"Only the Sentinel bot owner can enable or disable server modules.",
+				};
+			}
+
 			await db
 				.update(guildConfigs)
 				.set({
+					...(body.moduleVerification !== undefined
+						? { moduleVerification: body.moduleVerification }
+						: {}),
+					...(body.moduleTerritory !== undefined
+						? { moduleTerritory: body.moduleTerritory }
+						: {}),
+					...(body.moduleReactionRoles !== undefined
+						? { moduleReactionRoles: body.moduleReactionRoles }
+						: {}),
+					...(body.moduleMonitoring !== undefined
+						? { moduleMonitoring: body.moduleMonitoring }
+						: {}),
 					...(body.logChannelId !== undefined
 						? { logChannelId: body.logChannelId }
 						: {}),
@@ -267,11 +409,19 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				})
 				.where(eq(guildConfigs.guildId, params.guildId));
 
+			if (hasModuleUpdates) {
+				void syncGuildCommandsViaIpc(params.guildId);
+			}
+
 			return { success: true };
 		},
 		{
 			params: t.Object({ guildId: t.String() }),
 			body: t.Object({
+				moduleVerification: t.Optional(t.Boolean()),
+				moduleTerritory: t.Optional(t.Boolean()),
+				moduleReactionRoles: t.Optional(t.Boolean()),
+				moduleMonitoring: t.Optional(t.Boolean()),
 				logChannelId: t.Optional(t.Nullable(t.String())),
 				adminRoleIds: t.Optional(t.Array(t.String())),
 				verifiedRoleIds: t.Optional(t.Array(t.String())),
@@ -290,6 +440,84 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "Update Guild Config",
 				description:
 					"Updates general settings, verification settings, or module configuration for a guild.",
+			},
+		},
+	)
+	// PATCH /api/v1/guilds/:guildId/modules — update guild module enablements (Bot Owner only)
+	.patch(
+		"/:guildId/modules",
+		async ({ params, body, user, set }) => {
+			if (user?.role !== "owner") {
+				set.status = 403;
+				return {
+					error:
+						"Unauthorized. Only the Sentinel bot owner can configure server modules.",
+				};
+			}
+
+			const [existing] = await db
+				.select()
+				.from(guildConfigs)
+				.where(eq(guildConfigs.guildId, params.guildId));
+
+			if (!existing) {
+				set.status = 404;
+				return { error: "Guild configuration not found." };
+			}
+
+			const updates: Partial<{
+				moduleVerification: boolean;
+				moduleTerritory: boolean;
+				moduleReactionRoles: boolean;
+				moduleMonitoring: boolean;
+			}> = {};
+
+			if (body.moduleVerification !== undefined) {
+				updates.moduleVerification = body.moduleVerification;
+			}
+			if (body.moduleTerritory !== undefined) {
+				updates.moduleTerritory = body.moduleTerritory;
+			}
+			if (body.moduleReactionRoles !== undefined) {
+				updates.moduleReactionRoles = body.moduleReactionRoles;
+			}
+			if (body.moduleMonitoring !== undefined) {
+				updates.moduleMonitoring = body.moduleMonitoring;
+			}
+
+			if (Object.keys(updates).length > 0) {
+				await db
+					.update(guildConfigs)
+					.set({ ...updates, updatedAt: new Date() })
+					.where(eq(guildConfigs.guildId, params.guildId));
+
+				void syncGuildCommandsViaIpc(params.guildId);
+			}
+
+			return {
+				success: true,
+				modules: {
+					verification:
+						updates.moduleVerification ?? existing.moduleVerification,
+					territory: updates.moduleTerritory ?? existing.moduleTerritory,
+					reactionRoles:
+						updates.moduleReactionRoles ?? existing.moduleReactionRoles,
+					monitoring: updates.moduleMonitoring ?? existing.moduleMonitoring,
+				},
+			};
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			body: t.Object({
+				moduleVerification: t.Optional(t.Boolean()),
+				moduleTerritory: t.Optional(t.Boolean()),
+				moduleReactionRoles: t.Optional(t.Boolean()),
+				moduleMonitoring: t.Optional(t.Boolean()),
+			}),
+			detail: {
+				summary: "Update Guild Modules",
+				description:
+					"Toggles modules on/off for a guild. Strictly restricted to the Sentinel bot owner.",
 			},
 		},
 	)
@@ -973,6 +1201,218 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "Delete Reaction Role Message",
 				description:
 					"Deletes a reaction role menu and its associated emoji bindings.",
+			},
+		},
+	)
+	// GET /api/v1/guilds/:guildId/monitoring — list monitored factions
+	.get(
+		"/:guildId/monitoring",
+		async ({ params }) => {
+			const monitored = await db
+				.select()
+				.from(guildMonitoredFactions)
+				.where(eq(guildMonitoredFactions.guildId, params.guildId))
+				.orderBy(desc(guildMonitoredFactions.createdAt));
+
+			return { monitored };
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			detail: {
+				summary: "List Monitored Factions",
+				description:
+					"Returns all factions monitored by this guild and their category configurations.",
+			},
+		},
+	)
+	// POST /api/v1/guilds/:guildId/monitoring — add a faction to monitor
+	.post(
+		"/:guildId/monitoring",
+		async ({ params, body, set }) => {
+			if (!body.factionId || body.factionId <= 0) {
+				set.status = 400;
+				return { error: "Invalid faction ID." };
+			}
+
+			// Check if already monitored in this guild
+			const [alreadyMonitored] = await db
+				.select()
+				.from(guildMonitoredFactions)
+				.where(
+					and(
+						eq(guildMonitoredFactions.guildId, params.guildId),
+						eq(guildMonitoredFactions.factionId, body.factionId),
+					),
+				);
+
+			if (alreadyMonitored) {
+				set.status = 409;
+				return {
+					error: "This faction is already being monitored in this server.",
+				};
+			}
+
+			// Validate and resolve faction name & tag
+			let factionName: string | null = null;
+			let factionTag: string | null = null;
+
+			try {
+				const { tornApi } = await import("@sentinel/torn-api");
+				const basic = await tornApi.getRaw<{
+					name?: string;
+					tag?: string;
+				}>(`faction/${body.factionId}`, {
+					queryParams: { selections: "basic" },
+				});
+
+				if (basic?.name) {
+					factionName = basic.name;
+					factionTag = basic.tag ?? null;
+				}
+			} catch {
+				// Fallback to local table if available
+				const [existingFaction] = await db
+					.select()
+					.from(factions)
+					.where(eq(factions.id, body.factionId));
+				if (existingFaction) {
+					factionName = existingFaction.name;
+					factionTag = existingFaction.tag;
+				}
+			}
+
+			const [created] = await db
+				.insert(guildMonitoredFactions)
+				.values({
+					guildId: params.guildId,
+					factionId: body.factionId,
+					factionName: factionName ?? `Faction ${body.factionId}`,
+					factionTag,
+					revivesEnabled: body.revivesEnabled ?? true,
+					revivesChannelId: body.revivesChannelId ?? null,
+				})
+				.returning();
+
+			if (created?.revivesEnabled && created.revivesChannelId) {
+				void syncFactionMonitoringViaIpc(params.guildId, created.id);
+			}
+
+			return { success: true, monitored: created };
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			body: t.Object({
+				factionId: t.Number(),
+				revivesEnabled: t.Optional(t.Boolean()),
+				revivesChannelId: t.Optional(t.Nullable(t.String())),
+			}),
+			detail: {
+				summary: "Add Monitored Faction",
+				description:
+					"Registers a faction to be monitored for revives or other subcategories.",
+			},
+		},
+	)
+	// PATCH /api/v1/guilds/:guildId/monitoring/:monitorId — update subcategories/channels
+	.patch(
+		"/:guildId/monitoring/:monitorId",
+		async ({ params, body, set }) => {
+			const [existing] = await db
+				.select()
+				.from(guildMonitoredFactions)
+				.where(
+					and(
+						eq(guildMonitoredFactions.id, params.monitorId),
+						eq(guildMonitoredFactions.guildId, params.guildId),
+					),
+				);
+
+			if (!existing) {
+				set.status = 404;
+				return { error: "Monitored faction configuration not found." };
+			}
+
+			const updates: Partial<{
+				revivesEnabled: boolean;
+				revivesChannelId: string | null;
+				revivesMessageIds: string[];
+				updatedAt: Date;
+			}> = {
+				updatedAt: new Date(),
+			};
+
+			if (body.revivesEnabled !== undefined) {
+				updates.revivesEnabled = body.revivesEnabled;
+			}
+			if (body.revivesChannelId !== undefined) {
+				updates.revivesChannelId = body.revivesChannelId;
+				// If channel changed, reset message IDs so it creates a fresh embed in the new channel
+				if (body.revivesChannelId !== existing.revivesChannelId) {
+					updates.revivesMessageIds = [];
+				}
+			}
+
+			const [updated] = await db
+				.update(guildMonitoredFactions)
+				.set(updates)
+				.where(eq(guildMonitoredFactions.id, params.monitorId))
+				.returning();
+
+			if (updated?.revivesEnabled && updated.revivesChannelId) {
+				void syncFactionMonitoringViaIpc(params.guildId, params.monitorId);
+			}
+
+			return { success: true, monitored: updated };
+		},
+		{
+			params: t.Object({
+				guildId: t.String(),
+				monitorId: t.String(),
+			}),
+			body: t.Object({
+				revivesEnabled: t.Optional(t.Boolean()),
+				revivesChannelId: t.Optional(t.Nullable(t.String())),
+			}),
+			detail: {
+				summary: "Update Monitored Faction",
+				description:
+					"Updates monitoring sub-categories or designated output channels.",
+			},
+		},
+	)
+	// DELETE /api/v1/guilds/:guildId/monitoring/:monitorId — delete monitored faction
+	.delete(
+		"/:guildId/monitoring/:monitorId",
+		async ({ params, set }) => {
+			const [existing] = await db
+				.select()
+				.from(guildMonitoredFactions)
+				.where(
+					and(
+						eq(guildMonitoredFactions.id, params.monitorId),
+						eq(guildMonitoredFactions.guildId, params.guildId),
+					),
+				);
+
+			if (!existing) {
+				set.status = 404;
+				return { error: "Monitored faction not found." };
+			}
+
+			await db
+				.delete(guildMonitoredFactions)
+				.where(eq(guildMonitoredFactions.id, params.monitorId));
+
+			return { success: true };
+		},
+		{
+			params: t.Object({
+				guildId: t.String(),
+				monitorId: t.String(),
+			}),
+			detail: {
+				summary: "Delete Monitored Faction",
+				description: "Removes a faction from guild monitoring.",
 			},
 		},
 	);

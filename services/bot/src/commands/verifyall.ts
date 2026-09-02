@@ -39,6 +39,7 @@ function createProgressEmbed(
 const activeGuildBulkVerifications = new Set<string>();
 
 export const verifyallCommand = {
+	module: "verification" as const,
 	data: new SlashCommandBuilder()
 		.setName("verifyall")
 		.setDescription(

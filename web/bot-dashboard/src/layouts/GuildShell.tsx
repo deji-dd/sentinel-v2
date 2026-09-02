@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "../contexts/AuthContext";
 import AdminKeysPage from "../pages/AdminKeysPage";
 import GeneralSettingsPage from "../pages/GuildSettingsPage";
+import ModulesPage from "../pages/ModulesPage";
+import MonitoringPage from "../pages/MonitoringPage";
 import ReactionRolesPage from "../pages/ReactionRolesPage";
 import TerritoryPage from "../pages/TerritoryPage";
 import VerificationPage from "../pages/VerificationPage";
@@ -67,6 +69,8 @@ export default function GuildShell() {
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/reaction-roles")
 			return <ReactionRolesPage guildId={guildId} />;
+		if (subPath === "/monitoring") return <MonitoringPage guildId={guildId} />;
+		if (subPath === "/modules") return <ModulesPage guildId={guildId} />;
 		if (
 			subPath === "/keys" ||
 			subPath === "/admin/keys" ||
