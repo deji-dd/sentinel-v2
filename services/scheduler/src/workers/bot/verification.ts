@@ -1,5 +1,6 @@
 import { db, eq, guildConfigs } from "@sentinel/database";
 import { isTargetGuild, Logger } from "@sentinel/utils";
+import { requestGuildMembersFromBot } from "../../lib/ipc/listener";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import { runBulkGuildVerification } from "../../lib/verification";
@@ -38,6 +39,27 @@ export async function runVerificationWorker(): Promise<void> {
 			const elapsedMs = now.getTime() - lastRun;
 
 			if (elapsedMs >= intervalMs) {
+				const ipcServer = getActiveIpcServer();
+
+				logger.info(
+					`[Guild ${guild.guildId}] Scheduled verification due (Interval: ${intervalHours}h). Requesting member roster from bot...`,
+				);
+
+				// Request live guild members (with current Discord role IDs & nickname) from bot over IPC
+				const liveMembers = await requestGuildMembersFromBot(
+					ipcServer,
+					guild.guildId,
+					{ timeoutMs: 10000, retries: 2 },
+				);
+
+				// If the bot process is offline or unreachable, terminate early without falsely updating lastVerifyCronAt
+				if (!liveMembers) {
+					logger.warn(
+						`[Guild ${guild.guildId}] Bot is unreachable via IPC after retries. Aborting scheduled verification sweep early as Discord roles cannot be updated. Will retry next cycle.`,
+					);
+					continue;
+				}
+
 				await db
 					.update(guildConfigs)
 					.set({
@@ -47,10 +69,9 @@ export async function runVerificationWorker(): Promise<void> {
 					.where(eq(guildConfigs.guildId, guild.guildId));
 
 				const requestId = `cron-${guild.guildId}-${Date.now()}`;
-				const ipcServer = getActiveIpcServer();
 
 				logger.info(
-					`[Guild ${guild.guildId}] Starting scheduled verification sweep (Interval: ${intervalHours}h)...`,
+					`[Guild ${guild.guildId}] Starting scheduled verification sweep with ${liveMembers.length} live members...`,
 				);
 
 				const stats = await runBulkGuildVerification(
@@ -83,6 +104,7 @@ export async function runVerificationWorker(): Promise<void> {
 							);
 						}
 					},
+					liveMembers,
 				);
 
 				// Broadcast response completion over IPC

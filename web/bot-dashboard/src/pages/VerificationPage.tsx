@@ -1,9 +1,8 @@
 import {
 	AlertTriangle,
-	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
-	ChevronUp,
+	ExternalLink,
 	KeyRound,
 	Loader2,
 	Pencil,
@@ -19,6 +18,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
 	Select,
@@ -30,7 +37,16 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
 import NotInitializedView from "../components/NotInitializedView";
+import VerificationLogsHistory from "../components/VerificationLogsHistory";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
@@ -77,7 +93,7 @@ function roleColor(color: number): string {
 	return `#${color.toString(16).padStart(6, "0")}`;
 }
 
-const MAPPINGS_PER_PAGE = 5;
+const MAPPINGS_PER_PAGE = 10;
 
 export default function VerificationPage({ guildId }: VerificationPageProps) {
 	const { toast } = useToast();
@@ -152,18 +168,32 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 		null,
 	);
 
-	// Inline Card Role Inputs State
-	const [inlineMemberRoleInput, setInlineMemberRoleInput] = useState<
-		Record<string, string>
-	>({});
-	const [inlineLeaderRoleInput, setInlineLeaderRoleInput] = useState<
-		Record<string, string>
-	>({});
+	// Modal Edit State
+	interface EditingModalState {
+		idKey: string;
+		isPending: boolean;
+		factionId: number;
+		factionName: string | null;
+		factionTag: string | null;
+		tagImage: string | null;
+		memberRoleIds: string[];
+		leaderRoleIds: string[];
+	}
 
-	// Expanded Mapping State
-	const [expandedMappingId, setExpandedMappingId] = useState<string | null>(
-		null,
-	);
+	const [editingModalItem, setEditingModalItem] =
+		useState<EditingModalState | null>(null);
+	const [modalMemberRoleInput, setModalMemberRoleInput] = useState("");
+	const [modalLeaderRoleInput, setModalLeaderRoleInput] = useState("");
+
+	const handleOpenEditModal = (item: EditingModalState) => {
+		setEditingModalItem({
+			...item,
+			memberRoleIds: [...item.memberRoleIds],
+			leaderRoleIds: [...item.leaderRoleIds],
+		});
+		setModalMemberRoleInput("");
+		setModalLeaderRoleInput("");
+	};
 
 	const [isSaving, setIsSaving] = useState(false);
 
@@ -295,24 +325,36 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 				);
 
 				if (existingPending) {
-					setNewMemberRoles([...existingPending.memberRoleIds]);
-					setNewLeaderRoles([...existingPending.leaderRoleIds]);
-					setEditingMappingKey(existingPending.tempId);
+					handleOpenEditModal({
+						idKey: existingPending.tempId,
+						isPending: true,
+						factionId: existingPending.factionId,
+						factionName: existingPending.factionName,
+						factionTag: existingPending.factionTag,
+						tagImage: existingPending.tagImage,
+						memberRoleIds: existingPending.memberRoleIds,
+						leaderRoleIds: existingPending.leaderRoleIds,
+					});
 					toast(
-						`Faction #${factionIdNum} is already staged for addition. Loaded for editing.`,
+						`Faction #${factionIdNum} is already staged for addition. Opened edit modal.`,
 						"info",
 					);
 				} else if (existingSaved) {
 					const updateObj = pendingUpdates[existingSaved.id];
-					setNewMemberRoles([
-						...(updateObj?.memberRoleIds ?? existingSaved.memberRoleIds),
-					]);
-					setNewLeaderRoles([
-						...(updateObj?.leaderRoleIds ?? existingSaved.leaderRoleIds),
-					]);
-					setEditingMappingKey(existingSaved.id);
+					handleOpenEditModal({
+						idKey: existingSaved.id,
+						isPending: false,
+						factionId: existingSaved.factionId,
+						factionName: existingSaved.factionName,
+						factionTag: existingSaved.factionTag,
+						tagImage: existingSaved.tagImage,
+						memberRoleIds:
+							updateObj?.memberRoleIds ?? existingSaved.memberRoleIds,
+						leaderRoleIds:
+							updateObj?.leaderRoleIds ?? existingSaved.leaderRoleIds,
+					});
 					toast(
-						`Faction #${factionIdNum} is already configured. Loaded for editing.`,
+						`Faction #${factionIdNum} is already configured. Opened edit modal.`,
 						"info",
 					);
 				} else {
@@ -339,6 +381,36 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 		setNewMemberRoles([]);
 		setNewLeaderRoles([]);
 		setEditingMappingKey(null);
+	};
+
+	const handleDeleteEditingMapping = () => {
+		if (!editingMappingKey) return;
+
+		const factionIdNum = Number.parseInt(newFactionId, 10);
+		const factionName =
+			resolvedFaction?.name ??
+			(!Number.isNaN(factionIdNum) ? `Faction #${factionIdNum}` : "Faction");
+
+		const isPending = pendingAdds.some((p) => p.tempId === editingMappingKey);
+		if (isPending) {
+			setPendingAdds((prev) =>
+				prev.filter((p) => p.tempId !== editingMappingKey),
+			);
+			toast(`Removed staged mapping for ${factionName}.`, "info");
+		} else {
+			setPendingDeletes((prev) => new Set(prev).add(editingMappingKey));
+			setPendingUpdates((prev) => {
+				const next = { ...prev };
+				delete next[editingMappingKey];
+				return next;
+			});
+			toast(
+				`Staged ${factionName} mapping for deletion. Save changes to apply.`,
+				"info",
+			);
+		}
+
+		handleClearForm();
 	};
 
 	const handleAddPendingMapping = () => {
@@ -595,11 +667,17 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 		);
 	}
 
-	const activeMappings = mappings.filter((m) => !pendingDeletes.has(m.id));
 	const allVisibleMappings = [
-		...activeMappings.map((m) => ({ type: "existing" as const, data: m })),
+		...mappings.map((m) => ({ type: "existing" as const, data: m })),
 		...pendingAdds.map((p) => ({ type: "pending" as const, data: p })),
-	];
+	].sort((a, b) => {
+		const nameA = a.data.factionName || `Faction ${a.data.factionId}`;
+		const nameB = b.data.factionName || `Faction ${b.data.factionId}`;
+		return nameA.localeCompare(nameB, undefined, {
+			sensitivity: "base",
+			numeric: true,
+		});
+	});
 
 	const totalMappingsCount = allVisibleMappings.length;
 	const totalPages = Math.ceil(totalMappingsCount / MAPPINGS_PER_PAGE) || 1;
@@ -1085,7 +1163,7 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 						<div className="p-5 space-y-6">
 							{/* Faction Already Exists Warning Alert */}
 							{editingMappingKey && resolvedFaction && (
-								<div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs flex items-center justify-between gap-3 shadow-xs">
+								<div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
 									<div className="flex px-2 items-center gap-2.5 min-w-0">
 										<AlertTriangle className="size-4 text-amber-500 shrink-0" />
 										<span className="truncate font-medium text-amber-900 dark:text-amber-200">
@@ -1093,15 +1171,27 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 											mappings. Modifying roles will update this mapping.
 										</span>
 									</div>
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onClick={handleClearForm}
-										className="h-7 pe-2.5 text-[11px] bg-transparent hover:bg-amber-500/10 font-medium border-0 rounded-lg shrink-0 cursor-pointer"
-									>
-										Cancel Edit
-									</Button>
+									<div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+										<Button
+											type="button"
+											variant="destructive"
+											size="sm"
+											onClick={handleDeleteEditingMapping}
+											className="h-7 px-2.5 text-[11px] font-medium rounded-lg shrink-0 cursor-pointer gap-1.5"
+										>
+											<Trash2 className="size-3" />
+											Delete Mapping
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={handleClearForm}
+											className="h-7 px-2.5 text-[11px] bg-transparent hover:bg-amber-500/10 font-medium border-amber-500/30 rounded-lg shrink-0 cursor-pointer"
+										>
+											Cancel Edit
+										</Button>
+									</div>
 								</div>
 							)}
 
@@ -1123,6 +1213,12 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 										onChange={(e) =>
 											setNewFactionId(e.target.value.replace(/\D/g, ""))
 										}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") {
+												e.preventDefault();
+												void handleLookupFaction();
+											}
+										}}
 										placeholder="Enter Faction ID (e.g. 1234)"
 										className="font-mono text-xs rounded-xl flex-1"
 									/>
@@ -1341,14 +1437,25 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 								</span>
 								<div className="flex items-center gap-2 shrink-0">
 									{editingMappingKey && (
-										<Button
-											type="button"
-											variant="outline"
-											onClick={handleClearForm}
-											className="h-10 px-4 text-xs font-semibold rounded-xl cursor-pointer"
-										>
-											Cancel Edit
-										</Button>
+										<>
+											<Button
+												type="button"
+												variant="destructive"
+												onClick={handleDeleteEditingMapping}
+												className="h-10 px-4 text-xs font-semibold rounded-xl cursor-pointer gap-1.5"
+											>
+												<Trash2 className="size-3.5" data-icon="inline-start" />
+												Delete Mapping
+											</Button>
+											<Button
+												type="button"
+												variant="outline"
+												onClick={handleClearForm}
+												className="h-10 px-4 text-xs font-semibold rounded-xl cursor-pointer"
+											>
+												Cancel Edit
+											</Button>
+										</>
 									)}
 									<Button
 										type="button"
@@ -1373,427 +1480,312 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 						</div>
 					</div>
 
-					{/* Faction Mappings List */}
-					<div className="space-y-3">
-						<span className="text-xs font-mono font-bold text-muted-foreground uppercase tracking-wider block">
-							Configured Faction Mappings ({totalMappingsCount})
-						</span>
+					{/* Faction Mappings Table */}
+					<div className="space-y-4">
+						<div className="flex items-center justify-between">
+							<span className="text-xs font-mono font-bold text-muted-foreground uppercase tracking-wider block">
+								Configured Faction Mappings ({totalMappingsCount})
+							</span>
+							<span className="text-[11px] font-mono text-muted-foreground">
+								Sorted alphabetically
+							</span>
+						</div>
 
 						{totalMappingsCount === 0 ? (
-							<div className="p-6 text-center rounded-xl bg-background/40 border border-border/60 text-xs text-muted-foreground">
+							<div className="p-8 text-center rounded-2xl bg-card/40 border border-border/60 text-xs text-muted-foreground">
 								No faction mappings configured yet.
 							</div>
 						) : (
-							currentPageItems.map((item) => {
-								const isPending = item.type === "pending";
-								const mapping = item.data;
-								const idKey = isPending
-									? (mapping as PendingMapping).tempId
-									: (mapping as FactionMapping).id;
-								const isExpanded = expandedMappingId === idKey;
-								const isModified = !isPending && Boolean(pendingUpdates[idKey]);
-								const isPendingDelete = !isPending && pendingDeletes.has(idKey);
+							<div className="rounded-2xl border border-border/60 bg-card/60 backdrop-blur-xs overflow-hidden shadow-xs">
+								<Table>
+									<TableHeader className="bg-muted/30">
+										<TableRow className="border-border/40 hover:bg-transparent">
+											<TableHead className="w-[240px] text-xs font-mono font-bold uppercase tracking-wider">
+												Faction
+											</TableHead>
+											<TableHead className="text-xs font-mono font-bold uppercase tracking-wider">
+												Member Roles
+											</TableHead>
+											<TableHead className="text-xs font-mono font-bold uppercase tracking-wider">
+												Leader Roles
+											</TableHead>
+											<TableHead className="w-[120px] text-right text-xs font-mono font-bold uppercase tracking-wider">
+												Actions
+											</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{currentPageItems.map((item) => {
+											const isPending = item.type === "pending";
+											const mapping = item.data;
+											const idKey = isPending
+												? (mapping as PendingMapping).tempId
+												: (mapping as FactionMapping).id;
+											const isModified =
+												!isPending && Boolean(pendingUpdates[idKey]);
+											const isPendingDelete =
+												!isPending && pendingDeletes.has(idKey);
 
-								const memberRoles = isPending
-									? (mapping as PendingMapping).memberRoleIds
-									: (pendingUpdates[idKey]?.memberRoleIds ??
-										(mapping as FactionMapping).memberRoleIds);
-								const leaderRoles = isPending
-									? (mapping as PendingMapping).leaderRoleIds
-									: (pendingUpdates[idKey]?.leaderRoleIds ??
-										(mapping as FactionMapping).leaderRoleIds);
+											const memberRoles = isPending
+												? (mapping as PendingMapping).memberRoleIds
+												: (pendingUpdates[idKey]?.memberRoleIds ??
+													(mapping as FactionMapping).memberRoleIds);
+											const leaderRoles = isPending
+												? (mapping as PendingMapping).leaderRoleIds
+												: (pendingUpdates[idKey]?.leaderRoleIds ??
+													(mapping as FactionMapping).leaderRoleIds);
 
-								return (
-									<div
-										key={idKey}
-										className={`p-4 rounded-xl border transition-all ${
-											isPendingDelete
-												? "bg-destructive/5 border-destructive/30 opacity-75"
-												: isPending
-													? "bg-amber-500/5 border-amber-500/30"
-													: isModified
-														? "bg-blue-500/5 border-blue-500/30"
-														: "bg-background/60 border-border/80"
-										}`}
-									>
-										<div className="flex items-center justify-between gap-4">
-											<div className="flex items-center gap-3 min-w-0">
-												{"tagImage" in mapping && mapping.tagImage ? (
-													<img
-														src={`https://factiontags.torn.com/${mapping.tagImage}`}
-														alt={
-															mapping.factionTag || String(mapping.factionId)
-														}
-														className="h-6 object-contain shrink-0"
-													/>
-												) : (
-													<div className="size-8 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-mono text-xs font-bold shrink-0">
-														#{mapping.factionId}
-													</div>
-												)}
-
-												<div className="min-w-0">
-													<div className="flex items-center gap-2">
-														<span className="font-semibold text-sm text-foreground truncate">
-															{mapping.factionName
-																? `${mapping.factionName} [${mapping.factionTag ?? mapping.factionId}]`
-																: `Faction #${mapping.factionId}`}
-														</span>
-														{isPending && (
-															<Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-[9px] font-mono uppercase">
-																STAGED NEW
-															</Badge>
-														)}
-														{isModified && (
-															<Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-[9px] font-mono uppercase">
-																STAGED EDIT
-															</Badge>
-														)}
-														{isPendingDelete && (
-															<Badge className="bg-destructive/20 text-destructive border-destructive/30 text-[9px] font-mono uppercase">
-																STAGED DELETE
-															</Badge>
-														)}
-													</div>
-													<span className="text-[11px] text-muted-foreground font-mono block">
-														{memberRoles.length} member{" "}
-														{memberRoles.length !== 1 ? "roles" : "role"} •{" "}
-														{leaderRoles.length} leader{" "}
-														{leaderRoles.length !== 1 ? "roles" : "role"}
-													</span>
-												</div>
-											</div>
-
-											<div className="flex items-center gap-2 shrink-0">
-												{isModified && (
-													<Button
-														type="button"
-														variant="ghost"
-														size="icon"
-														onClick={() => handleRevertMapping(idKey)}
-														className="size-8 rounded-lg text-amber-500 hover:bg-amber-500/10 cursor-pointer"
-														title="Revert staged edits"
-													>
-														<RotateCcw className="size-3.5" />
-													</Button>
-												)}
-
-												<Button
-													type="button"
-													variant="ghost"
-													size="sm"
-													onClick={() =>
-														setExpandedMappingId(isExpanded ? null : idKey)
-													}
-													className="h-8 px-2.5 text-xs rounded-lg cursor-pointer"
+											return (
+												<TableRow
+													key={idKey}
+													className={`border-border/30 transition-colors ${
+														isPendingDelete
+															? "bg-destructive/5 line-through opacity-70 hover:bg-destructive/10"
+															: isPending
+																? "bg-amber-500/5 hover:bg-amber-500/10"
+																: isModified
+																	? "bg-blue-500/5 hover:bg-blue-500/10"
+																	: "hover:bg-muted/30"
+													}`}
 												>
-													{isExpanded ? (
-														<ChevronUp className="size-3.5" />
-													) : (
-														<ChevronDown className="size-3.5" />
-													)}
-												</Button>
+													{/* Faction Column */}
+													<TableCell className="align-middle">
+														<div className="flex items-center gap-3">
+															{"tagImage" in mapping && mapping.tagImage ? (
+																<img
+																	src={`https://factiontags.torn.com/${mapping.tagImage}`}
+																	alt={
+																		mapping.factionTag ||
+																		String(mapping.factionId)
+																	}
+																	className="h-6 object-contain shrink-0"
+																/>
+															) : (
+																<div className="size-8 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-mono text-xs font-bold shrink-0">
+																	#{mapping.factionId}
+																</div>
+															)}
+															<div className="min-w-0">
+																<div className="flex items-center gap-1.5 flex-wrap">
+																	<span className="font-semibold text-sm text-foreground truncate max-w-[180px]">
+																		{mapping.factionName ||
+																			`Faction #${mapping.factionId}`}
+																	</span>
+																	{isPending && (
+																		<Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-[9px] font-mono uppercase">
+																			STAGED NEW
+																		</Badge>
+																	)}
+																	{isModified && (
+																		<Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-[9px] font-mono uppercase">
+																			STAGED EDIT
+																		</Badge>
+																	)}
+																	{isPendingDelete && (
+																		<Badge className="bg-destructive/20 text-destructive border-destructive/30 text-[9px] font-mono uppercase">
+																			STAGED DELETE
+																		</Badge>
+																	)}
+																</div>
+																<a
+																	href={`https://www.torn.com/factions.php?step=profile&ID=${mapping.factionId}`}
+																	target="_blank"
+																	rel="noopener noreferrer"
+																	className="text-[11px] text-muted-foreground font-mono hover:text-primary transition-colors inline-flex items-center gap-1 mt-0.5"
+																>
+																	<span>#{mapping.factionId}</span>
+																	<ExternalLink className="size-2.5 opacity-60" />
+																</a>
+															</div>
+														</div>
+													</TableCell>
 
-												{!isPending && (
-													<Button
-														type="button"
-														variant="ghost"
-														size="icon"
-														onClick={() => {
-															if (pendingDeletes.has(idKey)) {
-																setPendingDeletes((prev) => {
-																	const next = new Set(prev);
-																	next.delete(idKey);
-																	return next;
-																});
-															} else {
-																setPendingDeletes((prev) =>
-																	new Set(prev).add(idKey),
-																);
-															}
-														}}
-														className={`size-8 rounded-lg cursor-pointer ${
-															pendingDeletes.has(idKey)
-																? "text-amber-500 hover:bg-amber-500/10"
-																: "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-														}`}
-														title={
-															pendingDeletes.has(idKey)
-																? "Restore mapping"
-																: "Stage for deletion"
-														}
-													>
-														{pendingDeletes.has(idKey) ? (
-															<RotateCcw className="size-3.5" />
-														) : (
-															<Trash2 className="size-3.5" />
-														)}
-													</Button>
-												)}
-
-												{isPending && (
-													<Button
-														type="button"
-														variant="ghost"
-														size="icon"
-														onClick={() =>
-															setPendingAdds((prev) =>
-																prev.filter((p) => p.tempId !== idKey),
-															)
-														}
-														className="size-8 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-														title="Remove staged mapping"
-													>
-														<X className="size-3.5" />
-													</Button>
-												)}
-											</div>
-										</div>
-
-										{/* Expanded Mapping Details & Inline Role Editors */}
-										{isExpanded && (
-											<div className="mt-4 pt-3 border-t border-border/40 space-y-4">
-												{/* Member Roles Editor */}
-												<div className="space-y-2">
-													<span className="text-[10px] font-mono uppercase text-muted-foreground font-bold block">
-														Member Roles
-													</span>
-													<div className="flex gap-2 items-center max-w-sm">
-														{roles.length > 0 ? (
-															<Select
-																value={inlineMemberRoleInput[idKey] ?? ""}
-																onValueChange={(val) =>
-																	setInlineMemberRoleInput((prev) => ({
-																		...prev,
-																		[idKey]: val,
-																	}))
-																}
-															>
-																<SelectTrigger className="flex-1 h-8 rounded-lg bg-background border-input text-foreground text-xs font-sans">
-																	<SelectValue placeholder="Add member role..." />
-																</SelectTrigger>
-																<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
-																	<SelectGroup>
-																		{roles.map((r) => (
-																			<SelectItem key={r.id} value={r.id}>
-																				@{r.name}
-																			</SelectItem>
-																		))}
-																	</SelectGroup>
-																</SelectContent>
-															</Select>
-														) : (
-															<Input
-																type="text"
-																value={inlineMemberRoleInput[idKey] ?? ""}
-																onChange={(e) =>
-																	setInlineMemberRoleInput((prev) => ({
-																		...prev,
-																		[idKey]: e.target.value,
-																	}))
-																}
-																placeholder="Role ID"
-																className="flex-1 font-mono text-xs h-8 rounded-lg"
-															/>
-														)}
-														<Button
-															type="button"
-															variant="secondary"
-															size="sm"
-															disabled={!inlineMemberRoleInput[idKey]}
-															onClick={() => {
-																const rId = inlineMemberRoleInput[idKey];
-																if (!rId) return;
-																if (memberRoles.includes(rId)) return;
-																handleUpdateItemRoles(
-																	idKey,
-																	isPending,
-																	[...memberRoles, rId],
-																	leaderRoles,
-																);
-																setInlineMemberRoleInput((prev) => ({
-																	...prev,
-																	[idKey]: "",
-																}));
-															}}
-															className="h-8 px-2.5 text-xs font-semibold rounded-lg cursor-pointer shrink-0"
-														>
-															Add
-														</Button>
-													</div>
-													<div className="flex flex-wrap gap-1.5">
-														{memberRoles.length === 0 ? (
-															<span className="text-xs text-muted-foreground italic">
-																None
-															</span>
-														) : (
-															memberRoles.map((rId: string) => {
-																const rObj = roles.find((r) => r.id === rId);
-																return (
-																	<Badge
-																		key={rId}
-																		variant="outline"
-																		className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5"
-																	>
-																		{rObj && (
-																			<span
-																				className="size-1.5 rounded-full shrink-0"
-																				style={{
-																					backgroundColor: roleColor(
-																						rObj.color,
-																					),
-																				}}
-																			/>
-																		)}
-																		<span>{rObj ? `@${rObj.name}` : rId}</span>
-																		<button
-																			type="button"
-																			onClick={() =>
-																				handleUpdateItemRoles(
-																					idKey,
-																					isPending,
-																					memberRoles.filter((r) => r !== rId),
-																					leaderRoles,
-																				)
-																			}
-																			className="hover:text-destructive cursor-pointer ml-0.5"
+													{/* Member Roles Column */}
+													<TableCell className="align-middle max-w-xs">
+														<div className="flex flex-wrap gap-1.5 py-1">
+															{memberRoles.length === 0 ? (
+																<span className="text-xs text-muted-foreground italic font-mono">
+																	None
+																</span>
+															) : (
+																memberRoles.map((rId) => {
+																	const rObj = roles.find((r) => r.id === rId);
+																	return (
+																		<Badge
+																			key={rId}
+																			variant="outline"
+																			className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5 bg-background/50"
 																		>
-																			<X className="size-3" />
-																		</button>
-																	</Badge>
-																);
-															})
-														)}
-													</div>
-												</div>
+																			{rObj && (
+																				<span
+																					className="size-1.5 rounded-full shrink-0"
+																					style={{
+																						backgroundColor: roleColor(
+																							rObj.color,
+																						),
+																					}}
+																				/>
+																			)}
+																			<span>
+																				{rObj ? `@${rObj.name}` : rId}
+																			</span>
+																		</Badge>
+																	);
+																})
+															)}
+														</div>
+													</TableCell>
 
-												{/* Leader Roles Editor */}
-												<div className="space-y-2">
-													<span className="text-[10px] font-mono uppercase text-muted-foreground font-bold block">
-														Leader Roles
-													</span>
-													<div className="flex gap-2 items-center max-w-sm">
-														{roles.length > 0 ? (
-															<Select
-																value={inlineLeaderRoleInput[idKey] ?? ""}
-																onValueChange={(val) =>
-																	setInlineLeaderRoleInput((prev) => ({
-																		...prev,
-																		[idKey]: val,
-																	}))
-																}
-															>
-																<SelectTrigger className="flex-1 h-8 rounded-lg bg-background border-input text-foreground text-xs font-sans">
-																	<SelectValue placeholder="Add leader role..." />
-																</SelectTrigger>
-																<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
-																	<SelectGroup>
-																		{roles.map((r) => (
-																			<SelectItem key={r.id} value={r.id}>
-																				@{r.name}
-																			</SelectItem>
-																		))}
-																	</SelectGroup>
-																</SelectContent>
-															</Select>
-														) : (
-															<Input
-																type="text"
-																value={inlineLeaderRoleInput[idKey] ?? ""}
-																onChange={(e) =>
-																	setInlineLeaderRoleInput((prev) => ({
-																		...prev,
-																		[idKey]: e.target.value,
-																	}))
-																}
-																placeholder="Role ID"
-																className="flex-1 font-mono text-xs h-8 rounded-lg"
-															/>
-														)}
-														<Button
-															type="button"
-															variant="secondary"
-															size="sm"
-															disabled={!inlineLeaderRoleInput[idKey]}
-															onClick={() => {
-																const rId = inlineLeaderRoleInput[idKey];
-																if (!rId) return;
-																if (leaderRoles.includes(rId)) return;
-																handleUpdateItemRoles(
-																	idKey,
-																	isPending,
-																	memberRoles,
-																	[...leaderRoles, rId],
-																);
-																setInlineLeaderRoleInput((prev) => ({
-																	...prev,
-																	[idKey]: "",
-																}));
-															}}
-															className="h-8 px-2.5 text-xs font-semibold rounded-lg cursor-pointer shrink-0"
-														>
-															Add
-														</Button>
-													</div>
-													<div className="flex flex-wrap gap-1.5">
-														{leaderRoles.length === 0 ? (
-															<span className="text-xs text-muted-foreground italic">
-																None
-															</span>
-														) : (
-															leaderRoles.map((rId: string) => {
-																const rObj = roles.find((r) => r.id === rId);
-																return (
-																	<Badge
-																		key={rId}
-																		variant="outline"
-																		className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5 border-purple-500/30 text-purple-300"
-																	>
-																		{rObj && (
-																			<span
-																				className="size-1.5 rounded-full shrink-0"
-																				style={{
-																					backgroundColor: roleColor(
-																						rObj.color,
-																					),
-																				}}
-																			/>
-																		)}
-																		<span>{rObj ? `@${rObj.name}` : rId}</span>
-																		<button
-																			type="button"
-																			onClick={() =>
-																				handleUpdateItemRoles(
-																					idKey,
-																					isPending,
-																					memberRoles,
-																					leaderRoles.filter((r) => r !== rId),
-																				)
-																			}
-																			className="hover:text-destructive cursor-pointer ml-0.5"
+													{/* Leader Roles Column */}
+													<TableCell className="align-middle max-w-xs">
+														<div className="flex flex-wrap gap-1.5 py-1">
+															{leaderRoles.length === 0 ? (
+																<span className="text-xs text-muted-foreground italic font-mono">
+																	None
+																</span>
+															) : (
+																leaderRoles.map((rId) => {
+																	const rObj = roles.find((r) => r.id === rId);
+																	return (
+																		<Badge
+																			key={rId}
+																			variant="outline"
+																			className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5 border-purple-500/30 text-purple-300 bg-purple-500/5"
 																		>
-																			<X className="size-3" />
-																		</button>
-																	</Badge>
-																);
-															})
-														)}
-													</div>
-												</div>
-											</div>
-										)}
-									</div>
-								);
-							})
+																			{rObj && (
+																				<span
+																					className="size-1.5 rounded-full shrink-0"
+																					style={{
+																						backgroundColor: roleColor(
+																							rObj.color,
+																						),
+																					}}
+																				/>
+																			)}
+																			<span>
+																				{rObj ? `@${rObj.name}` : rId}
+																			</span>
+																		</Badge>
+																	);
+																})
+															)}
+														</div>
+													</TableCell>
+
+													{/* Actions Column */}
+													<TableCell className="align-middle text-right">
+														<div className="flex items-center justify-end gap-1">
+															{!isPendingDelete && (
+																<Button
+																	type="button"
+																	variant="ghost"
+																	size="icon"
+																	onClick={() =>
+																		handleOpenEditModal({
+																			idKey,
+																			isPending,
+																			factionId: mapping.factionId,
+																			factionName: mapping.factionName ?? null,
+																			factionTag: mapping.factionTag ?? null,
+																			tagImage:
+																				("tagImage" in mapping
+																					? mapping.tagImage
+																					: null) ?? null,
+																			memberRoleIds: memberRoles,
+																			leaderRoleIds: leaderRoles,
+																		})
+																	}
+																	className="size-8 rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
+																	title="Edit mapping roles"
+																>
+																	<Pencil className="size-3.5" />
+																</Button>
+															)}
+
+															{isModified && (
+																<Button
+																	type="button"
+																	variant="ghost"
+																	size="icon"
+																	onClick={() => handleRevertMapping(idKey)}
+																	className="size-8 rounded-lg text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+																	title="Revert staged edits"
+																>
+																	<RotateCcw className="size-3.5" />
+																</Button>
+															)}
+
+															{!isPending && (
+																<Button
+																	type="button"
+																	variant="ghost"
+																	size="icon"
+																	onClick={() => {
+																		if (pendingDeletes.has(idKey)) {
+																			setPendingDeletes((prev) => {
+																				const next = new Set(prev);
+																				next.delete(idKey);
+																				return next;
+																			});
+																		} else {
+																			setPendingDeletes((prev) =>
+																				new Set(prev).add(idKey),
+																			);
+																		}
+																	}}
+																	className={`size-8 rounded-lg cursor-pointer ${
+																		isPendingDelete
+																			? "text-amber-500 hover:bg-amber-500/10"
+																			: "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+																	}`}
+																	title={
+																		isPendingDelete
+																			? "Restore mapping"
+																			: "Stage for deletion"
+																	}
+																>
+																	{isPendingDelete ? (
+																		<RotateCcw className="size-3.5" />
+																	) : (
+																		<Trash2 className="size-3.5" />
+																	)}
+																</Button>
+															)}
+
+															{isPending && (
+																<Button
+																	type="button"
+																	variant="ghost"
+																	size="icon"
+																	onClick={() =>
+																		setPendingAdds((prev) =>
+																			prev.filter((p) => p.tempId !== idKey),
+																		)
+																	}
+																	className="size-8 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+																	title="Remove staged mapping"
+																>
+																	<X className="size-3.5" />
+																</Button>
+															)}
+														</div>
+													</TableCell>
+												</TableRow>
+											);
+										})}
+									</TableBody>
+								</Table>
+							</div>
 						)}
 
 						{/* Pagination Controls */}
 						{totalPages > 1 && (
 							<div className="flex items-center justify-between pt-2">
 								<span className="text-[11px] font-mono text-muted-foreground">
-									Page {currentPage} of {totalPages}
+									Page {currentPage} of {totalPages} ({totalMappingsCount}{" "}
+									total)
 								</span>
-								<div className="flex items-center gap-1">
+								<div className="flex items-center gap-1.5">
 									<Button
 										type="button"
 										variant="outline"
@@ -1819,9 +1811,384 @@ export default function VerificationPage({ guildId }: VerificationPageProps) {
 								</div>
 							</div>
 						)}
+
+						{/* Edit Faction Mapping Dialog Modal */}
+						<Dialog
+							open={editingModalItem !== null}
+							onOpenChange={(open) => {
+								if (!open) setEditingModalItem(null);
+							}}
+						>
+							<DialogContent className="max-w-xl rounded-2xl border-border bg-card p-6 shadow-2xl">
+								<DialogHeader>
+									<DialogTitle className="text-lg font-bold flex items-center gap-2">
+										<Pencil className="size-4 text-primary" />
+										Edit Faction Mapping
+									</DialogTitle>
+									<DialogDescription className="text-xs text-muted-foreground">
+										Configure member and leader roles for{" "}
+										<span className="font-semibold text-foreground">
+											{editingModalItem?.factionName ||
+												`Faction #${editingModalItem?.factionId}`}
+										</span>
+										{editingModalItem?.factionId
+											? ` [#${editingModalItem.factionId}]`
+											: ""}
+										.
+									</DialogDescription>
+								</DialogHeader>
+
+								{editingModalItem && (
+									<div className="space-y-6 py-2">
+										{/* Faction Header Info */}
+										<div className="p-3 rounded-xl bg-background/50 border border-border/60 flex items-center justify-between gap-3">
+											<div className="flex items-center gap-3">
+												{editingModalItem.tagImage ? (
+													<img
+														src={`https://factiontags.torn.com/${editingModalItem.tagImage}`}
+														alt={
+															editingModalItem.factionTag ||
+															String(editingModalItem.factionId)
+														}
+														className="h-6 object-contain shrink-0"
+													/>
+												) : (
+													<div className="size-8 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-mono text-xs font-bold shrink-0">
+														#{editingModalItem.factionId}
+													</div>
+												)}
+												<div>
+													<div className="font-semibold text-sm text-foreground">
+														{editingModalItem.factionName ||
+															`Faction #${editingModalItem.factionId}`}
+													</div>
+													<span className="text-[11px] font-mono text-muted-foreground">
+														Faction ID: {editingModalItem.factionId}
+													</span>
+												</div>
+											</div>
+											<a
+												href={`https://www.torn.com/factions.php?step=profile&ID=${editingModalItem.factionId}`}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="text-xs font-mono text-primary hover:underline shrink-0 flex items-center gap-1"
+											>
+												<span>Torn Profile</span>
+												<ExternalLink className="size-3" />
+											</a>
+										</div>
+
+										{/* Member Roles Section */}
+										<div className="space-y-2">
+											<label
+												htmlFor="modal-member-role-select"
+												className="text-xs font-semibold text-foreground block"
+											>
+												Faction Member Roles
+											</label>
+											<div className="flex gap-2 items-center">
+												{roles.length > 0 ? (
+													<Select
+														value={modalMemberRoleInput}
+														onValueChange={setModalMemberRoleInput}
+													>
+														<SelectTrigger
+															id="modal-member-role-select"
+															className="flex-1 h-9 rounded-xl bg-background border-input text-foreground text-xs font-sans"
+														>
+															<SelectValue placeholder="Select Member Role..." />
+														</SelectTrigger>
+														<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
+															<SelectGroup>
+																{roles.map((r) => (
+																	<SelectItem key={r.id} value={r.id}>
+																		@{r.name}
+																	</SelectItem>
+																))}
+															</SelectGroup>
+														</SelectContent>
+													</Select>
+												) : (
+													<Input
+														id="modal-member-role-select"
+														type="text"
+														value={modalMemberRoleInput}
+														onChange={(e) =>
+															setModalMemberRoleInput(e.target.value)
+														}
+														placeholder="Role ID"
+														className="flex-1 font-mono text-xs h-9 rounded-xl"
+													/>
+												)}
+												<Button
+													type="button"
+													variant="secondary"
+													disabled={!modalMemberRoleInput}
+													onClick={() => {
+														if (!modalMemberRoleInput) return;
+														if (
+															editingModalItem.memberRoleIds.includes(
+																modalMemberRoleInput,
+															)
+														)
+															return;
+														setEditingModalItem({
+															...editingModalItem,
+															memberRoleIds: [
+																...editingModalItem.memberRoleIds,
+																modalMemberRoleInput,
+															],
+														});
+														setModalMemberRoleInput("");
+													}}
+													className="h-9 px-3 text-xs font-semibold rounded-xl cursor-pointer shrink-0"
+												>
+													Add
+												</Button>
+											</div>
+											<div className="flex flex-wrap gap-1.5 min-h-[36px] items-center p-2 rounded-xl bg-background/30 border border-border/40">
+												{editingModalItem.memberRoleIds.length === 0 ? (
+													<span className="text-[11px] text-muted-foreground italic">
+														No member roles assigned
+													</span>
+												) : (
+													editingModalItem.memberRoleIds.map((id) => {
+														const rObj = roles.find((r) => r.id === id);
+														return (
+															<Badge
+																key={id}
+																variant="outline"
+																className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5 bg-background/50"
+															>
+																{rObj && (
+																	<span
+																		className="size-1.5 rounded-full shrink-0"
+																		style={{
+																			backgroundColor: roleColor(rObj.color),
+																		}}
+																	/>
+																)}
+																<span>{rObj ? `@${rObj.name}` : id}</span>
+																<button
+																	type="button"
+																	onClick={() =>
+																		setEditingModalItem({
+																			...editingModalItem,
+																			memberRoleIds:
+																				editingModalItem.memberRoleIds.filter(
+																					(r) => r !== id,
+																				),
+																		})
+																	}
+																	className="hover:text-destructive cursor-pointer ml-0.5"
+																>
+																	<X className="size-3" />
+																</button>
+															</Badge>
+														);
+													})
+												)}
+											</div>
+										</div>
+
+										{/* Leader Roles Section */}
+										<div className="space-y-2">
+											<label
+												htmlFor="modal-leader-role-select"
+												className="text-xs font-semibold text-foreground block"
+											>
+												Faction Leader Roles
+											</label>
+											<div className="flex gap-2 items-center">
+												{roles.length > 0 ? (
+													<Select
+														value={modalLeaderRoleInput}
+														onValueChange={setModalLeaderRoleInput}
+													>
+														<SelectTrigger
+															id="modal-leader-role-select"
+															className="flex-1 h-9 rounded-xl bg-background border-input text-foreground text-xs font-sans"
+														>
+															<SelectValue placeholder="Select Leader Role..." />
+														</SelectTrigger>
+														<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
+															<SelectGroup>
+																{roles.map((r) => (
+																	<SelectItem key={r.id} value={r.id}>
+																		@{r.name}
+																	</SelectItem>
+																))}
+															</SelectGroup>
+														</SelectContent>
+													</Select>
+												) : (
+													<Input
+														id="modal-leader-role-select"
+														type="text"
+														value={modalLeaderRoleInput}
+														onChange={(e) =>
+															setModalLeaderRoleInput(e.target.value)
+														}
+														placeholder="Role ID"
+														className="flex-1 font-mono text-xs h-9 rounded-xl"
+													/>
+												)}
+												<Button
+													type="button"
+													variant="secondary"
+													disabled={!modalLeaderRoleInput}
+													onClick={() => {
+														if (!modalLeaderRoleInput) return;
+														if (
+															editingModalItem.leaderRoleIds.includes(
+																modalLeaderRoleInput,
+															)
+														)
+															return;
+														setEditingModalItem({
+															...editingModalItem,
+															leaderRoleIds: [
+																...editingModalItem.leaderRoleIds,
+																modalLeaderRoleInput,
+															],
+														});
+														setModalLeaderRoleInput("");
+													}}
+													className="h-9 px-3 text-xs font-semibold rounded-xl cursor-pointer shrink-0"
+												>
+													Add
+												</Button>
+											</div>
+											<div className="flex flex-wrap gap-1.5 min-h-[36px] items-center p-2 rounded-xl bg-background/30 border border-border/40">
+												{editingModalItem.leaderRoleIds.length === 0 ? (
+													<span className="text-[11px] text-muted-foreground italic">
+														No leader roles assigned
+													</span>
+												) : (
+													editingModalItem.leaderRoleIds.map((id) => {
+														const rObj = roles.find((r) => r.id === id);
+														return (
+															<Badge
+																key={id}
+																variant="outline"
+																className="text-[11px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1.5 border-purple-500/30 text-purple-300 bg-purple-500/5"
+															>
+																{rObj && (
+																	<span
+																		className="size-1.5 rounded-full shrink-0"
+																		style={{
+																			backgroundColor: roleColor(rObj.color),
+																		}}
+																	/>
+																)}
+																<span>{rObj ? `@${rObj.name}` : id}</span>
+																<button
+																	type="button"
+																	onClick={() =>
+																		setEditingModalItem({
+																			...editingModalItem,
+																			leaderRoleIds:
+																				editingModalItem.leaderRoleIds.filter(
+																					(r) => r !== id,
+																				),
+																		})
+																	}
+																	className="hover:text-destructive cursor-pointer ml-0.5"
+																>
+																	<X className="size-3" />
+																</button>
+															</Badge>
+														);
+													})
+												)}
+											</div>
+										</div>
+									</div>
+								)}
+
+								<DialogFooter className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-border/40">
+									{editingModalItem && (
+										<Button
+											type="button"
+											variant="destructive"
+											size="sm"
+											onClick={() => {
+												const fName =
+													editingModalItem.factionName ||
+													`Faction #${editingModalItem.factionId}`;
+												if (editingModalItem.isPending) {
+													setPendingAdds((prev) =>
+														prev.filter(
+															(p) => p.tempId !== editingModalItem.idKey,
+														),
+													);
+													toast(`Removed staged mapping for ${fName}.`, "info");
+												} else {
+													setPendingDeletes((prev) =>
+														new Set(prev).add(editingModalItem.idKey),
+													);
+													setPendingUpdates((prev) => {
+														const next = { ...prev };
+														delete next[editingModalItem.idKey];
+														return next;
+													});
+													toast(
+														`Staged ${fName} mapping for deletion. Save changes to apply.`,
+														"info",
+													);
+												}
+												setEditingModalItem(null);
+											}}
+											className="h-9 px-3 text-xs font-semibold rounded-xl cursor-pointer gap-1.5"
+										>
+											<Trash2 className="size-3.5" />
+											Delete Mapping
+										</Button>
+									)}
+									<div className="flex items-center gap-2 self-end sm:self-auto">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={() => setEditingModalItem(null)}
+											className="h-9 px-4 text-xs font-semibold rounded-xl cursor-pointer"
+										>
+											Cancel
+										</Button>
+										<Button
+											type="button"
+											size="sm"
+											onClick={() => {
+												if (!editingModalItem) return;
+												handleUpdateItemRoles(
+													editingModalItem.idKey,
+													editingModalItem.isPending,
+													editingModalItem.memberRoleIds,
+													editingModalItem.leaderRoleIds,
+												);
+												const fName =
+													editingModalItem.factionName ||
+													`Faction #${editingModalItem.factionId}`;
+												toast(
+													`Updated roles for ${fName}. Save changes to apply.`,
+													"info",
+												);
+												setEditingModalItem(null);
+											}}
+											className="h-9 px-4 text-xs font-semibold rounded-xl cursor-pointer"
+										>
+											Save Changes
+										</Button>
+									</div>
+								</DialogFooter>
+							</DialogContent>
+						</Dialog>
 					</div>
 				</CardContent>
 			</Card>
+
+			{/* Verification Logs History */}
+			<VerificationLogsHistory guildId={guildId} roles={roles} />
 
 			{/* Footer Action Bar */}
 			<div className="pt-6 border-t border-border/60 flex items-center justify-between gap-4">

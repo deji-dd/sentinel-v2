@@ -540,4 +540,64 @@ describe("Verification Engine", () => {
 		expect(userAction?.rolesToAdd).toContain("role_alpha_leader");
 		expect(userAction?.rolesToAdd).toContain("role_protected_officer");
 	});
+
+	test("runBulkGuildVerification reports updated: 0 when member roles and nickname are already up to date", async () => {
+		await db.insert(verifiedUsers).values({
+			discordId: TEST_DISCORD_ID,
+			tornId: 2633269,
+			tornName: "Deji",
+			factionId: 999,
+			factionTag: "ALPHA",
+			lastCheckedAt: new Date(),
+		});
+
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			url: string | URL | Request,
+		) => {
+			const urlStr = url.toString();
+			if (urlStr.includes("/faction")) {
+				return new Response(
+					JSON.stringify({
+						basic: {
+							name: "Alpha Faction",
+							tag: "ALPHA",
+							leader_id: 2633269,
+						},
+						members: [
+							{
+								id: 2633269,
+								name: "Deji",
+								position: "Leader",
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		}) as unknown as typeof fetch);
+
+		const result = await runBulkGuildVerification(
+			TEST_GUILD_ID,
+			"cron",
+			() => {},
+			[
+				{
+					discordId: TEST_DISCORD_ID,
+					// User already has all expected roles: verified, faction member, faction leader
+					currentRoleIds: [
+						"role_verified",
+						"role_alpha_member",
+						"role_alpha_leader",
+					],
+					// User already has correctly formatted nickname
+					currentNickname: "[ALPHA] Deji [2633269]",
+				},
+			],
+		);
+
+		expect(result.processed).toBe(1);
+		expect(result.updated).toBe(0);
+		expect(result.errors).toBe(0);
+	});
 });

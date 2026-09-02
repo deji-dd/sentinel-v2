@@ -1,15 +1,21 @@
 import {
 	and,
+	count,
 	db,
+	desc,
 	eq,
 	factionRoleMappings,
 	factions,
 	guildConfigs,
+	ilike,
 	inArray,
 	like,
+	or,
 	reactionRoleMappings,
 	reactionRoleMessages,
 	territoryBlueprints,
+	verificationLogs,
+	verifiedUsers,
 } from "@sentinel/database";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
@@ -525,6 +531,109 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "Lookup Faction",
 				description:
 					"Resolves a faction ID to name and tag using database or Torn API.",
+			},
+		},
+	)
+	// GET /api/v1/guilds/:guildId/verification-logs — list verification execution history
+	.get(
+		"/:guildId/verification-logs",
+		async ({ params, query }) => {
+			const guildId = params.guildId;
+			const page = Math.max(1, Number(query.page) || 1);
+			const limit = Math.min(100, Math.max(1, Number(query.limit) || 15));
+			const offset = (page - 1) * limit;
+
+			const conditions = [eq(verificationLogs.guildId, guildId)];
+
+			if (query.status && query.status !== "all") {
+				conditions.push(eq(verificationLogs.status, query.status));
+			}
+
+			if (query.trigger && query.trigger !== "all") {
+				conditions.push(eq(verificationLogs.triggeredBy, query.trigger));
+			}
+
+			if (query.search?.trim()) {
+				const searchTerm = `%${query.search.trim()}%`;
+				const searchCondition = or(
+					ilike(verificationLogs.discordId, searchTerm),
+					ilike(verificationLogs.oldNickname, searchTerm),
+					ilike(verificationLogs.newNickname, searchTerm),
+					ilike(verifiedUsers.tornName, searchTerm),
+				);
+				if (searchCondition) {
+					conditions.push(searchCondition);
+				}
+			}
+
+			const whereClause = and(...conditions);
+
+			// Count total matching records
+			const countResult = await db
+				.select({ value: count() })
+				.from(verificationLogs)
+				.leftJoin(
+					verifiedUsers,
+					eq(verificationLogs.discordId, verifiedUsers.discordId),
+				)
+				.where(whereClause);
+
+			const total = Number(countResult[0]?.value ?? 0);
+			const totalPages = Math.ceil(total / limit) || 1;
+
+			// Fetch paginated records joined with verifiedUsers
+			const rows = await db
+				.select({
+					id: verificationLogs.id,
+					guildId: verificationLogs.guildId,
+					discordId: verificationLogs.discordId,
+					status: verificationLogs.status,
+					triggeredBy: verificationLogs.triggeredBy,
+					rolesAdded: verificationLogs.rolesAdded,
+					rolesRemoved: verificationLogs.rolesRemoved,
+					oldNickname: verificationLogs.oldNickname,
+					newNickname: verificationLogs.newNickname,
+					error: verificationLogs.error,
+					createdAt: verificationLogs.createdAt,
+					tornId: verifiedUsers.tornId,
+					tornName: verifiedUsers.tornName,
+					factionTag: verifiedUsers.factionTag,
+				})
+				.from(verificationLogs)
+				.leftJoin(
+					verifiedUsers,
+					eq(verificationLogs.discordId, verifiedUsers.discordId),
+				)
+				.where(whereClause)
+				.orderBy(desc(verificationLogs.createdAt))
+				.limit(limit)
+				.offset(offset);
+
+			return {
+				logs: rows,
+				pagination: {
+					page,
+					limit,
+					total,
+					totalPages,
+				},
+			};
+		},
+		{
+			params: t.Object({
+				guildId: t.String(),
+			}),
+			query: t.Object({
+				page: t.Optional(t.String()),
+				limit: t.Optional(t.String()),
+				status: t.Optional(t.String()),
+				trigger: t.Optional(t.String()),
+				search: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Get Verification Logs",
+				description:
+					"Returns paginated verification execution history for a guild with joined user identity context.",
 			},
 		},
 	)

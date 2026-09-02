@@ -570,9 +570,13 @@ export async function runBulkGuildVerification(
 			verifiedUsersMap.set(u.discordId, u);
 		}
 
+		const hasLiveDiscordInput = Boolean(
+			membersListInput && membersListInput.length > 0,
+		);
+
 		// Determine target member list (all guild members passed in, or DB fallback)
 		const targetMembers: GuildMemberVerificationInput[] =
-			membersListInput && membersListInput.length > 0
+			hasLiveDiscordInput && membersListInput
 				? membersListInput
 				: dbVerifiedUsers.map((u) => ({
 						discordId: u.discordId,
@@ -724,19 +728,26 @@ export async function runBulkGuildVerification(
 						.slice(0, 32);
 
 					// Calculate diffs
-					const rolesToAdd = Array.from(targetRoles).filter(
-						(roleId) => !member.currentRoleIds.includes(roleId),
-					);
-					const rolesToRemove = Array.from(managedRoles).filter(
-						(roleId) =>
-							!targetRoles.has(roleId) &&
-							(member.currentRoleIds.length === 0 ||
-								member.currentRoleIds.includes(roleId)),
-					);
-					const newNickname =
-						formattedNickname === member.currentNickname
+					// Only calculate role additions, role removals, and nickname changes
+					// if we have live Discord member state. If falling back to DB alone,
+					// member.currentRoleIds is empty and cannot be used to deduce diffs.
+					const rolesToAdd = hasLiveDiscordInput
+						? Array.from(targetRoles).filter(
+								(roleId) => !member.currentRoleIds.includes(roleId),
+							)
+						: [];
+					const rolesToRemove = hasLiveDiscordInput
+						? Array.from(managedRoles).filter(
+								(roleId) =>
+									!targetRoles.has(roleId) &&
+									member.currentRoleIds.includes(roleId),
+							)
+						: [];
+					const newNickname = hasLiveDiscordInput
+						? formattedNickname === member.currentNickname
 							? null
-							: formattedNickname;
+							: formattedNickname
+						: null;
 
 					let factionChanged = false;
 					if (

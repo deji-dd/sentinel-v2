@@ -1,5 +1,6 @@
 import type {
 	BulkVerificationProgressData,
+	GuildMemberVerificationInput,
 	IpcMessage,
 	VerificationResponse,
 } from "@sentinel/schemas";
@@ -162,6 +163,65 @@ export function setupBotIpcListeners(client: Client): void {
 				message.requestId,
 				message.data,
 			);
+		} else if (
+			message.action === "guild_members_request" &&
+			message.requestId &&
+			message.data?.guildId
+		) {
+			const guildId = message.data.guildId;
+			const requestId = message.requestId;
+			void (async () => {
+				try {
+					const guild =
+						client.guilds.cache.get(guildId) ||
+						(await client.guilds.fetch(guildId).catch(() => null));
+					if (!guild) {
+						workerIpcClient.send({
+							action: "guild_members_response",
+							requestId,
+							data: {
+								guildId,
+								members: [],
+								error: `Guild ${guildId} not found on Discord client.`,
+							},
+						});
+						return;
+					}
+
+					const guildMembers = await guild.members.fetch();
+					const humanMembers = guildMembers.filter((m) => !m.user.bot);
+					const members: GuildMemberVerificationInput[] = humanMembers.map(
+						(m) => ({
+							discordId: m.id,
+							currentRoleIds: Array.from(m.roles.cache.keys()),
+							currentNickname: m.nickname,
+						}),
+					);
+
+					workerIpcClient.send({
+						action: "guild_members_response",
+						requestId,
+						data: {
+							guildId,
+							members,
+						},
+					});
+				} catch (err) {
+					logger.error(
+						`Failed to fetch guild members for guild ${guildId}:`,
+						err,
+					);
+					workerIpcClient.send({
+						action: "guild_members_response",
+						requestId,
+						data: {
+							guildId,
+							members: [],
+							error: err instanceof Error ? err.message : String(err),
+						},
+					});
+				}
+			})();
 		} else if ("data" in message && message.data) {
 			handleTerritoryAlert(
 				client,

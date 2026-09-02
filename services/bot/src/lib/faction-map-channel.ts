@@ -74,10 +74,25 @@ export function buildFactionDirectoryPayload(
 	page = 1,
 	itemsPerPage = ITEMS_PER_PAGE,
 ) {
-	const totalPages = Math.max(1, Math.ceil(mappings.length / itemsPerPage));
+	const sortedMappings = [...mappings].sort((a, b) => {
+		const nameA = a.factionName || `Faction ${a.factionId}`;
+		const nameB = b.factionName || `Faction ${b.factionId}`;
+		return nameA.localeCompare(nameB, undefined, {
+			sensitivity: "base",
+			numeric: true,
+		});
+	});
+
+	const totalPages = Math.max(
+		1,
+		Math.ceil(sortedMappings.length / itemsPerPage),
+	);
 	const currentPage = Math.min(Math.max(1, page), totalPages);
 	const startIndex = (currentPage - 1) * itemsPerPage;
-	const pageMappings = mappings.slice(startIndex, startIndex + itemsPerPage);
+	const pageMappings = sortedMappings.slice(
+		startIndex,
+		startIndex + itemsPerPage,
+	);
 
 	const factionLines = pageMappings.map((m) => {
 		const name = m.factionName || `Faction ${m.factionId}`;

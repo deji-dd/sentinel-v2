@@ -172,6 +172,24 @@ export type IpcBulkVerifyResponseMessage = {
 	};
 };
 
+export type IpcGuildMembersRequestMessage = {
+	action: "guild_members_request";
+	requestId: string;
+	data: {
+		guildId: string;
+	};
+};
+
+export type IpcGuildMembersResponseMessage = {
+	action: "guild_members_response";
+	requestId: string;
+	data: {
+		guildId: string;
+		members: GuildMemberVerificationInput[];
+		error?: string;
+	};
+};
+
 export type IpcSyncReactionRolesMessage = {
 	action: "sync_reaction_roles";
 	data?: {
@@ -306,6 +324,8 @@ export type IpcMessage =
 	| IpcBulkVerifyRequestMessage
 	| IpcBulkVerifyProgressMessage
 	| IpcBulkVerifyResponseMessage
+	| IpcGuildMembersRequestMessage
+	| IpcGuildMembersResponseMessage
 	| IpcSyncReactionRolesMessage
 	| IpcSyncFactionMapMessage
 	| IpcReinitializeCrimeLedgerMessage

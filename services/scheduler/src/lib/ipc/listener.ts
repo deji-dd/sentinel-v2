@@ -1,5 +1,8 @@
 import { db, workerSchedules } from "@sentinel/database";
-import type { IpcMessage } from "@sentinel/schemas";
+import type {
+	GuildMemberVerificationInput,
+	IpcMessage,
+} from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
 import { reinitializeBattlestatsLedger } from "../../workers/personal/battlestats";
@@ -13,6 +16,71 @@ import { runBulkGuildVerification, runVerificationJob } from "../verification";
 import { setActiveIpcServer } from "./server";
 
 const logger = new Logger("SchedulerIPC");
+
+type PendingGuildMembersRequest = {
+	resolve: (members: GuildMemberVerificationInput[] | null) => void;
+	timer: NodeJS.Timeout;
+};
+
+const pendingGuildMembersRequests = new Map<
+	string,
+	PendingGuildMembersRequest
+>();
+
+/**
+ * Requests live guild member state (roles, nickname) from the Discord bot over IPC.
+ * Includes configurable retries with backoff if the bot is temporarily unresponsive.
+ */
+export async function requestGuildMembersFromBot(
+	ipcServer: IpcServer<IpcMessage> | null,
+	guildId: string,
+	options: { timeoutMs?: number; retries?: number } = {},
+): Promise<GuildMemberVerificationInput[] | null> {
+	if (!ipcServer) {
+		logger.warn("Cannot request guild members: IPC server is not initialized.");
+		return null;
+	}
+
+	const timeoutMs = options.timeoutMs ?? 10000;
+	const retries = options.retries ?? 2;
+
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		if (attempt > 0) {
+			logger.info(
+				`[Guild ${guildId}] Retrying guild members fetch from bot (Attempt ${attempt + 1}/${retries + 1})...`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+		}
+
+		const requestId = `members-${guildId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+		const result = await new Promise<GuildMemberVerificationInput[] | null>(
+			(resolve) => {
+				const timer = setTimeout(() => {
+					pendingGuildMembersRequests.delete(requestId);
+					resolve(null);
+				}, timeoutMs);
+
+				pendingGuildMembersRequests.set(requestId, { resolve, timer });
+
+				ipcServer.broadcast({
+					action: "guild_members_request",
+					requestId,
+					data: { guildId },
+				});
+			},
+		);
+
+		if (result !== null) {
+			return result;
+		}
+	}
+
+	logger.warn(
+		`[Guild ${guildId}] Failed to retrieve live guild members from bot after ${retries + 1} attempts. Bot may be offline.`,
+	);
+	return null;
+}
 
 /**
  * Initializes and configures the Unix Domain Socket (IPC) server for the Scheduler service.
@@ -108,6 +176,23 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 							errors: 1,
 						},
 					});
+				}
+				return;
+			}
+
+			if (message.action === "guild_members_response" && message.requestId) {
+				const pending = pendingGuildMembersRequests.get(message.requestId);
+				if (pending) {
+					clearTimeout(pending.timer);
+					pendingGuildMembersRequests.delete(message.requestId);
+					if (message.data.error) {
+						logger.warn(
+							`Error returned from bot for guild members request: ${message.data.error}`,
+						);
+						pending.resolve(null);
+					} else {
+						pending.resolve(message.data.members);
+					}
 				}
 				return;
 			}
