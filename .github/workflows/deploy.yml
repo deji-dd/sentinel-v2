@@ -79,7 +79,7 @@ jobs:
             docker compose build --pull
             echo "Running database migrations..."
             docker compose run --rm sentinel-api bun run db:migrate
-            docker compose up -d --remove-orphans
+            docker compose up -d --remove-orphans --force-recreate
             echo "Checking Sentinel v2 container status..."
             docker compose ps
           EOF
