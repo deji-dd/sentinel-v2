@@ -34,7 +34,6 @@ export function parseDuration(input: string): number | null {
 	const tokenRegex = /(\d+)\s*([dhms])/g;
 	let totalMs = 0;
 	let matchCount = 0;
-	let lastIndex = 0;
 
 	let match: RegExpExecArray | null = tokenRegex.exec(trimmed);
 	while (match !== null) {
@@ -63,7 +62,6 @@ export function parseDuration(input: string): number | null {
 		}
 
 		matchCount++;
-		lastIndex = tokenRegex.lastIndex;
 		match = tokenRegex.exec(trimmed);
 	}
 

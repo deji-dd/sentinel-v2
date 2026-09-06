@@ -228,8 +228,11 @@ export function ItemRequestsPage() {
 	const [depositsTotalCount, setDepositsTotalCount] = useState(0);
 	const [depositsSearch, setDepositsSearch] = useState("");
 	const [debouncedDepositsSearch, setDebouncedDepositsSearch] = useState("");
-	const [togglingTestDepositId, setTogglingTestDepositId] = useState<string | null>(null);
-	const [selectedRejectionLog, setSelectedRejectionLog] = useState<ItemRequestLog | null>(null);
+	const [togglingTestDepositId, setTogglingTestDepositId] = useState<
+		string | null
+	>(null);
+	const [selectedRejectionLog, setSelectedRejectionLog] =
+		useState<ItemRequestLog | null>(null);
 	const depositsAbortControllerRef = useRef<AbortController | null>(null);
 
 	// ─── Fetch Stock Inventory ────────────────────────────────────────────────
@@ -1987,7 +1990,9 @@ export function ItemRequestsPage() {
 											<TableHead>Depositor</TableHead>
 											<TableHead>Item & Amount</TableHead>
 											<TableHead>Timestamp (TCT)</TableHead>
-											<TableHead className="w-[80px] text-right text-xs">Action</TableHead>
+											<TableHead className="w-[80px] text-right text-xs">
+												Action
+											</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody
@@ -2090,15 +2095,14 @@ export function ItemRequestsPage() {
 																	<span className="sr-only">Open menu</span>
 																</Button>
 															</DropdownMenuTrigger>
-															<DropdownMenuContent
-																align="end"
-																className="w-48"
-															>
+															<DropdownMenuContent align="end" className="w-48">
 																<DropdownMenuLabel className="text-[10px] font-mono uppercase text-muted-foreground">
 																	Deposit Actions
 																</DropdownMenuLabel>
 																<DropdownMenuItem
-																	onClick={() => handleToggleTestDeposit(dep.id)}
+																	onClick={() =>
+																		handleToggleTestDeposit(dep.id)
+																	}
 																	className="cursor-pointer text-xs flex items-center gap-2"
 																>
 																	<FlaskConical className="size-3.5" />
@@ -2127,7 +2131,9 @@ export function ItemRequestsPage() {
 																<DropdownMenuItem
 																	onClick={() => {
 																		navigator.clipboard.writeText(dep.id);
-																		toast.success("Deposit ID copied to clipboard");
+																		toast.success(
+																			"Deposit ID copied to clipboard",
+																		);
 																	}}
 																	className="cursor-pointer text-xs flex items-center gap-2"
 																>
@@ -2578,7 +2584,9 @@ export function ItemRequestsPage() {
 																	{log.status === "rejected" && (
 																		<>
 																			<DropdownMenuItem
-																				onClick={() => setSelectedRejectionLog(log)}
+																				onClick={() =>
+																					setSelectedRejectionLog(log)
+																				}
 																				className="cursor-pointer text-xs flex items-center gap-2 text-rose-500 focus:text-rose-500"
 																			>
 																				<FileText className="size-3.5" />
@@ -2701,7 +2709,8 @@ export function ItemRequestsPage() {
 							</strong>{" "}
 							for{" "}
 							<strong className="text-foreground">
-								{selectedRejectionLog?.quantity}x {selectedRejectionLog?.itemName}
+								{selectedRejectionLog?.quantity}x{" "}
+								{selectedRejectionLog?.itemName}
 							</strong>
 						</DialogDescription>
 					</DialogHeader>

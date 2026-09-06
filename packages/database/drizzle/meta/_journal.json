@@ -1,76 +1,76 @@
 {
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1788247974216,
-      "tag": "0000_nappy_katie_power",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1788371396839,
-      "tag": "0001_ancient_bruce_banner",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1788372358161,
-      "tag": "0002_right_goliath",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1788374049747,
-      "tag": "0003_light_thor_girl",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1788688470190,
-      "tag": "0004_yielding_harrier",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1788694010404,
-      "tag": "0005_spooky_oracle",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1788719753207,
-      "tag": "0006_aberrant_ozymandias",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1788730856956,
-      "tag": "0007_omniscient_annihilus",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1788731318336,
-      "tag": "0008_smart_martin_li",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1788731477214,
-      "tag": "0009_funny_longshot",
-      "breakpoints": true
-    }
-  ]
+	"version": "7",
+	"dialect": "postgresql",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "7",
+			"when": 1788247974216,
+			"tag": "0000_nappy_katie_power",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1788371396839,
+			"tag": "0001_ancient_bruce_banner",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1788372358161,
+			"tag": "0002_right_goliath",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1788374049747,
+			"tag": "0003_light_thor_girl",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1788688470190,
+			"tag": "0004_yielding_harrier",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1788694010404,
+			"tag": "0005_spooky_oracle",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "7",
+			"when": 1788719753207,
+			"tag": "0006_aberrant_ozymandias",
+			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "7",
+			"when": 1788730856956,
+			"tag": "0007_omniscient_annihilus",
+			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1788731318336,
+			"tag": "0008_smart_martin_li",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1788731477214,
+			"tag": "0009_funny_longshot",
+			"breakpoints": true
+		}
+	]
 }

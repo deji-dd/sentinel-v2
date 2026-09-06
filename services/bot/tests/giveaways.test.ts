@@ -151,7 +151,8 @@ describe("Giveaway Helpers", () => {
 				mockGiveaway,
 				3,
 			);
-			expect(embed.data.title).toContain("Active Giveaway — 5x Xanax");
+			expect(embed.data.title).toBe("Active Giveaway");
+			expect(embed.data.description).toContain("Item: **5x Xanax**");
 			expect(embed.data.description).toContain("Entries: **3**");
 			expect(embed.data.description).toContain("<@user_123>");
 
