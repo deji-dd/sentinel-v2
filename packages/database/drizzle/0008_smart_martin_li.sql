@@ -1,0 +1,1 @@
+ALTER TABLE "guild_configs" ADD COLUMN "module_giveaways" boolean DEFAULT false NOT NULL;

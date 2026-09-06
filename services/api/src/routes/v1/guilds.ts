@@ -381,7 +381,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				body.moduleVerification !== undefined ||
 				body.moduleTerritory !== undefined ||
 				body.moduleReactionRoles !== undefined ||
-				body.moduleMonitoring !== undefined;
+				body.moduleMonitoring !== undefined ||
+				body.moduleGiveaways !== undefined;
 
 			if (hasModuleUpdates && user?.role !== "owner") {
 				set.status = 403;
@@ -405,6 +406,9 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: {}),
 					...(body.moduleMonitoring !== undefined
 						? { moduleMonitoring: body.moduleMonitoring }
+						: {}),
+					...(body.moduleGiveaways !== undefined
+						? { moduleGiveaways: body.moduleGiveaways }
 						: {}),
 					...(body.logChannelId !== undefined
 						? { logChannelId: body.logChannelId }
@@ -466,6 +470,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				moduleTerritory: t.Optional(t.Boolean()),
 				moduleReactionRoles: t.Optional(t.Boolean()),
 				moduleMonitoring: t.Optional(t.Boolean()),
+				moduleGiveaways: t.Optional(t.Boolean()),
 				logChannelId: t.Optional(t.Nullable(t.String())),
 				adminRoleIds: t.Optional(t.Array(t.String())),
 				verifiedRoleIds: t.Optional(t.Array(t.String())),
@@ -514,6 +519,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				moduleTerritory: boolean;
 				moduleReactionRoles: boolean;
 				moduleMonitoring: boolean;
+				moduleGiveaways: boolean;
 			}> = {};
 
 			if (body.moduleVerification !== undefined) {
@@ -527,6 +533,9 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 			if (body.moduleMonitoring !== undefined) {
 				updates.moduleMonitoring = body.moduleMonitoring;
+			}
+			if (body.moduleGiveaways !== undefined) {
+				updates.moduleGiveaways = body.moduleGiveaways;
 			}
 
 			if (Object.keys(updates).length > 0) {
@@ -547,6 +556,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					reactionRoles:
 						updates.moduleReactionRoles ?? existing.moduleReactionRoles,
 					monitoring: updates.moduleMonitoring ?? existing.moduleMonitoring,
+					giveaways: updates.moduleGiveaways ?? existing.moduleGiveaways,
 				},
 			};
 		},
@@ -557,6 +567,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				moduleTerritory: t.Optional(t.Boolean()),
 				moduleReactionRoles: t.Optional(t.Boolean()),
 				moduleMonitoring: t.Optional(t.Boolean()),
+				moduleGiveaways: t.Optional(t.Boolean()),
 			}),
 			detail: {
 				summary: "Update Guild Modules",

@@ -11,6 +11,10 @@ import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
 import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
 import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
+import {
+	startGiveawayScheduler,
+	updateGiveawayChannel,
+} from "../lib/giveaways";
 import { logger } from "../lib/logger";
 import { startReactionRoleSyncLoop } from "../lib/reaction-roles";
 
@@ -62,6 +66,14 @@ export const readyEvent = {
 		await updateElimsArmoryStorageChannel(client).catch((err) => {
 			logger.warn("Failed to sync Elims Armory Storage embed on boot:", err);
 		});
+
+		// Synchronize Giveaway Channel if configured
+		await updateGiveawayChannel(client).catch((err) => {
+			logger.warn("Failed to sync Giveaway embed on boot:", err);
+		});
+
+		// Start background giveaway scheduler (15s cadence)
+		startGiveawayScheduler(client);
 
 		// Start background 1-minute verification reminder loop for approvers
 		startVerificationReminderScheduler(client);

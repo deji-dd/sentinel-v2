@@ -212,6 +212,7 @@ export interface GuildModuleStatus {
 	territory: boolean;
 	reactionRoles: boolean;
 	monitoring: boolean;
+	giveaways: boolean;
 }
 
 /**
@@ -227,13 +228,28 @@ export async function getGuildModules(
 			moduleTerritory: true,
 			moduleReactionRoles: true,
 			moduleMonitoring: true,
+			moduleGiveaways: true,
 		},
 	});
 
 	return {
-		verification: config?.moduleVerification ?? true,
-		territory: config?.moduleTerritory ?? true,
-		reactionRoles: config?.moduleReactionRoles ?? true,
+		verification: config?.moduleVerification ?? false,
+		territory: config?.moduleTerritory ?? false,
+		reactionRoles: config?.moduleReactionRoles ?? false,
 		monitoring: config?.moduleMonitoring ?? false,
+		giveaways: config?.moduleGiveaways ?? false,
 	};
+}
+
+/**
+ * Checks whether the Giveaway module is enabled for a guild.
+ * For Elims tournament guilds, it is ALWAYS enabled.
+ * For normal guilds, it requires explicit admin activation (module_giveaways = true).
+ */
+export async function isGiveawaysModuleEnabled(
+	guildId: string,
+): Promise<boolean> {
+	if (await isElimsGuildAsync(guildId)) return true;
+	const modules = await getGuildModules(guildId);
+	return modules.giveaways;
 }

@@ -1,4 +1,4 @@
-import { LayoutDashboard, LogOut, Package, Sliders } from "lucide-react";
+import { Gift, LayoutDashboard, LogOut, Package, Sliders } from "lucide-react";
 import type * as React from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -22,7 +22,11 @@ import { useAuth } from "../contexts/AuthContext";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";
 
-export type DashboardView = "overview" | "guild-config" | "item-requests";
+export type DashboardView =
+	| "overview"
+	| "guild-config"
+	| "item-requests"
+	| "giveaways";
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 	activeView: DashboardView;
@@ -114,6 +118,21 @@ export function AppSidebar({
 								>
 									<Package data-icon="inline-start" />
 									<span>Item Requests</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									isActive={activeView === "giveaways"}
+									onClick={() => {
+										onSelectView("giveaways");
+										navigate("/giveaways");
+									}}
+									tooltip="Giveaways"
+									className="cursor-pointer"
+								>
+									<Gift data-icon="inline-start" />
+									<span>Giveaways</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 

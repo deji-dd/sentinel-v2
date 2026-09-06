@@ -3,6 +3,7 @@ import type { DashboardView } from "@/components/AppSidebar";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";
+import { GiveawaysPage } from "./GiveawaysPage";
 import { GuildConfigPage } from "./GuildConfigPage";
 import { ItemRequestsPage } from "./ItemRequestsPage";
 
@@ -18,6 +19,9 @@ export function DashboardPage() {
 		if (path === "/item-requests") {
 			return "item-requests";
 		}
+		if (path === "/giveaways") {
+			return "giveaways";
+		}
 		return isOwner ? "guild-config" : "item-requests";
 	};
 
@@ -30,6 +34,8 @@ export function DashboardPage() {
 			setActiveView("guild-config");
 		} else if (path === "/item-requests") {
 			setActiveView("item-requests");
+		} else if (path === "/giveaways") {
+			setActiveView("giveaways");
 		} else if (path === "/overview") {
 			// Overview is disabled & inaccessible, redirect to item-requests
 			navigate("/item-requests");
@@ -50,6 +56,8 @@ export function DashboardPage() {
 		<DashboardLayout activeView={activeView} onSelectView={handleSelectView}>
 			{activeView === "guild-config" ? (
 				<GuildConfigPage />
+			) : activeView === "giveaways" ? (
+				<GiveawaysPage />
 			) : (
 				<ItemRequestsPage />
 			)}

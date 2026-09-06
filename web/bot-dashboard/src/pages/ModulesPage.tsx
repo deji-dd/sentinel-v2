@@ -35,12 +35,15 @@ export default function ModulesPage({ guildId }: ModulesPageProps) {
 		useState(true);
 	const [moduleMonitoring, setModuleMonitoring] = useState(false);
 	const [initialModuleMonitoring, setInitialModuleMonitoring] = useState(false);
+	const [moduleGiveaways, setModuleGiveaways] = useState(false);
+	const [initialModuleGiveaways, setInitialModuleGiveaways] = useState(false);
 
 	const isDirty =
 		moduleVerification !== initialModuleVerification ||
 		moduleTerritory !== initialModuleTerritory ||
 		moduleReactionRoles !== initialModuleReactionRoles ||
-		moduleMonitoring !== initialModuleMonitoring;
+		moduleMonitoring !== initialModuleMonitoring ||
+		moduleGiveaways !== initialModuleGiveaways;
 
 	const fetchConfig = useCallback(async () => {
 		try {
@@ -63,12 +66,14 @@ export default function ModulesPage({ guildId }: ModulesPageProps) {
 					moduleTerritory?: boolean;
 					moduleReactionRoles?: boolean;
 					moduleMonitoring?: boolean;
+					moduleGiveaways?: boolean;
 				};
 
 				const mv = config.moduleVerification ?? true;
 				const mt = config.moduleTerritory ?? true;
 				const mrr = config.moduleReactionRoles ?? true;
 				const mm = config.moduleMonitoring ?? false;
+				const mg = config.moduleGiveaways ?? false;
 
 				setModuleVerification(mv);
 				setInitialModuleVerification(mv);
@@ -78,6 +83,8 @@ export default function ModulesPage({ guildId }: ModulesPageProps) {
 				setInitialModuleReactionRoles(mrr);
 				setModuleMonitoring(mm);
 				setInitialModuleMonitoring(mm);
+				setModuleGiveaways(mg);
+				setInitialModuleGiveaways(mg);
 			}
 		} catch {
 			toast("Failed to load module configuration.", "error");
@@ -102,6 +109,7 @@ export default function ModulesPage({ guildId }: ModulesPageProps) {
 				moduleTerritory,
 				moduleReactionRoles,
 				moduleMonitoring,
+				moduleGiveaways,
 			});
 
 			if (res.error) {
@@ -331,6 +339,40 @@ export default function ModulesPage({ guildId }: ModulesPageProps) {
 								}`}
 							>
 								{moduleMonitoring ? "Active" : "Disabled"}
+							</Badge>
+						</div>
+					</div>
+
+					{/* Giveaways Module */}
+					<div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border/60 bg-background/50 gap-4">
+						<div className="flex items-start gap-3.5">
+							<div className="space-y-1">
+								<div className="flex items-center gap-2 flex-wrap">
+									<span className="font-semibold text-sm text-foreground">
+										Community Giveaways
+									</span>
+								</div>
+								<p className="text-xs text-muted-foreground">
+									Enables community item giveaways with persistent Discord
+									embeds and entry buttons.
+								</p>
+							</div>
+						</div>
+						<div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+							<Switch
+								id="module-giveaways-switch"
+								checked={moduleGiveaways}
+								onCheckedChange={setModuleGiveaways}
+							/>
+							<Badge
+								variant={moduleGiveaways ? "secondary" : "outline"}
+								className={`text-xs font-mono w-18 justify-center ${
+									moduleGiveaways
+										? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30"
+										: "text-muted-foreground"
+								}`}
+							>
+								{moduleGiveaways ? "Active" : "Disabled"}
 							</Badge>
 						</div>
 					</div>

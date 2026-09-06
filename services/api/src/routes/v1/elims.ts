@@ -180,7 +180,7 @@ function getBotInviteUrl(guildId?: string): string {
 	return base;
 }
 
-async function verifyElimsAdmin(
+export async function verifyElimsAdmin(
 	user: { role: string; discordId?: string | null } | null,
 ): Promise<boolean> {
 	if (!user) return false;
@@ -1848,6 +1848,47 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Toggle Test Flag on Request Log",
 				description:
 					"Toggles the is_test flag on a given item request log entry.",
+			},
+		},
+	)
+
+	// ─── PATCH /api/v1/elims/item-requests/deposits/:id/test ──────────────────
+	.patch(
+		"/item-requests/deposits/:id/test",
+		async ({ params, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden" };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(elimsArmoryDeposits)
+				.where(eq(elimsArmoryDeposits.id, params.id));
+
+			if (!existing) {
+				set.status = 404;
+				return { error: "Deposit entry not found." };
+			}
+
+			const [updated] = await db
+				.update(elimsArmoryDeposits)
+				.set({
+					isTest: !existing.isTest,
+					updatedAt: new Date(),
+				})
+				.where(eq(elimsArmoryDeposits.id, params.id))
+				.returning();
+
+			return { success: true, item: updated };
+		},
+		{
+			params: t.Object({ id: t.String() }),
+			detail: {
+				summary: "Toggle Test Flag on Deposit Log",
+				description:
+					"Toggles the is_test flag on a given armory deposit entry.",
 			},
 		},
 	);

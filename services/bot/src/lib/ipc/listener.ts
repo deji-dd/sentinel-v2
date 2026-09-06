@@ -13,6 +13,7 @@ import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
+import { updateGiveawayChannel } from "../giveaways";
 import { logger } from "../logger";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
@@ -156,7 +157,11 @@ Logger.addLogSink((entry) => {
 	});
 });
 
-botIpcServer.start();
+if (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) {
+	botIpcServer.start().catch((err) => {
+		logger.error("Failed to start Bot IPC server:", err);
+	});
+}
 
 /**
  * Registers IPC message listeners for real-time bot event dispatches (reaction roles, faction map, territory alerts, cron verification).
@@ -185,6 +190,8 @@ export function setupBotIpcListeners(client: Client): void {
 				message.data?.config,
 			);
 			void updateElimsArmoryStorageChannel(client, message.data?.guildId);
+		} else if (message.action === "sync_elims_giveaways") {
+			void updateGiveawayChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {
@@ -194,6 +201,7 @@ export function setupBotIpcListeners(client: Client): void {
 				void getTargetGuildIds();
 				void deployGuildCommands(guildId);
 				void updateElimsItemRequestsChannel(client, guildId);
+				void updateGiveawayChannel(client, guildId);
 			}
 		} else if (message.action === "reset_elims_guild") {
 			logger.info("Elims guild configuration was reset via IPC.");

@@ -11,10 +11,13 @@ import {
 export const guildConfigs = pgTable("guild_configs", {
 	guildId: text("guild_id").primaryKey(),
 	authorized: boolean("authorized").default(true).notNull(),
-	moduleVerification: boolean("module_verification").default(true).notNull(),
-	moduleTerritory: boolean("module_territory").default(true).notNull(),
-	moduleReactionRoles: boolean("module_reaction_roles").default(true).notNull(),
+	moduleVerification: boolean("module_verification").default(false).notNull(),
+	moduleTerritory: boolean("module_territory").default(false).notNull(),
+	moduleReactionRoles: boolean("module_reaction_roles")
+		.default(false)
+		.notNull(),
 	moduleMonitoring: boolean("module_monitoring").default(false).notNull(),
+	moduleGiveaways: boolean("module_giveaways").default(false).notNull(),
 	logChannelId: text("log_channel_id"),
 	adminRoleIds: jsonb("admin_role_ids").$type<string[]>().default([]).notNull(),
 	verifiedRoleIds: jsonb("verified_role_ids")

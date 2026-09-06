@@ -44,7 +44,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...dashboardCommand, scope: "both" },
 	{ ...configCommand, scope: "normal" },
 	{ ...ttSelectorCommand, scope: "normal" },
-	{ ...purgeCommand, scope: "normal" },
+	{ ...purgeCommand, scope: "both" },
 	{ ...verifyCommand, scope: "normal" },
 	{ ...verifyallCommand, scope: "normal" },
 	{ ...assaultCheckCommand, scope: "normal" },
@@ -56,6 +56,7 @@ export const normalCommandsList: BotCommand[] = [
 export const elimsCommandsList: BotCommand[] = [
 	{ ...dashboardCommand, scope: "both" },
 	{ ...pingCommand, scope: "both" },
+	{ ...purgeCommand, scope: "both" },
 ];
 
 // Global list of all known bot commands for the dispatcher collection

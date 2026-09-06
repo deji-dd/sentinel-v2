@@ -90,7 +90,7 @@ export async function getRequesterApprovedHistory(
 		.from(elimsItemRequests)
 		.where(and(...conditions));
 
-	const fieldName = `Approved History (${isTest ? "Test" : "Live"})`;
+	const fieldName = `Approved History`;
 
 	if (approvedRequests.length === 0) {
 		return {

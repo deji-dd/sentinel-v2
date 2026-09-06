@@ -32,6 +32,14 @@ import {
 import { createErrorEmbed } from "../lib/embeds";
 import { handleFactionDirectoryButton } from "../lib/faction-map-channel";
 import { handleFactionMonitoringButton } from "../lib/faction-monitoring-channel";
+import {
+	handleGiveawayCategorySelect,
+	handleGiveawayCreateInitButton,
+	handleGiveawayEntryButton,
+	handleGiveawayItemPageButton,
+	handleGiveawayItemSelect,
+	handleGiveawayModalSubmit,
+} from "../lib/giveaways";
 import { logger } from "../lib/logger";
 
 export const interactionCreateEvent = {
@@ -82,6 +90,12 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("monitoring_revives_page:")
 				) {
 					await handleFactionMonitoringButton(interaction);
+				} else if (interaction.customId === "giveaway_create_init") {
+					await handleGiveawayCreateInitButton(interaction);
+				} else if (interaction.customId.startsWith("giveaway_item_page:")) {
+					await handleGiveawayItemPageButton(interaction);
+				} else if (interaction.customId.startsWith("giveaway_entry:")) {
+					await handleGiveawayEntryButton(interaction);
 				}
 				return;
 			}
@@ -97,6 +111,10 @@ export const interactionCreateEvent = {
 					await handleArmoryTestCategorySelect(interaction);
 				} else if (interaction.customId === "elims_armory_test_item_select") {
 					await handleArmoryTestItemSelect(interaction);
+				} else if (interaction.customId === "giveaway_category_select") {
+					await handleGiveawayCategorySelect(interaction);
+				} else if (interaction.customId.startsWith("giveaway_item_select:")) {
+					await handleGiveawayItemSelect(interaction);
 				}
 				return;
 			}
@@ -121,6 +139,8 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("elims_armory_test_qty_modal:")
 				) {
 					await handleArmoryTestQtyModalSubmit(interaction);
+				} else if (interaction.customId.startsWith("giveaway_config_modal:")) {
+					await handleGiveawayModalSubmit(interaction);
 				}
 				return;
 			}

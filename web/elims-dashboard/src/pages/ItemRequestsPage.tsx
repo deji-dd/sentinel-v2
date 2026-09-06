@@ -5,6 +5,7 @@ import {
 	Copy,
 	Download,
 	ExternalLink,
+	FileText,
 	FlaskConical,
 	Loader2,
 	MoreHorizontal,
@@ -32,6 +33,14 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -219,6 +228,8 @@ export function ItemRequestsPage() {
 	const [depositsTotalCount, setDepositsTotalCount] = useState(0);
 	const [depositsSearch, setDepositsSearch] = useState("");
 	const [debouncedDepositsSearch, setDebouncedDepositsSearch] = useState("");
+	const [togglingTestDepositId, setTogglingTestDepositId] = useState<string | null>(null);
+	const [selectedRejectionLog, setSelectedRejectionLog] = useState<ItemRequestLog | null>(null);
 	const depositsAbortControllerRef = useRef<AbortController | null>(null);
 
 	// ─── Fetch Stock Inventory ────────────────────────────────────────────────
@@ -697,7 +708,6 @@ export function ItemRequestsPage() {
 		setBlacklistedUserIds((prev) => [...prev, member.id]);
 		setMemberSearchQuery("");
 		setIsMemberDropdownOpen(false);
-		toast.success(`Added ${member.displayName} to blacklist.`);
 	};
 
 	const handleAddBlacklist = () => {
@@ -710,12 +720,10 @@ export function ItemRequestsPage() {
 		setBlacklistedUserIds((prev) => [...prev, trimmed]);
 		setMemberSearchQuery("");
 		setIsMemberDropdownOpen(false);
-		toast.success(`Added user ID ${trimmed} to blacklist.`);
 	};
 
 	const handleRemoveBlacklist = (userId: string) => {
 		setBlacklistedUserIds((prev) => prev.filter((id) => id !== userId));
-		toast.success(`Removed user ID ${userId} from blacklist.`);
 	};
 
 	// ─── Mode Switcher Handler ────────────────────────────────────────────────
@@ -803,6 +811,39 @@ export function ItemRequestsPage() {
 			toast.error(err instanceof Error ? err.message : "Error updating log");
 		} finally {
 			setTogglingTestId(null);
+		}
+	};
+
+	// ─── Toggle Test Flag on Deposit ──────────────────────────────────────────
+	const handleToggleTestDeposit = async (depositId: string) => {
+		setTogglingTestDepositId(depositId);
+		try {
+			const res = await fetch(
+				`/api/v1/elims/item-requests/deposits/${depositId}/test`,
+				{
+					method: "PATCH",
+				},
+			);
+			if (!res.ok) throw new Error("Failed to update deposit test flag");
+			const data = (await res.json()) as {
+				success: boolean;
+				item: ArmoryDeposit;
+			};
+
+			setDeposits((prev) =>
+				prev.map((item) => (item.id === depositId ? data.item : item)),
+			);
+			toast.success(
+				data.item.isTest
+					? "Moved deposit to test history."
+					: "Moved deposit to live history.",
+			);
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Error updating deposit log",
+			);
+		} finally {
+			setTogglingTestDepositId(null);
 		}
 	};
 
@@ -1946,6 +1987,7 @@ export function ItemRequestsPage() {
 											<TableHead>Depositor</TableHead>
 											<TableHead>Item & Amount</TableHead>
 											<TableHead>Timestamp (TCT)</TableHead>
+											<TableHead className="w-[80px] text-right text-xs">Action</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody
@@ -1959,7 +2001,7 @@ export function ItemRequestsPage() {
 											["dep-1", "dep-2", "dep-3", "dep-4", "dep-5"].map(
 												(skKey) => (
 													<TableRow key={skKey}>
-														<TableCell colSpan={3}>
+														<TableCell colSpan={4}>
 															<Skeleton className="h-9 w-full" />
 														</TableCell>
 													</TableRow>
@@ -1968,7 +2010,7 @@ export function ItemRequestsPage() {
 										) : deposits.length === 0 ? (
 											<TableRow>
 												<TableCell
-													colSpan={3}
+													colSpan={4}
 													className="text-center py-10 text-xs text-muted-foreground"
 												>
 													No deposits found matching your criteria.
@@ -2028,6 +2070,72 @@ export function ItemRequestsPage() {
 														<span className="text-xs font-mono text-foreground">
 															{formatTctTimestamp(dep.createdAt)}
 														</span>
+													</TableCell>
+
+													{/* Actions */}
+													<TableCell className="text-right">
+														<DropdownMenu>
+															<DropdownMenuTrigger asChild>
+																<Button
+																	variant="ghost"
+																	size="icon"
+																	className="size-7 hover:bg-muted/80 cursor-pointer"
+																	disabled={togglingTestDepositId === dep.id}
+																>
+																	{togglingTestDepositId === dep.id ? (
+																		<Loader2 className="size-3.5 animate-spin" />
+																	) : (
+																		<MoreHorizontal className="size-3.5" />
+																	)}
+																	<span className="sr-only">Open menu</span>
+																</Button>
+															</DropdownMenuTrigger>
+															<DropdownMenuContent
+																align="end"
+																className="w-48"
+															>
+																<DropdownMenuLabel className="text-[10px] font-mono uppercase text-muted-foreground">
+																	Deposit Actions
+																</DropdownMenuLabel>
+																<DropdownMenuItem
+																	onClick={() => handleToggleTestDeposit(dep.id)}
+																	className="cursor-pointer text-xs flex items-center gap-2"
+																>
+																	<FlaskConical className="size-3.5" />
+																	<span>
+																		{dep.isTest
+																			? "Move to Live"
+																			: "Move to Test"}
+																	</span>
+																</DropdownMenuItem>
+																<DropdownMenuSeparator />
+																{dep.tornId && (
+																	<DropdownMenuItem
+																		asChild
+																		className="cursor-pointer text-xs flex items-center gap-2"
+																	>
+																		<a
+																			href={`https://www.torn.com/profiles.php?XID=${dep.tornId}`}
+																			target="_blank"
+																			rel="noopener noreferrer"
+																		>
+																			<ExternalLink className="size-3.5" />
+																			<span>View Torn Profile</span>
+																		</a>
+																	</DropdownMenuItem>
+																)}
+																<DropdownMenuItem
+																	onClick={() => {
+																		navigator.clipboard.writeText(dep.id);
+																		toast.success("Deposit ID copied to clipboard");
+																	}}
+																	className="cursor-pointer text-xs flex items-center gap-2"
+																>
+																	<Copy className="size-3.5" />
+																	<span>Copy Deposit ID</span>
+																</DropdownMenuItem>
+															</DropdownMenuContent>
+														</DropdownMenu>
 													</TableCell>
 												</TableRow>
 											))
@@ -2396,10 +2504,13 @@ export function ItemRequestsPage() {
 																{isRejected && (
 																	<Badge
 																		variant="outline"
-																		className="bg-rose-500/10 text-rose-500 border-rose-500/30 text-[10px] font-mono flex items-center gap-1 w-fit"
+																		className="bg-rose-500/10 text-rose-500 border-rose-500/30 text-[10px] font-mono flex items-center gap-1 w-fit cursor-pointer hover:bg-rose-500/20 transition-colors"
+																		onClick={() => setSelectedRejectionLog(log)}
+																		title="Click to view rejection reason"
 																	>
 																		<XCircle className="size-2.5" />
-																		REJECTED
+																		<span>REJECTED</span>
+																		<FileText className="size-2.5 opacity-70" />
 																	</Badge>
 																)}
 															</div>
@@ -2464,6 +2575,18 @@ export function ItemRequestsPage() {
 																	<DropdownMenuLabel className="text-[10px] font-mono uppercase text-muted-foreground">
 																		Log Actions
 																	</DropdownMenuLabel>
+																	{log.status === "rejected" && (
+																		<>
+																			<DropdownMenuItem
+																				onClick={() => setSelectedRejectionLog(log)}
+																				className="cursor-pointer text-xs flex items-center gap-2 text-rose-500 focus:text-rose-500"
+																			>
+																				<FileText className="size-3.5" />
+																				<span>View Rejection Reason</span>
+																			</DropdownMenuItem>
+																			<DropdownMenuSeparator />
+																		</>
+																	)}
 																	<DropdownMenuItem
 																		onClick={() => handleToggleTest(log.id)}
 																		className="cursor-pointer text-xs flex items-center gap-2"
@@ -2559,6 +2682,71 @@ export function ItemRequestsPage() {
 					</Card>
 				</TabsContent>
 			</Tabs>
+
+			{/* Rejection Details Modal */}
+			<Dialog
+				open={!!selectedRejectionLog}
+				onOpenChange={(open) => !open && setSelectedRejectionLog(null)}
+			>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2 text-destructive">
+							<XCircle className="size-5" />
+							Rejection Details
+						</DialogTitle>
+						<DialogDescription className="text-xs">
+							Request by{" "}
+							<strong className="text-foreground">
+								{selectedRejectionLog?.discordUsername}
+							</strong>{" "}
+							for{" "}
+							<strong className="text-foreground">
+								{selectedRejectionLog?.quantity}x {selectedRejectionLog?.itemName}
+							</strong>
+						</DialogDescription>
+					</DialogHeader>
+
+					<div className="space-y-3 py-2 text-xs">
+						<div className="flex justify-between items-center text-muted-foreground border-b border-border/60 pb-2">
+							<span>Handled By</span>
+							<span className="font-semibold text-foreground font-mono">
+								{selectedRejectionLog?.handledByUsername ||
+									(selectedRejectionLog?.handledByDiscordId
+										? `<@${selectedRejectionLog.handledByDiscordId}>`
+										: "Manager")}
+							</span>
+						</div>
+						{selectedRejectionLog?.handledAt && (
+							<div className="flex justify-between items-center text-muted-foreground border-b border-border/60 pb-2">
+								<span>Handled At</span>
+								<span className="font-mono text-foreground">
+									{formatTctTimestamp(selectedRejectionLog.handledAt)}
+								</span>
+							</div>
+						)}
+						<div className="space-y-1.5">
+							<span className="font-medium text-muted-foreground">
+								Rejection Reason
+							</span>
+							<div className="p-3 bg-destructive/5 border border-destructive/20 text-foreground font-mono text-xs rounded-lg whitespace-pre-wrap max-h-48 overflow-y-auto">
+								{selectedRejectionLog?.reason ||
+									"No explicit reason was provided."}
+							</div>
+						</div>
+					</div>
+
+					<DialogFooter>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setSelectedRejectionLog(null)}
+							className="cursor-pointer"
+						>
+							Close
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

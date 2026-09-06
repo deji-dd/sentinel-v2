@@ -255,6 +255,13 @@ export type IpcSyncElimsItemRequestsMessage = {
 	};
 };
 
+export type IpcSyncElimsGiveawaysMessage = {
+	action: "sync_elims_giveaways";
+	data?: {
+		guildId?: string;
+	};
+};
+
 export type IpcReinitializeCrimeLedgerMessage = {
 	action: "reinitialize_crime_ledger";
 	data?: Record<string, unknown>;
@@ -386,6 +393,7 @@ export type IpcMessage =
 	| IpcSyncElimsGuildMessage
 	| IpcResetElimsGuildMessage
 	| IpcSyncElimsItemRequestsMessage
+	| IpcSyncElimsGiveawaysMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

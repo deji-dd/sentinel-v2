@@ -34,7 +34,7 @@ describe("getRequesterApprovedHistory", () => {
 			testUserId,
 			false,
 		);
-		expect(liveHistory.fieldName).toBe("Approved History (Live)");
+		expect(liveHistory.fieldName).toBe("Approved History");
 		expect(liveHistory.fieldValue).toBe("None");
 
 		const testHistory = await getRequesterApprovedHistory(
@@ -42,7 +42,7 @@ describe("getRequesterApprovedHistory", () => {
 			testUserId,
 			true,
 		);
-		expect(testHistory.fieldName).toBe("Approved History (Test)");
+		expect(testHistory.fieldName).toBe("Approved History");
 		expect(testHistory.fieldValue).toBe("None");
 	});
 
@@ -132,7 +132,7 @@ describe("getRequesterApprovedHistory", () => {
 			testUserId,
 			false,
 		);
-		expect(liveHistory.fieldName).toBe("Approved History (Live)");
+		expect(liveHistory.fieldName).toBe("Approved History");
 		expect(liveHistory.fieldValue).toContain("• **10x** Xanax");
 		expect(liveHistory.fieldValue).toContain("• **20x** Feathery Hotel Coupon");
 		expect(liveHistory.fieldValue).toContain("**Total**: 30 items");
@@ -143,7 +143,7 @@ describe("getRequesterApprovedHistory", () => {
 			testUserId,
 			true,
 		);
-		expect(testHistory.fieldName).toBe("Approved History (Test)");
+		expect(testHistory.fieldName).toBe("Approved History");
 		expect(testHistory.fieldValue).toContain("• **3x** Xanax");
 		expect(testHistory.fieldValue).toContain("**Total**: 3 items");
 		expect(testHistory.fieldValue).not.toContain("Feathery Hotel Coupon");
