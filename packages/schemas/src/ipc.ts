@@ -220,6 +220,20 @@ export type IpcSyncGuildCommandsMessage = {
 	};
 };
 
+export type IpcSyncAuthorizedGuildsMessage = {
+	action: "sync_authorized_guilds";
+	data?: {
+		guildId?: string;
+	};
+};
+
+export type IpcDeauthorizeGuildMessage = {
+	action: "deauthorize_guild";
+	data?: {
+		guildId?: string;
+	};
+};
+
 export type IpcSyncElimsGuildMessage = {
 	action: "sync_elims_guild";
 	data?: {
@@ -367,6 +381,8 @@ export type IpcMessage =
 	| IpcSyncFactionMapMessage
 	| IpcSyncFactionMonitoringMessage
 	| IpcSyncGuildCommandsMessage
+	| IpcSyncAuthorizedGuildsMessage
+	| IpcDeauthorizeGuildMessage
 	| IpcSyncElimsGuildMessage
 	| IpcResetElimsGuildMessage
 	| IpcSyncElimsItemRequestsMessage
