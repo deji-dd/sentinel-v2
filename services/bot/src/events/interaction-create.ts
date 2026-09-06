@@ -11,11 +11,23 @@ import {
 } from "discord.js";
 import type { BotCommand } from "../commands/index";
 import {
+	handleArmoryLogDepositButton,
+	handleArmoryLogModalSubmit,
+	handleArmoryTestCategorySelect,
+	handleArmoryTestDepositButton,
+	handleArmoryTestItemSelect,
+	handleArmoryTestQtyModalSubmit,
+} from "../lib/elims-armory-storage";
+import {
 	handleItemGrantingButton,
+	handleItemGrantRejectModalSubmit,
 	handleItemRequestButton,
 	handleItemRequestCategorySelect,
 	handleItemRequestItemSelect,
 	handleItemRequestModalSubmit,
+	handleItemVerifySendButton,
+	handleItemVerifySendModalSubmit,
+	handleItemVerifyTestBypassButton,
 } from "../lib/elims-item-requests";
 import { createErrorEmbed } from "../lib/embeds";
 import { handleFactionDirectoryButton } from "../lib/faction-map-channel";
@@ -46,10 +58,21 @@ export const interactionCreateEvent = {
 		}
 
 		if (interaction.isButton()) {
-			if (interaction.customId === "elims_request_open") {
+			if (
+				interaction.customId === "elims_request_open" ||
+				interaction.customId === "elims_request_test_open"
+			) {
 				await handleItemRequestButton(interaction);
 			} else if (interaction.customId.startsWith("elims_grant_")) {
 				await handleItemGrantingButton(interaction);
+			} else if (interaction.customId.startsWith("elims_verify_send:")) {
+				await handleItemVerifySendButton(interaction);
+			} else if (interaction.customId.startsWith("elims_verify_test_bypass:")) {
+				await handleItemVerifyTestBypassButton(interaction);
+			} else if (interaction.customId === "elims_armory_log_deposit") {
+				await handleArmoryLogDepositButton(interaction);
+			} else if (interaction.customId === "elims_armory_test_deposit") {
+				await handleArmoryTestDepositButton(interaction);
 			} else if (interaction.customId.startsWith("faction_dir_page:")) {
 				await handleFactionDirectoryButton(interaction);
 			} else if (interaction.customId.startsWith("monitoring_revives_page:")) {
@@ -59,17 +82,34 @@ export const interactionCreateEvent = {
 		}
 
 		if (interaction.isStringSelectMenu()) {
-			if (interaction.customId === "elims_category_select") {
+			if (interaction.customId.startsWith("elims_category_select")) {
 				await handleItemRequestCategorySelect(interaction);
-			} else if (interaction.customId === "elims_item_select") {
+			} else if (interaction.customId.startsWith("elims_item_select")) {
 				await handleItemRequestItemSelect(interaction);
+			} else if (interaction.customId === "elims_armory_test_category_select") {
+				await handleArmoryTestCategorySelect(interaction);
+			} else if (interaction.customId === "elims_armory_test_item_select") {
+				await handleArmoryTestItemSelect(interaction);
 			}
 			return;
 		}
 
 		if (interaction.isModalSubmit()) {
-			if (interaction.customId.startsWith("elims_request_modal:")) {
+			if (
+				interaction.customId.startsWith("elims_request_modal:") ||
+				interaction.customId.startsWith("elims_request_test_modal:")
+			) {
 				await handleItemRequestModalSubmit(interaction);
+			} else if (interaction.customId.startsWith("elims_grant_reject_modal:")) {
+				await handleItemGrantRejectModalSubmit(interaction);
+			} else if (interaction.customId.startsWith("elims_verify_send_modal:")) {
+				await handleItemVerifySendModalSubmit(interaction);
+			} else if (interaction.customId === "elims_armory_log_modal") {
+				await handleArmoryLogModalSubmit(interaction);
+			} else if (
+				interaction.customId.startsWith("elims_armory_test_qty_modal:")
+			) {
+				await handleArmoryTestQtyModalSubmit(interaction);
 			}
 			return;
 		}

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatTctTimestamp } from "@/lib/utils";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";
 
@@ -487,9 +488,9 @@ export function GuildConfigPage() {
 													</Badge>
 												</div>
 												<span className="text-[10px] text-muted-foreground font-mono">
-													Added {new Date(k.createdAt).toLocaleDateString()}
+													Added {formatTctTimestamp(k.createdAt)}
 													{k.lastUsedAt &&
-														` • Last used ${new Date(k.lastUsedAt).toLocaleDateString()}`}
+														` • Last used ${formatTctTimestamp(k.lastUsedAt)}`}
 												</span>
 											</div>
 										</div>

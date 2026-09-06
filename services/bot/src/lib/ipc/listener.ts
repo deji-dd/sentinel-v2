@@ -9,6 +9,7 @@ import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
+import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
@@ -183,6 +184,7 @@ export function setupBotIpcListeners(client: Client): void {
 				message.data?.guildId,
 				message.data?.config,
 			);
+			void updateElimsArmoryStorageChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {

@@ -67,6 +67,7 @@ export {
 	like,
 	lt,
 	lte,
+	ne,
 	or,
 	type SQL,
 	sql,
@@ -74,5 +75,6 @@ export {
 
 // Export schema for queries and types
 export * from "./src/lib/alerts";
+export * from "./src/lib/elims-stock";
 export * from "./src/lib/guilds";
 export * from "./src/schema";

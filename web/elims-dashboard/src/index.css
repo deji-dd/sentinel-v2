@@ -113,3 +113,15 @@ body {
 	min-height: 100vh;
 	transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+/* Hide arrows/spinners from number inputs */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+
+input[type="number"] {
+	-moz-appearance: textfield;
+	appearance: textfield;
+}

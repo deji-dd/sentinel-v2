@@ -13,14 +13,18 @@ export interface WhitelistedItem {
 	category: string;
 	marketPrice?: number;
 	image?: string;
+	maxRequestable?: number;
 }
 
 export interface ElimsItemRequestConfig {
 	requestChannelId: string | null;
 	grantingChannelId: string | null;
+	storageChannelId?: string | null;
+	storageEmbedMessageId?: string | null;
 	requesterRoleIds: string[];
 	managerRoleIds: string[];
 	allowedItems: WhitelistedItem[];
+	blacklistedUserIds?: string[];
 	embedMessageId?: string | null;
 	updatedAt: string;
 }
@@ -49,7 +53,35 @@ export const elimsItemRequests = pgTable("elims_item_requests", {
 	handledByTornId: integer("handled_by_torn_id"),
 	handledByTornName: text("handled_by_torn_name"),
 	handledAt: timestamp("handled_at", { withTimezone: true, mode: "date" }),
+	verificationStatus: text("verification_status").default("none").notNull(), // 'none' | 'pending_verification' | 'verified'
+	verifiedAt: timestamp("verified_at", { withTimezone: true, mode: "date" }),
+	verifiedByDiscordId: text("verified_by_discord_id"),
+	verificationLog: text("verification_log"),
 	metadata: jsonb("metadata"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export const elimsArmoryDeposits = pgTable("elims_armory_deposits", {
+	id: text("id")
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	guildId: text("guild_id").notNull(),
+	discordUserId: text("discord_user_id").notNull(),
+	discordUsername: text("discord_username").notNull(),
+	tornId: integer("torn_id"),
+	tornName: text("torn_name"),
+	itemId: text("item_id").notNull(),
+	itemName: text("item_name").notNull(),
+	itemCategory: text("item_category").notNull(),
+	quantity: integer("quantity").notNull(),
+	rawLog: text("raw_log"),
+	isTest: boolean("is_test").default(false).notNull(),
+	status: text("status").default("available").notNull(), // 'available' | 'consumed'
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),

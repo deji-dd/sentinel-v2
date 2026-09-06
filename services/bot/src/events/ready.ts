@@ -6,7 +6,9 @@ import {
 } from "@sentinel/database";
 import { ActivityType, type Client, Events } from "discord.js";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
+import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
+import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
 import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
 import { logger } from "../lib/logger";
@@ -55,5 +57,13 @@ export const readyEvent = {
 		await updateElimsItemRequestsChannel(client).catch((err) => {
 			logger.warn("Failed to sync Elims Item Requests embed on boot:", err);
 		});
+
+		// Synchronize Elims Armory Storage Channel if configured
+		await updateElimsArmoryStorageChannel(client).catch((err) => {
+			logger.warn("Failed to sync Elims Armory Storage embed on boot:", err);
+		});
+
+		// Start background 1-minute verification reminder loop for approvers
+		startVerificationReminderScheduler(client);
 	},
 };

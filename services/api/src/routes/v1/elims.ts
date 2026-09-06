@@ -5,12 +5,15 @@ import {
 	desc,
 	type ElimsItemRequestConfig,
 	elimsApiKeys,
+	elimsArmoryDeposits,
 	elimsItemRequests,
 	elimsVerifiedUsers,
 	eq,
+	getArmoryStock,
 	guildConfigs,
 	ilike,
 	or,
+	type SQL,
 	systemStates,
 	tornItems,
 	type WhitelistedItem,
@@ -59,11 +62,27 @@ interface DiscordGuildMember {
 	user?: {
 		id: string;
 		username: string;
+		global_name?: string | null;
 		avatar: string | null;
+		bot?: boolean;
 	};
+	nick?: string | null;
 	roles: string[];
 	permissions?: string;
 }
+
+const guildMemberCache = new Map<
+	string,
+	{
+		timestamp: number;
+		members: Array<{
+			id: string;
+			username: string;
+			displayName: string;
+			avatar: string | null;
+		}>;
+	}
+>();
 
 interface ElimsConfigData {
 	guildId: string;
@@ -890,6 +909,92 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 		},
 	)
 
+	// ─── GET /api/v1/elims/guild-members/:guildId ─────────────────────────────
+	.get(
+		"/guild-members/:guildId",
+		async ({ params, query, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+			const { guildId } = params;
+			if (!/^\d{17,20}$/.test(guildId)) {
+				set.status = 400;
+				return { error: "Invalid Discord Guild ID format." };
+			}
+			const botToken = env.DISCORD_TOKEN;
+			if (!botToken) return { members: [] };
+
+			const cacheKey = `members_${guildId}`;
+			const bypassCache = query.fresh === "true";
+			const cached = guildMemberCache.get(cacheKey);
+			if (
+				!bypassCache &&
+				cached &&
+				Date.now() - cached.timestamp < 3 * 60 * 1000
+			) {
+				return { members: cached.members };
+			}
+
+			const allMembers: Array<{
+				id: string;
+				username: string;
+				displayName: string;
+				avatar: string | null;
+			}> = [];
+
+			let after: string | undefined;
+			for (let page = 0; page < 3; page++) {
+				const queryStr = `limit=1000${after ? `&after=${after}` : ""}`;
+				const batch = await fetchDiscordApi<DiscordGuildMember[]>(
+					`/guilds/${guildId}/members?${queryStr}`,
+					`Bot ${botToken}`,
+				);
+
+				if (!batch || !Array.isArray(batch) || batch.length === 0) break;
+
+				for (const m of batch) {
+					if (!m.user || m.user.bot) continue;
+					allMembers.push({
+						id: m.user.id,
+						username: m.user.username,
+						displayName: m.nick || m.user.global_name || m.user.username,
+						avatar: m.user.avatar
+							? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=64`
+							: null,
+					});
+				}
+
+				if (batch.length < 1000) break;
+				after = batch[batch.length - 1]?.user?.id;
+				if (!after) break;
+			}
+
+			allMembers.sort((a, b) =>
+				a.displayName.localeCompare(b.displayName, undefined, {
+					sensitivity: "base",
+				}),
+			);
+
+			guildMemberCache.set(cacheKey, {
+				timestamp: Date.now(),
+				members: allMembers,
+			});
+
+			return { members: allMembers };
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			query: t.Object({ fresh: t.Optional(t.String()) }),
+			detail: {
+				summary: "Fetch Guild Members",
+				description:
+					"Fetches non-bot members of the guild for user search and blacklisting.",
+			},
+		},
+	)
+
 	// ─── GET /api/v1/elims/api-keys ───────────────────────────────────────────
 	.get(
 		"/api-keys",
@@ -1165,13 +1270,45 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				return { error: "Forbidden: Elims administrator access required." };
 			}
 
+			const [existingState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+			const existingConfig =
+				existingState?.data as unknown as ElimsItemRequestConfig | null;
+
+			// If request channel changed, old embed cannot be reused; otherwise preserve existing embedMessageId
+			const channelChanged =
+				existingConfig?.requestChannelId &&
+				body.requestChannelId !== undefined &&
+				body.requestChannelId !== existingConfig.requestChannelId;
+
+			const embedMessageId = channelChanged
+				? null
+				: (body.embedMessageId ?? existingConfig?.embedMessageId ?? null);
+
+			// If storage channel changed, old embed cannot be reused; otherwise preserve existing storageEmbedMessageId
+			const storageChannelChanged =
+				existingConfig?.storageChannelId &&
+				body.storageChannelId !== undefined &&
+				body.storageChannelId !== existingConfig.storageChannelId;
+
+			const storageEmbedMessageId = storageChannelChanged
+				? null
+				: (body.storageEmbedMessageId ??
+					existingConfig?.storageEmbedMessageId ??
+					null);
+
 			const configPayload: ElimsItemRequestConfig = {
 				requestChannelId: body.requestChannelId ?? null,
 				grantingChannelId: body.grantingChannelId ?? null,
+				storageChannelId: body.storageChannelId ?? null,
+				storageEmbedMessageId,
 				requesterRoleIds: body.requesterRoleIds ?? [],
 				managerRoleIds: body.managerRoleIds ?? [],
 				allowedItems: body.allowedItems ?? [],
-				embedMessageId: body.embedMessageId ?? null,
+				blacklistedUserIds: body.blacklistedUserIds ?? [],
+				embedMessageId,
 				updatedAt: new Date().toISOString(),
 			};
 
@@ -1215,6 +1352,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 			body: t.Object({
 				requestChannelId: t.Nullable(t.String()),
 				grantingChannelId: t.Nullable(t.String()),
+				storageChannelId: t.Optional(t.Nullable(t.String())),
+				storageEmbedMessageId: t.Optional(t.Nullable(t.String())),
 				requesterRoleIds: t.Array(t.String()),
 				managerRoleIds: t.Array(t.String()),
 				allowedItems: t.Array(
@@ -1224,14 +1363,173 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 						category: t.String(),
 						marketPrice: t.Optional(t.Number()),
 						image: t.Optional(t.String()),
+						maxRequestable: t.Optional(t.Number()),
 					}),
 				),
+				blacklistedUserIds: t.Optional(t.Array(t.String())),
 				embedMessageId: t.Optional(t.Nullable(t.String())),
 			}),
 			detail: {
 				summary: "Update Item Requests Configuration",
 				description:
-					"Updates request/grant channels, requester/manager roles, and whitelisted items.",
+					"Updates request/grant/storage channels, requester/manager roles, and whitelisted items.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/item-requests/storage/inventory ────────────────────
+	.get(
+		"/item-requests/storage/inventory",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden" };
+			}
+
+			const [elimsGuildState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const elimsGuildData = elimsGuildState?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			let guildId = elimsGuildData?.guildId ?? "";
+			if (!guildId) {
+				const [deposit] = await db
+					.select({ guildId: elimsArmoryDeposits.guildId })
+					.from(elimsArmoryDeposits)
+					.limit(1);
+				if (deposit?.guildId) {
+					guildId = deposit.guildId;
+				}
+			}
+
+			const liveStockMap = await getArmoryStock(guildId, false);
+			const testStockMap = await getArmoryStock(guildId, true);
+
+			const liveList = Array.from(liveStockMap.values());
+			const testList = Array.from(testStockMap.values());
+
+			return {
+				inventory: {
+					live: liveList,
+					test: testList,
+				},
+				live: liveList,
+				test: testList,
+			};
+		},
+		{
+			detail: {
+				summary: "Get Armory Stock Inventory",
+				description:
+					"Returns current available item stockpile for Live and Test modes.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/item-requests/deposits ─────────────────────────────
+	.get(
+		"/item-requests/deposits",
+		async ({ query, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden" };
+			}
+
+			const [elimsGuildState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const elimsGuildData = elimsGuildState?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = elimsGuildData?.guildId ?? "";
+
+			const page = Math.max(1, Number(query.page ?? 1));
+			const limit = Math.min(100, Math.max(1, Number(query.limit ?? 20)));
+			const offset = (page - 1) * limit;
+
+			const conditions: SQL<unknown>[] = [
+				eq(elimsArmoryDeposits.guildId, guildId),
+			];
+
+			if (query.isTest === "true") {
+				conditions.push(eq(elimsArmoryDeposits.isTest, true));
+			} else if (query.isTest === "false") {
+				conditions.push(eq(elimsArmoryDeposits.isTest, false));
+			}
+
+			if (query.search?.trim()) {
+				const s = `%${query.search.trim()}%`;
+				const searchFilter = or(
+					ilike(elimsArmoryDeposits.tornName, s),
+					ilike(elimsArmoryDeposits.discordUsername, s),
+					ilike(elimsArmoryDeposits.itemName, s),
+					ilike(elimsArmoryDeposits.itemCategory, s),
+				);
+				if (searchFilter) {
+					conditions.push(searchFilter);
+				}
+			}
+
+			const whereClause = and(...conditions);
+
+			const [totalResult] = await db
+				.select({ count: count() })
+				.from(elimsArmoryDeposits)
+				.where(whereClause);
+
+			const total = Number(totalResult?.count ?? 0);
+			const totalPages = Math.max(1, Math.ceil(total / limit));
+
+			const deposits = await db
+				.select()
+				.from(elimsArmoryDeposits)
+				.where(whereClause)
+				.orderBy(desc(elimsArmoryDeposits.createdAt))
+				.limit(limit)
+				.offset(offset);
+
+			return {
+				deposits: deposits.map((d) => ({
+					id: d.id,
+					discordUserId: d.discordUserId,
+					discordUsername: d.discordUsername,
+					tornId: d.tornId,
+					tornName: d.tornName,
+					itemId: d.itemId,
+					itemName: d.itemName,
+					itemCategory: d.itemCategory,
+					quantity: d.quantity,
+					rawLog: d.rawLog,
+					isTest: d.isTest,
+					status: d.status,
+					createdAt: d.createdAt.toISOString(),
+				})),
+				pagination: {
+					total,
+					page,
+					limit,
+					totalPages,
+				},
+			};
+		},
+		{
+			query: t.Object({
+				page: t.Optional(t.String()),
+				limit: t.Optional(t.String()),
+				isTest: t.Optional(t.String()),
+				search: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Get Armory Deposit History",
+				description:
+					"Fetches paginated depositer log history for the active guild.",
 			},
 		},
 	)
