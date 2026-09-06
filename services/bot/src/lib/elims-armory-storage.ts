@@ -14,6 +14,7 @@ import {
 	ButtonStyle,
 	type Client,
 	EmbedBuilder,
+	type Message,
 	MessageFlags,
 	ModalBuilder,
 	type ModalSubmitInteraction,
@@ -47,9 +48,11 @@ export async function buildArmoryStorageEmbed(): Promise<{
 	const embed = new EmbedBuilder()
 		.setTitle("Item Deposits")
 		.setDescription(
-			"**How to Deposit:**\n" +
-				"1. Copy the Torn event log (e.g. `You were sent 16x Serotonin from [User](...)`\n" +
-				"2. Click **Log Deposit** below and paste your log.",
+			`**How to Deposit:**
+1. Copy your Torn event log(s) (e.g. \`You were sent 16x Serotonin from [User](...)\`)
+2. Click **Log Deposit** below to paste.
+
+💬 **Large Logs:** If your log is too long for the popup, simply **paste it directly into this channel chat**! Sentinel will automatically record all item deposits and delete your message immediately to keep the channel clean.`,
 		)
 		.setColor(EMBED_COLORS.PRIMARY);
 
@@ -210,44 +213,50 @@ async function performArmoryStorageChannelUpdate(
 export async function handleArmoryLogDepositButton(
 	interaction: ButtonInteraction,
 ): Promise<void> {
-	const [state] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
-	const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
+	try {
+		const [state] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+		const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
 
-	// Check Blacklist
-	if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
-		await interaction.reply({
-			embeds: [
-				createErrorEmbed(
-					"Access Denied",
-					"You have been blacklisted from interacting with the tournament armory.",
-				),
-			],
-			flags: MessageFlags.Ephemeral,
-		});
-		return;
+		// Check Blacklist
+		if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
+			await interaction.reply({
+				embeds: [
+					createErrorEmbed(
+						"Access Denied",
+						"You have been blacklisted from interacting with the tournament armory.",
+					),
+				],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+
+		const modal = new ModalBuilder()
+			.setCustomId("elims_armory_log_modal")
+			.setTitle("Armory — Log Deposit");
+
+		const logInput = new TextInputBuilder()
+			.setCustomId("deposit_log_text")
+			.setLabel("Torn Event Log(s)")
+			.setStyle(TextInputStyle.Paragraph)
+			.setPlaceholder(
+				"Paste Torn event log(s) here, e.g.:\nYou were sent 16x Serotonin from [User](...)",
+			)
+			.setRequired(true)
+			.setMaxLength(4000);
+
+		const row = new ActionRowBuilder<TextInputBuilder>().addComponents(
+			logInput,
+		);
+		modal.addComponents(row);
+
+		await interaction.showModal(modal);
+	} catch (err) {
+		logger.error("Error in handleArmoryLogDepositButton:", err);
 	}
-
-	const modal = new ModalBuilder()
-		.setCustomId("elims_armory_log_modal")
-		.setTitle("Armory — Log Deposit");
-
-	const logInput = new TextInputBuilder()
-		.setCustomId("deposit_log_text")
-		.setLabel("Torn Event Log(s)")
-		.setStyle(TextInputStyle.Paragraph)
-		.setPlaceholder(
-			"Paste Torn log(s) here, e.g.:\nYou were sent 16x Serotonin from [User](...)\nor: 00:50:02 - 06/09/26 User sent 16x Serotonin to you",
-		)
-		.setRequired(true)
-		.setMaxLength(2000);
-
-	const row = new ActionRowBuilder<TextInputBuilder>().addComponents(logInput);
-	modal.addComponents(row);
-
-	await interaction.showModal(modal);
 }
 
 /**
@@ -256,97 +265,122 @@ export async function handleArmoryLogDepositButton(
 export async function handleArmoryLogModalSubmit(
 	interaction: ModalSubmitInteraction,
 ): Promise<void> {
-	await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+	try {
+		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-	const [state] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
-	const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
+		const [state] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+		const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
 
-	if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
-		await interaction.editReply({
-			embeds: [
-				createErrorEmbed(
-					"Access Denied",
-					"You are blacklisted from depositing items.",
-				),
-			],
-		});
-		return;
-	}
+		if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
+			await interaction.editReply({
+				embeds: [
+					createErrorEmbed(
+						"Access Denied",
+						"You are blacklisted from depositing items.",
+					),
+				],
+			});
+			return;
+		}
 
-	const logText = interaction.fields.getTextInputValue("deposit_log_text");
-	const parsedLogs = parseDepositLogs(logText);
+		const logText = interaction.fields.getTextInputValue("deposit_log_text");
+		const parsedLogs = parseDepositLogs(logText);
 
-	if (parsedLogs.length === 0) {
-		await interaction.editReply({
-			embeds: [
-				createErrorEmbed(
-					"Invalid Event Log",
-					"Could not parse any valid item transfer logs from your input.\n\n" +
-						"**Accepted formats:**\n" +
-						"• `You were sent 16x Serotonin from [User](...)`\n" +
-						"• `00:50:02 - 06/09/26 User sent 16x Serotonin to you`\n" +
-						"• `You were sent a Brick from [User](...) with the message: ...`",
-				),
-			],
-		});
-		return;
-	}
+		if (parsedLogs.length === 0) {
+			await interaction.editReply({
+				embeds: [
+					createErrorEmbed(
+						"Unable to Parse Deposit Log",
+						`Could not parse any valid item transfer logs from your input.
 
-	const guildId = interaction.guildId ?? "";
-	const insertedItems: Array<{
-		name: string;
-		quantity: number;
-		donor: string;
-	}> = [];
+💬 **Is your log too long?**
+Discord modal popups have a strict character limit. If your log is very long or got cut off, **send it directly into this channel chat instead**! Sentinel will automatically read it, record the deposits, and delete your message to keep the channel clean.
 
-	for (const parsed of parsedLogs) {
-		const matchedItem = config?.allowedItems.find(
-			(i) =>
-				i.name.trim().toLowerCase() === parsed.itemName.trim().toLowerCase(),
+**Accepted formats:**
+• \`You were sent 16x Serotonin from [User](...)\`
+• \`00:50:02 - 06/09/26 User sent 16x Serotonin to you\`
+• \`You were sent a Brick from [User](...) with the message: ...\``,
+					),
+				],
+			});
+			return;
+		}
+
+		const guildId = interaction.guildId ?? "";
+		const insertedItems: Array<{
+			name: string;
+			quantity: number;
+			donor: string;
+		}> = [];
+
+		for (const parsed of parsedLogs) {
+			const matchedItem = config?.allowedItems.find(
+				(i) =>
+					i.name.trim().toLowerCase() === parsed.itemName.trim().toLowerCase(),
+			);
+
+			await db.insert(elimsArmoryDeposits).values({
+				guildId,
+				discordUserId: interaction.user.id,
+				discordUsername: interaction.user.username,
+				tornName: parsed.donorName,
+				tornId: parsed.donorTornId,
+				itemId: matchedItem?.id ?? "external",
+				itemName: matchedItem?.name ?? parsed.itemName,
+				itemCategory: matchedItem?.category ?? "General",
+				quantity: parsed.quantity,
+				rawLog: parsed.rawLog,
+				isTest: false,
+				status: "available",
+			});
+
+			insertedItems.push({
+				name: matchedItem?.name ?? parsed.itemName,
+				quantity: parsed.quantity,
+				donor: parsed.donorName,
+			});
+		}
+
+		// Refresh persistent storage embed
+		if (config && interaction.client) {
+			void updateElimsArmoryStorageChannel(interaction.client, guildId);
+		}
+
+		// Ephemeral review confirmation
+		const reviewLines = insertedItems.map(
+			(item) =>
+				`• **${item.quantity.toLocaleString()}x** ${item.name} from **${item.donor}**`,
 		);
 
-		await db.insert(elimsArmoryDeposits).values({
-			guildId,
-			discordUserId: interaction.user.id,
-			discordUsername: interaction.user.username,
-			tornName: parsed.donorName,
-			tornId: parsed.donorTornId,
-			itemId: matchedItem?.id ?? "external",
-			itemName: matchedItem?.name ?? parsed.itemName,
-			itemCategory: matchedItem?.category ?? "General",
-			quantity: parsed.quantity,
-			rawLog: parsed.rawLog,
-			isTest: false,
-			status: "available",
-		});
+		const limitNotice =
+			logText.length >= 3950
+				? "\n\n⚠️ **Note:** Your input reached the 4,000 character limit. If any logs were cut off, you can send the remaining logs directly in this channel chat!"
+				: "";
 
-		insertedItems.push({
-			name: matchedItem?.name ?? parsed.itemName,
-			quantity: parsed.quantity,
-			donor: parsed.donorName,
-		});
+		const successEmbed = createSuccessEmbed(
+			"Deposit Logged Successfully",
+			`Successfully processed and added **${insertedItems.length}** deposit record(s) to the armory stockpile:\n\n${reviewLines.join("\n")}${limitNotice}`,
+		);
+
+		await interaction.editReply({ embeds: [successEmbed] });
+	} catch (err) {
+		logger.error("Error in handleArmoryLogModalSubmit:", err);
+		if (interaction.deferred || interaction.replied) {
+			await interaction
+				.editReply({
+					embeds: [
+						createErrorEmbed(
+							"Deposit Failed",
+							"An error occurred while processing your deposit log.",
+						),
+					],
+				})
+				.catch(() => {});
+		}
 	}
-
-	// Refresh persistent storage embed
-	if (config && interaction.client) {
-		void updateElimsArmoryStorageChannel(interaction.client, guildId);
-	}
-
-	// Ephemeral review confirmation
-	const reviewLines = insertedItems.map(
-		(item) =>
-			`• **${item.quantity.toLocaleString()}x** ${item.name} from **${item.donor}**`,
-	);
-
-	const successEmbed = createSuccessEmbed(
-		"Deposit Logged Successfully",
-		`Successfully processed and added **${insertedItems.length}** deposit record(s) to the armory stockpile:\n\n${reviewLines.join("\n")}`,
-	);
-
-	await interaction.editReply({ embeds: [successEmbed] });
 }
 
 /**
@@ -355,69 +389,73 @@ export async function handleArmoryLogModalSubmit(
 export async function handleArmoryTestDepositButton(
 	interaction: ButtonInteraction,
 ): Promise<void> {
-	const [state] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
-	const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
+	try {
+		const [state] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+		const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
 
-	if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
-		await interaction.reply({
-			embeds: [
-				createErrorEmbed(
-					"Access Denied",
-					"You are blacklisted from armory interactions.",
-				),
-			],
-			flags: MessageFlags.Ephemeral,
-		});
-		return;
-	}
+		if (config?.blacklistedUserIds?.includes(interaction.user.id)) {
+			await interaction.reply({
+				embeds: [
+					createErrorEmbed(
+						"Access Denied",
+						"You are blacklisted from armory interactions.",
+					),
+				],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
 
-	if (!config || config.allowedItems.length === 0) {
-		await interaction.reply({
-			embeds: [
-				createErrorEmbed(
-					"No Items Whitelisted",
-					"No items have been whitelisted yet to simulate test deposits.",
-				),
-			],
-			flags: MessageFlags.Ephemeral,
-		});
-		return;
-	}
+		if (!config || config.allowedItems.length === 0) {
+			await interaction.reply({
+				embeds: [
+					createErrorEmbed(
+						"No Items Whitelisted",
+						"No items have been whitelisted yet to simulate test deposits.",
+					),
+				],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
 
-	// Follow the flow of item request: Category first then item
-	const categories = Array.from(
-		new Set(config.allowedItems.map((i) => i.category || "General")),
-	).slice(0, 25);
+		// Follow the flow of item request: Category first then item
+		const categories = Array.from(
+			new Set(config.allowedItems.map((i) => i.category || "General")),
+		).slice(0, 25);
 
-	const selectMenu = new StringSelectMenuBuilder()
-		.setCustomId("elims_armory_test_category_select")
-		.setPlaceholder("Select an item category...")
-		.addOptions(
-			categories.map((cat) => ({
-				label: cat,
-				value: cat,
-				description: `Browse items in ${cat}`,
-			})),
+		const selectMenu = new StringSelectMenuBuilder()
+			.setCustomId("elims_armory_test_category_select")
+			.setPlaceholder("Select an item category...")
+			.addOptions(
+				categories.map((cat) => ({
+					label: cat,
+					value: cat,
+					description: `Browse items in ${cat}`,
+				})),
+			);
+
+		const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+			selectMenu,
 		);
 
-	const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-		selectMenu,
-	);
+		const categoryEmbed = createBaseEmbed(
+			"Item Deposits — Select Category",
+			"Select the category of items you would like to deposit into **Test Stock** from the dropdown below:",
+			EMBED_COLORS.PRIMARY,
+		);
 
-	const categoryEmbed = createBaseEmbed(
-		"Item Deposits — Select Category",
-		"Select the category of items you would like to deposit into **Test Stock** from the dropdown below:",
-		EMBED_COLORS.PRIMARY,
-	);
-
-	await interaction.reply({
-		embeds: [categoryEmbed],
-		components: [row],
-		flags: MessageFlags.Ephemeral,
-	});
+		await interaction.reply({
+			embeds: [categoryEmbed],
+			components: [row],
+			flags: MessageFlags.Ephemeral,
+		});
+	} catch (err) {
+		logger.error("Error in handleArmoryTestDepositButton:", err);
+	}
 }
 
 /**
@@ -502,25 +540,31 @@ export async function handleArmoryTestCategorySelect(
 export async function handleArmoryTestItemSelect(
 	interaction: StringSelectMenuInteraction,
 ): Promise<void> {
-	const itemId = interaction.values[0];
-	if (!itemId) return;
+	try {
+		const itemId = interaction.values[0];
+		if (!itemId) return;
 
-	const modal = new ModalBuilder()
-		.setCustomId(`elims_armory_test_qty_modal:${itemId}`)
-		.setTitle("[TEST] Deposit Quantity");
+		const modal = new ModalBuilder()
+			.setCustomId(`elims_armory_test_qty_modal:${itemId}`)
+			.setTitle("[TEST] Deposit Quantity");
 
-	const qtyInput = new TextInputBuilder()
-		.setCustomId("test_quantity")
-		.setLabel("Test Quantity to Deposit")
-		.setStyle(TextInputStyle.Short)
-		.setPlaceholder("e.g. 50")
-		.setRequired(true)
-		.setMaxLength(6);
+		const qtyInput = new TextInputBuilder()
+			.setCustomId("test_quantity")
+			.setLabel("Test Quantity to Deposit")
+			.setStyle(TextInputStyle.Short)
+			.setPlaceholder("e.g. 50")
+			.setRequired(true)
+			.setMaxLength(6);
 
-	const row = new ActionRowBuilder<TextInputBuilder>().addComponents(qtyInput);
-	modal.addComponents(row);
+		const row = new ActionRowBuilder<TextInputBuilder>().addComponents(
+			qtyInput,
+		);
+		modal.addComponents(row);
 
-	await interaction.showModal(modal);
+		await interaction.showModal(modal);
+	} catch (err) {
+		logger.error("Error in handleArmoryTestItemSelect:", err);
+	}
 }
 
 /**
@@ -529,72 +573,245 @@ export async function handleArmoryTestItemSelect(
 export async function handleArmoryTestQtyModalSubmit(
 	interaction: ModalSubmitInteraction,
 ): Promise<void> {
-	await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+	try {
+		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-	const itemId = interaction.customId.split(":")[1];
-	const qtyStr = interaction.fields.getTextInputValue("test_quantity").trim();
-	const quantity = Number.parseInt(qtyStr, 10);
+		const itemId = interaction.customId.split(":")[1];
+		const qtyStr = interaction.fields.getTextInputValue("test_quantity").trim();
+		const quantity = Number.parseInt(qtyStr, 10);
 
-	if (Number.isNaN(quantity) || quantity <= 0) {
-		await interaction.editReply({
-			embeds: [
-				createErrorEmbed(
-					"Invalid Quantity",
-					"Please provide a positive whole number for test deposit.",
-				),
-			],
+		if (Number.isNaN(quantity) || quantity <= 0) {
+			await interaction.editReply({
+				embeds: [
+					createErrorEmbed(
+						"Invalid Quantity",
+						"Please provide a positive whole number for test deposit.",
+					),
+				],
+			});
+			return;
+		}
+
+		const [state] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+		const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
+		const item = config?.allowedItems.find((i) => i.id === itemId);
+
+		if (!item) {
+			await interaction.editReply({
+				embeds: [
+					createErrorEmbed("Item Not Found", "Selected item was not found."),
+				],
+			});
+			return;
+		}
+
+		const guildId = interaction.guildId ?? "";
+		const resolvedUser = await resolveElimsUser(interaction.user.id, guildId);
+
+		const tornName =
+			resolvedUser?.tornName ??
+			interaction.user.displayName ??
+			interaction.user.username;
+		const tornId = resolvedUser?.tornId ?? null;
+
+		await db.insert(elimsArmoryDeposits).values({
+			guildId,
+			discordUserId: interaction.user.id,
+			discordUsername: interaction.user.username,
+			tornName,
+			tornId,
+			itemId: item.id,
+			itemName: item.name,
+			itemCategory: item.category || "General",
+			quantity,
+			rawLog: `[TEST DEPOSIT] Simulated by ${tornName}${tornId ? ` [${tornId}]` : ""} (${quantity}x ${item.name})`,
+			isTest: true,
+			status: "available",
 		});
-		return;
+
+		if (config && interaction.client) {
+			void updateElimsArmoryStorageChannel(interaction.client, guildId);
+		}
+
+		const successEmbed = createSuccessEmbed(
+			"[TEST] Deposit Recorded",
+			`Added **${quantity.toLocaleString()}x ${item.name}** into **Test Storage**.`,
+		);
+
+		await interaction.editReply({ embeds: [successEmbed] });
+	} catch (err) {
+		logger.error("Error in handleArmoryTestQtyModalSubmit:", err);
+		if (interaction.deferred || interaction.replied) {
+			await interaction
+				.editReply({
+					embeds: [
+						createErrorEmbed(
+							"Test Deposit Failed",
+							"An error occurred while processing your test deposit.",
+						),
+					],
+				})
+				.catch(() => {});
+		}
 	}
+}
 
-	const [state] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
-	const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
-	const item = config?.allowedItems.find((i) => i.id === itemId);
+/**
+ * Handles incoming chat messages in the armory storage channel.
+ * If a user sends event logs in chat (especially useful for large logs exceeding modal limits),
+ * Sentinel parses the deposits, inserts them into the database, updates the storage embed,
+ * deletes the user's message to keep the channel clean, and posts a self-deleting confirmation.
+ */
+export async function handleArmoryStorageChatMessage(
+	message: Message,
+): Promise<void> {
+	if (message.author.bot || !message.guildId) return;
+	if (!message.channel.isSendable()) return;
 
-	if (!item) {
-		await interaction.editReply({
-			embeds: [
-				createErrorEmbed("Item Not Found", "Selected item was not found."),
-			],
-		});
-		return;
+	try {
+		const [state] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
+		const config = state?.data as unknown as ElimsItemRequestConfig | undefined;
+
+		if (
+			!config?.storageChannelId ||
+			message.channelId !== config.storageChannelId
+		) {
+			return;
+		}
+
+		// Check if user is blacklisted
+		if (config.blacklistedUserIds?.includes(message.author.id)) {
+			await message.delete().catch(() => {});
+			const reply = await message.channel
+				.send({
+					embeds: [
+						createErrorEmbed(
+							"Access Denied",
+							`<@${message.author.id}>, you are blacklisted from depositing items.`,
+						),
+					],
+				})
+				.catch(() => null);
+			if (reply) {
+				setTimeout(() => {
+					reply.delete().catch(() => {});
+				}, 8000);
+			}
+			return;
+		}
+
+		const parsedLogs = parseDepositLogs(message.content);
+
+		if (parsedLogs.length === 0) {
+			const lower = message.content.toLowerCase();
+			if (
+				lower.includes("sent") ||
+				lower.includes("you were sent") ||
+				lower.includes("to you")
+			) {
+				await message.delete().catch(() => {});
+				const reply = await message.channel
+					.send({
+						embeds: [
+							createErrorEmbed(
+								"Unable to Parse Deposit Log",
+								`<@${message.author.id}>, could not parse any valid item transfer logs from your message.
+
+**Accepted formats:**
+• \`You were sent 16x Serotonin from [User](...)\`
+• \`00:50:02 - 06/09/26 User sent 16x Serotonin to you\`
+• \`You were sent a Brick from [User](...) with the message: ...\``,
+							),
+						],
+					})
+					.catch(() => null);
+				if (reply) {
+					setTimeout(() => {
+						reply.delete().catch(() => {});
+					}, 10000);
+				}
+			}
+			return;
+		}
+
+		// Valid deposits detected: delete the user's message immediately to keep the channel clean
+		await message.delete().catch(() => {});
+
+		const guildId = message.guildId;
+		const insertedItems: Array<{
+			name: string;
+			quantity: number;
+			donor: string;
+		}> = [];
+
+		for (const parsed of parsedLogs) {
+			const matchedItem = config.allowedItems.find(
+				(i) =>
+					i.name.trim().toLowerCase() === parsed.itemName.trim().toLowerCase(),
+			);
+
+			await db.insert(elimsArmoryDeposits).values({
+				guildId,
+				discordUserId: message.author.id,
+				discordUsername: message.author.username,
+				tornName: parsed.donorName,
+				tornId: parsed.donorTornId,
+				itemId: matchedItem?.id ?? "external",
+				itemName: matchedItem?.name ?? parsed.itemName,
+				itemCategory: matchedItem?.category ?? "General",
+				quantity: parsed.quantity,
+				rawLog: parsed.rawLog,
+				isTest: false,
+				status: "available",
+			});
+
+			insertedItems.push({
+				name: matchedItem?.name ?? parsed.itemName,
+				quantity: parsed.quantity,
+				donor: parsed.donorName,
+			});
+		}
+
+		// Update the persistent storage embed
+		if (message.client) {
+			void updateElimsArmoryStorageChannel(message.client, guildId);
+		}
+
+		// Post a temporary self-deleting confirmation embed
+		const reviewLines = insertedItems.map(
+			(item) =>
+				`• **${item.quantity.toLocaleString()}x** ${item.name} from **${item.donor}**`,
+		);
+
+		const extraCount = reviewLines.length - 15;
+		const extraNotice =
+			extraCount > 0 ? `\n*...and ${extraCount} more item(s)*` : "";
+
+		const reply = await message.channel
+			.send({
+				embeds: [
+					createSuccessEmbed(
+						"Deposits Recorded via Chat",
+						`Successfully logged **${insertedItems.length}** item transfer(s) from <@${message.author.id}>:
+
+${reviewLines.slice(0, 15).join("\n")}${extraNotice}`,
+					),
+				],
+			})
+			.catch(() => null);
+
+		if (reply) {
+			setTimeout(() => {
+				reply.delete().catch(() => {});
+			}, 10000);
+		}
+	} catch (err) {
+		logger.error("Error in handleArmoryStorageChatMessage:", err);
 	}
-
-	const guildId = interaction.guildId ?? "";
-	const resolvedUser = await resolveElimsUser(interaction.user.id, guildId);
-
-	const tornName =
-		resolvedUser?.tornName ??
-		interaction.user.displayName ??
-		interaction.user.username;
-	const tornId = resolvedUser?.tornId ?? null;
-
-	await db.insert(elimsArmoryDeposits).values({
-		guildId,
-		discordUserId: interaction.user.id,
-		discordUsername: interaction.user.username,
-		tornName,
-		tornId,
-		itemId: item.id,
-		itemName: item.name,
-		itemCategory: item.category || "General",
-		quantity,
-		rawLog: `[TEST DEPOSIT] Simulated by ${tornName}${tornId ? ` [${tornId}]` : ""} (${quantity}x ${item.name})`,
-		isTest: true,
-		status: "available",
-	});
-
-	if (config && interaction.client) {
-		void updateElimsArmoryStorageChannel(interaction.client, guildId);
-	}
-
-	const successEmbed = createSuccessEmbed(
-		"[TEST] Deposit Recorded",
-		`Added **${quantity.toLocaleString()}x ${item.name}** into **Test Storage**.`,
-	);
-
-	await interaction.editReply({ embeds: [successEmbed] });
 }

@@ -7,7 +7,6 @@ import {
 	elimsApiKeys,
 	elimsArmoryDeposits,
 	elimsItemRequests,
-	elimsVerifiedUsers,
 	eq,
 	getArmoryStock,
 	guildConfigs,
@@ -1626,42 +1625,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 			const totalPages = Math.max(1, Math.ceil(total / limit));
 
 			const rawLogs = await db
-				.select({
-					id: elimsItemRequests.id,
-					guildId: elimsItemRequests.guildId,
-					discordUserId: elimsItemRequests.discordUserId,
-					discordUsername: elimsItemRequests.discordUsername,
-					tornId: elimsItemRequests.tornId,
-					tornName: elimsItemRequests.tornName,
-					itemId: elimsItemRequests.itemId,
-					itemName: elimsItemRequests.itemName,
-					itemCategory: elimsItemRequests.itemCategory,
-					quantity: elimsItemRequests.quantity,
-					status: elimsItemRequests.status,
-					isTest: elimsItemRequests.isTest,
-					reason: elimsItemRequests.reason,
-					requestMessageId: elimsItemRequests.requestMessageId,
-					grantingMessageId: elimsItemRequests.grantingMessageId,
-					dmSent: elimsItemRequests.dmSent,
-					handledByDiscordId: elimsItemRequests.handledByDiscordId,
-					handledByUsername: elimsItemRequests.handledByUsername,
-					handledByTornId: elimsItemRequests.handledByTornId,
-					handledByTornName: elimsItemRequests.handledByTornName,
-					handledAt: elimsItemRequests.handledAt,
-					metadata: elimsItemRequests.metadata,
-					createdAt: elimsItemRequests.createdAt,
-					updatedAt: elimsItemRequests.updatedAt,
-					handlerVerifiedTornId: elimsVerifiedUsers.tornId,
-					handlerVerifiedTornName: elimsVerifiedUsers.tornName,
-				})
+				.select()
 				.from(elimsItemRequests)
-				.leftJoin(
-					elimsVerifiedUsers,
-					eq(
-						elimsItemRequests.handledByDiscordId,
-						elimsVerifiedUsers.discordId,
-					),
-				)
 				.where(whereClause)
 				.orderBy(desc(elimsItemRequests.createdAt))
 				.limit(limit)
@@ -1686,10 +1651,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				dmSent: row.dmSent,
 				handledByDiscordId: row.handledByDiscordId,
 				handledByUsername: row.handledByUsername,
-				handledByTornId:
-					row.handledByTornId ?? row.handlerVerifiedTornId ?? null,
-				handledByTornName:
-					row.handledByTornName ?? row.handlerVerifiedTornName ?? null,
+				handledByTornId: row.handledByTornId,
+				handledByTornName: row.handledByTornName,
 				handledAt: row.handledAt,
 				metadata: row.metadata,
 				createdAt: row.createdAt,
@@ -1757,37 +1720,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				conditions.length > 0 ? and(...conditions) : undefined;
 
 			const rawExportLogs = await db
-				.select({
-					id: elimsItemRequests.id,
-					guildId: elimsItemRequests.guildId,
-					discordUserId: elimsItemRequests.discordUserId,
-					discordUsername: elimsItemRequests.discordUsername,
-					tornId: elimsItemRequests.tornId,
-					tornName: elimsItemRequests.tornName,
-					itemId: elimsItemRequests.itemId,
-					itemName: elimsItemRequests.itemName,
-					itemCategory: elimsItemRequests.itemCategory,
-					quantity: elimsItemRequests.quantity,
-					status: elimsItemRequests.status,
-					isTest: elimsItemRequests.isTest,
-					reason: elimsItemRequests.reason,
-					handledByDiscordId: elimsItemRequests.handledByDiscordId,
-					handledByUsername: elimsItemRequests.handledByUsername,
-					handledByTornId: elimsItemRequests.handledByTornId,
-					handledByTornName: elimsItemRequests.handledByTornName,
-					handledAt: elimsItemRequests.handledAt,
-					createdAt: elimsItemRequests.createdAt,
-					handlerVerifiedTornId: elimsVerifiedUsers.tornId,
-					handlerVerifiedTornName: elimsVerifiedUsers.tornName,
-				})
+				.select()
 				.from(elimsItemRequests)
-				.leftJoin(
-					elimsVerifiedUsers,
-					eq(
-						elimsItemRequests.handledByDiscordId,
-						elimsVerifiedUsers.discordId,
-					),
-				)
 				.where(whereClause)
 				.orderBy(desc(elimsItemRequests.createdAt));
 
@@ -1829,11 +1763,6 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 			const csvRows = [headers.join(",")];
 
 			for (const r of rawExportLogs) {
-				const handledByTornId =
-					r.handledByTornId ?? r.handlerVerifiedTornId ?? null;
-				const handledByTornName =
-					r.handledByTornName ?? r.handlerVerifiedTornName ?? null;
-
 				csvRows.push(
 					[
 						escapeCell(r.id),
@@ -1850,8 +1779,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 						escapeCell(r.isTest ? "TRUE" : "FALSE"),
 						escapeCell(r.handledByDiscordId),
 						escapeCell(r.handledByUsername),
-						escapeCell(handledByTornId),
-						escapeCell(handledByTornName),
+						escapeCell(r.handledByTornId),
+						escapeCell(r.handledByTornName),
 						escapeCell(r.handledAt),
 						escapeCell(r.reason),
 					].join(","),

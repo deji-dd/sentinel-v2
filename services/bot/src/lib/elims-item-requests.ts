@@ -4,7 +4,6 @@ import {
 	type ElimsItemRequestConfig,
 	elimsApiKeys,
 	elimsItemRequests,
-	elimsVerifiedUsers,
 	eq,
 	getArmoryStock,
 	ne,
@@ -147,13 +146,6 @@ export async function resolveElimsUser(
 	discordId: string,
 	guildId: string,
 ): Promise<ResolvedElimsUser | null> {
-	const envKey = process.env.TORN_API_KEY?.trim().replace(/^["']|["']$/g, "");
-	const candidateKeys: Array<{ key: string; id?: string }> = [];
-
-	if (envKey && isValidApiKey(envKey)) {
-		candidateKeys.push({ key: envKey });
-	}
-
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 	const guildKeys = await db
 		.select()
@@ -162,6 +154,8 @@ export async function resolveElimsUser(
 			and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
 		)
 		.orderBy(elimsApiKeys.lastUsedAt);
+
+	const candidateKeys: Array<{ key: string; id?: string }> = [];
 
 	for (const k of guildKeys) {
 		const rawKey =
@@ -174,7 +168,7 @@ export async function resolveElimsUser(
 	}
 
 	if (candidateKeys.length === 0) {
-		logger.warn("No valid Torn API key available for live user resolution.");
+		logger.warn(`No valid guild API keys configured for guild ${guildId}.`);
 		return null;
 	}
 
@@ -182,23 +176,54 @@ export async function resolveElimsUser(
 
 	for (const candidate of candidateKeys) {
 		try {
-			// Call Torn API v2 user endpoint with selections: discord, profile, competition, networth
-			const response = (await client.get("/user", {
-				apiKey: candidate.key,
+			// Single live Torn API v2 call resolving profile, competition, and networth directly from discordId
+			const res = (await client.get("/user/{id}", {
+				pathParams: { id: discordId },
 				queryParams: {
-					selections: ["discord", "profile", "competition", "networth"],
-					id: discordId,
+					selections: "profile,competition,personalstats",
+					cat: "networth",
 				},
+				apiKey: candidate.key,
 			})) as {
-				name?: string;
+				profile?: { id?: number; name?: string; faction_id?: number };
+				name?: string; // Elimination
 				score?: number;
 				team?: string;
 				attacks?: number;
-				profile?: { id?: number; name?: string; faction_id?: number };
-				discord?: { discord_id?: string; user_id?: number };
-				faction?: { id?: number; tag?: string };
-				networth?: { total?: number };
+				personalstats?: {
+					networth?: { total?: number } | number;
+				};
 			};
+
+			const tornId = res?.profile?.id;
+			const tornName = res?.profile?.name;
+
+			if (!tornId || !tornName) {
+				continue;
+			}
+
+			let competition: UserCompetitionElimination | null = null;
+			if (typeof res.score === "number") {
+				competition = {
+					name: res.name ?? "Elimination",
+					score: res.score,
+					team: res.team ?? "Unknown",
+					attacks: res.attacks ?? 0,
+				};
+			}
+
+			let networth: number | null = null;
+			if (res.personalstats) {
+				if (typeof res.personalstats.networth === "number") {
+					networth = res.personalstats.networth;
+				} else if (
+					typeof res.personalstats.networth === "object" &&
+					res.personalstats.networth !== null &&
+					typeof res.personalstats.networth.total === "number"
+				) {
+					networth = res.personalstats.networth.total;
+				}
+			}
 
 			if (candidate.id) {
 				await db
@@ -208,62 +233,12 @@ export async function resolveElimsUser(
 					.catch(() => {});
 			}
 
-			// Verify that the response actually matches the requested Discord ID
-			if (
-				response?.discord?.discord_id &&
-				response.discord.discord_id !== discordId
-			) {
-				continue;
-			}
-
-			const tornId =
-				response?.profile?.id ?? response?.discord?.user_id ?? null;
-			const tornName = response?.profile?.name ?? null;
-
-			if (tornId && tornName) {
-				const now = new Date();
-				const competition: UserCompetitionElimination | null =
-					response?.score !== undefined && response?.team !== undefined
-						? {
-								name: response.name ?? "Elimination",
-								score: response.score ?? 0,
-								team: response.team ?? "",
-								attacks: response.attacks ?? 0,
-							}
-						: null;
-
-				const networth = response?.networth?.total ?? null;
-
-				// Sync with elimsVerifiedUsers table in DB for dashboard joins
-				await db
-					.insert(elimsVerifiedUsers)
-					.values({
-						discordId,
-						tornId,
-						tornName,
-						factionId:
-							response.faction?.id ?? response.profile?.faction_id ?? null,
-						factionTag: response.faction?.tag ?? null,
-						lastCheckedAt: now,
-						createdAt: now,
-						updatedAt: now,
-					})
-					.onConflictDoUpdate({
-						target: elimsVerifiedUsers.discordId,
-						set: {
-							tornId,
-							tornName,
-							factionId:
-								response.faction?.id ?? response.profile?.faction_id ?? null,
-							factionTag: response.faction?.tag ?? null,
-							lastCheckedAt: now,
-							updatedAt: now,
-						},
-					})
-					.catch(() => {});
-
-				return { tornId, tornName, competition, networth };
-			}
+			return {
+				tornId,
+				tornName,
+				competition,
+				networth,
+			};
 		} catch (err) {
 			logger.warn(`Live Torn user lookup failed for ${discordId}:`, err);
 		}
@@ -808,6 +783,10 @@ export async function handleItemRequestModalSubmit(
 				status: "pending",
 				isTest,
 				reason,
+				metadata: {
+					competition: resolvedUser?.competition ?? null,
+					networth: resolvedUser?.networth ?? null,
+				},
 			})
 			.returning();
 
@@ -1074,6 +1053,32 @@ export async function handleItemGrantingButton(
 
 			await interaction.showModal(modal);
 			return;
+		}
+
+		if (actionType === "elims_grant_accept") {
+			const guildId = interaction.guildId ?? request.guildId;
+			const stockMap = await getArmoryStock(guildId, request.isTest);
+			const itemStock =
+				stockMap.get(request.itemId) ??
+				stockMap.get(request.itemName.trim().toLowerCase());
+			const availableStock = itemStock?.available ?? 0;
+
+			if (availableStock < request.quantity) {
+				const missing = request.quantity - availableStock;
+				const embed = createErrorEmbed(
+					"Insufficient Storage Stock",
+					`Cannot approve request for **${request.quantity.toLocaleString()}x ${request.itemName}**.\n\n` +
+						`• **In Storage:** ${availableStock.toLocaleString()}\n` +
+						`• **Requested:** ${request.quantity.toLocaleString()}\n` +
+						`• **Missing:** ${missing.toLocaleString()} item(s)\n\n` +
+						`Please wait for more deposits to be logged before approving this request.`,
+				);
+				await interaction.reply({
+					embeds: [embed],
+					flags: MessageFlags.Ephemeral,
+				});
+				return;
+			}
 		}
 
 		// Acknowledge interaction immediately to prevent Discord client timeout rollback
@@ -1463,8 +1468,7 @@ export async function handleItemVerifySendButton(
 			.setLabel("Torn Sent Event Log")
 			.setStyle(TextInputStyle.Paragraph)
 			.setPlaceholder(
-				"e.g.: 04:37:52 - 04/09/26 You sent 5x Flash Grenade to Fahquetu\n" +
-					"or: You sent an Armor Cache to ladyK",
+				"e.g.: 04:37:52 - 04/09/26 You sent 5x Flash Grenade to Fahquetu",
 			)
 			.setRequired(true)
 			.setMaxLength(1000);

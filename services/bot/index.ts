@@ -11,6 +11,7 @@ import { guildCreateEvent } from "./src/events/guild-create";
 import { guildMemberAddEvent } from "./src/events/guild-member-add";
 import { interactionCreateEvent } from "./src/events/interaction-create";
 import { readyEvent } from "./src/events/ready";
+import { handleArmoryStorageChatMessage } from "./src/lib/elims-armory-storage";
 import { setupBotIpcListeners } from "./src/lib/ipc";
 import { logger } from "./src/lib/logger";
 import { handleReactionRoleAdd } from "./src/lib/reaction-roles";
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
 			GatewayIntentBits.GuildMessages,
 			GatewayIntentBits.GuildMembers,
 			GatewayIntentBits.GuildMessageReactions,
+			GatewayIntentBits.MessageContent,
 		],
 		partials: [
 			Partials.Message,
@@ -66,6 +68,9 @@ async function main(): Promise<void> {
 	client.on(Events.MessageReactionAdd, (reaction, user) =>
 		handleReactionRoleAdd(reaction, user),
 	);
+	client.on(Events.MessageCreate, (message) => {
+		void handleArmoryStorageChatMessage(message);
+	});
 
 	// Register IPC event listeners for real-time dashboard dispatches
 	setupBotIpcListeners(client);
@@ -101,6 +106,12 @@ async function main(): Promise<void> {
 
 	process.on("SIGINT", () => shutdown("SIGINT"));
 	process.on("SIGTERM", () => shutdown("SIGTERM"));
+	process.on("unhandledRejection", (reason) => {
+		logger.error("Unhandled Promise Rejection in Discord Bot:", reason);
+	});
+	process.on("uncaughtException", (error) => {
+		logger.error("Uncaught Exception in Discord Bot:", error);
+	});
 
 	try {
 		logger.info("Connecting Discord Bot V2 client...");

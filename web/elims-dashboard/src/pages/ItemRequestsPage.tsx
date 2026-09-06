@@ -681,6 +681,14 @@ export function ItemRequestsPage() {
 			.slice(0, 30);
 	}, [guildMembers, memberSearchQuery]);
 
+	const memberMap = useMemo(() => {
+		const map = new Map<string, GuildMemberSummary>();
+		for (const m of guildMembers) {
+			map.set(m.id, m);
+		}
+		return map;
+	}, [guildMembers]);
+
 	const handleSelectMemberToBlacklist = (member: GuildMemberSummary) => {
 		if (blacklistedUserIds.includes(member.id)) {
 			toast.info(`${member.displayName} is already blacklisted.`);
@@ -1009,14 +1017,6 @@ export function ItemRequestsPage() {
 					<TabsTrigger value="logs" className="cursor-pointer gap-2">
 						<Clock className="size-3.5" />
 						<span>Requests History</span>
-						{logsTotalCount > 0 && (
-							<Badge
-								variant="secondary"
-								className="text-[10px] font-mono px-1 py-0 ml-1"
-							>
-								{logsTotalCount}
-							</Badge>
-						)}
 					</TabsTrigger>
 				</TabsList>
 
@@ -2264,28 +2264,58 @@ export function ItemRequestsPage() {
 												const isAccepted = log.status === "accepted";
 												const isRejected = log.status === "rejected";
 
+												const member = memberMap.get(log.discordUserId);
+												const nickMatch = member?.displayName?.match(
+													/^(?:\[[^\]]*\]\s*)?(.+?)\s*\[(\d+)\]$/,
+												);
+												const effectiveTornId =
+													log.tornId ??
+													(nickMatch?.[2] ? Number(nickMatch[2]) : null);
+												const effectiveTornName =
+													log.tornName ??
+													(nickMatch?.[1]
+														? nickMatch[1].trim()
+														: (member?.displayName ?? log.discordUsername));
+
+												const handlerMember = log.handledByDiscordId
+													? memberMap.get(log.handledByDiscordId)
+													: null;
+												const handlerNickMatch =
+													handlerMember?.displayName?.match(
+														/^(?:\[[^\]]*\]\s*)?(.+?)\s*\[(\d+)\]$/,
+													);
+												const effectiveHandlerTornId =
+													log.handledByTornId ??
+													(handlerNickMatch?.[2]
+														? Number(handlerNickMatch[2])
+														: null);
+												const effectiveHandlerTornName =
+													log.handledByTornName ??
+													(handlerNickMatch?.[1]
+														? handlerNickMatch[1].trim()
+														: (handlerMember?.displayName ??
+															log.handledByUsername));
+
 												return (
 													<TableRow key={log.id}>
 														{/* Requester */}
 														<TableCell>
-															{log.tornId ? (
+															{effectiveTornId ? (
 																<a
-																	href={`https://www.torn.com/profiles.php?XID=${log.tornId}`}
+																	href={`https://www.torn.com/profiles.php?XID=${effectiveTornId}`}
 																	target="_blank"
 																	rel="noopener noreferrer"
 																	className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1"
-																	title={`View Torn Profile for ${log.tornName ?? log.tornId}`}
+																	title={`View Torn Profile for ${effectiveTornName} [${effectiveTornId}]`}
 																>
 																	<span>
-																		{log.tornName
-																			? `${log.tornName} [${log.tornId}]`
-																			: `[${log.tornId}]`}
+																		{effectiveTornName} [{effectiveTornId}]
 																	</span>
 																	<ExternalLink className="size-3 opacity-70 shrink-0" />
 																</a>
 															) : (
 																<span className="text-xs text-muted-foreground">
-																	{log.discordUsername}
+																	{member?.displayName || log.discordUsername}
 																</span>
 															)}
 														</TableCell>
@@ -2380,26 +2410,29 @@ export function ItemRequestsPage() {
 															<div className="flex flex-col text-xs font-mono">
 																<span>{formatTctTimestamp(log.createdAt)}</span>
 																{(log.handledByUsername ||
-																	log.handledByTornId) && (
+																	effectiveHandlerTornId) && (
 																	<div className="text-[10px] text-muted-foreground inline-flex items-center gap-1 flex-wrap">
 																		<span>by</span>
-																		{log.handledByTornId ? (
+																		{effectiveHandlerTornId ? (
 																			<a
-																				href={`https://www.torn.com/profiles.php?XID=${log.handledByTornId}`}
+																				href={`https://www.torn.com/profiles.php?XID=${effectiveHandlerTornId}`}
 																				target="_blank"
 																				rel="noopener noreferrer"
 																				className="font-semibold text-primary hover:underline inline-flex items-center gap-0.5"
-																				title={`View Torn Profile for ${log.handledByTornName ?? log.handledByTornId}`}
+																				title={`View Torn Profile for ${effectiveHandlerTornName ?? effectiveHandlerTornId}`}
 																			>
 																				<span>
-																					{log.handledByTornName
-																						? `${log.handledByTornName} [${log.handledByTornId}]`
-																						: `[${log.handledByTornId}]`}
+																					{effectiveHandlerTornName
+																						? `${effectiveHandlerTornName} [${effectiveHandlerTornId}]`
+																						: `[${effectiveHandlerTornId}]`}
 																				</span>
 																				<ExternalLink className="size-2.5 opacity-70 shrink-0" />
 																			</a>
 																		) : (
-																			<span>{log.handledByUsername}</span>
+																			<span>
+																				{handlerMember?.displayName ||
+																					log.handledByUsername}
+																			</span>
 																		)}
 																	</div>
 																)}
