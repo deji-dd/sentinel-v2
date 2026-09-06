@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
-import type { GuildMember } from "discord.js";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { eq } from "@sentinel/database";
+import type { ButtonInteraction, GuildMember } from "discord.js";
 import {
 	formatDuration,
 	paginateItems,
@@ -180,6 +181,66 @@ describe("Giveaway Helpers", () => {
 				"guild_test_123",
 			);
 			expect(allowedResult.allowed).toBe(true);
+		});
+	});
+
+	describe("giveaway host entry restriction", () => {
+		const testGwId = `gw-host-test-${crypto.randomUUID()}`;
+		const hostUserId = `user-host-${crypto.randomUUID()}`;
+
+		beforeAll(async () => {
+			const { db, giveaways } = await import("@sentinel/database");
+			await db.insert(giveaways).values({
+				id: testGwId,
+				guildId: "guild-host-test",
+				channelId: "channel-123",
+				messageId: "msg-123",
+				createdByDiscordId: hostUserId,
+				createdByUsername: "HostUser",
+				itemId: "206",
+				itemName: "Xanax",
+				itemCategory: "Drug",
+				itemCount: 1,
+				winnerCount: 1,
+				durationStr: "1h",
+				durationMs: 3600000,
+				status: "active",
+				endsAt: new Date(Date.now() + 3600000),
+			});
+		});
+
+		afterAll(async () => {
+			const { db, giveaways } = await import("@sentinel/database");
+			await db.delete(giveaways).where(eq(giveaways.id, testGwId));
+		});
+
+		it("rejects host when trying to enter their own giveaway", async () => {
+			const { handleGiveawayEntryButton } = await import(
+				"../src/lib/giveaways"
+			);
+			let repliedEmbed:
+				| { data: { title?: string; description?: string } }
+				| undefined;
+
+			const mockInteraction = {
+				customId: `giveaway_entry:${testGwId}`,
+				user: { id: hostUserId, username: "HostUser" },
+				reply: async (payload: {
+					embeds?: Array<{ data: { title?: string; description?: string } }>;
+				}) => {
+					repliedEmbed = payload.embeds?.[0];
+				},
+			};
+
+			await handleGiveawayEntryButton(
+				mockInteraction as unknown as ButtonInteraction,
+			);
+
+			expect(repliedEmbed).toBeDefined();
+			expect(repliedEmbed?.data?.title).toBe("Cannot Enter");
+			expect(repliedEmbed?.data?.description).toBe(
+				"You cannot enter your own giveaway.",
+			);
 		});
 	});
 });

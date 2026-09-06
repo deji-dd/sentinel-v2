@@ -996,6 +996,19 @@ export async function handleGiveawayEntryButton(
 			return;
 		}
 
+		// Prevent host from entering their own giveaway
+		if (interaction.user.id === giveaway.createdByDiscordId) {
+			const errorEmbed = createErrorEmbed(
+				"Cannot Enter",
+				"You cannot enter your own giveaway.",
+			);
+			await interaction.reply({
+				embeds: [errorEmbed],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+
 		// Check if user is already entered
 		const [existingEntry] = await db
 			.select()
