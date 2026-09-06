@@ -2,13 +2,20 @@ import {
 	ensureTargetGuildConfigs,
 	getGuildModules,
 	getTargetGuildIds,
+	isElimsGuildAsync,
 } from "@sentinel/database";
 import { REST, Routes } from "discord.js";
-import { commandsList } from "../commands";
+import {
+	type BotCommand,
+	elimsCommandsList,
+	normalCommandsList,
+} from "../commands";
 import { logger } from "../lib/logger";
 
 /**
- * Deploys slash commands directly to a specific target guild, filtering by enabled modules.
+ * Deploys slash commands directly to a specific target guild.
+ * Enforces strict separation: Elims tournament guild receives ONLY Elims commands,
+ * while normal guilds receive ONLY normal bot commands (filtered by active modules).
  */
 export async function deployGuildCommands(guildId: string): Promise<void> {
 	const token = process.env.DISCORD_TOKEN;
@@ -18,27 +25,40 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 		return;
 	}
 
-	const modules = await getGuildModules(guildId);
-	const enabledCommands = commandsList.filter((cmd) => {
-		if (!cmd.module) return true;
-		if (cmd.module === "verification") return modules.verification;
-		if (cmd.module === "territory") return modules.territory;
-		if (cmd.module === "reaction_roles") return modules.reactionRoles;
-		return false;
-	});
+	const isElims = await isElimsGuildAsync(guildId);
+	let enabledCommands: BotCommand[] = [];
+
+	if (isElims) {
+		// 1. Elims Tournament Server — Strictly Elims Commands
+		enabledCommands = elimsCommandsList;
+		logger.info(
+			`Deploying ${enabledCommands.length} Elims slash command(s) to Tournament Guild ${guildId}...`,
+		);
+	} else {
+		// 2. Standard Sentinel Guild — Normal Commands filtered by modules
+		const modules = await getGuildModules(guildId);
+		enabledCommands = normalCommandsList.filter((cmd) => {
+			if (!cmd.module) return true;
+			if (cmd.module === "verification") return modules.verification;
+			if (cmd.module === "territory") return modules.territory;
+			if (cmd.module === "reaction_roles") return modules.reactionRoles;
+			return false;
+		});
+		logger.info(
+			`Deploying ${enabledCommands.length} normal slash command(s) to Guild ${guildId}...`,
+		);
+	}
 
 	const commandBodies = enabledCommands.map((cmd) => cmd.data.toJSON());
 	const rest = new REST({ version: "10" }).setToken(token);
 
 	try {
-		logger.info(
-			`Deploying ${commandBodies.length} active slash commands to Guild ${guildId}...`,
-		);
-
 		await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
 			body: commandBodies,
 		});
-		logger.info(`Successfully deployed commands to Guild ${guildId}.`);
+		logger.info(
+			`Successfully deployed ${enabledCommands.length} command(s) to Guild ${guildId} (${isElims ? "Elims Server" : "Standard Guild"}).`,
+		);
 	} catch (error) {
 		logger.error(`Failed to deploy commands to guild ${guildId}:`, error);
 	}

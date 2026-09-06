@@ -8,6 +8,7 @@ import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
+import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { logger } from "../logger";
@@ -175,6 +176,23 @@ export function setupBotIpcListeners(client: Client): void {
 				message.data?.guildId,
 				message.data?.monitorId,
 			);
+		} else if (message.action === "sync_elims_item_requests") {
+			void updateElimsItemRequestsChannel(
+				client,
+				message.data?.guildId,
+				message.data?.config,
+			);
+		} else if (message.action === "sync_elims_guild") {
+			const guildId = message.data?.guildId;
+			if (typeof guildId === "string") {
+				logger.info(
+					`Elims guild configuration updated via IPC for guild: ${guildId}`,
+				);
+				void deployGuildCommands(guildId);
+				void updateElimsItemRequestsChannel(client, guildId);
+			}
+		} else if (message.action === "reset_elims_guild") {
+			logger.info("Elims guild configuration was reset via IPC.");
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

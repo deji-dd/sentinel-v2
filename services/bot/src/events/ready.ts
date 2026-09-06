@@ -6,6 +6,7 @@ import {
 } from "@sentinel/database";
 import { ActivityType, type Client, Events } from "discord.js";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
+import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
 import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
 import { logger } from "../lib/logger";
@@ -54,5 +55,10 @@ export const readyEvent = {
 
 		// Synchronize Faction Monitoring Channels across target guilds
 		await updateFactionRevivesChannel(client);
+
+		// Synchronize Elims Item Requests Channel if configured
+		await updateElimsItemRequestsChannel(client).catch((err) => {
+			logger.warn("Failed to sync Elims Item Requests embed on boot:", err);
+		});
 	},
-} as const;
+};

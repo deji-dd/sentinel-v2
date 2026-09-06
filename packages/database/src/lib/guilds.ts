@@ -1,9 +1,49 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../index";
 import { guildConfigs } from "../schema/discord";
+import { systemStates } from "../schema/system";
 
 let authorizedGuildsCache = new Set<string>();
+let elimsGuildIdCache: string | null = null;
 let cacheInitialized = false;
+
+/**
+ * Retrieves the currently configured Elims tournament Discord guild ID.
+ */
+export async function getElimsGuildId(): Promise<string | null> {
+	try {
+		const [row] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, "elims:guild_config"));
+
+		const data = row?.data as { guildId?: string } | undefined;
+		elimsGuildIdCache = data?.guildId ?? null;
+		return elimsGuildIdCache;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Synchronous check whether a guild is the active Elims tournament server.
+ */
+export function isElimsGuild(guildId: string | null | undefined): boolean {
+	if (!guildId) return false;
+	return elimsGuildIdCache === guildId;
+}
+
+/**
+ * Asynchronous check whether a guild is the active Elims tournament server.
+ */
+export async function isElimsGuildAsync(
+	guildId: string | null | undefined,
+): Promise<boolean> {
+	if (!guildId) return false;
+	if (elimsGuildIdCache === guildId) return true;
+	const current = await getElimsGuildId();
+	return current === guildId;
+}
 
 /**
  * Fallback helper to retrieve target Discord guild IDs configured in environment variables (for legacy migration).
@@ -22,7 +62,7 @@ function getLegacyEnvGuildIds(): string[] {
 }
 
 /**
- * Retrieves all authorized target guild IDs from the database.
+ * Retrieves all authorized target guild IDs from the database (including active Elims tournament guild).
  * Updates the in-memory cache for fast synchronous checks.
  */
 export async function getTargetGuildIds(): Promise<string[]> {
@@ -35,6 +75,13 @@ export async function getTargetGuildIds(): Promise<string[]> {
 		.where(eq(guildConfigs.authorized, true));
 
 	const ids = rows.map((r) => r.guildId);
+
+	// Also retrieve and permit the Elims tournament server
+	const elimsId = await getElimsGuildId();
+	if (elimsId && !ids.includes(elimsId)) {
+		ids.push(elimsId);
+	}
+
 	authorizedGuildsCache = new Set(ids);
 	cacheInitialized = true;
 	return ids;
@@ -46,6 +93,7 @@ export async function getTargetGuildIds(): Promise<string[]> {
 export function isTargetGuild(guildId: string | null | undefined): boolean {
 	if (!guildId) return false;
 	if (authorizedGuildsCache.has(guildId)) return true;
+	if (elimsGuildIdCache === guildId) return true;
 	if (!cacheInitialized) {
 		const legacyIds = getLegacyEnvGuildIds();
 		if (legacyIds.length > 0) return legacyIds.includes(guildId);
@@ -60,10 +108,11 @@ export async function isTargetGuildAsync(
 	guildId: string | null | undefined,
 ): Promise<boolean> {
 	if (!guildId) return false;
+	if (elimsGuildIdCache === guildId) return true;
 	if (!cacheInitialized) {
 		await getTargetGuildIds();
 	}
-	return authorizedGuildsCache.has(guildId);
+	return authorizedGuildsCache.has(guildId) || elimsGuildIdCache === guildId;
 }
 
 /**

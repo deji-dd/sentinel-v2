@@ -23,8 +23,10 @@ import {
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import {
+	syncFactionMapViaIpc,
 	syncFactionMonitoringViaIpc,
 	syncGuildCommandsViaIpc,
+	syncReactionRolesViaIpc,
 } from "../../lib/bot-ipc";
 import { authPlugin } from "../../middleware/auth";
 
@@ -411,6 +413,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 
 			if (hasModuleUpdates) {
 				void syncGuildCommandsViaIpc(params.guildId);
+			}
+
+			if (body.factionListChannelId !== undefined) {
+				void syncFactionMapViaIpc(params.guildId);
 			}
 
 			return { success: true };
@@ -1045,6 +1051,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				.from(reactionRoleMappings)
 				.where(eq(reactionRoleMappings.messageId, messageId));
 
+			void syncReactionRolesViaIpc(params.guildId);
+
 			return {
 				success: true,
 				message: createdMessage
@@ -1131,6 +1139,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				.from(reactionRoleMappings)
 				.where(eq(reactionRoleMappings.messageId, params.messageId));
 
+			void syncReactionRolesViaIpc(params.guildId);
+
 			return {
 				success: true,
 				message: updatedMessage
@@ -1189,6 +1199,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			await db
 				.delete(reactionRoleMessages)
 				.where(eq(reactionRoleMessages.id, params.messageId));
+
+			void syncReactionRolesViaIpc(params.guildId);
 
 			return { success: true };
 		},

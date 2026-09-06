@@ -220,6 +220,27 @@ export type IpcSyncGuildCommandsMessage = {
 	};
 };
 
+export type IpcSyncElimsGuildMessage = {
+	action: "sync_elims_guild";
+	data?: {
+		guildId?: string;
+		adminRoleIds?: string[];
+	};
+};
+
+export type IpcResetElimsGuildMessage = {
+	action: "reset_elims_guild";
+	data?: Record<string, unknown>;
+};
+
+export type IpcSyncElimsItemRequestsMessage = {
+	action: "sync_elims_item_requests";
+	data?: {
+		guildId?: string;
+		config?: Record<string, unknown>;
+	};
+};
+
 export type IpcReinitializeCrimeLedgerMessage = {
 	action: "reinitialize_crime_ledger";
 	data?: Record<string, unknown>;
@@ -346,6 +367,9 @@ export type IpcMessage =
 	| IpcSyncFactionMapMessage
 	| IpcSyncFactionMonitoringMessage
 	| IpcSyncGuildCommandsMessage
+	| IpcSyncElimsGuildMessage
+	| IpcResetElimsGuildMessage
+	| IpcSyncElimsItemRequestsMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

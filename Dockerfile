@@ -17,6 +17,7 @@ COPY services/api/package.json ./services/api/
 COPY services/bot/package.json ./services/bot/
 COPY services/scheduler/package.json ./services/scheduler/
 COPY web/bot-dashboard/package.json ./web/bot-dashboard/
+COPY web/elims-dashboard/package.json ./web/elims-dashboard/
 COPY web/tt-selector/package.json ./web/tt-selector/
 COPY web/user-dashboard/package.json ./web/user-dashboard/
 

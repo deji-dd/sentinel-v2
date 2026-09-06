@@ -47,6 +47,12 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		) {
 			appDir = "web/tt-selector/dist";
 		} else if (
+			host.includes("elims.") ||
+			host.includes("elims-dashboard") ||
+			origin.includes("elims")
+		) {
+			appDir = "web/elims-dashboard/dist";
+		} else if (
 			host.includes("user-dashboard") ||
 			host.includes("ayodejib.dev") ||
 			host.startsWith("user.") ||

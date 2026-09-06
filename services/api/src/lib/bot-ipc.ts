@@ -64,3 +64,48 @@ export async function syncFactionMonitoringViaIpc(
 ): Promise<boolean> {
 	return notifyBotAction("sync_faction_monitoring", { guildId, monitorId });
 }
+
+/**
+ * Dispatches an IPC signal to the Bot to update reaction roles for the given guild.
+ */
+export async function syncReactionRolesViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_reaction_roles", { guildId });
+}
+
+/**
+ * Dispatches an IPC signal to the Bot to refresh the faction territory map channel for the given guild.
+ */
+export async function syncFactionMapViaIpc(guildId: string): Promise<boolean> {
+	return notifyBotAction("sync_faction_map", { guildId });
+}
+
+/**
+ * Dispatches an IPC signal to the Bot when the Elims tournament guild configuration
+ * (active server or admin roles) is set up or updated.
+ */
+export async function syncElimsGuildViaIpc(
+	guildId: string,
+	data?: Record<string, unknown>,
+): Promise<boolean> {
+	return notifyBotAction("sync_elims_guild", { guildId, ...data });
+}
+
+/**
+ * Dispatches an IPC signal to the Bot when the Elims guild configuration is reset.
+ */
+export async function resetElimsGuildViaIpc(): Promise<boolean> {
+	return notifyBotAction("reset_elims_guild");
+}
+
+/**
+ * Dispatches an IPC signal to the Bot to synchronize the Elims Item Requests module
+ * (channels, roles, allowed items, or embed maintenance).
+ */
+export async function syncElimsItemRequestsViaIpc(
+	guildId: string,
+	config?: Record<string, unknown>,
+): Promise<boolean> {
+	return notifyBotAction("sync_elims_item_requests", { guildId, config });
+}

@@ -22,6 +22,8 @@
 		"tt-selector:dev": "bun --filter @sentinel/tt-selector dev",
 		"user-dashboard:build": "bun --filter @sentinel/user-dashboard build",
 		"user-dashboard:dev": "bun --filter @sentinel/user-dashboard dev",
+		"elims-dashboard:build": "bun --filter @sentinel/elims-dashboard build",
+		"elims-dashboard:dev": "bun --filter @sentinel/elims-dashboard dev",
 		"web:build": "bun --filter \"@sentinel/*-dashboard\" --filter \"@sentinel/tt-selector\" --parallel build",
 		"trigger": "bun run services/scheduler/src/scripts/trigger.ts",
 		"refresh:alliances": "bun run scripts/refresh-faction-alliances.ts",

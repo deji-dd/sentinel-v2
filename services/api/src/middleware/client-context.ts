@@ -4,6 +4,7 @@ export type ClientAppType =
 	| "tt-selector"
 	| "bot-dashboard"
 	| "user-dashboard"
+	| "elims-dashboard"
 	| "unknown";
 
 /**
@@ -30,6 +31,13 @@ export const clientContextPlugin = new Elysia({
 		origin.startsWith("https://sentinel.blasted-labs.tech")
 	) {
 		clientApp = "bot-dashboard";
+	} else if (
+		clientHeader === "elims-dashboard" ||
+		host.startsWith("elims.") ||
+		origin.startsWith("https://elims.") ||
+		origin.includes("elims")
+	) {
+		clientApp = "elims-dashboard";
 	} else if (
 		clientHeader === "user-dashboard" ||
 		host.startsWith("sentinel.ayodejib.dev") ||
