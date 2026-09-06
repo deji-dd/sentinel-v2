@@ -78,7 +78,8 @@ jobs:
             cd ${DEPLOY_DIR}
             docker compose build --pull
             echo "Running database migrations..."
-            docker compose run --rm sentinel-api bun run db:migrate
+            docker compose run -T --rm sentinel-api bun run db:migrate </dev/null
+            echo "Recreating containers with updated code..."
             docker compose up -d --remove-orphans --force-recreate
             echo "Checking Sentinel v2 container status..."
             docker compose ps
