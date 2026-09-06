@@ -4,9 +4,13 @@ import {
 	Loader2,
 	RefreshCw,
 	Save,
+	Search,
+	User,
+	UserX,
+	X,
 	XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +21,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
 	Select,
 	SelectContent,
@@ -83,6 +88,7 @@ interface GiveawayConfig {
 	announcementChannelId: string | null;
 	managerChannelId: string | null;
 	managerRoleIds: string[];
+	blacklistedUserIds?: string[];
 }
 
 export function GiveawaysPage() {
@@ -95,6 +101,7 @@ export function GiveawaysPage() {
 		announcementChannelId: null,
 		managerChannelId: null,
 		managerRoleIds: [],
+		blacklistedUserIds: [],
 	});
 	const [loadingConfig, setLoadingConfig] = useState(false);
 	const [savingConfig, setSavingConfig] = useState(false);
@@ -105,6 +112,10 @@ export function GiveawaysPage() {
 	const [cancellingId, setCancellingId] = useState<string | null>(null);
 
 	const [guildMembers, setGuildMembers] = useState<GuildMemberSummary[]>([]);
+	const [blacklistedUserIds, setBlacklistedUserIds] = useState<string[]>([]);
+	const [memberSearchQuery, setMemberSearchQuery] = useState("");
+	const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
+	const memberSearchRef = useRef<HTMLDivElement>(null);
 
 	// Fetch Channels
 	const fetchChannels = useCallback(async () => {
@@ -153,7 +164,9 @@ export function GiveawaysPage() {
 					announcementChannelId: data.config.announcementChannelId ?? null,
 					managerChannelId: data.config.managerChannelId ?? null,
 					managerRoleIds: data.config.managerRoleIds ?? [],
+					blacklistedUserIds: data.config.blacklistedUserIds ?? [],
 				});
+				setBlacklistedUserIds(data.config.blacklistedUserIds ?? []);
 			}
 		} catch (err) {
 			console.error("Failed to load giveaway config:", err);
@@ -242,6 +255,61 @@ export function GiveawaysPage() {
 		);
 	};
 
+	// Click outside listener for member dropdown
+	useEffect(() => {
+		const handleClickOutside = (e: MouseEvent) => {
+			if (
+				memberSearchRef.current &&
+				!memberSearchRef.current.contains(e.target as Node)
+			) {
+				setIsMemberDropdownOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", handleClickOutside);
+		return () => document.removeEventListener("mousedown", handleClickOutside);
+	}, []);
+
+	const filteredMembers = useMemo(() => {
+		if (!memberSearchQuery.trim()) {
+			return guildMembers.slice(0, 30);
+		}
+		const q = memberSearchQuery.toLowerCase().trim();
+		return guildMembers
+			.filter(
+				(m) =>
+					m.displayName.toLowerCase().includes(q) ||
+					m.username.toLowerCase().includes(q) ||
+					m.id.includes(q),
+			)
+			.slice(0, 30);
+	}, [guildMembers, memberSearchQuery]);
+
+	const handleSelectMemberToBlacklist = (member: GuildMemberSummary) => {
+		if (blacklistedUserIds.includes(member.id)) {
+			toast.info(`${member.displayName} is already blacklisted.`);
+			return;
+		}
+		setBlacklistedUserIds((prev) => [...prev, member.id]);
+		setMemberSearchQuery("");
+		setIsMemberDropdownOpen(false);
+	};
+
+	const handleAddBlacklist = () => {
+		const trimmed = memberSearchQuery.trim();
+		if (!trimmed) return;
+		if (blacklistedUserIds.includes(trimmed)) {
+			toast.info("User is already blacklisted.");
+			return;
+		}
+		setBlacklistedUserIds((prev) => [...prev, trimmed]);
+		setMemberSearchQuery("");
+		setIsMemberDropdownOpen(false);
+	};
+
+	const handleRemoveBlacklist = (userId: string) => {
+		setBlacklistedUserIds((prev) => prev.filter((id) => id !== userId));
+	};
+
 	const handleSaveConfig = async () => {
 		setSavingConfig(true);
 
@@ -249,7 +317,10 @@ export function GiveawaysPage() {
 			const res = await fetch("/api/v1/elims/giveaways/config", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(config),
+				body: JSON.stringify({
+					...config,
+					blacklistedUserIds,
+				}),
 			});
 
 			if (!res.ok) {
@@ -259,7 +330,7 @@ export function GiveawaysPage() {
 				throw new Error(errorData.error ?? "Failed to save configuration");
 			}
 
-			toast.success("Giveaway channels updated successfully.");
+			toast.success("Giveaway settings updated successfully.");
 		} catch (err) {
 			toast.error(
 				err instanceof Error ? err.message : "Failed to save configuration.",
@@ -309,137 +380,326 @@ export function GiveawaysPage() {
 						Giveaways
 					</h1>
 				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						void fetchChannels();
-						void fetchConfig();
-						void fetchGiveaways();
-					}}
-					disabled={loadingChannels || loadingConfig || loadingGiveaways}
-					className="h-9 gap-1.5 self-start sm:self-auto cursor-pointer"
-				>
-					<RefreshCw
-						className={`size-3.5 ${
-							loadingChannels || loadingConfig || loadingGiveaways
-								? "animate-spin"
-								: ""
-						}`}
-					/>
-					Refresh
-				</Button>
+				<div className="flex items-center gap-2 self-start sm:self-auto">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => {
+							void fetchChannels();
+							void fetchConfig();
+							void fetchGiveaways();
+						}}
+						disabled={loadingChannels || loadingConfig || loadingGiveaways}
+						className="h-9 gap-1.5 cursor-pointer"
+					>
+						<RefreshCw
+							className={`size-3.5 ${
+								loadingChannels || loadingConfig || loadingGiveaways
+									? "animate-spin"
+									: ""
+							}`}
+						/>
+						Refresh
+					</Button>
+					<Button
+						variant="default"
+						size="sm"
+						onClick={() => void handleSaveConfig()}
+						disabled={savingConfig || loadingConfig || loadingChannels}
+						className="h-9 gap-1.5 font-medium cursor-pointer"
+					>
+						{savingConfig ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							<Save className="size-3.5" />
+						)}
+						Save Settings
+					</Button>
+				</div>
 			</div>
 
-			{/* Section 1: Channel Configuration */}
-			<Card className="border-border shadow-xs bg-card">
-				<CardHeader className="pb-4">
-					<CardTitle className="text-base font-semibold">
-						Giveaway Channels
-					</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-4">
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-						{/* Announcement Channel */}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="announcement-channel"
-								className="text-xs font-medium text-foreground flex items-center gap-1.5"
-							>
-								<Hash className="size-3.5 text-muted-foreground" />
-								Announcement Channel (Public)
-							</label>
-							<Select
-								value={config.announcementChannelId ?? "none"}
-								onValueChange={(val) =>
-									setConfig((prev) => ({
-										...prev,
-										announcementChannelId: val === "none" ? null : val,
-									}))
-								}
-								disabled={loadingChannels || loadingConfig}
-							>
-								<SelectTrigger id="announcement-channel" className="h-9 w-full">
-									<SelectValue placeholder="Select announcement channel..." />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="none">
-										<span className="text-muted-foreground">
-											None (Disabled)
-										</span>
-									</SelectItem>
-									{channels.map((ch) => (
-										<SelectItem key={ch.id} value={ch.id}>
-											#{ch.name}
+			{/* Section 1: Configuration Grid (Channels & Blacklist) */}
+			<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+				{/* Section 1a: Channel Configuration */}
+				<Card className="border-border shadow-xs bg-card">
+					<CardHeader className="pb-4">
+						<CardTitle className="text-base font-semibold">
+							Giveaway Channels
+						</CardTitle>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						<div className="space-y-4">
+							{/* Announcement Channel */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="announcement-channel"
+									className="text-xs font-medium text-foreground flex items-center gap-1.5"
+								>
+									<Hash className="size-3.5 text-muted-foreground" />
+									Announcement Channel (Public)
+								</label>
+								<Select
+									value={config.announcementChannelId ?? "none"}
+									onValueChange={(val) =>
+										setConfig((prev) => ({
+											...prev,
+											announcementChannelId: val === "none" ? null : val,
+										}))
+									}
+									disabled={loadingChannels || loadingConfig}
+								>
+									<SelectTrigger
+										id="announcement-channel"
+										className="h-9 w-full"
+									>
+										<SelectValue placeholder="Select announcement channel..." />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="none">
+											<span className="text-muted-foreground">
+												None (Disabled)
+											</span>
 										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-							<p className="text-[11px] text-muted-foreground">
-								The channel where the bot publishes active giveaways and member
-								entry buttons.
-							</p>
-						</div>
+										{channels.map((ch) => (
+											<SelectItem key={ch.id} value={ch.id}>
+												#{ch.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<p className="text-[11px] text-muted-foreground">
+									The channel where the bot publishes active giveaways and
+									member entry buttons.
+								</p>
+							</div>
 
-						{/* Manager Channel */}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="manager-channel"
-								className="text-xs font-medium text-foreground flex items-center gap-1.5"
-							>
-								<Hash className="size-3.5 text-muted-foreground" />
-								Management Channel
-							</label>
-							<Select
-								value={config.managerChannelId ?? "none"}
-								onValueChange={(val) =>
-									setConfig((prev) => ({
-										...prev,
-										managerChannelId: val === "none" ? null : val,
-									}))
-								}
-								disabled={loadingChannels || loadingConfig}
-							>
-								<SelectTrigger id="manager-channel" className="h-9 w-full">
-									<SelectValue placeholder="Select control panel channel..." />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="none">
-										<span className="text-muted-foreground">
-											Same as announcement channel
-										</span>
-									</SelectItem>
-									{channels.map((ch) => (
-										<SelectItem key={ch.id} value={ch.id}>
-											#{ch.name}
+							{/* Manager Channel */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="manager-channel"
+									className="text-xs font-medium text-foreground flex items-center gap-1.5"
+								>
+									<Hash className="size-3.5 text-muted-foreground" />
+									Management Channel
+								</label>
+								<Select
+									value={config.managerChannelId ?? "none"}
+									onValueChange={(val) =>
+										setConfig((prev) => ({
+											...prev,
+											managerChannelId: val === "none" ? null : val,
+										}))
+									}
+									disabled={loadingChannels || loadingConfig}
+								>
+									<SelectTrigger id="manager-channel" className="h-9 w-full">
+										<SelectValue placeholder="Select control panel channel..." />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="none">
+											<span className="text-muted-foreground">
+												Same as announcement channel
+											</span>
 										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-							<p className="text-[11px] text-muted-foreground">
-								Channel where the bot maintains the persistent "Create Giveaway"
-								button.
-							</p>
+										{channels.map((ch) => (
+											<SelectItem key={ch.id} value={ch.id}>
+												#{ch.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<p className="text-[11px] text-muted-foreground">
+									Channel where the bot maintains the persistent "Create
+									Giveaway" button.
+								</p>
+							</div>
 						</div>
-					</div>
+					</CardContent>
+				</Card>
 
-					<div className="flex justify-end pt-2">
-						<Button
-							size="sm"
-							onClick={() => void handleSaveConfig()}
-							disabled={savingConfig || loadingConfig || loadingChannels}
-							className="gap-1.5 cursor-pointer"
-						>
-							{savingConfig ? (
-								<Loader2 className="size-3.5 animate-spin" />
-							) : (
-								<Save className="size-3.5" />
+				{/* Section 1b: Member Blacklist */}
+				<Card className="border-border shadow-xs bg-card">
+					<CardHeader className="pb-4">
+						<div className="flex items-center justify-between">
+							<CardTitle className="text-base font-semibold flex items-center gap-2">
+								<span>Member Blacklist</span>
+							</CardTitle>
+							<Badge
+								variant="outline"
+								className="font-mono text-xs text-destructive border-destructive/30"
+							>
+								{blacklistedUserIds.length} blocked
+							</Badge>
+						</div>
+					</CardHeader>
+					<CardContent className="flex flex-col gap-4">
+						<p className="text-[11px] text-muted-foreground">
+							Search and select server members to block from creating giveaways.
+						</p>
+
+						{/* Member Search Bar & Dropdown */}
+						<div ref={memberSearchRef} className="relative">
+							<div className="flex items-center gap-2">
+								<div className="relative flex-1">
+									<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+									<Input
+										type="text"
+										placeholder="Search member by name, username, or ID..."
+										value={memberSearchQuery}
+										onFocus={() => setIsMemberDropdownOpen(true)}
+										onChange={(e) => {
+											setMemberSearchQuery(e.target.value);
+											setIsMemberDropdownOpen(true);
+										}}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") {
+												e.preventDefault();
+												if (
+													filteredMembers[0] &&
+													memberSearchQuery.trim().length > 0
+												) {
+													handleSelectMemberToBlacklist(filteredMembers[0]);
+												} else {
+													handleAddBlacklist();
+												}
+											}
+										}}
+										className="pl-8 text-xs font-mono"
+									/>
+								</div>
+								<Button
+									variant="destructive"
+									size="sm"
+									onClick={handleAddBlacklist}
+									disabled={!memberSearchQuery.trim()}
+									className="cursor-pointer gap-1.5 shrink-0 text-xs"
+								>
+									<UserX className="size-3.5" />
+									<span>Block</span>
+								</Button>
+							</div>
+
+							{/* Search Dropdown */}
+							{isMemberDropdownOpen && (
+								<div className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-56 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg flex flex-col gap-1">
+									<div className="flex items-center justify-between px-2 py-1 text-[10px] font-mono text-muted-foreground uppercase border-b border-border/50">
+										<span>
+											{memberSearchQuery.trim()
+												? `Matching Members (${filteredMembers.length})`
+												: `Server Members (${guildMembers.length})`}
+										</span>
+									</div>
+
+									{filteredMembers.length === 0 ? (
+										<div className="p-3 text-center text-xs text-muted-foreground">
+											{memberSearchQuery.trim()
+												? "No matching server members found. Click 'Block' to block this raw ID."
+												: "No server members loaded."}
+										</div>
+									) : (
+										filteredMembers.map((member) => {
+											const isBlocked = blacklistedUserIds.includes(member.id);
+											return (
+												<button
+													key={member.id}
+													type="button"
+													onClick={() => {
+														if (!isBlocked) {
+															handleSelectMemberToBlacklist(member);
+														}
+													}}
+													disabled={isBlocked}
+													className={`flex items-center justify-between gap-2 p-1.5 rounded-md text-left transition-colors w-full ${
+														isBlocked
+															? "opacity-50 cursor-not-allowed bg-muted/20"
+															: "hover:bg-muted/60 cursor-pointer"
+													}`}
+												>
+													<div className="flex items-center gap-2 min-w-0">
+														{member.avatar ? (
+															<img
+																src={member.avatar}
+																alt={member.displayName}
+																className="size-6 rounded-full object-cover shrink-0"
+															/>
+														) : (
+															<div className="size-6 rounded-full bg-muted flex items-center justify-center text-muted-foreground shrink-0">
+																<User className="size-3.5" />
+															</div>
+														)}
+														<div className="flex flex-col min-w-0">
+															<span className="text-xs font-medium text-foreground truncate">
+																{member.displayName}
+															</span>
+															<span className="text-[10px] font-mono text-muted-foreground truncate">
+																@{member.username}
+															</span>
+														</div>
+													</div>
+
+													<Badge
+														variant={isBlocked ? "outline" : "secondary"}
+														className={`text-[9px] font-mono shrink-0 ${
+															isBlocked
+																? "border-destructive/40 text-destructive bg-destructive/10"
+																: "text-muted-foreground"
+														}`}
+													>
+														{isBlocked ? "Blocked" : "Select"}
+													</Badge>
+												</button>
+											);
+										})
+									)}
+								</div>
 							)}
-							Save Channels
-						</Button>
-					</div>
-				</CardContent>
-			</Card>
+						</div>
+
+						{/* Blocked Members List */}
+						{blacklistedUserIds.length > 0 ? (
+							<div className="flex flex-wrap gap-1.5 pt-1 max-h-40 overflow-y-auto">
+								{blacklistedUserIds.map((userId) => {
+									const member = guildMembers.find((m) => m.id === userId);
+									return (
+										<Badge
+											key={userId}
+											variant="outline"
+											className="gap-1.5 text-xs font-mono py-1 px-2 border border-destructive/40 bg-destructive/10 text-destructive flex items-center"
+										>
+											{member?.avatar ? (
+												<img
+													src={member.avatar}
+													alt={member.displayName}
+													className="size-3.5 rounded-full object-cover shrink-0"
+												/>
+											) : (
+												<UserX className="size-3 shrink-0" />
+											)}
+											<span className="font-sans font-medium text-foreground">
+												{member?.displayName ?? member?.username ?? userId}
+											</span>
+
+											<button
+												type="button"
+												onClick={() => handleRemoveBlacklist(userId)}
+												title="Remove from blacklist"
+												className="text-destructive/70 hover:text-destructive cursor-pointer ml-1"
+											>
+												<X className="size-3" />
+											</button>
+										</Badge>
+									);
+								})}
+							</div>
+						) : (
+							<p className="text-xs text-muted-foreground italic">
+								No members are currently blacklisted. All server members can
+								create giveaways.
+							</p>
+						)}
+					</CardContent>
+				</Card>
+			</div>
 
 			{/* Section 2: Giveaway History */}
 			<Card className="border-border shadow-xs bg-card">

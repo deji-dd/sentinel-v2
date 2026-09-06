@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { GuildMember } from "discord.js";
 import {
 	formatDuration,
 	paginateItems,
@@ -163,6 +164,22 @@ describe("Giveaway Helpers", () => {
 			};
 			expect(button?.custom_id).toBe("giveaway_entry:gw_test_123");
 			expect(button?.label).toBe("Enter / Leave Giveaway");
+		});
+	});
+
+	describe("giveaway permission and blacklist", () => {
+		it("allows members by default and handles null members cleanly", async () => {
+			const { canManageGiveaways } = await import("../src/lib/giveaways");
+
+			const nullResult = await canManageGiveaways(null, "guild_test_123");
+			expect(nullResult.allowed).toBe(false);
+
+			const normalMember = { id: "user_normal_999" } as unknown as GuildMember;
+			const allowedResult = await canManageGiveaways(
+				normalMember,
+				"guild_test_123",
+			);
+			expect(allowedResult.allowed).toBe(true);
 		});
 	});
 });

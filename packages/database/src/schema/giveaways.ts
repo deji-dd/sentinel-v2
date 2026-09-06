@@ -12,6 +12,7 @@ export interface ElimsGiveawayConfig {
 	managerChannelId?: string | null;
 	creatorEmbedMessageId?: string | null;
 	managerRoleIds: string[];
+	blacklistedUserIds?: string[];
 	updatedAt: string;
 }
 

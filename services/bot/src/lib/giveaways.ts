@@ -87,22 +87,24 @@ export async function saveGiveawayConfig(
 }
 
 /**
- * Checks whether an interaction member has permission to manage giveaways.
+ * Checks whether an interaction member has permission to create giveaways.
+ * All members are permitted by default unless explicitly blacklisted by administrators.
  */
 export async function canManageGiveaways(
 	member: GuildMember | null,
 	guildId: string,
-): Promise<boolean> {
-	if (!member) return false;
-	if (member.id === member.guild.ownerId) return true;
-	if (member.permissions.has("Administrator")) return true;
+): Promise<{ allowed: boolean; reason?: string }> {
+	if (!member) return { allowed: false, reason: "Member not found" };
 
 	const config = await getGiveawayConfig(guildId);
-	if (!config || config.managerRoleIds.length === 0) return false;
+	if (config?.blacklistedUserIds?.includes(member.id)) {
+		return {
+			allowed: false,
+			reason: "You have been blacklisted from creating giveaways.",
+		};
+	}
 
-	return member.roles.cache.some((role) =>
-		config.managerRoleIds.includes(role.id),
-	);
+	return { allowed: true };
 }
 
 /**
@@ -480,7 +482,7 @@ export async function handleGiveawayCreateInitButton(
 			return;
 		}
 
-		const allowed = await canManageGiveaways(
+		const { allowed, reason } = await canManageGiveaways(
 			interaction.member as GuildMember,
 			interaction.guildId,
 		);
@@ -488,7 +490,7 @@ export async function handleGiveawayCreateInitButton(
 		if (!allowed) {
 			const errorEmbed = createErrorEmbed(
 				"Permission Denied",
-				"You do not have permission to create giveaways.",
+				reason ?? "You do not have permission to create giveaways.",
 			);
 			await interaction.reply({
 				embeds: [errorEmbed],

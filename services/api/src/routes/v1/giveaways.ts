@@ -47,11 +47,14 @@ export const giveawayRoutes = new Elysia({ prefix: "/elims/giveaways" })
 				.from(systemStates)
 				.where(eq(systemStates.id, ELIMS_GIVEAWAYS_CONFIG_ID));
 
-			const config = (sysState?.data as ElimsGiveawayConfig | undefined) ?? {
-				announcementChannelId: null,
-				managerChannelId: null,
-				managerRoleIds: [],
-				updatedAt: new Date().toISOString(),
+			const existingData = sysState?.data as ElimsGiveawayConfig | undefined;
+			const config: ElimsGiveawayConfig = {
+				announcementChannelId: existingData?.announcementChannelId ?? null,
+				managerChannelId: existingData?.managerChannelId ?? null,
+				managerRoleIds: existingData?.managerRoleIds ?? [],
+				blacklistedUserIds: existingData?.blacklistedUserIds ?? [],
+				creatorEmbedMessageId: existingData?.creatorEmbedMessageId ?? null,
+				updatedAt: existingData?.updatedAt ?? new Date().toISOString(),
 			};
 
 			return { config };
@@ -60,7 +63,7 @@ export const giveawayRoutes = new Elysia({ prefix: "/elims/giveaways" })
 			detail: {
 				summary: "Get Giveaway Configuration",
 				description:
-					"Fetches announcement channel, manager channel, and manager roles for giveaways.",
+					"Fetches announcement channel, manager channel, manager roles, and blacklisted users for giveaways.",
 			},
 		},
 	)
@@ -81,10 +84,18 @@ export const giveawayRoutes = new Elysia({ prefix: "/elims/giveaways" })
 				return { error: "Elims tournament server is not configured." };
 			}
 
+			const [sysState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_GIVEAWAYS_CONFIG_ID));
+			const existingData = sysState?.data as ElimsGiveawayConfig | undefined;
+
 			const updatedConfig: ElimsGiveawayConfig = {
 				announcementChannelId: body.announcementChannelId ?? null,
 				managerChannelId: body.managerChannelId ?? null,
 				managerRoleIds: body.managerRoleIds ?? [],
+				blacklistedUserIds: body.blacklistedUserIds ?? [],
+				creatorEmbedMessageId: existingData?.creatorEmbedMessageId ?? null,
 				updatedAt: new Date().toISOString(),
 			};
 
@@ -115,10 +126,12 @@ export const giveawayRoutes = new Elysia({ prefix: "/elims/giveaways" })
 				announcementChannelId: t.Nullable(t.String()),
 				managerChannelId: t.Optional(t.Nullable(t.String())),
 				managerRoleIds: t.Optional(t.Array(t.String())),
+				blacklistedUserIds: t.Optional(t.Array(t.String())),
 			}),
 			detail: {
 				summary: "Update Giveaway Configuration",
-				description: "Saves channel settings and manager roles for giveaways.",
+				description:
+					"Saves channel settings, manager roles, and member blacklist for giveaways.",
 			},
 		},
 	)
