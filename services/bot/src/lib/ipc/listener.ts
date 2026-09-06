@@ -1,3 +1,4 @@
+import { getTargetGuildIds } from "@sentinel/database";
 import type {
 	BulkVerificationProgressData,
 	GuildMemberVerificationInput,
@@ -188,11 +189,34 @@ export function setupBotIpcListeners(client: Client): void {
 				logger.info(
 					`Elims guild configuration updated via IPC for guild: ${guildId}`,
 				);
+				void getTargetGuildIds();
 				void deployGuildCommands(guildId);
 				void updateElimsItemRequestsChannel(client, guildId);
 			}
 		} else if (message.action === "reset_elims_guild") {
 			logger.info("Elims guild configuration was reset via IPC.");
+			void getTargetGuildIds();
+		} else if (message.action === "sync_authorized_guilds") {
+			const guildId = message.data?.guildId;
+			if (typeof guildId === "string") {
+				logger.info(
+					`Authorized target guilds updated via IPC for guild: ${guildId}`,
+				);
+				void getTargetGuildIds();
+				void deployGuildCommands(guildId);
+			}
+		} else if (message.action === "deauthorize_guild") {
+			const guildId = message.data?.guildId;
+			if (typeof guildId === "string") {
+				logger.info(`Guild ${guildId} was deauthorized via IPC.`);
+				void getTargetGuildIds();
+				const guild = client.guilds.cache.get(guildId);
+				if (guild) {
+					void guild.leave().catch((err) => {
+						logger.error(`Failed to leave deauthorized guild ${guildId}:`, err);
+					});
+				}
+			}
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

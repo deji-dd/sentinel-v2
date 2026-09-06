@@ -109,3 +109,21 @@ export async function syncElimsItemRequestsViaIpc(
 ): Promise<boolean> {
 	return notifyBotAction("sync_elims_item_requests", { guildId, config });
 }
+
+/**
+ * Dispatches an IPC signal to the Bot when a guild is authorized in Sentinel.
+ */
+export async function syncAuthorizedGuildsViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_authorized_guilds", { guildId });
+}
+
+/**
+ * Dispatches an IPC signal to the Bot when a guild is deauthorized.
+ */
+export async function deauthorizeGuildViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("deauthorize_guild", { guildId });
+}

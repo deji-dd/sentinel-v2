@@ -8,6 +8,7 @@ import {
 	elimsItemRequests,
 	elimsVerifiedUsers,
 	eq,
+	guildConfigs,
 	ilike,
 	or,
 	systemStates,
@@ -407,9 +408,31 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					: Promise.resolve(null),
 			]);
 
+			const safeBotGuilds: DiscordGuild[] = botGuilds ? [...botGuilds] : [];
+			const botGuildIds = new Set(safeBotGuilds.map((g) => g.id));
+
+			// Direct lookup for authorized guilds not returned in /users/@me/guilds
+			const authorizedRows = await db
+				.select({ guildId: guildConfigs.guildId })
+				.from(guildConfigs)
+				.where(eq(guildConfigs.authorized, true));
+
+			for (const row of authorizedRows) {
+				if (!botGuildIds.has(row.guildId)) {
+					const directGuild = await fetchDiscordApi<DiscordGuild>(
+						`/guilds/${row.guildId}`,
+						`Bot ${botToken}`,
+					);
+					if (directGuild) {
+						safeBotGuilds.push(directGuild);
+						botGuildIds.add(directGuild.id);
+					}
+				}
+			}
+
 			const userGuildMap = new Map((userGuilds ?? []).map((g) => [g.id, g]));
 
-			const mappedGuilds = (botGuilds ?? []).map((g) => ({
+			const mappedGuilds = safeBotGuilds.map((g) => ({
 				id: g.id,
 				name: g.name,
 				icon: g.icon,
@@ -417,6 +440,19 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				owner: g.owner,
 				userInGuild: userGuildMap.has(g.id),
 			}));
+
+			for (const row of authorizedRows) {
+				if (!botGuildIds.has(row.guildId)) {
+					mappedGuilds.push({
+						id: row.guildId,
+						name: `Authorized Server (${row.guildId})`,
+						icon: null,
+						botInGuild: true,
+						owner: false,
+						userInGuild: userGuildMap.has(row.guildId),
+					});
+				}
+			}
 
 			return {
 				guilds: mappedGuilds,

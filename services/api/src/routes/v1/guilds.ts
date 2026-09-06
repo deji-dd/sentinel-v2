@@ -23,6 +23,8 @@ import {
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import {
+	deauthorizeGuildViaIpc,
+	syncAuthorizedGuildsViaIpc,
 	syncFactionMapViaIpc,
 	syncFactionMonitoringViaIpc,
 	syncGuildCommandsViaIpc,
@@ -122,15 +124,32 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				.where(eq(guildConfigs.authorized, true));
 			const authorizedSet = new Set(authorizedRows.map((r) => r.guildId));
 
+			const safeBotGuilds: DiscordGuild[] = botGuilds ? [...botGuilds] : [];
+			const botGuildIds = new Set(safeBotGuilds.map((g) => g.id));
+
+			// Direct lookup for authorized guilds not returned in /users/@me/guilds
+			// (handles Discord REST API edge caching, pagination, and propagation delay)
+			for (const row of authorizedRows) {
+				if (!botGuildIds.has(row.guildId)) {
+					const directGuild = await fetchDiscordApi<DiscordGuild>(
+						`/guilds/${row.guildId}`,
+						`Bot ${botToken}`,
+					);
+					if (directGuild) {
+						safeBotGuilds.push(directGuild);
+						botGuildIds.add(directGuild.id);
+					}
+				}
+			}
+
 			const botGuildMap = new Map(
-				(botGuilds ?? []).map((g) => [g.id, { ...g, botInGuild: true }]),
+				safeBotGuilds.map((g) => [g.id, { ...g, botInGuild: true }]),
 			);
 
 			const isSentinelOwner = user?.role === "owner" || user?.role === "admin";
 
 			if (isSentinelOwner) {
 				const userGuildMap = new Map((userGuilds ?? []).map((g) => [g.id, g]));
-				const botGuildIds = new Set((botGuilds ?? []).map((g) => g.id));
 
 				const result: Array<
 					DiscordGuild & {
@@ -139,13 +158,30 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						authorized: boolean;
 						userInGuild: boolean;
 					}
-				> = (botGuilds ?? []).map((g) => ({
+				> = safeBotGuilds.map((g) => ({
 					...g,
 					botInGuild: true,
 					manageable: true,
 					authorized: authorizedSet.has(g.id),
 					userInGuild: userGuildMap.has(g.id),
 				}));
+
+				// Ensure authorized guilds always appear even if Discord API direct lookup timed out
+				for (const row of authorizedRows) {
+					if (!botGuildIds.has(row.guildId)) {
+						result.push({
+							id: row.guildId,
+							name: `Authorized Server (${row.guildId})`,
+							icon: null,
+							owner: false,
+							permissions: "0",
+							botInGuild: true,
+							manageable: true,
+							authorized: true,
+							userInGuild: userGuildMap.has(row.guildId),
+						});
+					}
+				}
 
 				// Also add user's manageable guilds where bot is not installed yet
 				if (userGuilds) {
@@ -215,6 +251,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			await authorizeGuild(guildId);
+			void syncAuthorizedGuildsViaIpc(guildId);
 
 			const clientId = env.DISCORD_CLIENT_ID;
 			const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot%20applications.commands&guild_id=${guildId}&disable_guild_select=true`;
@@ -254,6 +291,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			await deauthorizeGuild(guildId);
+			void deauthorizeGuildViaIpc(guildId);
 
 			return {
 				success: true,

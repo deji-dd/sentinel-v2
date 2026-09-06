@@ -109,10 +109,11 @@ export async function isTargetGuildAsync(
 ): Promise<boolean> {
 	if (!guildId) return false;
 	if (elimsGuildIdCache === guildId) return true;
-	if (!cacheInitialized) {
-		await getTargetGuildIds();
-	}
-	return authorizedGuildsCache.has(guildId) || elimsGuildIdCache === guildId;
+	if (authorizedGuildsCache.has(guildId)) return true;
+
+	// On cache miss, re-fetch from DB to guarantee fresh state across separate API and Bot processes
+	const freshIds = await getTargetGuildIds();
+	return freshIds.includes(guildId);
 }
 
 /**

@@ -10,11 +10,8 @@ export const guildCreateEvent = {
 
 		if (!isAuthorized) {
 			logger.warn(
-				`Bot was added to unauthorized server ${guild.name} (${guild.id}). Leaving immediately...`,
+				`Bot was added to server ${guild.name} (${guild.id}) without prior authorization. Retaining in server pending dashboard configuration.`,
 			);
-			await guild.leave().catch((err) => {
-				logger.error(`Failed to leave unauthorized guild ${guild.id}:`, err);
-			});
 			return;
 		}
 

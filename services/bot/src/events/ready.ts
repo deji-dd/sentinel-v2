@@ -26,18 +26,13 @@ export const readyEvent = {
 		// Auto-provision configs for all configured target guilds
 		await ensureTargetGuildConfigs();
 
-		// Auto-leave any unauthorized guilds
+		// Ensure authorized target guilds cache is fully loaded on startup
 		const targetIds = await getTargetGuildIds();
-		if (targetIds.length > 0) {
-			for (const [id, guild] of client.guilds.cache) {
-				if (!isTargetGuild(id)) {
-					logger.warn(
-						`Leaving unauthorized guild ${guild.name} (${id}). Target guilds: ${targetIds.join(", ")}`,
-					);
-					await guild.leave().catch((err) => {
-						logger.error(`Failed to leave unauthorized guild ${id}:`, err);
-					});
-				}
+		for (const [id, guild] of client.guilds.cache) {
+			if (!isTargetGuild(id)) {
+				logger.info(
+					`Bot connected to unconfigured guild ${guild.name} (${id}). Available for dashboard setup. Target guilds: ${targetIds.join(", ")}`,
+				);
 			}
 		}
 
