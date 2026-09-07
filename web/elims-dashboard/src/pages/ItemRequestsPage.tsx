@@ -167,6 +167,8 @@ interface ItemRequestsConfigSnapshot {
 	storageChannelId: string | null;
 	requesterRoleIds: string[];
 	managerRoleIds: string[];
+	depositorRoleIds: string[];
+	depositorUserIds: string[];
 	blacklistedUserIds: string[];
 	allowedItems: WhitelistedItem[];
 }
@@ -182,6 +184,8 @@ export function ItemRequestsPage() {
 	const [storageChannelId, setStorageChannelId] = useState<string | null>(null);
 	const [requesterRoleIds, setRequesterRoleIds] = useState<string[]>([]);
 	const [managerRoleIds, setManagerRoleIds] = useState<string[]>([]);
+	const [depositorRoleIds, setDepositorRoleIds] = useState<string[]>([]);
+	const [depositorUserIds, setDepositorUserIds] = useState<string[]>([]);
 	const [blacklistedUserIds, setBlacklistedUserIds] = useState<string[]>([]);
 	const [allowedItems, setAllowedItems] = useState<WhitelistedItem[]>([]);
 	const [initialConfig, setInitialConfig] =
@@ -189,12 +193,18 @@ export function ItemRequestsPage() {
 	const [loadingConfig, setLoadingConfig] = useState(true);
 	const [savingConfig, setSavingConfig] = useState(false);
 
-	// ─── Server Members for Blacklist Search ──────────────────────────────────
+	// ─── Server Members for Blacklist & Depositor Search ─────────────────────
 	const [guildMembers, setGuildMembers] = useState<GuildMemberSummary[]>([]);
 	const [loadingMembers, setLoadingMembers] = useState(false);
 	const [memberSearchQuery, setMemberSearchQuery] = useState("");
 	const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
 	const memberSearchRef = useRef<HTMLDivElement | null>(null);
+
+	const [depositorMemberSearchQuery, setDepositorMemberSearchQuery] =
+		useState("");
+	const [isDepositorMemberDropdownOpen, setIsDepositorMemberDropdownOpen] =
+		useState(false);
+	const depositorMemberSearchRef = useRef<HTMLDivElement | null>(null);
 
 	// ─── Armory Stock Inventory State ──────────────────────────────────────────
 	const [stockInventory, setStockInventory] = useState<ItemStock[]>([]);
@@ -380,6 +390,8 @@ export function ItemRequestsPage() {
 					storageChannelId: (cfg.storageChannelId as string) ?? null,
 					requesterRoleIds: (cfg.requesterRoleIds as string[]) ?? [],
 					managerRoleIds: (cfg.managerRoleIds as string[]) ?? [],
+					depositorRoleIds: (cfg.depositorRoleIds as string[]) ?? [],
+					depositorUserIds: (cfg.depositorUserIds as string[]) ?? [],
 					blacklistedUserIds: (cfg.blacklistedUserIds as string[]) ?? [],
 					allowedItems: (cfg.allowedItems as WhitelistedItem[]) ?? [],
 				};
@@ -388,6 +400,8 @@ export function ItemRequestsPage() {
 				setStorageChannelId(snapshot.storageChannelId);
 				setRequesterRoleIds(snapshot.requesterRoleIds);
 				setManagerRoleIds(snapshot.managerRoleIds);
+				setDepositorRoleIds(snapshot.depositorRoleIds);
+				setDepositorUserIds(snapshot.depositorUserIds);
 				setBlacklistedUserIds(snapshot.blacklistedUserIds);
 				setAllowedItems(snapshot.allowedItems);
 				setInitialConfig(snapshot);
@@ -664,15 +678,24 @@ export function ItemRequestsPage() {
 	};
 
 	// ─── Toggle Roles ─────────────────────────────────────────────────────────
-	const toggleRole = (roleId: string, type: "requester" | "manager") => {
+	const toggleRole = (
+		roleId: string,
+		type: "requester" | "manager" | "depositor",
+	) => {
 		if (type === "requester") {
 			setRequesterRoleIds((prev) =>
 				prev.includes(roleId)
 					? prev.filter((id) => id !== roleId)
 					: [...prev, roleId],
 			);
-		} else {
+		} else if (type === "manager") {
 			setManagerRoleIds((prev) =>
+				prev.includes(roleId)
+					? prev.filter((id) => id !== roleId)
+					: [...prev, roleId],
+			);
+		} else {
+			setDepositorRoleIds((prev) =>
 				prev.includes(roleId)
 					? prev.filter((id) => id !== roleId)
 					: [...prev, roleId],
@@ -685,6 +708,46 @@ export function ItemRequestsPage() {
 		setAllowedItems((prev) =>
 			prev.map((i) => (i.id === itemId ? { ...i, maxRequestable: max } : i)),
 		);
+	};
+
+	// ─── Depositor Member Search & Handlers ──────────────────────────────────
+	const filteredDepositorMembers = useMemo(() => {
+		const q = depositorMemberSearchQuery.trim().toLowerCase();
+		if (!q) return guildMembers.slice(0, 30);
+		return guildMembers
+			.filter(
+				(m) =>
+					m.displayName.toLowerCase().includes(q) ||
+					m.username.toLowerCase().includes(q) ||
+					m.id.includes(q),
+			)
+			.slice(0, 30);
+	}, [guildMembers, depositorMemberSearchQuery]);
+
+	const handleSelectMemberToDepositor = (member: GuildMemberSummary) => {
+		if (depositorUserIds.includes(member.id)) {
+			toast.info(`${member.displayName} is already an authorized depositor.`);
+			return;
+		}
+		setDepositorUserIds((prev) => [...prev, member.id]);
+		setDepositorMemberSearchQuery("");
+		setIsDepositorMemberDropdownOpen(false);
+	};
+
+	const handleAddDepositorMember = () => {
+		const trimmed = depositorMemberSearchQuery.trim();
+		if (!trimmed) return;
+		if (depositorUserIds.includes(trimmed)) {
+			toast.info("User is already an authorized depositor.");
+			return;
+		}
+		setDepositorUserIds((prev) => [...prev, trimmed]);
+		setDepositorMemberSearchQuery("");
+		setIsDepositorMemberDropdownOpen(false);
+	};
+
+	const handleRemoveDepositorMember = (userId: string) => {
+		setDepositorUserIds((prev) => prev.filter((id) => id !== userId));
 	};
 
 	// ─── Blacklist Member Search & Handlers ──────────────────────────────────
@@ -762,6 +825,8 @@ export function ItemRequestsPage() {
 					storageChannelId: storageChannelId || null,
 					requesterRoleIds,
 					managerRoleIds,
+					depositorRoleIds,
+					depositorUserIds,
 					blacklistedUserIds,
 					allowedItems,
 				}),
@@ -778,6 +843,8 @@ export function ItemRequestsPage() {
 				storageChannelId: storageChannelId || null,
 				requesterRoleIds: [...requesterRoleIds],
 				managerRoleIds: [...managerRoleIds],
+				depositorRoleIds: [...depositorRoleIds],
+				depositorUserIds: [...depositorUserIds],
 				blacklistedUserIds: [...blacklistedUserIds],
 				allowedItems: [...allowedItems],
 			});
@@ -814,6 +881,18 @@ export function ItemRequestsPage() {
 		const mgrSet = new Set(initialConfig.managerRoleIds);
 		if (managerRoleIds.some((id) => !mgrSet.has(id))) return true;
 
+		// Depositor roles
+		if (depositorRoleIds.length !== initialConfig.depositorRoleIds.length)
+			return true;
+		const depRoleSet = new Set(initialConfig.depositorRoleIds);
+		if (depositorRoleIds.some((id) => !depRoleSet.has(id))) return true;
+
+		// Depositor users
+		if (depositorUserIds.length !== initialConfig.depositorUserIds.length)
+			return true;
+		const depUserSet = new Set(initialConfig.depositorUserIds);
+		if (depositorUserIds.some((id) => !depUserSet.has(id))) return true;
+
 		// Blacklist
 		if (blacklistedUserIds.length !== initialConfig.blacklistedUserIds.length)
 			return true;
@@ -839,6 +918,8 @@ export function ItemRequestsPage() {
 		storageChannelId,
 		requesterRoleIds,
 		managerRoleIds,
+		depositorRoleIds,
+		depositorUserIds,
 		blacklistedUserIds,
 		allowedItems,
 	]);
@@ -850,6 +931,8 @@ export function ItemRequestsPage() {
 		setStorageChannelId(initialConfig.storageChannelId);
 		setRequesterRoleIds(initialConfig.requesterRoleIds);
 		setManagerRoleIds(initialConfig.managerRoleIds);
+		setDepositorRoleIds(initialConfig.depositorRoleIds);
+		setDepositorUserIds(initialConfig.depositorUserIds);
 		setBlacklistedUserIds(initialConfig.blacklistedUserIds);
 		setAllowedItems(initialConfig.allowedItems);
 		toast.info("Unsaved changes discarded.");
@@ -1158,15 +1241,16 @@ export function ItemRequestsPage() {
 										</Select>
 									</div>
 
-									{/* Armory Storage Channel */}
+									{/* Armory Depositor & Storage Channel */}
 									<div className="flex flex-col gap-1.5">
 										<label
 											htmlFor="storage-channel-select"
 											className="text-xs font-semibold text-foreground flex items-center justify-between"
 										>
-											<span>Armory Storage Channel</span>
+											<span>Armory Depositor & Storage Channel</span>
 											<span className="text-[10px] text-muted-foreground font-normal">
-												Bot maintains persistent armory deposit embed here
+												Where members paste deposit logs and bot posts live
+												stock
 											</span>
 										</label>
 										<Select
@@ -1456,6 +1540,287 @@ export function ItemRequestsPage() {
 																onClick={() => toggleRole(id, "manager")}
 																title="Remove role"
 																className="text-muted-foreground hover:text-foreground cursor-pointer ml-0.5"
+															>
+																<X className="size-3" />
+															</button>
+														</Badge>
+													);
+												})}
+											</div>
+										)}
+									</div>
+
+									{/* Separator */}
+									<div className="border-t border-border/40 my-1" />
+
+									{/* Allowed Depositor Roles */}
+									<div className="flex flex-col gap-2">
+										<div className="flex items-center justify-between">
+											<span className="text-xs font-semibold text-foreground">
+												Allowed Depositor Roles
+											</span>
+											<span className="text-[10px] text-muted-foreground">
+												{depositorRoleIds.length === 0 &&
+												depositorUserIds.length === 0
+													? "Open to all server members"
+													: `${depositorRoleIds.length} role(s) selected`}
+											</span>
+										</div>
+										<p className="text-[11px] text-muted-foreground">
+											Restrict who can deposit items by pasting logs into the
+											armory channel. Anyone else messaging in that channel will
+											be deleted immediately.
+										</p>
+										<Select
+											value={
+												depositorRoleIds.length === 1
+													? (depositorRoleIds[0] ?? "none")
+													: "none"
+											}
+											onValueChange={(val) => {
+												if (val === "none") {
+													setDepositorRoleIds([]);
+												} else if (!depositorRoleIds.includes(val)) {
+													setDepositorRoleIds((prev) => [...prev, val]);
+												}
+											}}
+											disabled={loadingRoles || loadingConfig}
+										>
+											<SelectTrigger
+												id="depositor-roles-select"
+												className="w-full font-mono text-xs cursor-pointer"
+											>
+												<SelectValue
+													placeholder={
+														depositorRoleIds.length === 0
+															? "-- None (Open to all members) --"
+															: `${depositorRoleIds.length} role(s) selected`
+													}
+												>
+													{depositorRoleIds.length === 0
+														? "-- None (Open to all members) --"
+														: depositorRoleIds.length === 1
+															? (roles.find((r) => r.id === depositorRoleIds[0])
+																	?.name ?? "1 role selected")
+															: `${depositorRoleIds.length} roles selected`}
+												</SelectValue>
+											</SelectTrigger>
+											<SelectContent>
+												<SelectGroup>
+													<SelectLabel className="text-[10px] uppercase font-mono tracking-wider">
+														Server Roles
+													</SelectLabel>
+													<SelectItem
+														value="none"
+														className="text-xs font-mono"
+													>
+														-- None (Open to all members) --
+													</SelectItem>
+													{roles.map((r) => {
+														const isAdded = depositorRoleIds.includes(r.id);
+														return (
+															<SelectItem
+																key={r.id}
+																value={r.id}
+																className="text-xs font-mono"
+															>
+																<div className="flex items-center gap-2">
+																	<span
+																		className="size-2 rounded-full shrink-0"
+																		style={{
+																			backgroundColor: formatRoleColor(r.color),
+																		}}
+																	/>
+																	<span>{r.name}</span>
+																	{isAdded && (
+																		<span className="text-[10px] text-primary ml-1">
+																			(Selected)
+																		</span>
+																	)}
+																</div>
+															</SelectItem>
+														);
+													})}
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+
+										{/* Selected Depositor Roles Badges */}
+										{depositorRoleIds.length > 0 && (
+											<div className="flex flex-wrap gap-1.5 pt-1">
+												{depositorRoleIds.map((id) => {
+													const r = roles.find((role) => role.id === id);
+													return (
+														<Badge
+															key={id}
+															variant="secondary"
+															className="gap-1.5 text-xs font-mono py-0.5 px-2 border border-border/80 bg-background/80"
+														>
+															<span
+																className="size-2 rounded-full shrink-0"
+																style={{
+																	backgroundColor: r
+																		? formatRoleColor(r.color)
+																		: "#94a3b8",
+																}}
+															/>
+															<span>{r?.name ?? id}</span>
+															<button
+																type="button"
+																onClick={() => toggleRole(id, "depositor")}
+																title="Remove role"
+																className="text-muted-foreground hover:text-foreground cursor-pointer ml-0.5"
+															>
+																<X className="size-3" />
+															</button>
+														</Badge>
+													);
+												})}
+											</div>
+										)}
+									</div>
+
+									{/* Allowed Specific Depositor Members */}
+									<div className="flex flex-col gap-2 pt-2">
+										<div className="flex items-center justify-between">
+											<span className="text-xs font-semibold text-foreground">
+												Allowed Depositor Members
+											</span>
+											<span className="text-[10px] text-muted-foreground">
+												{depositorUserIds.length} member(s) allowed
+											</span>
+										</div>
+										<p className="text-[11px] text-muted-foreground">
+											Explicitly permit individual members to deposit in
+											addition to any role permissions.
+										</p>
+
+										<div ref={depositorMemberSearchRef} className="relative">
+											<div className="flex items-center gap-2">
+												<div className="relative flex-1">
+													<Input
+														placeholder="Search server members by name or ID..."
+														value={depositorMemberSearchQuery}
+														onChange={(e) => {
+															setDepositorMemberSearchQuery(e.target.value);
+															setIsDepositorMemberDropdownOpen(true);
+														}}
+														onFocus={() =>
+															setIsDepositorMemberDropdownOpen(true)
+														}
+														className="text-xs font-mono pr-8"
+													/>
+												</div>
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={handleAddDepositorMember}
+													disabled={!depositorMemberSearchQuery.trim()}
+													className="text-xs shrink-0 cursor-pointer"
+												>
+													<Plus className="size-3.5 mr-1" />
+													Add
+												</Button>
+											</div>
+
+											{/* Search Dropdown */}
+											{isDepositorMemberDropdownOpen && (
+												<div className="absolute top-full left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md p-1">
+													{loadingMembers ? (
+														<div className="p-2 text-center text-xs text-muted-foreground">
+															Loading members...
+														</div>
+													) : filteredDepositorMembers.length === 0 ? (
+														<div className="p-2 text-center text-xs text-muted-foreground">
+															No members found
+														</div>
+													) : (
+														filteredDepositorMembers.map((m) => {
+															const isAlreadyAdded = depositorUserIds.includes(
+																m.id,
+															);
+															return (
+																<button
+																	key={m.id}
+																	type="button"
+																	onClick={() =>
+																		handleSelectMemberToDepositor(m)
+																	}
+																	disabled={isAlreadyAdded}
+																	className={`w-full flex items-center justify-between p-2 rounded text-xs text-left transition-colors ${
+																		isAlreadyAdded
+																			? "opacity-50 cursor-not-allowed bg-muted/40"
+																			: "hover:bg-muted/60 cursor-pointer"
+																	}`}
+																>
+																	<div className="flex items-center gap-2 min-w-0">
+																		{m.avatar ? (
+																			<img
+																				src={m.avatar}
+																				alt={m.displayName}
+																				className="size-5 rounded-full object-cover shrink-0"
+																			/>
+																		) : (
+																			<div className="size-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+																				<User className="size-3 text-primary" />
+																			</div>
+																		)}
+																		<div className="flex flex-col min-w-0">
+																			<span className="font-medium truncate text-foreground">
+																				{m.displayName}
+																			</span>
+																			<span className="text-[10px] text-muted-foreground font-mono truncate">
+																				@{m.username} • {m.id}
+																			</span>
+																		</div>
+																	</div>
+																	{isAlreadyAdded && (
+																		<span className="text-[10px] text-primary shrink-0 ml-2 font-mono">
+																			Allowed
+																		</span>
+																	)}
+																</button>
+															);
+														})
+													)}
+												</div>
+											)}
+										</div>
+
+										{/* Allowed Depositor Badges */}
+										{depositorUserIds.length > 0 && (
+											<div className="flex flex-wrap gap-1.5 pt-1">
+												{depositorUserIds.map((userId) => {
+													const member = guildMembers.find(
+														(m) => m.id === userId,
+													);
+													return (
+														<Badge
+															key={userId}
+															variant="secondary"
+															className="gap-1.5 text-xs font-mono py-1 px-2 border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 flex items-center"
+														>
+															{member?.avatar ? (
+																<img
+																	src={member.avatar}
+																	alt={member.displayName}
+																	className="size-3.5 rounded-full object-cover shrink-0"
+																/>
+															) : (
+																<User className="size-3 shrink-0" />
+															)}
+															<span className="font-sans font-medium text-foreground">
+																{member?.displayName ??
+																	member?.username ??
+																	userId}
+															</span>
+															<button
+																type="button"
+																onClick={() =>
+																	handleRemoveDepositorMember(userId)
+																}
+																title="Remove allowed depositor"
+																className="text-muted-foreground hover:text-destructive cursor-pointer ml-1"
 															>
 																<X className="size-3" />
 															</button>

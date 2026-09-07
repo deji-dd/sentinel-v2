@@ -23,6 +23,8 @@ export interface ElimsItemRequestConfig {
 	storageEmbedMessageId?: string | null;
 	requesterRoleIds: string[];
 	managerRoleIds: string[];
+	depositorRoleIds?: string[];
+	depositorUserIds?: string[];
 	allowedItems: WhitelistedItem[];
 	blacklistedUserIds?: string[];
 	embedMessageId?: string | null;

@@ -7,6 +7,8 @@ import {
 	ChevronRight,
 	RefreshCw,
 	Search,
+	ShieldCheck,
+	Trash2,
 	Users,
 	X,
 } from "lucide-react";
@@ -22,9 +24,27 @@ import {
 	YAxis,
 } from "recharts";
 import { toast } from "sonner";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
 	Select,
@@ -116,11 +136,14 @@ const STAT_BUCKETS = [
 	{ label: "10b-25b", min: 10e9, max: 25e9, color: "#6366f1" },
 	{ label: "25b-50b", min: 25e9, max: 50e9, color: "#8b5cf6" },
 	{ label: "50b-100b", min: 50e9, max: 100e9, color: "#a855f7" },
+	{ label: "100b-250b", min: 100e9, max: 250e9, color: "#d946ef" },
+	{ label: "250b-500b", min: 250e9, max: 500e9, color: "#ec4899" },
+	{ label: "500b-1t", min: 500e9, max: 1e12, color: "#f43f5e" },
 	{
-		label: ">100b",
-		min: 100e9,
+		label: ">1t",
+		min: 1e12,
 		max: Number.POSITIVE_INFINITY,
-		color: "#ec4899",
+		color: "#e11d48",
 	},
 ] as const;
 
@@ -135,7 +158,15 @@ type SortField =
 	| "fairFight";
 type SortOrder = "asc" | "desc";
 
+const ROLE_STORAGE_KEY = "sentinel_elims_team_breakdown_role";
+
 function formatStatNumber(num: number): string {
+	if (num >= 1_000_000_000_000_000) {
+		return `${(num / 1_000_000_000_000_000).toFixed(2)}q`;
+	}
+	if (num >= 1_000_000_000_000) {
+		return `${(num / 1_000_000_000_000).toFixed(2)}t`;
+	}
 	if (num >= 1_000_000_000) {
 		return `${(num / 1_000_000_000).toFixed(2)}b`;
 	}
@@ -149,6 +180,12 @@ function formatStatNumber(num: number): string {
 }
 
 function formatCurrency(num: number): string {
+	if (num >= 1_000_000_000_000_000) {
+		return `$${(num / 1_000_000_000_000_000).toFixed(2)}q`;
+	}
+	if (num >= 1_000_000_000_000) {
+		return `$${(num / 1_000_000_000_000).toFixed(2)}t`;
+	}
 	if (num >= 1_000_000_000) {
 		return `$${(num / 1_000_000_000).toFixed(2)}b`;
 	}
@@ -205,7 +242,12 @@ export function TeamBreakdownPage() {
 		user?.discordId === "729432882166366218";
 
 	const [roles, setRoles] = useState<DiscordRoleItem[]>([]);
-	const [selectedRoleId, setSelectedRoleId] = useState<string>("all");
+	const [selectedRoleId, setSelectedRoleId] = useState<string>(() => {
+		if (typeof window !== "undefined") {
+			return localStorage.getItem(ROLE_STORAGE_KEY) || "all";
+		}
+		return "all";
+	});
 	const [search, setSearch] = useState("");
 	const [selectedTier, setSelectedTier] = useState<string | null>(null);
 	const [sortField, setSortField] = useState<SortField>("bsEstimate");
@@ -216,11 +258,42 @@ export function TeamBreakdownPage() {
 	const [currentPage, setCurrentPage] = useState(1);
 	const [pageSize, setPageSize] = useState(50);
 
+	const [isStatRolesDialogOpen, setIsStatRolesDialogOpen] = useState(false);
+	const [statRoleMappings, setStatRoleMappings] = useState<
+		Record<string, string>
+	>({});
+	const [savingStatRoles, setSavingStatRoles] = useState(false);
+
+	const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+	const [resettingMembers, setResettingMembers] = useState(false);
+
+	const selectedRoleName = useMemo(() => {
+		if (selectedRoleId === "all") return null;
+		const found = roles.find((r) => r.id === selectedRoleId);
+		return found ? found.name : selectedRoleId;
+	}, [roles, selectedRoleId]);
+
+	const handleRoleChange = (newRoleId: string) => {
+		setSelectedRoleId(newRoleId);
+		if (typeof window !== "undefined") {
+			localStorage.setItem(ROLE_STORAGE_KEY, newRoleId);
+		}
+	};
+
 	const fetchRoles = useCallback(async () => {
 		try {
 			const res = await api.api.v1.elims["guild-roles"].get();
 			if (res.data && "roles" in res.data) {
 				setRoles(res.data.roles as DiscordRoleItem[]);
+			}
+		} catch {}
+	}, []);
+
+	const fetchStatRoles = useCallback(async () => {
+		try {
+			const res = await api.api.v1.elims["team-stats"]["stat-roles"].get();
+			if (res.data && "mappings" in res.data && res.data.mappings) {
+				setStatRoleMappings(res.data.mappings as Record<string, string>);
 			}
 		} catch {}
 	}, []);
@@ -251,8 +324,9 @@ export function TeamBreakdownPage() {
 	useEffect(() => {
 		if (isOwner) {
 			fetchRoles();
+			fetchStatRoles();
 		}
-	}, [fetchRoles, isOwner]);
+	}, [fetchRoles, fetchStatRoles, isOwner]);
 
 	useEffect(() => {
 		fetchMembersStats();
@@ -288,6 +362,64 @@ export function TeamBreakdownPage() {
 			);
 		} finally {
 			setFetchingStats(false);
+		}
+	};
+
+	const handleSaveAndAssignStatRoles = async () => {
+		setSavingStatRoles(true);
+		try {
+			const res = await api.api.v1.elims["team-stats"]["assign-roles"].post({
+				roleMappings: statRoleMappings,
+			});
+
+			if (res.data) {
+				const result = res.data as {
+					success: boolean;
+					message?: string;
+				};
+				toast.success(
+					result.message ?? "Stat roles saved and assignment started.",
+				);
+				setIsStatRolesDialogOpen(false);
+			} else if (res.error) {
+				toast.error("Failed to assign stat roles.");
+			}
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Failed to assign stat roles.",
+			);
+		} finally {
+			setSavingStatRoles(false);
+		}
+	};
+
+	const handleResetMembers = async () => {
+		setResettingMembers(true);
+		try {
+			const res = await api.api.v1.elims["team-stats"].reset.post({
+				roleId: selectedRoleId !== "all" ? selectedRoleId : undefined,
+			});
+
+			if (res.data) {
+				const result = res.data as {
+					success: boolean;
+					message?: string;
+					deletedCount: number;
+				};
+				toast.success(
+					result.message ?? `Removed ${result.deletedCount} member record(s).`,
+				);
+				setIsResetDialogOpen(false);
+				await fetchMembersStats();
+			} else if (res.error) {
+				toast.error("Failed to reset member stats.");
+			}
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Failed to reset member stats.",
+			);
+		} finally {
+			setResettingMembers(false);
 		}
 	};
 
@@ -527,10 +659,21 @@ export function TeamBreakdownPage() {
 			<Card>
 				<CardHeader className="pb-2 border-b border-border/40">
 					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-						<div>
+						<div className="flex items-center gap-3">
 							<CardTitle className="text-sm font-bold font-mono uppercase tracking-wide">
 								Battle Stat Distribution
 							</CardTitle>
+							{isOwner && (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => setIsStatRolesDialogOpen(true)}
+									className="h-7 text-xs font-mono gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
+								>
+									<ShieldCheck className="size-3.5" />
+									Auto-Assign Roles
+								</Button>
+							)}
 						</div>
 						{selectedTier && (
 							<Button
@@ -654,13 +797,10 @@ export function TeamBreakdownPage() {
 							)}
 						</div>
 
-						{/* Owner Action Controls (Role Select & Sync Button) */}
+						{/* Owner Action Controls (Role Select, Sync, and Reset/Prune Buttons) */}
 						{isOwner && (
 							<>
-								<Select
-									value={selectedRoleId}
-									onValueChange={setSelectedRoleId}
-								>
+								<Select value={selectedRoleId} onValueChange={handleRoleChange}>
 									<SelectTrigger className="w-44 h-8 text-xs font-mono">
 										<SelectValue placeholder="All Server Members" />
 									</SelectTrigger>
@@ -685,6 +825,18 @@ export function TeamBreakdownPage() {
 										className={`size-3.5 ${fetchingStats ? "animate-spin" : ""}`}
 									/>
 									{hasMissingStats ? "Sync Missing Stats" : "Get Members Stats"}
+								</Button>
+
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => setIsResetDialogOpen(true)}
+									className="gap-1.5 h-8 text-xs font-mono text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+								>
+									<Trash2 className="size-3.5" />
+									{selectedRoleId !== "all"
+										? "Reset to Role"
+										: "Reset All Stats"}
 								</Button>
 							</>
 						)}
@@ -919,6 +1071,141 @@ export function TeamBreakdownPage() {
 					)}
 				</CardContent>
 			</Card>
+
+			{/* Reset / Prune Members Confirmation Dialog */}
+			<AlertDialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							{selectedRoleId !== "all" && selectedRoleName
+								? `Reset Members to "${selectedRoleName}"?`
+								: "Reset All Member Stats?"}
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{selectedRoleId !== "all" && selectedRoleName
+								? `This will remove all synced member stats records for users who do NOT have the "${selectedRoleName}" role. Only members possessing this role will be kept.`
+								: "This will remove all synced member battle stats for this tournament guild. You will need to sync them again."}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={resettingMembers}>
+							Cancel
+						</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={(e) => {
+								e.preventDefault();
+								handleResetMembers();
+							}}
+							disabled={resettingMembers}
+							className="bg-destructive text-destructive-foreground hover:bg-destructive/90 gap-1.5"
+						>
+							{resettingMembers ? (
+								<RefreshCw className="size-3.5 animate-spin" />
+							) : (
+								<Trash2 className="size-3.5" />
+							)}
+							{selectedRoleId !== "all"
+								? "Remove Members Without Role"
+								: "Reset All Members"}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			{/* Stat Distribution Auto-Assign Roles Dialog */}
+			<Dialog
+				open={isStatRolesDialogOpen}
+				onOpenChange={setIsStatRolesDialogOpen}
+			>
+				<DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<ShieldCheck className="size-5 text-primary" />
+							Auto-Assign Discord Roles by Stat Tier
+						</DialogTitle>
+						<DialogDescription>
+							Map each battle stat tier to a Discord role. When saved, the bot
+							will automatically assign each member their corresponding tier
+							role and remove obsolete tier roles.
+						</DialogDescription>
+					</DialogHeader>
+
+					<div className="flex flex-col gap-2.5 py-3">
+						{STAT_BUCKETS.map((bucket) => {
+							const currentRoleId = statRoleMappings[bucket.label] || "none";
+							return (
+								<div
+									key={bucket.label}
+									className="flex items-center justify-between p-2.5 rounded-md border border-border/50 bg-card/50"
+								>
+									<div className="flex items-center gap-2.5">
+										<div
+											className="size-3 rounded-full shrink-0"
+											style={{ backgroundColor: bucket.color }}
+										/>
+										<div className="font-mono text-xs font-semibold">
+											{bucket.label}
+										</div>
+									</div>
+
+									<Select
+										value={currentRoleId}
+										onValueChange={(val) => {
+											setStatRoleMappings((prev) => {
+												const next = { ...prev };
+												if (val === "none") {
+													delete next[bucket.label];
+												} else {
+													next[bucket.label] = val;
+												}
+												return next;
+											});
+										}}
+									>
+										<SelectTrigger className="w-56 h-8 text-xs font-mono">
+											<SelectValue placeholder="Select role..." />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="none">
+												<span className="text-muted-foreground italic">
+													None (Don't assign)
+												</span>
+											</SelectItem>
+											{roles.map((r) => (
+												<SelectItem key={r.id} value={r.id}>
+													{r.name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+							);
+						})}
+					</div>
+
+					<DialogFooter className="gap-2 sm:gap-0">
+						<Button
+							variant="outline"
+							onClick={() => setIsStatRolesDialogOpen(false)}
+							disabled={savingStatRoles}
+						>
+							Cancel
+						</Button>
+						<Button
+							onClick={handleSaveAndAssignStatRoles}
+							disabled={savingStatRoles}
+							className="gap-2 font-mono"
+						>
+							{savingStatRoles ? (
+								<RefreshCw className="size-3.5 animate-spin" />
+							) : (
+								<ShieldCheck className="size-3.5" />
+							)}
+							Save & Assign Roles
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

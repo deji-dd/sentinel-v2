@@ -1,5 +1,7 @@
 import {
 	Check,
+	ChevronLeft,
+	ChevronRight,
 	ExternalLink,
 	Hash,
 	Key,
@@ -31,6 +33,14 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
 import { formatTctTimestamp } from "@/lib/utils";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";
@@ -85,6 +95,13 @@ export function GuildConfigPage() {
 	const [newApiKey, setNewApiKey] = useState("");
 	const [addingKey, setAddingKey] = useState(false);
 	const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
+	const [keysPage, setKeysPage] = useState(1);
+	const KEYS_PER_PAGE = 6;
+	const totalKeyPages = Math.max(1, Math.ceil(apiKeys.length / KEYS_PER_PAGE));
+	const paginatedKeys = useMemo(() => {
+		const start = (keysPage - 1) * KEYS_PER_PAGE;
+		return apiKeys.slice(start, start + KEYS_PER_PAGE);
+	}, [apiKeys, keysPage]);
 
 	// Key Donation Channel state
 	const [channels, setChannels] = useState<DiscordChannel[]>([]);
@@ -633,7 +650,7 @@ export function GuildConfigPage() {
 						</Select>
 					</div>
 
-					{/* Keys List */}
+					{/* Keys List (Paginated Table) */}
 					<div className="border border-border rounded-md overflow-hidden bg-background/30">
 						{loadingKeys ? (
 							<div className="flex flex-col gap-2 p-3">
@@ -646,32 +663,55 @@ export function GuildConfigPage() {
 								donation channel to enable live tournament operations.
 							</div>
 						) : (
-							<div className="divide-y divide-border/50">
-								{apiKeys.map((k) => (
-									<div
-										key={k.id}
-										className="flex items-center justify-between p-3 text-xs gap-3 hover:bg-muted/20 transition-colors"
-									>
-										<div className="flex items-center gap-3 min-w-0">
-											<div className="size-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-												<Key className="size-4 text-primary" />
-											</div>
-											<div className="flex flex-col min-w-0">
-												<div className="flex items-center gap-1.5 flex-wrap">
-													<a
-														href={`https://www.torn.com/profiles.php?XID=${k.tornId}`}
-														target="_blank"
-														rel="noopener noreferrer"
-														className="font-semibold text-primary hover:underline inline-flex items-center gap-1 truncate"
-													>
-														<span>
-															{k.tornName} [{k.tornId}]
-														</span>
-														<ExternalLink className="size-2.5 opacity-70 shrink-0" />
-													</a>
+							<div className="flex flex-col">
+								<Table>
+									<TableHeader>
+										<TableRow className="border-b border-border/50 hover:bg-transparent">
+											<TableHead className="text-xs font-mono">
+												Torn Member
+											</TableHead>
+											<TableHead className="text-xs font-mono">
+												Status
+											</TableHead>
+											<TableHead className="text-xs font-mono">
+												Origin / Donated By
+											</TableHead>
+											<TableHead className="text-xs font-mono">
+												Added / Last Used
+											</TableHead>
+											<TableHead className="text-right text-xs font-mono">
+												Action
+											</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{paginatedKeys.map((k) => (
+											<TableRow
+												key={k.id}
+												className="border-b border-border/40 hover:bg-muted/20 transition-colors text-xs"
+											>
+												<TableCell className="py-2.5 font-medium">
+													<div className="flex items-center gap-2.5 min-w-0">
+														<div className="size-7 rounded bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+															<Key className="size-3.5 text-primary" />
+														</div>
+														<a
+															href={`https://www.torn.com/profiles.php?XID=${k.tornId}`}
+															target="_blank"
+															rel="noopener noreferrer"
+															className="font-semibold text-primary hover:underline inline-flex items-center gap-1 truncate"
+														>
+															<span>
+																{k.tornName} [{k.tornId}]
+															</span>
+															<ExternalLink className="size-2.5 opacity-70 shrink-0" />
+														</a>
+													</div>
+												</TableCell>
+												<TableCell className="py-2.5">
 													<Badge
 														variant="outline"
-														className={`text-[9px] font-mono px-1 py-0 h-4 ${
+														className={`text-[9px] font-mono px-1.5 py-0 h-4 ${
 															k.isValid
 																? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
 																: "bg-rose-500/10 text-rose-500 border-rose-500/30"
@@ -679,41 +719,91 @@ export function GuildConfigPage() {
 													>
 														{k.isValid ? "ACTIVE" : "INVALID"}
 													</Badge>
-													{k.donatedByDiscordTag && (
+												</TableCell>
+												<TableCell className="py-2.5">
+													{k.donatedByDiscordTag ? (
 														<Badge
 															variant="secondary"
-															className="text-[9px] font-mono px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/20 flex items-center gap-1"
+															className="text-[9px] font-mono px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/20 flex items-center gap-1 w-fit"
 															title={`Donated by Discord member: ${k.donatedByDiscordTag}${k.donatedByDiscordId ? ` (${k.donatedByDiscordId})` : ""}`}
 														>
 															<User className="size-2.5 opacity-80" />
-															<span>Donated by @{k.donatedByDiscordTag}</span>
+															<span>@{k.donatedByDiscordTag}</span>
 														</Badge>
+													) : (
+														<span className="text-[11px] text-muted-foreground font-mono">
+															Direct Config
+														</span>
 													)}
-												</div>
-												<span className="text-[10px] text-muted-foreground font-mono">
-													Added {formatTctTimestamp(k.createdAt)}
-													{k.lastUsedAt &&
-														` • Last used ${formatTctTimestamp(k.lastUsedAt)}`}
-												</span>
-											</div>
-										</div>
+												</TableCell>
+												<TableCell className="py-2.5">
+													<div className="flex flex-col text-[10px] text-muted-foreground font-mono">
+														<span>Added {formatTctTimestamp(k.createdAt)}</span>
+														{k.lastUsedAt && (
+															<span className="text-[9px] opacity-80">
+																Used {formatTctTimestamp(k.lastUsedAt)}
+															</span>
+														)}
+													</div>
+												</TableCell>
+												<TableCell className="py-2.5 text-right">
+													<Button
+														variant="ghost"
+														size="icon-xs"
+														onClick={() => handleDeleteApiKey(k.id)}
+														disabled={deletingKeyId === k.id}
+														className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+														title="Delete API key"
+													>
+														{deletingKeyId === k.id ? (
+															<RefreshCw className="size-3.5 animate-spin" />
+														) : (
+															<Trash2 className="size-3.5" />
+														)}
+													</Button>
+												</TableCell>
+											</TableRow>
+										))}
+									</TableBody>
+								</Table>
 
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											onClick={() => handleDeleteApiKey(k.id)}
-											disabled={deletingKeyId === k.id}
-											className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-											title="Delete API key"
-										>
-											{deletingKeyId === k.id ? (
-												<RefreshCw className="size-3.5 animate-spin" />
-											) : (
-												<Trash2 className="size-3.5" />
-											)}
-										</Button>
+								{/* Pagination Controls */}
+								{totalKeyPages > 1 && (
+									<div className="flex items-center justify-between px-3 py-2 border-t border-border/50 bg-muted/10 text-xs font-mono">
+										<span className="text-[11px] text-muted-foreground">
+											Showing {(keysPage - 1) * KEYS_PER_PAGE + 1}-
+											{Math.min(keysPage * KEYS_PER_PAGE, apiKeys.length)} of{" "}
+											{apiKeys.length} keys
+										</span>
+										<div className="flex items-center gap-1.5">
+											<Button
+												variant="outline"
+												size="icon-xs"
+												onClick={() => setKeysPage((p) => Math.max(1, p - 1))}
+												disabled={keysPage <= 1}
+												className="cursor-pointer"
+												title="Previous page"
+											>
+												<ChevronLeft className="size-3.5" />
+											</Button>
+											<span className="text-[11px] font-medium px-2">
+												Page {keysPage} of {totalKeyPages}
+											</span>
+											<Button
+												variant="outline"
+												size="icon-xs"
+												onClick={() =>
+													setKeysPage((p) => Math.min(totalKeyPages, p + 1))
+												}
+												disabled={keysPage >= totalKeyPages}
+												className="cursor-pointer"
+												title="Next page"
+											>
+												<ChevronRight className="size-3.5" />
+											</Button>
+										</div>
 									</div>
-								))}
+								)}
 							</div>
 						)}
 					</div>

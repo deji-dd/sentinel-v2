@@ -212,3 +212,13 @@ export async function deauthorizeGuildViaIpc(
 ): Promise<boolean> {
 	return notifyBotAction("deauthorize_guild", { guildId });
 }
+
+/**
+ * Dispatches an IPC signal to the Bot to auto-assign roles to guild members based on stat distribution.
+ */
+export async function assignElimsStatRolesViaIpc(
+	guildId: string,
+	roleMappings: Record<string, string>,
+): Promise<boolean> {
+	return notifyBotAction("elims_assign_stat_roles", { guildId, roleMappings });
+}

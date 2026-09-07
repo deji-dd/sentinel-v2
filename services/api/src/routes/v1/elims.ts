@@ -32,6 +32,7 @@ import {
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import {
+	assignElimsStatRolesViaIpc,
 	requestSchedulerAction,
 	resetElimsGuildViaIpc,
 	syncElimsGuildViaIpc,
@@ -1446,6 +1447,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				storageEmbedMessageId,
 				requesterRoleIds: body.requesterRoleIds ?? [],
 				managerRoleIds: body.managerRoleIds ?? [],
+				depositorRoleIds: body.depositorRoleIds ?? [],
+				depositorUserIds: body.depositorUserIds ?? [],
 				allowedItems: body.allowedItems ?? [],
 				blacklistedUserIds: body.blacklistedUserIds ?? [],
 				embedMessageId,
@@ -1496,6 +1499,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				storageEmbedMessageId: t.Optional(t.Nullable(t.String())),
 				requesterRoleIds: t.Array(t.String()),
 				managerRoleIds: t.Array(t.String()),
+				depositorRoleIds: t.Optional(t.Array(t.String())),
+				depositorUserIds: t.Optional(t.Array(t.String())),
 				allowedItems: t.Array(
 					t.Object({
 						id: t.String(),
@@ -2594,6 +2599,180 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Fetch Member Stats",
 				description:
 					"Triggers the Scheduler to fetch member stats for new members with role X.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/team-stats/reset ───────────────────────────────────
+	.post(
+		"/team-stats/reset",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = configData?.guildId;
+
+			if (!guildId) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			let deletedCount = 0;
+			if (body?.roleId && body.roleId !== "all") {
+				// Remove members without this role
+				const deleted = await db
+					.delete(elimsMemberStats)
+					.where(
+						and(
+							eq(elimsMemberStats.guildId, guildId),
+							sql`NOT (${elimsMemberStats.roles} @> ${JSON.stringify([body.roleId])}::jsonb)`,
+						),
+					)
+					.returning({ id: elimsMemberStats.id });
+				deletedCount = deleted.length;
+			} else {
+				// Reset all members in this guild
+				const deleted = await db
+					.delete(elimsMemberStats)
+					.where(eq(elimsMemberStats.guildId, guildId))
+					.returning({ id: elimsMemberStats.id });
+				deletedCount = deleted.length;
+			}
+
+			return {
+				success: true,
+				deletedCount,
+				message:
+					body?.roleId && body.roleId !== "all"
+						? `Pruned ${deletedCount} member(s) who do not have the selected role.`
+						: `Reset ${deletedCount} member stats records.`,
+			};
+		},
+		{
+			body: t.Optional(
+				t.Object({
+					roleId: t.Optional(t.String()),
+				}),
+			),
+			detail: {
+				summary: "Reset Member Stats",
+				description:
+					"Resets stored member stats for this tournament guild or prunes members without the specified role.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/team-stats/stat-roles ───────────────────────────────
+	.get(
+		"/team-stats/stat-roles",
+		async ({ user, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, "elims:stat_roles"));
+
+			const data = existing?.data as
+				| { mappings?: Record<string, string> }
+				| undefined;
+			return {
+				mappings: data?.mappings ?? {},
+			};
+		},
+		{
+			detail: {
+				summary: "Get Stat Distribution Role Mappings",
+				description:
+					"Returns role mappings for battle stat distribution brackets.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/team-stats/assign-roles ────────────────────────────
+	.post(
+		"/team-stats/assign-roles",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = configData?.guildId;
+
+			if (!guildId) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const mappings = body.roleMappings;
+
+			// Save to systemStates
+			await db
+				.insert(systemStates)
+				.values({
+					id: "elims:stat_roles",
+					init: true,
+					data: {
+						mappings,
+						updatedAt: new Date().toISOString(),
+					},
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.onConflictDoUpdate({
+					target: systemStates.id,
+					set: {
+						data: {
+							mappings,
+							updatedAt: new Date().toISOString(),
+						},
+						updatedAt: new Date(),
+					},
+				});
+
+			// Dispatch IPC to bot to auto-assign roles
+			const dispatched = await assignElimsStatRolesViaIpc(guildId, mappings);
+
+			return {
+				success: true,
+				dispatched,
+				message: dispatched
+					? "Bot has begun auto-assigning roles based on stat distribution."
+					: "Mappings saved. Bot IPC could not be reached (verify bot is running).",
+			};
+		},
+		{
+			body: t.Object({
+				roleMappings: t.Record(t.String(), t.String()),
+			}),
+			detail: {
+				summary: "Save and Assign Roles Based on Stat Distribution",
+				description:
+					"Saves stat distribution role mappings and instructs Discord bot to auto-assign roles.",
 			},
 		},
 	);

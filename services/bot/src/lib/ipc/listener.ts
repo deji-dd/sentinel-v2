@@ -13,6 +13,7 @@ import { handleCronVerificationProgress } from "../cron-verification-logger";
 import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../elims-key-donation";
+import { autoAssignElimsStatRoles } from "../elims-stat-roles";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
@@ -252,6 +253,14 @@ export function setupBotIpcListeners(client: Client): void {
 			void updateGiveawayChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_key_donation") {
 			void updateElimsKeyDonationChannel(client, message.data?.guildId);
+		} else if (message.action === "elims_assign_stat_roles") {
+			const guildId = message.data?.guildId;
+			const roleMappings = message.data?.roleMappings as
+				| Record<string, string>
+				| undefined;
+			if (typeof guildId === "string" && roleMappings) {
+				void autoAssignElimsStatRoles(client, guildId, roleMappings);
+			}
 		} else if (message.action === "sync_elims_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {

@@ -531,6 +531,39 @@ export async function handleArmoryStorageChatMessage(
 			return;
 		}
 
+		// Check if depositor restrictions (roles or specific members) are configured
+		const allowedRoles = config.depositorRoleIds ?? [];
+		const allowedUsers = config.depositorUserIds ?? [];
+		if (allowedRoles.length > 0 || allowedUsers.length > 0) {
+			const memberRoles = message.member
+				? Array.from(message.member.roles.cache.keys())
+				: [];
+			const hasAllowedRole = allowedRoles.some((rId) =>
+				memberRoles.includes(rId),
+			);
+			const isAllowedUser = allowedUsers.includes(message.author.id);
+
+			if (!hasAllowedRole && !isAllowedUser) {
+				await message.delete().catch(() => {});
+				const reply = await message.channel
+					.send({
+						embeds: [
+							createErrorEmbed(
+								"Access Denied",
+								`<@${message.author.id}>, you are not authorized to deposit items in this channel.`,
+							),
+						],
+					})
+					.catch(() => null);
+				if (reply) {
+					setTimeout(() => {
+						reply.delete().catch(() => {});
+					}, 5000);
+				}
+				return;
+			}
+		}
+
 		const parsedLogs = parseDepositLogs(message.content);
 
 		// Case 1: Text could not be parsed
