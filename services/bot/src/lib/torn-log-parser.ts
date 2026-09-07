@@ -74,9 +74,13 @@ function normalizeQuantity(qtyStr: string): number {
  * - "00:50:02 - 06/09/26 Clitasaurus sent 16x Serotonin to you"
  * - "You were sent a Parcel from [LinFeng](...) with the message: ..."
  */
-export function parseSingleDepositLog(line: string): ParsedDepositLog | null {
+/**
+ * Parses a single deposit log line (sent logs, received logs, or trade logs).
+ * Trade logs can contain multiple comma-separated items, thus returning an array.
+ */
+export function parseDepositLogLine(line: string): ParsedDepositLog[] {
 	const trimmed = line.trim();
-	if (!trimmed) return null;
+	if (!trimmed) return [];
 
 	// Optional timestamp prefix e.g. "00:50:02 - 06/09/26 " or 4-digit year
 	const tsMatch = trimmed.match(
@@ -97,15 +101,17 @@ export function parseSingleDepositLog(line: string): ParsedDepositLog | null {
 		);
 		const message = p1Match[4]?.trim() || null;
 
-		return {
-			itemName,
-			quantity,
-			donorName,
-			donorTornId,
-			message,
-			timestamp,
-			rawLog: trimmed,
-		};
+		return [
+			{
+				itemName,
+				quantity,
+				donorName,
+				donorTornId,
+				message,
+				timestamp,
+				rawLog: trimmed,
+			},
+		];
 	}
 
 	// Pattern 2: "(DONOR) sent (a|an|\d+x|\d+) (ITEM) to you(?:\s+with the message:\s*(.*))?"
@@ -120,18 +126,71 @@ export function parseSingleDepositLog(line: string): ParsedDepositLog | null {
 		const itemName = p2Match[3].trim();
 		const message = p2Match[4]?.trim() || null;
 
-		return {
-			itemName,
-			quantity,
-			donorName,
-			donorTornId,
-			message,
-			timestamp,
-			rawLog: trimmed,
-		};
+		return [
+			{
+				itemName,
+				quantity,
+				donorName,
+				donorTornId,
+				message,
+				timestamp,
+				rawLog: trimmed,
+			},
+		];
 	}
 
-	return null;
+	// Pattern 3: "(DONOR) traded (ITEMS...) to you(?:\s+with the message:\s*(.*?))?(?:\s*(?:\[view\]|view|\[.*?\]\(.*?\)))?$"
+	const p3Match = content.match(
+		/^(.+?)\s+traded\s+(.+?)\s+to you(?:\s+with the message:\s*(.*?))?(?:\s*(?:\[view\]|view|\[.*?\]\(.*?\)))?$/i,
+	);
+	if (p3Match?.[1] && p3Match[2]) {
+		const { name: donorName, tornId: donorTornId } = extractUserAndId(
+			p3Match[1],
+		);
+		const message = p3Match[3]?.trim() || null;
+		// Strip cash if any was part of the trade, e.g. "$5,000,000"
+		const cleanedItems = p3Match[2]
+			.replace(/(?:,\s*)?\$[\d,]+(?:\s*,\s*)?/g, ", ")
+			.replace(/^,\s*|,\s*$/g, "");
+		const chunks = cleanedItems
+			.split(",")
+			.map((c) => c.trim())
+			.filter(Boolean);
+
+		const parsedItems: ParsedDepositLog[] = [];
+		for (const chunk of chunks) {
+			const qMatch = chunk.match(/^(a|an|\d+x|\d+)\s+(.+)$/i);
+			let quantity = 1;
+			let itemName = chunk;
+			if (qMatch?.[1] && qMatch[2]) {
+				quantity = normalizeQuantity(qMatch[1]);
+				itemName = qMatch[2].trim();
+			}
+			parsedItems.push({
+				itemName,
+				quantity,
+				donorName,
+				donorTornId,
+				message,
+				timestamp,
+				rawLog: trimmed,
+			});
+		}
+
+		if (parsedItems.length > 0) {
+			return parsedItems;
+		}
+	}
+
+	return [];
+}
+
+/**
+ * Parses a single deposit log line. Returns the first parsed item for compatibility.
+ */
+export function parseSingleDepositLog(line: string): ParsedDepositLog | null {
+	const results = parseDepositLogLine(line);
+	return results[0] ?? null;
 }
 
 /**
@@ -145,8 +204,8 @@ export function parseDepositLogs(input: string): ParsedDepositLog[] {
 	const results: ParsedDepositLog[] = [];
 
 	for (const line of lines) {
-		const parsed = parseSingleDepositLog(line);
-		if (parsed) {
+		const parsedList = parseDepositLogLine(line);
+		for (const parsed of parsedList) {
 			results.push(parsed);
 		}
 	}

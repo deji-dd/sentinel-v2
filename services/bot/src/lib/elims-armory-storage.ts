@@ -172,6 +172,7 @@ Paste your Torn event log(s) **directly into this channel chat**! Sentinel will 
 **Accepted Log Examples:**
 • \`23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you\`
 • \`19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED\`
+• \`05:36:39 - 11/12/25 The-Don-Salieri traded 100x Flash Grenade, 150x Pepper Spray, 18x Xanax to you [view]\`
 `,
 		)
 		.setColor(EMBED_COLORS.PRIMARY);
@@ -545,8 +546,8 @@ export async function handleArmoryStorageChatMessage(
 Accepted Log Examples:
 • \`23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you\`
 • \`19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED\`
-• \`You were sent 16x Serotonin from [User](https://...)\`
-• \`You were sent a Brick from User with the message: ...\``,
+• \`05:36:39 - 11/12/25 The-Don-Salieri traded 100x Flash Grenade, 150x Pepper Spray, 18x Xanax to you [view]\`
+`,
 						),
 					],
 				})

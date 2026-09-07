@@ -161,6 +161,64 @@ describe("Torn Log Parser", () => {
 				"Please use this brick if you do not have a hat to throw in the ring",
 			);
 		});
+
+		test("parses trade log with multiple items and [view] suffix", () => {
+			const log =
+				"05:36:39 - 11/12/25 The-Don-Salieri traded 100x Flash Grenade, 150x Pepper Spray, 18x Xanax to you [view]";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(3);
+
+			expect(results[0]?.itemName).toBe("Flash Grenade");
+			expect(results[0]?.quantity).toBe(100);
+			expect(results[0]?.donorName).toBe("The-Don-Salieri");
+			expect(results[0]?.timestamp).toBe("05:36:39 - 11/12/25");
+
+			expect(results[1]?.itemName).toBe("Pepper Spray");
+			expect(results[1]?.quantity).toBe(150);
+			expect(results[1]?.donorName).toBe("The-Don-Salieri");
+
+			expect(results[2]?.itemName).toBe("Xanax");
+			expect(results[2]?.quantity).toBe(18);
+			expect(results[2]?.donorName).toBe("The-Don-Salieri");
+		});
+
+		test("parses second trade log with 5 medical items", () => {
+			const log =
+				"21:08:11 - 09/12/25 The-Don-Salieri traded 100x First Aid Kit, 20x Ipecac Syrup, 100x Morphine, 100x Small First Aid Kit, 35x Xanax to you [view]";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(5);
+
+			expect(results[0]?.itemName).toBe("First Aid Kit");
+			expect(results[0]?.quantity).toBe(100);
+			expect(results[1]?.itemName).toBe("Ipecac Syrup");
+			expect(results[1]?.quantity).toBe(20);
+			expect(results[2]?.itemName).toBe("Morphine");
+			expect(results[2]?.quantity).toBe(100);
+			expect(results[3]?.itemName).toBe("Small First Aid Kit");
+			expect(results[3]?.quantity).toBe(100);
+			expect(results[4]?.itemName).toBe("Xanax");
+			expect(results[4]?.quantity).toBe(35);
+			expect(results[4]?.timestamp).toBe("21:08:11 - 09/12/25");
+		});
+
+		test("parses trade log with cash stripped and message attached", () => {
+			const log =
+				"The-Don-Salieri [12345] traded 50x Flash Grenade, $5,000,000, 10x Vicodin to you with the message: Good luck [view]";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(2);
+
+			expect(results[0]?.itemName).toBe("Flash Grenade");
+			expect(results[0]?.quantity).toBe(50);
+			expect(results[0]?.donorName).toBe("The-Don-Salieri");
+			expect(results[0]?.donorTornId).toBe(12345);
+			expect(results[0]?.message).toBe("Good luck");
+
+			expect(results[1]?.itemName).toBe("Vicodin");
+			expect(results[1]?.quantity).toBe(10);
+			expect(results[1]?.donorName).toBe("The-Don-Salieri");
+			expect(results[1]?.donorTornId).toBe(12345);
+			expect(results[1]?.message).toBe("Good luck");
+		});
 	});
 
 	describe("parseSingleSentLog & validateSentLogAgainstRequest", () => {

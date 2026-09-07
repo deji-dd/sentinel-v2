@@ -967,26 +967,12 @@ export function ItemRequestsPage() {
 			{/* Page Header & System Status */}
 			<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border/60 pb-5">
 				<div className="flex items-center gap-3">
-					<div className="p-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary">
-						<Package className="size-5" />
-					</div>
 					<div>
 						<div className="flex items-center gap-2">
 							<h1 className="text-xl font-bold tracking-tight text-foreground">
-								Tournament Armory & Requests
+								Stock
 							</h1>
-							<Badge
-								variant="outline"
-								className="gap-1.5 font-mono text-[10px] uppercase border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
-							>
-								<span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-								<span>Live System</span>
-							</Badge>
 						</div>
-						<p className="text-xs text-muted-foreground mt-0.5">
-							Configure items, review distribution requests, and manage armory
-							deposits.
-						</p>
 					</div>
 				</div>
 
