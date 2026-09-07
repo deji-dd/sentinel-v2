@@ -1,5 +1,6 @@
 services:
   sentinel-api:
+    image: ghcr.io/deji-dd/sentinel-v2:${SENTINEL_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -26,6 +27,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   sentinel-bot:
+    image: ghcr.io/deji-dd/sentinel-v2:${SENTINEL_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -53,6 +55,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   sentinel-scheduler:
+    image: ghcr.io/deji-dd/sentinel-v2:${SENTINEL_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile

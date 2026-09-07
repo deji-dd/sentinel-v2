@@ -10,10 +10,35 @@ on:
       - "docs/**"
       - ".gitignore"
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  validate-and-build:
-    name: Validate & Build
+  validate-and-test:
+    name: Validate & Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sentinel_db
+          POSTGRES_USER: sentinel_user
+          POSTGRES_PASSWORD: e63af385d45ae76c4a8b90b995c2cf1d8c0cf6ca444d3985
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: sentinel_db
+      POSTGRES_USER: sentinel_user
+      POSTGRES_PASSWORD: e63af385d45ae76c4a8b90b995c2cf1d8c0cf6ca444d3985
 
     steps:
       - name: Checkout Code
@@ -36,9 +61,55 @@ jobs:
       - name: Build Web Dashboards
         run: bun run web:build
 
+      - name: Run Database Migrations
+        run: bun run db:migrate
+
+      - name: Run Tests
+        run: bun test
+
+  build-and-push:
+    name: Build & Push Container Image
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy to dejis-cloud
-    needs: validate-and-build
+    needs: build-and-push
     runs-on: ubuntu-latest
     env:
       SERVER_HOST: dejis-cloud
@@ -64,23 +135,22 @@ jobs:
             mkdir -p "${DEPLOY_DIR}"
           EOF
 
-      - name: Sync Application Files
+      - name: Sync Docker Compose Configuration
         run: |
-          echo "Streaming repository files to ${SERVER_HOST}:${DEPLOY_DIR}..."
-          tar -czf - --exclude='.git' --exclude='.env*' --exclude='.github' --exclude='node_modules' . | \
-            ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} \
-            "tar -xzf - -C ${DEPLOY_DIR}"
+          echo "Syncing docker-compose.yml to ${SERVER_HOST}:${DEPLOY_DIR}..."
+          scp -o StrictHostKeyChecking=no docker-compose.yml ${SERVER_USER}@${SERVER_HOST}:${DEPLOY_DIR}/docker-compose.yml
 
       - name: Deploy Containers with Docker Compose
         run: |
           ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} "bash -s" << EOF
             set -euo pipefail
             cd ${DEPLOY_DIR}
-            docker compose build --pull
+            echo "Pulling updated Docker image from ghcr.io..."
+            docker compose pull
             echo "Running database migrations..."
             docker compose run -T --rm sentinel-api bun run db:migrate </dev/null
             echo "Recreating containers with updated code..."
-            docker compose up -d --remove-orphans --force-recreate
+            docker compose up -d --remove-orphans
             echo "Checking Sentinel v2 container status..."
             docker compose ps
           EOF
