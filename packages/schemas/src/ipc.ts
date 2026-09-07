@@ -269,6 +269,14 @@ export type IpcSyncElimsKeyDonationMessage = {
 	};
 };
 
+export type IpcElimsAssignStatRolesMessage = {
+	action: "elims_assign_stat_roles";
+	data?: {
+		guildId?: string;
+		roleMappings?: Record<string, string>;
+	};
+};
+
 export interface UserCompetitionElimination {
 	name: "Elimination" | string;
 	score: number;
@@ -490,6 +498,7 @@ export type IpcMessage =
 	| IpcSyncElimsItemRequestsMessage
 	| IpcSyncElimsGiveawaysMessage
 	| IpcSyncElimsKeyDonationMessage
+	| IpcElimsAssignStatRolesMessage
 	| IpcElimsResolveUserRequestMessage
 	| IpcElimsResolveUserResponseMessage
 	| IpcElimsVerifyKeyRequestMessage

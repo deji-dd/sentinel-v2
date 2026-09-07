@@ -139,7 +139,7 @@ async function syncEliminationBaseData(
 					.values({
 						id: teamId,
 						name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
-						participants: t.participants ?? 0,
+						membersCount: t.participants ?? 0,
 						position: t.position ?? 1,
 						score: t.score ?? 0,
 						lives: t.lives ?? 0,
@@ -154,7 +154,7 @@ async function syncEliminationBaseData(
 						target: elimsTeams.id,
 						set: {
 							name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
-							participants: t.participants ?? 0,
+							membersCount: t.participants ?? 0,
 							position: t.position ?? 1,
 							score: t.score ?? 0,
 							lives: t.lives ?? 0,
