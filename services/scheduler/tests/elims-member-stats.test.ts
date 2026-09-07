@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { db, elimsMemberStats, eq } from "@sentinel/database";
+import { apiKeys, db, elimsMemberStats, eq } from "@sentinel/database";
 import { fetchFFScouterStats } from "@sentinel/torn-api";
 import * as botIpc from "../src/lib/ipc/listener";
 import { syncTeamMemberStats } from "../src/workers/elimination/member-stats-sync";
@@ -8,9 +8,21 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
 	let botSpy: ReturnType<typeof spyOn>;
 	const TEST_GUILD_ID = `test-guild-${crypto.randomUUID()}`;
+	const TEST_KEY_USER_ID = 8888888;
 	const ORIGINAL_FF_KEY = process.env.FF_SCOUTER_KEY;
 
 	beforeEach(async () => {
+		await db
+			.insert(apiKeys)
+			.values({
+				userId: TEST_KEY_USER_ID,
+				apiKeyEncrypted: "test_member_key_16ch",
+				apiKeyHash: "test_member_hash",
+				keyType: "system",
+				isValid: true,
+			})
+			.onConflictDoNothing();
+
 		await db
 			.delete(elimsMemberStats)
 			.where(eq(elimsMemberStats.guildId, TEST_GUILD_ID));
@@ -20,6 +32,7 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 		fetchSpy?.mockRestore();
 		botSpy?.mockRestore();
 		process.env.FF_SCOUTER_KEY = ORIGINAL_FF_KEY;
+		await db.delete(apiKeys).where(eq(apiKeys.userId, TEST_KEY_USER_ID));
 		await db
 			.delete(elimsMemberStats)
 			.where(eq(elimsMemberStats.guildId, TEST_GUILD_ID));

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+	apiKeys,
 	db,
 	elimsTeamPlayers,
 	elimsTeamSnapshots,
@@ -17,9 +18,22 @@ import {
 
 describe("Elimination Team Tracker Worker", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
+	const TEST_KEY_USER_ID = 9999999;
 
 	beforeEach(async () => {
 		_resetSimulationInMemoryState();
+		// Ensure an active system key exists in the pool for live/mock probe checks
+		await db
+			.insert(apiKeys)
+			.values({
+				userId: TEST_KEY_USER_ID,
+				apiKeyEncrypted: "test_probe_key_16ch",
+				apiKeyHash: "test_probe_hash",
+				keyType: "system",
+				isValid: true,
+			})
+			.onConflictDoNothing();
+
 		// Clean up existing test records
 		await db
 			.delete(elimsTeamSnapshots)
@@ -34,6 +48,7 @@ describe("Elimination Team Tracker Worker", () => {
 	afterEach(async () => {
 		fetchSpy?.mockRestore();
 		_resetSimulationInMemoryState();
+		await db.delete(apiKeys).where(eq(apiKeys.userId, TEST_KEY_USER_ID));
 		await db
 			.delete(elimsTeamSnapshots)
 			.where(eq(elimsTeamSnapshots.isMock, true));
