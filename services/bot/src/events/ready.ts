@@ -8,6 +8,7 @@ import { ActivityType, type Client, Events } from "discord.js";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
+import { updateElimsKeyDonationChannel } from "../lib/elims-key-donation";
 import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
 import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
@@ -70,6 +71,11 @@ export const readyEvent = {
 		// Synchronize Giveaway Channel if configured
 		await updateGiveawayChannel(client).catch((err) => {
 			logger.warn("Failed to sync Giveaway embed on boot:", err);
+		});
+
+		// Synchronize Key Donation Channel if configured
+		await updateElimsKeyDonationChannel(client).catch((err) => {
+			logger.warn("Failed to sync Elims Key Donation embed on boot:", err);
 		});
 
 		// Start background giveaway scheduler (15s cadence)

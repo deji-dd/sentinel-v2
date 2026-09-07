@@ -3,6 +3,7 @@ import type {
 	BulkVerificationProgressData,
 	GuildMemberVerificationInput,
 	IpcMessage,
+	ResolvedElimsUser,
 	VerificationResponse,
 } from "@sentinel/schemas";
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
@@ -11,6 +12,7 @@ import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
 import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
+import { updateElimsKeyDonationChannel } from "../elims-key-donation";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
@@ -42,9 +44,29 @@ export type PendingBulkRequest = {
 
 type IpcMessageListener = (message: IpcMessage) => void;
 
+type PendingElimsResolveUserRequest = {
+	resolve: (user: ResolvedElimsUser | null) => void;
+	reject: (reason: Error) => void;
+	timer: NodeJS.Timeout;
+};
+
+type PendingElimsVerifyKeyRequest = {
+	resolve: (data: { tornId: number; tornName: string }) => void;
+	reject: (reason: Error) => void;
+	timer: NodeJS.Timeout;
+};
+
 const messageListeners = new Set<IpcMessageListener>();
 export const pendingRequests = new Map<string, PendingRequest>();
 export const pendingBulkRequests = new Map<string, PendingBulkRequest>();
+export const pendingElimsResolveUserRequests = new Map<
+	string,
+	PendingElimsResolveUserRequest
+>();
+export const pendingElimsVerifyKeyRequests = new Map<
+	string,
+	PendingElimsVerifyKeyRequest
+>();
 
 export function addIpcMessageListener(listener: IpcMessageListener): void {
 	messageListeners.add(listener);
@@ -121,6 +143,42 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 			}
 		}
 
+		if (message.action === "elims_resolve_user_response" && message.requestId) {
+			const pending = pendingElimsResolveUserRequests.get(message.requestId);
+			if (pending) {
+				clearTimeout(pending.timer);
+				pendingElimsResolveUserRequests.delete(message.requestId);
+				if (message.data.error) {
+					logger.warn(
+						`Error returned for elims resolve user request [${message.requestId}]: ${message.data.error}`,
+					);
+				}
+				pending.resolve(message.data.user);
+			}
+		}
+
+		if (message.action === "elims_verify_key_response" && message.requestId) {
+			const pending = pendingElimsVerifyKeyRequests.get(message.requestId);
+			if (pending) {
+				clearTimeout(pending.timer);
+				pendingElimsVerifyKeyRequests.delete(message.requestId);
+				if (message.data.error) {
+					pending.reject(new Error(message.data.error));
+				} else if (message.data.tornId && message.data.tornName) {
+					pending.resolve({
+						tornId: message.data.tornId,
+						tornName: message.data.tornName,
+					});
+				} else {
+					pending.reject(
+						new Error(
+							"Invalid verification response received from scheduler worker.",
+						),
+					);
+				}
+			}
+		}
+
 		for (const listener of messageListeners) {
 			try {
 				listener(message);
@@ -192,6 +250,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void updateElimsArmoryStorageChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_giveaways") {
 			void updateGiveawayChannel(client, message.data?.guildId);
+		} else if (message.action === "sync_elims_key_donation") {
+			void updateElimsKeyDonationChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {
@@ -202,6 +262,7 @@ export function setupBotIpcListeners(client: Client): void {
 				void deployGuildCommands(guildId);
 				void updateElimsItemRequestsChannel(client, guildId);
 				void updateGiveawayChannel(client, guildId);
+				void updateElimsKeyDonationChannel(client, guildId);
 			}
 		} else if (message.action === "reset_elims_guild") {
 			logger.info("Elims guild configuration was reset via IPC.");

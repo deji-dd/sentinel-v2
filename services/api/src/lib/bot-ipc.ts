@@ -121,6 +121,16 @@ export async function syncElimsGiveawaysViaIpc(
 }
 
 /**
+ * Dispatches an IPC signal to the Bot to synchronize the Elims API Key Donation module
+ * (persistent channel embed maintenance).
+ */
+export async function syncElimsKeyDonationViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_elims_key_donation", { guildId });
+}
+
+/**
  * Dispatches an IPC signal to the Bot when a guild is authorized in Sentinel.
  */
 export async function syncAuthorizedGuildsViaIpc(

@@ -45,15 +45,7 @@ export function buildVerificationReminderMessage(request: {
 		.setLabel("Verify Send (Paste Log)")
 		.setStyle(ButtonStyle.Primary);
 
-	const testBypassBtn = new ButtonBuilder()
-		.setCustomId(`elims_verify_test_bypass:${request.id}`)
-		.setLabel("[TEST] Mark as Test Verified")
-		.setStyle(ButtonStyle.Secondary);
-
-	const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-		verifyBtn,
-		testBypassBtn,
-	);
+	const row = new ActionRowBuilder<ButtonBuilder>().addComponents(verifyBtn);
 
 	return { embed, row };
 }

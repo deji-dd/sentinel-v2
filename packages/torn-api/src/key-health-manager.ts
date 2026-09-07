@@ -1,4 +1,4 @@
-import { apiKeys, db, eq } from "../../database";
+import { apiKeys, db, elimsApiKeys, eq } from "../../database";
 import { Logger } from "../../utils";
 import { hashApiKey } from "./crypto";
 
@@ -84,12 +84,13 @@ export class KeyHealthManager {
 	}
 
 	/**
-	 * Marks the key as invalid in SQLite database.
+	 * Marks the key as invalid in SQLite / Postgres database (checks both system and guild keys).
 	 */
 	private async disableKey(apiKey: string): Promise<void> {
 		try {
-			const keyHash = hashApiKey(apiKey, this.pepper);
-			const updated = await db
+			const pepper = process.env.API_KEY_HASH_PEPPER || this.pepper;
+			const keyHash = hashApiKey(apiKey, pepper);
+			const updatedApiKeys = await db
 				.update(apiKeys)
 				.set({
 					isValid: false,
@@ -98,12 +99,35 @@ export class KeyHealthManager {
 				.where(eq(apiKeys.apiKeyHash, keyHash))
 				.returning({ userId: apiKeys.userId });
 
-			const userId = updated[0]?.userId ?? "Unknown";
-			logger.warn(
-				`API Key for User ${userId} disabled after ${INVALIDATION_THRESHOLD} consecutive Error Code 2 failures.`,
-			);
+			if (updatedApiKeys.length > 0) {
+				const userId = updatedApiKeys[0]?.userId ?? "Unknown";
+				logger.warn(
+					`API Key for User ${userId} disabled after ${INVALIDATION_THRESHOLD} consecutive Error Code 2 failures.`,
+				);
+				return;
+			}
+
+			const updatedElimsKeys = await db
+				.update(elimsApiKeys)
+				.set({
+					isValid: false,
+					updatedAt: new Date(),
+				})
+				.where(eq(elimsApiKeys.apiKeyHash, keyHash))
+				.returning({
+					tornId: elimsApiKeys.tornId,
+					guildId: elimsApiKeys.guildId,
+				});
+
+			if (updatedElimsKeys.length > 0) {
+				const tornId = updatedElimsKeys[0]?.tornId ?? "Unknown";
+				const guildId = updatedElimsKeys[0]?.guildId ?? "Unknown";
+				logger.warn(
+					`Guild API Key for Torn User ${tornId} in guild ${guildId} disabled after ${INVALIDATION_THRESHOLD} consecutive Error Code 2 failures.`,
+				);
+			}
 		} catch (err) {
-			logger.error("Failed to disable invalid key in SQLite:", err);
+			logger.error("Failed to disable invalid key in database:", err);
 		}
 	}
 }

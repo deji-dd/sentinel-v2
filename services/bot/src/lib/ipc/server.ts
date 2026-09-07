@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import type {
 	BulkVerificationProgressData,
 	GuildMemberVerificationInput,
+	ResolvedElimsUser,
 	VerificationRequest,
 	VerificationResponse,
 } from "@sentinel/schemas";
+import { logger } from "../logger";
 import {
 	type BulkVerificationResult,
 	pendingBulkRequests,
+	pendingElimsResolveUserRequests,
+	pendingElimsVerifyKeyRequests,
 	pendingRequests,
 	workerIpcClient,
 } from "./listener";
@@ -100,4 +104,68 @@ export async function sendBulkVerificationRequest(
 	timeoutMs = 60000,
 ): Promise<BulkVerificationResult> {
 	return streamBulkVerificationRequest(data, undefined, timeoutMs);
+}
+
+/**
+ * Sends an IPC request to the scheduler worker to resolve a Discord user's live Torn identity
+ * using tournament guild keys.
+ */
+export async function sendElimsUserResolutionRequest(
+	discordId: string,
+	guildId: string,
+	timeoutMs = 15000,
+): Promise<ResolvedElimsUser | null> {
+	const requestId = randomUUID();
+
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			pendingElimsResolveUserRequests.delete(requestId);
+			logger.warn(
+				`Elims user resolution timed out for ${discordId} in guild ${guildId}.`,
+			);
+			resolve(null);
+		}, timeoutMs);
+
+		pendingElimsResolveUserRequests.set(requestId, { resolve, reject, timer });
+
+		workerIpcClient.send({
+			action: "elims_resolve_user_request",
+			requestId,
+			data: {
+				discordId,
+				guildId,
+			},
+		});
+	});
+}
+
+/**
+ * Sends an IPC request to the scheduler worker to verify a candidate Torn API key.
+ */
+export async function sendElimsKeyVerificationRequest(
+	apiKey: string,
+	timeoutMs = 15000,
+): Promise<{ tornId: number; tornName: string }> {
+	const requestId = randomUUID();
+
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			pendingElimsVerifyKeyRequests.delete(requestId);
+			reject(
+				new Error(
+					"Elims key verification timed out. Scheduler process did not respond in time.",
+				),
+			);
+		}, timeoutMs);
+
+		pendingElimsVerifyKeyRequests.set(requestId, { resolve, reject, timer });
+
+		workerIpcClient.send({
+			action: "elims_verify_key_request",
+			requestId,
+			data: {
+				apiKey,
+			},
+		});
+	});
 }

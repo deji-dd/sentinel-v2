@@ -262,6 +262,63 @@ export type IpcSyncElimsGiveawaysMessage = {
 	};
 };
 
+export type IpcSyncElimsKeyDonationMessage = {
+	action: "sync_elims_key_donation";
+	data?: {
+		guildId?: string;
+	};
+};
+
+export interface UserCompetitionElimination {
+	name: "Elimination" | string;
+	score: number;
+	team: string;
+	attacks: number;
+}
+
+export interface ResolvedElimsUser {
+	tornId: number;
+	tornName: string;
+	competition?: UserCompetitionElimination | null;
+	networth?: number | null;
+}
+
+export type IpcElimsResolveUserRequestMessage = {
+	action: "elims_resolve_user_request";
+	requestId: string;
+	data: {
+		discordId: string;
+		guildId: string;
+	};
+};
+
+export type IpcElimsResolveUserResponseMessage = {
+	action: "elims_resolve_user_response";
+	requestId: string;
+	data: {
+		user: ResolvedElimsUser | null;
+		error?: string;
+	};
+};
+
+export type IpcElimsVerifyKeyRequestMessage = {
+	action: "elims_verify_key_request";
+	requestId: string;
+	data: {
+		apiKey: string;
+	};
+};
+
+export type IpcElimsVerifyKeyResponseMessage = {
+	action: "elims_verify_key_response";
+	requestId: string;
+	data: {
+		tornId?: number;
+		tornName?: string;
+		error?: string;
+	};
+};
+
 export type IpcReinitializeCrimeLedgerMessage = {
 	action: "reinitialize_crime_ledger";
 	data?: Record<string, unknown>;
@@ -394,6 +451,11 @@ export type IpcMessage =
 	| IpcResetElimsGuildMessage
 	| IpcSyncElimsItemRequestsMessage
 	| IpcSyncElimsGiveawaysMessage
+	| IpcSyncElimsKeyDonationMessage
+	| IpcElimsResolveUserRequestMessage
+	| IpcElimsResolveUserResponseMessage
+	| IpcElimsVerifyKeyRequestMessage
+	| IpcElimsVerifyKeyResponseMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

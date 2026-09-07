@@ -5,7 +5,7 @@ import type {
 	PathOperation,
 	paths,
 } from "@sentinel/schemas";
-import { and, apiKeys, db, eq } from "../../database";
+import { and, apiKeys, db, elimsApiKeys, eq } from "../../database";
 import { Logger } from "../../utils";
 import { TornApiClient } from "./client";
 import { decryptApiKey } from "./crypto";
@@ -16,6 +16,7 @@ import { UserRateLimiter } from "./user-rate-limiter";
 
 const logger = new Logger("TornApiManager");
 let systemKeyIndex = 0;
+const guildKeyIndexMap = new Map<string, number>();
 
 /**
  * Fetches all active system API keys in the database (keyType = 'system').
@@ -64,6 +65,70 @@ export async function getNextSystemKey(): Promise<ManagedApiKey> {
 	}
 	systemKeyIndex = (systemKeyIndex + 1) % keys.length;
 	return key;
+}
+
+/**
+ * Fetches all active tournament guild API keys in the database for a specific guild (`elimsApiKeys` table).
+ */
+export async function getGuildKeyPool(
+	guildId: string,
+): Promise<ManagedApiKey[]> {
+	const masterKey = process.env.ENCRYPTION_KEY ?? "";
+	const keysInDb = await db
+		.select()
+		.from(elimsApiKeys)
+		.where(
+			and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
+		)
+		.orderBy(elimsApiKeys.lastUsedAt);
+
+	if (keysInDb.length > 0) {
+		const result: ManagedApiKey[] = [];
+		const seenKeys = new Set<string>();
+
+		for (const k of keysInDb) {
+			const rawKey =
+				k.apiKeyEncrypted.length > 16 && masterKey
+					? decryptApiKey(k.apiKeyEncrypted, masterKey)
+					: k.apiKeyEncrypted;
+
+			if (!seenKeys.has(rawKey)) {
+				seenKeys.add(rawKey);
+				result.push({
+					apiKey: rawKey,
+					userId: k.tornId,
+					keyType: "guild",
+				});
+			}
+		}
+
+		return result;
+	}
+
+	return [];
+}
+
+/**
+ * Fetches active guild keys that are not currently in temporary disable cooldown.
+ */
+export async function getActiveGuildKeyPool(
+	guildId: string,
+): Promise<ManagedApiKey[]> {
+	const pool = await getGuildKeyPool(guildId);
+	const active = pool.filter(
+		(k) => !tornApi.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+	);
+	return active.length > 0 ? active : pool;
+}
+
+/**
+ * Gets the next available tournament guild key using fair round-robin and key health filtering.
+ */
+export async function getNextGuildKey(
+	guildId: string,
+	excludeKeys?: Set<string>,
+): Promise<ManagedApiKey | null> {
+	return tornApi.getNextGuildKey(guildId, excludeKeys);
 }
 
 /**
@@ -161,6 +226,38 @@ export class ManagedTornApiClient {
 			throw new Error("No API keys available in key pool.");
 		}
 		systemKeyIndex = (systemKeyIndex + 1) % candidates.length;
+		return key;
+	}
+
+	/**
+	 * Selects the next available key for a guild, filtering out keys currently in temporary disable cooldown.
+	 */
+	async getNextGuildKey(
+		guildId: string,
+		excludeKeys?: Set<string>,
+	): Promise<ManagedApiKey | null> {
+		const pool = await getGuildKeyPool(guildId);
+		if (pool.length === 0) return null;
+
+		let candidates = pool.filter(
+			(k) =>
+				!this.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey) &&
+				!excludeKeys?.has(k.apiKey),
+		);
+
+		if (candidates.length === 0 && excludeKeys && excludeKeys.size > 0) {
+			candidates = pool.filter((k) => !excludeKeys.has(k.apiKey));
+		}
+
+		if (candidates.length === 0) {
+			candidates = pool;
+		}
+
+		const currentIndex = guildKeyIndexMap.get(guildId) ?? 0;
+		const key = candidates[currentIndex % candidates.length];
+		if (!key) return null;
+
+		guildKeyIndexMap.set(guildId, (currentIndex + 1) % candidates.length);
 		return key;
 	}
 

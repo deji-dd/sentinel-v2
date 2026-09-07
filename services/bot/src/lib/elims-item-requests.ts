@@ -2,18 +2,16 @@ import {
 	and,
 	db,
 	type ElimsItemRequestConfig,
-	elimsApiKeys,
 	elimsItemRequests,
 	eq,
 	getArmoryStock,
 	ne,
 	systemStates,
 } from "@sentinel/database";
-import {
-	decryptApiKey,
-	isValidApiKey,
-	TornApiClient,
-} from "@sentinel/torn-api";
+import type {
+	ResolvedElimsUser,
+	UserCompetitionElimination,
+} from "@sentinel/schemas";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
@@ -37,6 +35,7 @@ import {
 	createSuccessEmbed,
 	EMBED_COLORS,
 } from "./embeds";
+import { sendElimsUserResolutionRequest } from "./ipc/server";
 import { logger } from "./logger";
 import {
 	parseSingleSentLog,
@@ -46,19 +45,7 @@ import {
 const ELIMS_CONFIG_ID = "elims:guild_config";
 const ELIMS_ITEM_REQUESTS_CONFIG_ID = "elims:item_requests_config";
 
-export interface UserCompetitionElimination {
-	name: "Elimination" | string;
-	score: number;
-	team: string;
-	attacks: number;
-}
-
-export interface ResolvedElimsUser {
-	tornId: number;
-	tornName: string;
-	competition?: UserCompetitionElimination | null;
-	networth?: number | null;
-}
+export type { ResolvedElimsUser, UserCompetitionElimination };
 
 /**
  * Computes unified approved item history for a requester in a guild.
@@ -140,111 +127,13 @@ export async function getRequesterApprovedHistory(
 
 /**
  * Resolves a Discord user's live Torn identity, competition stats, and networth.
- * Performs a live Torn API v2 call without database caching.
+ * Delegates the lookup to the scheduler worker engine over IPC.
  */
 export async function resolveElimsUser(
 	discordId: string,
 	guildId: string,
 ): Promise<ResolvedElimsUser | null> {
-	const masterKey = process.env.ENCRYPTION_KEY ?? "";
-	const guildKeys = await db
-		.select()
-		.from(elimsApiKeys)
-		.where(
-			and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
-		)
-		.orderBy(elimsApiKeys.lastUsedAt);
-
-	const candidateKeys: Array<{ key: string; id?: string }> = [];
-
-	for (const k of guildKeys) {
-		const rawKey =
-			k.apiKeyEncrypted.length > 16 && masterKey
-				? decryptApiKey(k.apiKeyEncrypted, masterKey)
-				: k.apiKeyEncrypted;
-		if (isValidApiKey(rawKey) && !candidateKeys.some((c) => c.key === rawKey)) {
-			candidateKeys.push({ key: rawKey, id: k.id });
-		}
-	}
-
-	if (candidateKeys.length === 0) {
-		logger.warn(`No valid guild API keys configured for guild ${guildId}.`);
-		return null;
-	}
-
-	const client = new TornApiClient();
-
-	for (const candidate of candidateKeys) {
-		try {
-			// Single live Torn API v2 call resolving profile, competition, and networth directly from discordId
-			const res = (await client.get("/user/{id}", {
-				pathParams: { id: discordId },
-				queryParams: {
-					selections: "profile,competition,personalstats",
-					cat: "networth",
-				},
-				apiKey: candidate.key,
-			})) as {
-				profile?: { id?: number; name?: string; faction_id?: number };
-				name?: string; // Elimination
-				score?: number;
-				team?: string;
-				attacks?: number;
-				personalstats?: {
-					networth?: { total?: number } | number;
-				};
-			};
-
-			const tornId = res?.profile?.id;
-			const tornName = res?.profile?.name;
-
-			if (!tornId || !tornName) {
-				continue;
-			}
-
-			let competition: UserCompetitionElimination | null = null;
-			if (typeof res.score === "number") {
-				competition = {
-					name: res.name ?? "Elimination",
-					score: res.score,
-					team: res.team ?? "Unknown",
-					attacks: res.attacks ?? 0,
-				};
-			}
-
-			let networth: number | null = null;
-			if (res.personalstats) {
-				if (typeof res.personalstats.networth === "number") {
-					networth = res.personalstats.networth;
-				} else if (
-					typeof res.personalstats.networth === "object" &&
-					res.personalstats.networth !== null &&
-					typeof res.personalstats.networth.total === "number"
-				) {
-					networth = res.personalstats.networth.total;
-				}
-			}
-
-			if (candidate.id) {
-				await db
-					.update(elimsApiKeys)
-					.set({ lastUsedAt: new Date() })
-					.where(eq(elimsApiKeys.id, candidate.id))
-					.catch(() => {});
-			}
-
-			return {
-				tornId,
-				tornName,
-				competition,
-				networth,
-			};
-		} catch (err) {
-			logger.warn(`Live Torn user lookup failed for ${discordId}:`, err);
-		}
-	}
-
-	return null;
+	return sendElimsUserResolutionRequest(discordId, guildId);
 }
 
 /**
@@ -297,8 +186,7 @@ export async function updateElimsItemRequestsChannel(
 		embed.setFields({
 			name: "Instructions",
 			value:
-				"Click **Request Items** to submit a supply request.\n" +
-				"Use **[TEST] Request Items** to simulate a test request without affecting tournament inventory.",
+				"Click **Request Items** below to submit a tournament supply request.",
 			inline: false,
 		});
 
@@ -307,14 +195,8 @@ export async function updateElimsItemRequestsChannel(
 			.setLabel("Request Items")
 			.setStyle(ButtonStyle.Primary);
 
-		const testRequestButton = new ButtonBuilder()
-			.setCustomId("elims_request_test_open")
-			.setLabel("[TEST] Request Items")
-			.setStyle(ButtonStyle.Secondary);
-
 		const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
 			requestButton,
-			testRequestButton,
 		);
 
 		// Find any existing "Item Requests" embed messages from the bot in this channel
@@ -459,29 +341,19 @@ export async function handleItemRequestButton(
 			}
 		}
 
-		const isTest = interaction.customId === "elims_request_test_open";
-
 		// Extract unique categories (max 25 for select menu)
 		const categories = Array.from(
 			new Set(config.allowedItems.map((i) => i.category || "General")),
 		).slice(0, 25);
 
 		const selectMenu = new StringSelectMenuBuilder()
-			.setCustomId(
-				isTest ? "elims_category_select:test" : "elims_category_select:live",
-			)
-			.setPlaceholder(
-				isTest
-					? "Select an item category (TEST)..."
-					: "Select an item category...",
-			)
+			.setCustomId("elims_category_select:live")
+			.setPlaceholder("Select an item category...")
 			.addOptions(
 				categories.map((cat) => ({
 					label: cat,
 					value: cat,
-					description: isTest
-						? `Browse test requestable items in ${cat}`
-						: `Browse requestable items in ${cat}`,
+					description: `Browse requestable items in ${cat}`,
 				})),
 			);
 
@@ -490,13 +362,9 @@ export async function handleItemRequestButton(
 		);
 
 		const categoryEmbed = createBaseEmbed(
-			isTest
-				? "[TEST] Item Requests — Select Category"
-				: "Item Requests — Select Category",
-			isTest
-				? "Select the category of supplies you would like to **test request** from the dropdown below:"
-				: "Select the category of supplies you would like to request from the dropdown below:",
-			isTest ? EMBED_COLORS.WARNING : EMBED_COLORS.PRIMARY,
+			"Item Requests — Select Category",
+			"Select the category of supplies you would like to request from the dropdown below:",
+			EMBED_COLORS.PRIMARY,
 		);
 
 		await interaction.reply({
@@ -553,15 +421,9 @@ export async function handleItemRequestCategorySelect(
 			return;
 		}
 
-		const isTest = interaction.customId.endsWith(":test");
-
 		const selectMenu = new StringSelectMenuBuilder()
-			.setCustomId(isTest ? "elims_item_select:test" : "elims_item_select:live")
-			.setPlaceholder(
-				isTest
-					? `Select an item from ${selectedCategory} (TEST)...`
-					: `Select an item from ${selectedCategory}...`,
-			)
+			.setCustomId("elims_item_select:live")
+			.setPlaceholder(`Select an item from ${selectedCategory}...`)
 			.addOptions(
 				itemsInCategory.map((it) => ({
 					label: it.name,
@@ -577,13 +439,9 @@ export async function handleItemRequestCategorySelect(
 		);
 
 		const itemSelectEmbed = createBaseEmbed(
-			isTest
-				? `[TEST] Item Requests — ${selectedCategory}`
-				: `Item Requests — ${selectedCategory}`,
-			isTest
-				? `Select the specific item you want to **test request** from **${selectedCategory}** below:`
-				: `Select the specific item you need from **${selectedCategory}** below:`,
-			isTest ? EMBED_COLORS.WARNING : EMBED_COLORS.PRIMARY,
+			`Item Requests — ${selectedCategory}`,
+			`Select the specific item you need from **${selectedCategory}** below:`,
+			EMBED_COLORS.PRIMARY,
 		);
 
 		await interaction.update({
@@ -631,19 +489,9 @@ export async function handleItemRequestItemSelect(
 			? ` (Max: ${selectedItem.maxRequestable})`
 			: "";
 
-		const isTest = interaction.customId.endsWith(":test");
-
 		const modal = new ModalBuilder()
-			.setCustomId(
-				isTest
-					? `elims_request_test_modal:${selectedItemId}`
-					: `elims_request_modal:${selectedItemId}`,
-			)
-			.setTitle(
-				isTest
-					? `[TEST] Request ${itemName.slice(0, 22)}`
-					: `Request ${itemName.slice(0, 30)}`,
-			);
+			.setCustomId(`elims_request_modal:${selectedItemId}`)
+			.setTitle(`Request ${itemName.slice(0, 30)}`);
 
 		const quantityInput = new TextInputBuilder()
 			.setCustomId("quantity")
@@ -760,7 +608,7 @@ export async function handleItemRequestModalSubmit(
 			return;
 		}
 
-		const isTest = interaction.customId.startsWith("elims_request_test_modal:");
+		const isTest = false;
 
 		// Resolve Torn user details if verified via Elims DB or guild key live call
 		const resolvedUser = await resolveElimsUser(
@@ -923,10 +771,8 @@ export async function handleItemRequestModalSubmit(
 		}
 
 		const successEmbed = createSuccessEmbed(
-			isTest ? "[TEST] Item Request Submitted" : "Item Request Submitted",
-			(isTest
-				? `Your item request has been submitted for simulation.\n\n`
-				: `Your item request has been submitted for review.\n\n`) +
+			"Item Request Submitted",
+			`Your item request has been submitted for review.\n\n` +
 				`**Request ID**: #${shortId}\n` +
 				`**Item**: ${item.name} x${quantity}\n` +
 				`**Category**: ${item.category || "General"}` +
@@ -1621,79 +1467,5 @@ export async function handleItemVerifySendModalSubmit(
 		});
 	} catch (err) {
 		logger.error("Error in handleItemVerifySendModalSubmit:", err);
-	}
-}
-
-/**
- * Handles "[TEST] Mark as Test Verified" button.
- * Bypasses log verification and stops 1-minute reminders.
- */
-export async function handleItemVerifyTestBypassButton(
-	interaction: ButtonInteraction,
-): Promise<void> {
-	try {
-		const requestId = interaction.customId.split(":")[1];
-		if (!requestId) return;
-
-		await interaction.deferUpdate();
-
-		const [request] = await db
-			.select()
-			.from(elimsItemRequests)
-			.where(eq(elimsItemRequests.id, requestId));
-
-		if (!request) return;
-
-		await db
-			.update(elimsItemRequests)
-			.set({
-				verificationStatus: "verified",
-				isTest: true,
-				verifiedAt: new Date(),
-				verifiedByDiscordId: interaction.user.id,
-				verificationLog: `[TEST] Bypassed verification by approver <@${interaction.user.id}>`,
-				updatedAt: new Date(),
-			})
-			.where(eq(elimsItemRequests.id, requestId));
-
-		const successEmbed = createSuccessEmbed(
-			"[TEST] Verification Bypassed",
-			`Request #${request.id.slice(0, 8)} has been marked as **Test Verified**.\n\nYou will no longer receive verification reminders for this request.`,
-		);
-
-		await interaction.editReply({
-			embeds: [successEmbed],
-			components: [],
-		});
-
-		// Also update granting channel embed footer if accessible
-		if (request.grantingMessageId) {
-			try {
-				const [state] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
-				const config = state?.data as unknown as ElimsItemRequestConfig | null;
-
-				if (config?.grantingChannelId) {
-					const channel = await interaction.client.channels
-						.fetch(config.grantingChannelId)
-						.catch(() => null);
-					if (channel instanceof TextChannel) {
-						const grantMsg = await channel.messages
-							.fetch(request.grantingMessageId)
-							.catch(() => null);
-						if (grantMsg?.embeds[0]) {
-							const updated = EmbedBuilder.from(grantMsg.embeds[0]).setFooter({
-								text: `Sentinel`,
-							});
-							await grantMsg.edit({ embeds: [updated] }).catch(() => {});
-						}
-					}
-				}
-			} catch {}
-		}
-	} catch (err) {
-		logger.error("Error in handleItemVerifyTestBypassButton:", err);
 	}
 }

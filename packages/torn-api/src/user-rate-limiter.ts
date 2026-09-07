@@ -83,6 +83,11 @@ export class UserRateLimiter {
 	}
 
 	/**
+	 * Satisfies RateLimitTracker interface. Requests are recorded inside waitIfNeeded.
+	 */
+	async recordRequest(_userId?: string | number): Promise<void> {}
+
+	/**
 	 * Returns current number of active requests within the window for the user.
 	 */
 	getRequestCount(userId: string | number): number {

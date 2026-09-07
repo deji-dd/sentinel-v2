@@ -80,6 +80,8 @@ export const elimsArmoryDeposits = pgTable("elims_armory_deposits", {
 	itemCategory: text("item_category").notNull(),
 	quantity: integer("quantity").notNull(),
 	rawLog: text("raw_log"),
+	logTimestamp: text("log_timestamp"),
+	logMessage: text("log_message"),
 	isTest: boolean("is_test").default(false).notNull(),
 	status: text("status").default("available").notNull(), // 'available' | 'consumed'
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
@@ -125,6 +127,8 @@ export const elimsApiKeys = pgTable("elims_api_keys", {
 	apiKeyHash: text("api_key_hash").notNull(),
 	isValid: boolean("is_valid").default(true).notNull(),
 	invalidCount: integer("invalid_count").default(0).notNull(),
+	donatedByDiscordId: text("donated_by_discord_id"),
+	donatedByDiscordTag: text("donated_by_discord_tag"),
 	lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()

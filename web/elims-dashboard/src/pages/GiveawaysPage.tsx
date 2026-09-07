@@ -103,6 +103,12 @@ export function GiveawaysPage() {
 		managerRoleIds: [],
 		blacklistedUserIds: [],
 	});
+	const [initialConfig, setInitialConfig] = useState<GiveawayConfig | null>(
+		null,
+	);
+	const [initialBlacklistedUserIds, setInitialBlacklistedUserIds] = useState<
+		string[]
+	>([]);
 	const [loadingConfig, setLoadingConfig] = useState(false);
 	const [savingConfig, setSavingConfig] = useState(false);
 
@@ -160,13 +166,17 @@ export function GiveawaysPage() {
 			if (!res.ok) throw new Error("Failed to load giveaway configuration");
 			const data = (await res.json()) as { config?: GiveawayConfig };
 			if (data.config) {
-				setConfig({
+				const fetchedConfig: GiveawayConfig = {
 					announcementChannelId: data.config.announcementChannelId ?? null,
 					managerChannelId: data.config.managerChannelId ?? null,
 					managerRoleIds: data.config.managerRoleIds ?? [],
 					blacklistedUserIds: data.config.blacklistedUserIds ?? [],
-				});
-				setBlacklistedUserIds(data.config.blacklistedUserIds ?? []);
+				};
+				const fetchedBlacklist = data.config.blacklistedUserIds ?? [];
+				setConfig(fetchedConfig);
+				setInitialConfig(fetchedConfig);
+				setBlacklistedUserIds(fetchedBlacklist);
+				setInitialBlacklistedUserIds(fetchedBlacklist);
 			}
 		} catch (err) {
 			console.error("Failed to load giveaway config:", err);
@@ -330,6 +340,11 @@ export function GiveawaysPage() {
 				throw new Error(errorData.error ?? "Failed to save configuration");
 			}
 
+			setInitialConfig({
+				...config,
+				blacklistedUserIds,
+			});
+			setInitialBlacklistedUserIds([...blacklistedUserIds]);
 			toast.success("Giveaway settings updated successfully.");
 		} catch (err) {
 			toast.error(
@@ -338,6 +353,34 @@ export function GiveawaysPage() {
 		} finally {
 			setSavingConfig(false);
 		}
+	};
+
+	const hasUnsavedChanges = useMemo(() => {
+		if (!initialConfig) return false;
+		if (config.announcementChannelId !== initialConfig.announcementChannelId)
+			return true;
+		if (config.managerChannelId !== initialConfig.managerChannelId) return true;
+
+		// Check manager roles
+		if (config.managerRoleIds.length !== initialConfig.managerRoleIds.length)
+			return true;
+		const initRolesSet = new Set(initialConfig.managerRoleIds);
+		if (config.managerRoleIds.some((id) => !initRolesSet.has(id))) return true;
+
+		// Check blacklist
+		if (blacklistedUserIds.length !== initialBlacklistedUserIds.length)
+			return true;
+		const initBlSet = new Set(initialBlacklistedUserIds);
+		if (blacklistedUserIds.some((id) => !initBlSet.has(id))) return true;
+
+		return false;
+	}, [config, initialConfig, blacklistedUserIds, initialBlacklistedUserIds]);
+
+	const handleResetChanges = () => {
+		if (!initialConfig) return;
+		setConfig(initialConfig);
+		setBlacklistedUserIds(initialBlacklistedUserIds);
+		toast.info("Unsaved changes discarded.");
 	};
 
 	const handleCancelGiveaway = async (id: string) => {
@@ -405,7 +448,12 @@ export function GiveawaysPage() {
 						variant="default"
 						size="sm"
 						onClick={() => void handleSaveConfig()}
-						disabled={savingConfig || loadingConfig || loadingChannels}
+						disabled={
+							savingConfig ||
+							loadingConfig ||
+							loadingChannels ||
+							!hasUnsavedChanges
+						}
 						className="h-9 gap-1.5 font-medium cursor-pointer"
 					>
 						{savingConfig ? (
@@ -882,6 +930,50 @@ export function GiveawaysPage() {
 					)}
 				</CardContent>
 			</Card>
+
+			{/* Floating unsaved changes bar */}
+			{hasUnsavedChanges && (
+				<div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-2xl bg-card/95 backdrop-blur-md border border-border shadow-xl rounded-xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200">
+					<div className="flex items-center gap-2.5 min-w-0">
+						<div className="flex flex-col min-w-0">
+							<span className="text-xs font-semibold text-foreground">
+								Careful — you have unsaved changes!
+							</span>
+						</div>
+					</div>
+
+					<div className="flex items-center gap-2 shrink-0">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handleResetChanges}
+							disabled={savingConfig}
+							className="text-xs h-8 cursor-pointer"
+						>
+							Discard
+						</Button>
+						<Button
+							variant="default"
+							size="sm"
+							onClick={() => void handleSaveConfig()}
+							disabled={savingConfig}
+							className="text-xs h-8 cursor-pointer font-medium"
+						>
+							{savingConfig ? (
+								<>
+									<Loader2 className="size-3.5 animate-spin" />
+									Saving...
+								</>
+							) : (
+								<>
+									<Save className="size-3.5" />
+									Save Settings
+								</>
+							)}
+						</Button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

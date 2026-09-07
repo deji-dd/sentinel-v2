@@ -6,13 +6,12 @@ import {
 	Download,
 	ExternalLink,
 	FileText,
-	FlaskConical,
 	Loader2,
 	MoreHorizontal,
 	Package,
 	Plus,
-	Radio,
 	RefreshCw,
+	Save,
 	Search,
 	ShieldAlert,
 	SlidersHorizontal,
@@ -145,6 +144,8 @@ export interface ArmoryDeposit {
 	itemCategory: string;
 	quantity: number;
 	rawLog: string | null;
+	logTimestamp?: string | null;
+	logMessage?: string | null;
 	isTest: boolean;
 	status: string;
 	createdAt: string;
@@ -160,6 +161,16 @@ function formatRoleColor(color: number): string {
 	return `#${color.toString(16).padStart(6, "0")}`;
 }
 
+interface ItemRequestsConfigSnapshot {
+	requestChannelId: string | null;
+	grantingChannelId: string | null;
+	storageChannelId: string | null;
+	requesterRoleIds: string[];
+	managerRoleIds: string[];
+	blacklistedUserIds: string[];
+	allowedItems: WhitelistedItem[];
+}
+
 export function ItemRequestsPage() {
 	const { guild, hasAdminAccess, isOwner } = useElims();
 
@@ -173,6 +184,8 @@ export function ItemRequestsPage() {
 	const [managerRoleIds, setManagerRoleIds] = useState<string[]>([]);
 	const [blacklistedUserIds, setBlacklistedUserIds] = useState<string[]>([]);
 	const [allowedItems, setAllowedItems] = useState<WhitelistedItem[]>([]);
+	const [initialConfig, setInitialConfig] =
+		useState<ItemRequestsConfigSnapshot | null>(null);
 	const [loadingConfig, setLoadingConfig] = useState(true);
 	const [savingConfig, setSavingConfig] = useState(false);
 
@@ -183,14 +196,8 @@ export function ItemRequestsPage() {
 	const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
 	const memberSearchRef = useRef<HTMLDivElement | null>(null);
 
-	// ─── Live vs Test Sandbox Mode ─────────────────────────────────────────────
-	const [dashboardMode, setDashboardMode] = useState<"live" | "test">("live");
-
 	// ─── Armory Stock Inventory State ──────────────────────────────────────────
-	const [stockInventory, setStockInventory] = useState<{
-		live: ItemStock[];
-		test: ItemStock[];
-	}>({ live: [], test: [] });
+	const [stockInventory, setStockInventory] = useState<ItemStock[]>([]);
 	const [loadingStock, setLoadingStock] = useState(false);
 
 	// Channels and Roles options from Discord
@@ -213,10 +220,8 @@ export function ItemRequestsPage() {
 	const [logsTotalPages, setLogsTotalPages] = useState(1);
 	const [logsTotalCount, setLogsTotalCount] = useState(0);
 	const [statusFilter, setStatusFilter] = useState("all");
-	const [testFilter, setTestFilter] = useState("false");
 	const [logsSearch, setLogsSearch] = useState("");
 	const [debouncedLogsSearch, setDebouncedLogsSearch] = useState("");
-	const [togglingTestId, setTogglingTestId] = useState<string | null>(null);
 	const logsAbortControllerRef = useRef<AbortController | null>(null);
 
 	// ─── Depositor History State ───────────────────────────────────────────────
@@ -228,11 +233,14 @@ export function ItemRequestsPage() {
 	const [depositsTotalCount, setDepositsTotalCount] = useState(0);
 	const [depositsSearch, setDepositsSearch] = useState("");
 	const [debouncedDepositsSearch, setDebouncedDepositsSearch] = useState("");
-	const [togglingTestDepositId, setTogglingTestDepositId] = useState<
-		string | null
-	>(null);
 	const [selectedRejectionLog, setSelectedRejectionLog] =
 		useState<ItemRequestLog | null>(null);
+	const [isClearLogsDialogOpen, setIsClearLogsDialogOpen] = useState(false);
+	const [isClearingLogs, setIsClearingLogs] = useState(false);
+	const [selectedRawLog, setSelectedRawLog] = useState<{
+		title: string;
+		rawLog: string | null;
+	} | null>(null);
 	const depositsAbortControllerRef = useRef<AbortController | null>(null);
 
 	// ─── Fetch Stock Inventory ────────────────────────────────────────────────
@@ -250,14 +258,9 @@ export function ItemRequestsPage() {
 				data &&
 				typeof data === "object" &&
 				"live" in data &&
-				"test" in data &&
-				Array.isArray(data.live) &&
-				Array.isArray(data.test)
+				Array.isArray(data.live)
 			) {
-				setStockInventory({
-					live: data.live as ItemStock[],
-					test: data.test as ItemStock[],
-				});
+				setStockInventory(data.live as ItemStock[]);
 				return data;
 			}
 			return null;
@@ -371,13 +374,23 @@ export function ItemRequestsPage() {
 				typeof data.config === "object"
 			) {
 				const cfg = data.config as Record<string, unknown>;
-				setRequestChannelId((cfg.requestChannelId as string) ?? null);
-				setGrantingChannelId((cfg.grantingChannelId as string) ?? null);
-				setStorageChannelId((cfg.storageChannelId as string) ?? null);
-				setRequesterRoleIds((cfg.requesterRoleIds as string[]) ?? []);
-				setManagerRoleIds((cfg.managerRoleIds as string[]) ?? []);
-				setBlacklistedUserIds((cfg.blacklistedUserIds as string[]) ?? []);
-				setAllowedItems((cfg.allowedItems as WhitelistedItem[]) ?? []);
+				const snapshot: ItemRequestsConfigSnapshot = {
+					requestChannelId: (cfg.requestChannelId as string) ?? null,
+					grantingChannelId: (cfg.grantingChannelId as string) ?? null,
+					storageChannelId: (cfg.storageChannelId as string) ?? null,
+					requesterRoleIds: (cfg.requesterRoleIds as string[]) ?? [],
+					managerRoleIds: (cfg.managerRoleIds as string[]) ?? [],
+					blacklistedUserIds: (cfg.blacklistedUserIds as string[]) ?? [],
+					allowedItems: (cfg.allowedItems as WhitelistedItem[]) ?? [],
+				};
+				setRequestChannelId(snapshot.requestChannelId);
+				setGrantingChannelId(snapshot.grantingChannelId);
+				setStorageChannelId(snapshot.storageChannelId);
+				setRequesterRoleIds(snapshot.requesterRoleIds);
+				setManagerRoleIds(snapshot.managerRoleIds);
+				setBlacklistedUserIds(snapshot.blacklistedUserIds);
+				setAllowedItems(snapshot.allowedItems);
+				setInitialConfig(snapshot);
 				return cfg;
 			}
 			return null;
@@ -480,7 +493,6 @@ export function ItemRequestsPage() {
 				limit: "15",
 			});
 			if (statusFilter !== "all") params.set("status", statusFilter);
-			if (testFilter !== "all") params.set("isTest", testFilter);
 			if (search.trim()) params.set("search", search.trim());
 
 			fetch(`/api/v1/elims/item-requests/logs?${params.toString()}`, {
@@ -519,12 +531,12 @@ export function ItemRequestsPage() {
 					}
 				});
 		},
-		[logsPage, statusFilter, testFilter, debouncedLogsSearch],
+		[logsPage, statusFilter, debouncedLogsSearch],
 	);
 
 	useEffect(() => {
 		fetchLogs(1, debouncedLogsSearch);
-	}, [statusFilter, testFilter, debouncedLogsSearch, fetchLogs]);
+	}, [statusFilter, debouncedLogsSearch, fetchLogs]);
 
 	// ─── Debounce Depositor Search ─────────────────────────────────────────────
 	useEffect(() => {
@@ -548,11 +560,6 @@ export function ItemRequestsPage() {
 				page: String(page),
 				limit: "15",
 			});
-			if (dashboardMode === "live") {
-				params.set("isTest", "false");
-			} else if (dashboardMode === "test") {
-				params.set("isTest", "true");
-			}
 			if (search.trim()) params.set("search", search.trim());
 
 			fetch(`/api/v1/elims/item-requests/deposits?${params.toString()}`, {
@@ -591,12 +598,12 @@ export function ItemRequestsPage() {
 					}
 				});
 		},
-		[depositsPage, dashboardMode, debouncedDepositsSearch],
+		[depositsPage, debouncedDepositsSearch],
 	);
 
 	useEffect(() => {
 		fetchDeposits(1, debouncedDepositsSearch);
-	}, [dashboardMode, debouncedDepositsSearch, fetchDeposits]);
+	}, [debouncedDepositsSearch, fetchDeposits]);
 
 	// ─── CSV Export ───────────────────────────────────────────────────────────
 	const [isExporting, setIsExporting] = useState(false);
@@ -607,7 +614,6 @@ export function ItemRequestsPage() {
 			const params = new URLSearchParams();
 			if (!exportAll) {
 				if (statusFilter !== "all") params.set("status", statusFilter);
-				if (testFilter !== "all") params.set("isTest", testFilter);
 				if (logsSearch.trim()) params.set("search", logsSearch.trim());
 			}
 
@@ -729,19 +735,10 @@ export function ItemRequestsPage() {
 		setBlacklistedUserIds((prev) => prev.filter((id) => id !== userId));
 	};
 
-	// ─── Mode Switcher Handler ────────────────────────────────────────────────
-	const handleSwitchMode = (mode: "live" | "test") => {
-		setDashboardMode(mode);
-		setTestFilter(mode === "live" ? "false" : "true");
-		setLogsPage(1);
-	};
-
-	// ─── Computed Stock Map for Active Mode ───────────────────────────────────
+	// ─── Computed Stock Map ───────────────────────────────────────────────────
 	const currentStockMap = useMemo(() => {
-		const list =
-			dashboardMode === "live" ? stockInventory.live : stockInventory.test;
 		const map = new Map<string, ItemStock>();
-		for (const s of list) {
+		for (const s of stockInventory) {
 			if (s.itemId) {
 				map.set(s.itemId, s);
 			}
@@ -750,7 +747,7 @@ export function ItemRequestsPage() {
 			}
 		}
 		return map;
-	}, [dashboardMode, stockInventory]);
+	}, [stockInventory]);
 
 	// ─── Save Configuration ───────────────────────────────────────────────────
 	const handleSaveConfig = async () => {
@@ -775,6 +772,16 @@ export function ItemRequestsPage() {
 				throw new Error(data.error ?? "Failed to save configuration");
 			}
 
+			setInitialConfig({
+				requestChannelId: requestChannelId || null,
+				grantingChannelId: grantingChannelId || null,
+				storageChannelId: storageChannelId || null,
+				requesterRoleIds: [...requesterRoleIds],
+				managerRoleIds: [...managerRoleIds],
+				blacklistedUserIds: [...blacklistedUserIds],
+				allowedItems: [...allowedItems],
+			});
+
 			toast.success("Item Requests configuration saved successfully!");
 			fetchStock();
 		} catch (err) {
@@ -786,67 +793,99 @@ export function ItemRequestsPage() {
 		}
 	};
 
-	// ─── Toggle Test Flag on Log ──────────────────────────────────────────────
-	const handleToggleTest = async (logId: string) => {
-		setTogglingTestId(logId);
-		try {
-			const res = await fetch(
-				`/api/v1/elims/item-requests/logs/${logId}/test`,
-				{
-					method: "PATCH",
-				},
-			);
-			if (!res.ok) throw new Error("Failed to update test flag");
-			const data = (await res.json()) as {
-				success: boolean;
-				item: ItemRequestLog;
-			};
+	const hasUnsavedChanges = useMemo(() => {
+		if (!initialConfig) return false;
+		if ((requestChannelId || null) !== initialConfig.requestChannelId)
+			return true;
+		if ((grantingChannelId || null) !== initialConfig.grantingChannelId)
+			return true;
+		if ((storageChannelId || null) !== initialConfig.storageChannelId)
+			return true;
 
-			setLogs((prev) =>
-				prev.map((item) => (item.id === logId ? data.item : item)),
-			);
-			toast.success(
-				data.item.isTest
-					? "Marked request as test log."
-					: "Unmarked request as test log.",
-			);
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Error updating log");
-		} finally {
-			setTogglingTestId(null);
+		// Requester roles
+		if (requesterRoleIds.length !== initialConfig.requesterRoleIds.length)
+			return true;
+		const reqSet = new Set(initialConfig.requesterRoleIds);
+		if (requesterRoleIds.some((id) => !reqSet.has(id))) return true;
+
+		// Manager roles
+		if (managerRoleIds.length !== initialConfig.managerRoleIds.length)
+			return true;
+		const mgrSet = new Set(initialConfig.managerRoleIds);
+		if (managerRoleIds.some((id) => !mgrSet.has(id))) return true;
+
+		// Blacklist
+		if (blacklistedUserIds.length !== initialConfig.blacklistedUserIds.length)
+			return true;
+		const blSet = new Set(initialConfig.blacklistedUserIds);
+		if (blacklistedUserIds.some((id) => !blSet.has(id))) return true;
+
+		// Allowed items
+		if (allowedItems.length !== initialConfig.allowedItems.length) return true;
+		const allowedMap = new Map(
+			initialConfig.allowedItems.map((i) => [i.id, i]),
+		);
+		for (const item of allowedItems) {
+			const init = allowedMap.get(item.id);
+			if (!init) return true;
+			if (item.maxRequestable !== init.maxRequestable) return true;
 		}
+
+		return false;
+	}, [
+		initialConfig,
+		requestChannelId,
+		grantingChannelId,
+		storageChannelId,
+		requesterRoleIds,
+		managerRoleIds,
+		blacklistedUserIds,
+		allowedItems,
+	]);
+
+	const handleResetChanges = () => {
+		if (!initialConfig) return;
+		setRequestChannelId(initialConfig.requestChannelId);
+		setGrantingChannelId(initialConfig.grantingChannelId);
+		setStorageChannelId(initialConfig.storageChannelId);
+		setRequesterRoleIds(initialConfig.requesterRoleIds);
+		setManagerRoleIds(initialConfig.managerRoleIds);
+		setBlacklistedUserIds(initialConfig.blacklistedUserIds);
+		setAllowedItems(initialConfig.allowedItems);
+		toast.info("Unsaved changes discarded.");
 	};
 
-	// ─── Toggle Test Flag on Deposit ──────────────────────────────────────────
-	const handleToggleTestDeposit = async (depositId: string) => {
-		setTogglingTestDepositId(depositId);
+	// ─── Clear All Logs (Owner Only) ──────────────────────────────────────────
+	const handleClearLogs = async () => {
+		setIsClearingLogs(true);
 		try {
-			const res = await fetch(
-				`/api/v1/elims/item-requests/deposits/${depositId}/test`,
-				{
-					method: "PATCH",
-				},
-			);
-			if (!res.ok) throw new Error("Failed to update deposit test flag");
+			const res = await fetch("/api/v1/elims/item-requests/clear-logs", {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error || "Failed to clear logs");
+			}
 			const data = (await res.json()) as {
 				success: boolean;
-				item: ArmoryDeposit;
+				clearedRequests: number;
+				clearedDeposits: number;
+				message?: string;
 			};
-
-			setDeposits((prev) =>
-				prev.map((item) => (item.id === depositId ? data.item : item)),
-			);
 			toast.success(
-				data.item.isTest
-					? "Moved deposit to test history."
-					: "Moved deposit to live history.",
+				data.message ||
+					"All request logs and armory deposits have been cleared.",
 			);
+			setIsClearLogsDialogOpen(false);
+			void fetchStock();
+			void fetchLogs(1);
+			void fetchDeposits(1);
 		} catch (err) {
 			toast.error(
-				err instanceof Error ? err.message : "Error updating deposit log",
+				err instanceof Error ? err.message : "Error clearing tournament logs",
 			);
 		} finally {
-			setTogglingTestDepositId(null);
+			setIsClearingLogs(false);
 		}
 	};
 
@@ -925,44 +964,46 @@ export function ItemRequestsPage() {
 
 	return (
 		<div className="flex flex-col gap-6 max-w-7xl mx-auto w-full pb-16">
-			{/* Page Header & Environment Switcher */}
+			{/* Page Header & System Status */}
 			<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border/60 pb-5">
-				{/* Live / Test Mode Switcher */}
-				<div className="flex items-center gap-1.5 p-1 bg-muted/40 rounded-xl border border-border/80 w-fit">
-					<button
-						type="button"
-						onClick={() => handleSwitchMode("live")}
-						className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
-							dashboardMode === "live"
-								? "bg-background text-emerald-600 dark:text-emerald-400 shadow-xs border border-emerald-500/30"
-								: "text-muted-foreground hover:text-foreground"
-						}`}
-					>
-						<span
-							className={`size-2 rounded-full ${
-								dashboardMode === "live"
-									? "bg-emerald-500 animate-pulse"
-									: "bg-muted-foreground/50"
-							}`}
-						/>
-						<span>Live</span>
-					</button>
-
-					<button
-						type="button"
-						onClick={() => handleSwitchMode("test")}
-						className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
-							dashboardMode === "test"
-								? "bg-background text-amber-600 dark:text-amber-400 shadow-xs border border-amber-500/30"
-								: "text-muted-foreground hover:text-foreground"
-						}`}
-					>
-						<FlaskConical className="size-3.5" />
-						<span>[TEST]</span>
-					</button>
+				<div className="flex items-center gap-3">
+					<div className="p-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary">
+						<Package className="size-5" />
+					</div>
+					<div>
+						<div className="flex items-center gap-2">
+							<h1 className="text-xl font-bold tracking-tight text-foreground">
+								Tournament Armory & Requests
+							</h1>
+							<Badge
+								variant="outline"
+								className="gap-1.5 font-mono text-[10px] uppercase border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+							>
+								<span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+								<span>Live System</span>
+							</Badge>
+						</div>
+						<p className="text-xs text-muted-foreground mt-0.5">
+							Configure items, review distribution requests, and manage armory
+							deposits.
+						</p>
+					</div>
 				</div>
 
 				<div className="flex items-center gap-2 shrink-0">
+					{isOwner && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setIsClearLogsDialogOpen(true)}
+							className="cursor-pointer gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/50"
+							title="Clear all request and deposit history (Sentinel Owner only)"
+						>
+							<Trash2 className="size-3.5" />
+							<span>Clear Logs</span>
+						</Button>
+					)}
+
 					<Button
 						variant="outline"
 						size="sm"
@@ -997,55 +1038,17 @@ export function ItemRequestsPage() {
 						variant="default"
 						size="sm"
 						onClick={handleSaveConfig}
-						disabled={savingConfig || loadingConfig}
+						disabled={savingConfig || loadingConfig || !hasUnsavedChanges}
 						className="cursor-pointer gap-1.5 font-medium"
 					>
 						{savingConfig ? (
 							<Loader2 className="size-3.5 animate-spin" />
 						) : (
-							<Check className="size-3.5" />
+							<Save className="size-3.5" />
 						)}
 						<span>Save Settings</span>
 					</Button>
 				</div>
-			</div>
-
-			{/* Mode Context Banner */}
-			<div
-				className={`flex items-center justify-between p-3 rounded-lg border text-xs ${
-					dashboardMode === "live"
-						? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
-						: "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300"
-				}`}
-			>
-				<div className="flex items-center gap-2.5">
-					{dashboardMode === "live" ? (
-						<Radio className="size-4 shrink-0 text-emerald-500" />
-					) : (
-						<FlaskConical className="size-4 shrink-0 text-amber-500" />
-					)}
-					<div className="flex flex-col sm:flex-row sm:items-center sm:gap-2">
-						<span className="font-bold uppercase tracking-wider text-[11px]">
-							{dashboardMode === "live" ? "Live" : "[TEST]"}
-						</span>
-						<span className="hidden sm:inline opacity-50">•</span>
-						<span className="opacity-90 text-[11px]">
-							{dashboardMode === "live"
-								? "Showing actual armory stock & real-player item requests. Verified via Torn send logs."
-								: "Showing test inventory stock & test requests. Bypassed verification tests do not disturb approvers."}
-						</span>
-					</div>
-				</div>
-				<Badge
-					variant="outline"
-					className={`font-mono text-[10px] shrink-0 uppercase ${
-						dashboardMode === "live"
-							? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-background/60"
-							: "border-amber-500/40 text-amber-600 dark:text-amber-400 bg-background/60"
-					}`}
-				>
-					{dashboardMode === "live" ? "Live Mode" : "Test Mode"}
-				</Badge>
 			</div>
 
 			{/* Main Tabs */}
@@ -1849,9 +1852,7 @@ export function ItemRequestsPage() {
 																					<span
 																						className={`font-semibold ${
 																							stock > 0
-																								? dashboardMode === "live"
-																									? "text-emerald-600 dark:text-emerald-400"
-																									: "text-amber-600 dark:text-amber-400"
+																								? "text-emerald-600 dark:text-emerald-400"
 																								: "text-muted-foreground"
 																						}`}
 																					>
@@ -1987,9 +1988,11 @@ export function ItemRequestsPage() {
 								<Table>
 									<TableHeader className="bg-muted/30">
 										<TableRow className="text-[11px] font-mono uppercase tracking-wider">
-											<TableHead>Depositor</TableHead>
-											<TableHead>Item & Amount</TableHead>
-											<TableHead>Timestamp (TCT)</TableHead>
+											<TableHead>Donor (Torn)</TableHead>
+											<TableHead>Item & Quantity</TableHead>
+											<TableHead>Pasted By (Discord)</TableHead>
+											<TableHead>Log Time (TCT)</TableHead>
+											<TableHead>Pasted In Chat</TableHead>
 											<TableHead className="w-[80px] text-right text-xs">
 												Action
 											</TableHead>
@@ -2006,7 +2009,7 @@ export function ItemRequestsPage() {
 											["dep-1", "dep-2", "dep-3", "dep-4", "dep-5"].map(
 												(skKey) => (
 													<TableRow key={skKey}>
-														<TableCell colSpan={4}>
+														<TableCell colSpan={6}>
 															<Skeleton className="h-9 w-full" />
 														</TableCell>
 													</TableRow>
@@ -2015,7 +2018,7 @@ export function ItemRequestsPage() {
 										) : deposits.length === 0 ? (
 											<TableRow>
 												<TableCell
-													colSpan={4}
+													colSpan={6}
 													className="text-center py-10 text-xs text-muted-foreground"
 												>
 													No deposits found matching your criteria.
@@ -2024,9 +2027,9 @@ export function ItemRequestsPage() {
 										) : (
 											deposits.map((dep) => (
 												<TableRow key={dep.id}>
-													{/* Depositor */}
+													{/* Donor (Torn) */}
 													<TableCell>
-														<div className="flex flex-col">
+														<div className="flex flex-col gap-0.5">
 															{dep.tornId ? (
 																<a
 																	href={`https://www.torn.com/profiles.php?XID=${dep.tornId}`}
@@ -2044,20 +2047,28 @@ export function ItemRequestsPage() {
 																</a>
 															) : (
 																<span className="text-xs font-semibold text-foreground">
-																	{dep.tornName || dep.discordUsername}
+																	{dep.tornName || "Unknown"}
+																</span>
+															)}
+															{dep.logMessage && (
+																<span
+																	className="text-[11px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded w-fit italic truncate max-w-[220px]"
+																	title={dep.logMessage}
+																>
+																	💬 "{dep.logMessage}"
 																</span>
 															)}
 														</div>
 													</TableCell>
 
-													{/* Item & Amount */}
+													{/* Item & Quantity */}
 													<TableCell>
 														<div className="flex items-center gap-2">
 															<Badge
 																variant="secondary"
 																className="font-mono text-xs px-2 py-0.5 font-bold"
 															>
-																x{dep.quantity}
+																+{dep.quantity}
 															</Badge>
 															<div className="flex flex-col">
 																<span className="text-xs font-medium text-foreground">
@@ -2070,9 +2081,27 @@ export function ItemRequestsPage() {
 														</div>
 													</TableCell>
 
-													{/* Timestamp (TCT) */}
+													{/* Pasted By (Discord) */}
 													<TableCell>
-														<span className="text-xs font-mono text-foreground">
+														<div className="flex items-center gap-1.5">
+															<User className="size-3.5 text-muted-foreground shrink-0" />
+															<span className="text-xs font-medium text-foreground">
+																@{dep.discordUsername}
+															</span>
+														</div>
+													</TableCell>
+
+													{/* Log Time (TCT) */}
+													<TableCell>
+														<div className="flex items-center gap-1 text-xs font-mono text-foreground">
+															<Clock className="size-3 text-muted-foreground shrink-0" />
+															<span>{dep.logTimestamp || "—"}</span>
+														</div>
+													</TableCell>
+
+													{/* Pasted In Chat */}
+													<TableCell>
+														<span className="text-xs font-mono text-muted-foreground">
 															{formatTctTimestamp(dep.createdAt)}
 														</span>
 													</TableCell>
@@ -2085,13 +2114,8 @@ export function ItemRequestsPage() {
 																	variant="ghost"
 																	size="icon"
 																	className="size-7 hover:bg-muted/80 cursor-pointer"
-																	disabled={togglingTestDepositId === dep.id}
 																>
-																	{togglingTestDepositId === dep.id ? (
-																		<Loader2 className="size-3.5 animate-spin" />
-																	) : (
-																		<MoreHorizontal className="size-3.5" />
-																	)}
+																	<MoreHorizontal className="size-3.5" />
 																	<span className="sr-only">Open menu</span>
 																</Button>
 															</DropdownMenuTrigger>
@@ -2099,20 +2123,20 @@ export function ItemRequestsPage() {
 																<DropdownMenuLabel className="text-[10px] font-mono uppercase text-muted-foreground">
 																	Deposit Actions
 																</DropdownMenuLabel>
-																<DropdownMenuItem
-																	onClick={() =>
-																		handleToggleTestDeposit(dep.id)
-																	}
-																	className="cursor-pointer text-xs flex items-center gap-2"
-																>
-																	<FlaskConical className="size-3.5" />
-																	<span>
-																		{dep.isTest
-																			? "Move to Live"
-																			: "Move to Test"}
-																	</span>
-																</DropdownMenuItem>
-																<DropdownMenuSeparator />
+																{dep.rawLog && (
+																	<DropdownMenuItem
+																		onClick={() =>
+																			setSelectedRawLog({
+																				title: `Deposit Log — ${dep.itemName} (+${dep.quantity})`,
+																				rawLog: dep.rawLog,
+																			})
+																		}
+																		className="cursor-pointer text-xs flex items-center gap-2"
+																	>
+																		<FileText className="size-3.5" />
+																		<span>View Raw Log</span>
+																	</DropdownMenuItem>
+																)}
 																{dep.tornId && (
 																	<DropdownMenuItem
 																		asChild
@@ -2255,29 +2279,6 @@ export function ItemRequestsPage() {
 													className="text-xs font-mono"
 												>
 													Rejected
-												</SelectItem>
-											</SelectGroup>
-										</SelectContent>
-									</Select>
-
-									{/* Test Filter */}
-									<Select
-										value={testFilter}
-										onValueChange={(v) => setTestFilter(v)}
-									>
-										<SelectTrigger className="h-8 text-xs font-mono w-[130px] cursor-pointer">
-											<SelectValue placeholder="Type" />
-										</SelectTrigger>
-										<SelectContent>
-											<SelectGroup>
-												<SelectItem value="all" className="text-xs font-mono">
-													All Logs
-												</SelectItem>
-												<SelectItem value="false" className="text-xs font-mono">
-													Live Requests
-												</SelectItem>
-												<SelectItem value="true" className="text-xs font-mono">
-													Test Logs Only
 												</SelectItem>
 											</SelectGroup>
 										</SelectContent>
@@ -2564,13 +2565,8 @@ export function ItemRequestsPage() {
 																		variant="ghost"
 																		size="icon-xs"
 																		className="cursor-pointer hover:bg-muted"
-																		disabled={togglingTestId === log.id}
 																	>
-																		{togglingTestId === log.id ? (
-																			<Loader2 className="size-3.5 animate-spin" />
-																		) : (
-																			<MoreHorizontal className="size-3.5" />
-																		)}
+																		<MoreHorizontal className="size-3.5" />
 																		<span className="sr-only">Open menu</span>
 																	</Button>
 																</DropdownMenuTrigger>
@@ -2595,18 +2591,6 @@ export function ItemRequestsPage() {
 																			<DropdownMenuSeparator />
 																		</>
 																	)}
-																	<DropdownMenuItem
-																		onClick={() => handleToggleTest(log.id)}
-																		className="cursor-pointer text-xs flex items-center gap-2"
-																	>
-																		<FlaskConical className="size-3.5" />
-																		<span>
-																			{log.isTest
-																				? "Unmark as Test"
-																				: "Mark as Test"}
-																		</span>
-																	</DropdownMenuItem>
-																	<DropdownMenuSeparator />
 																	{log.tornId && (
 																		<DropdownMenuItem
 																			asChild
@@ -2756,6 +2740,137 @@ export function ItemRequestsPage() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			{/* Clear All Logs Dialog (Owner Only) */}
+			<Dialog
+				open={isClearLogsDialogOpen}
+				onOpenChange={setIsClearLogsDialogOpen}
+			>
+				<DialogContent className="sm:max-w-[440px]">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2 text-destructive">
+							<Trash2 className="size-5" />
+							<span>Clear Tournament Logs?</span>
+						</DialogTitle>
+						<DialogDescription className="pt-2 text-xs leading-relaxed text-muted-foreground">
+							Are you sure you want to permanently clear{" "}
+							<strong>all item request history</strong> and{" "}
+							<strong>armory deposit records</strong> for this server?
+							<br />
+							<br />
+							This will reset tournament armory inventory levels to zero and
+							re-synchronize the storage channel. This action cannot be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter className="gap-2 sm:gap-0 pt-4">
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setIsClearLogsDialogOpen(false)}
+							disabled={isClearingLogs}
+							className="cursor-pointer"
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							size="sm"
+							onClick={handleClearLogs}
+							disabled={isClearingLogs}
+							className="cursor-pointer gap-1.5"
+						>
+							{isClearingLogs ? (
+								<Loader2 className="size-3.5 animate-spin" />
+							) : (
+								<Trash2 className="size-3.5" />
+							)}
+							<span>Clear Everything</span>
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* View Raw Log Dialog */}
+			<Dialog
+				open={!!selectedRawLog}
+				onOpenChange={(open) => !open && setSelectedRawLog(null)}
+			>
+				<DialogContent className="sm:max-w-[500px]">
+					<DialogHeader>
+						<DialogTitle className="text-sm font-semibold flex items-center gap-2">
+							<FileText className="size-4 text-primary" />
+							<span>{selectedRawLog?.title || "Raw Event Log"}</span>
+						</DialogTitle>
+						<DialogDescription className="text-xs text-muted-foreground">
+							The exact Torn event log text as pasted by the player into
+							Discord.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="p-3 bg-muted/50 rounded-lg border border-border/80 font-mono text-xs break-all select-all whitespace-pre-wrap">
+						{selectedRawLog?.rawLog}
+					</div>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => {
+								if (selectedRawLog?.rawLog) {
+									navigator.clipboard.writeText(selectedRawLog.rawLog);
+									toast.success("Copied raw log to clipboard");
+								}
+							}}
+							className="cursor-pointer gap-1.5"
+						>
+							<Copy className="size-3.5" />
+							<span>Copy Log Text</span>
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Floating unsaved changes bar */}
+			{hasUnsavedChanges && (
+				<div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-2xl bg-card/95 backdrop-blur-md border border-border shadow-xl rounded-xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200">
+					<div className="flex items-center gap-2.5 min-w-0">
+						<div className="flex flex-col min-w-0">
+							<span className="text-xs font-semibold text-foreground">
+								Careful — you have unsaved changes!
+							</span>
+						</div>
+					</div>
+
+					<div className="flex items-center gap-2 shrink-0">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handleResetChanges}
+							disabled={savingConfig}
+							className="text-xs h-8 cursor-pointer"
+						>
+							Discard
+						</Button>
+						<Button
+							variant="default"
+							size="sm"
+							onClick={handleSaveConfig}
+							disabled={savingConfig}
+							className="text-xs h-8 cursor-pointer font-medium"
+						>
+							{savingConfig ? (
+								<>
+									<Loader2 className="size-3.5 animate-spin" />
+									Saving...
+								</>
+							) : (
+								<>
+									<Save className="size-3.5" />
+									Save Settings
+								</>
+							)}
+						</Button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

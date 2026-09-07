@@ -5,6 +5,7 @@ import type {
 } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
+import { resolveElimsUser, verifyElimsKey } from "../../workers/elimination";
 import { reinitializeBattlestatsLedger } from "../../workers/personal/battlestats";
 import { reinitializeCrimeLedger } from "../../workers/personal/crimes";
 import { requestResetLogManager } from "../../workers/personal/log-manager";
@@ -193,6 +194,69 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 					} else {
 						pending.resolve(message.data.members);
 					}
+				}
+				return;
+			}
+
+			if (
+				message.action === "elims_resolve_user_request" &&
+				message.requestId &&
+				message.data
+			) {
+				try {
+					const user = await resolveElimsUser(
+						message.data.discordId,
+						message.data.guildId,
+					);
+					ipcServer.broadcast({
+						action: "elims_resolve_user_response",
+						requestId: message.requestId,
+						data: {
+							user,
+						},
+					});
+				} catch (err) {
+					logger.error("Elims user resolution failed via IPC:", err);
+					ipcServer.broadcast({
+						action: "elims_resolve_user_response",
+						requestId: message.requestId,
+						data: {
+							user: null,
+							error:
+								err instanceof Error ? err.message : "Internal worker error.",
+						},
+					});
+				}
+				return;
+			}
+
+			if (
+				message.action === "elims_verify_key_request" &&
+				message.requestId &&
+				message.data
+			) {
+				try {
+					const verified = await verifyElimsKey(message.data.apiKey);
+					ipcServer.broadcast({
+						action: "elims_verify_key_response",
+						requestId: message.requestId,
+						data: {
+							tornId: verified.tornId,
+							tornName: verified.tornName,
+						},
+					});
+				} catch (err) {
+					logger.error("Elims key verification failed via IPC:", err);
+					ipcServer.broadcast({
+						action: "elims_verify_key_response",
+						requestId: message.requestId,
+						data: {
+							error:
+								err instanceof Error
+									? err.message
+									: "Torn API verification failed.",
+						},
+					});
 				}
 				return;
 			}

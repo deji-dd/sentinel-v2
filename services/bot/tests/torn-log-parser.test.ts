@@ -22,9 +22,26 @@ describe("Torn Log Parser", () => {
 			expect(res.name).toBe("Clitasaurus");
 			expect(res.tornId).toBeNull();
 		});
+
+		test("extracts name and ID from bracket notation 'Name [12345]'", () => {
+			const res = extractUserAndId("LinFeng [2399359]");
+			expect(res.name).toBe("LinFeng");
+			expect(res.tornId).toBe(2399359);
+		});
 	});
 
 	describe("parseSingleDepositLog", () => {
+		test("parses '23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you'", () => {
+			const log = "23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you";
+			const parsed = parseSingleDepositLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(2);
+			expect(parsed?.itemName).toBe("Vicodin");
+			expect(parsed?.donorName).toBe("Lunette");
+			expect(parsed?.donorTornId).toBeNull();
+			expect(parsed?.timestamp).toBe("23:14:09 - 06/09/26");
+			expect(parsed?.message).toBeNull();
+		});
 		test("parses format 1 with quantity, item, donor link", () => {
 			const log =
 				"You were sent 16x Serotonin from [Clitasaurus](https://www.torn.com/profiles.php?XID=2059853)";
@@ -107,6 +124,42 @@ describe("Torn Log Parser", () => {
 			expect(results[0]?.quantity).toBe(16);
 			expect(results[1]?.itemName).toBe("Brick");
 			expect(results[1]?.quantity).toBe(1);
+		});
+
+		test("parses user's 5-line multi-deposit batch with mixed messages and items", () => {
+			const text = `23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you
+00:50:02 - 06/09/26 Clitasaurus sent 16x Serotonin to you
+19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED
+19:57:50 - 05/09/26 Sting3r sent a Parcel to you
+18:22:51 - 05/09/26 Bricks sent a Brick to you with the message: Please use this brick if you do not have a hat to throw in the ring`;
+			const results = parseDepositLogs(text);
+			expect(results).toHaveLength(5);
+
+			expect(results[0]?.itemName).toBe("Vicodin");
+			expect(results[0]?.quantity).toBe(2);
+			expect(results[0]?.donorName).toBe("Lunette");
+			expect(results[0]?.timestamp).toBe("23:14:09 - 06/09/26");
+
+			expect(results[1]?.itemName).toBe("Serotonin");
+			expect(results[1]?.quantity).toBe(16);
+			expect(results[1]?.donorName).toBe("Clitasaurus");
+
+			expect(results[2]?.itemName).toBe("Parcel");
+			expect(results[2]?.quantity).toBe(1);
+			expect(results[2]?.donorName).toBe("LinFeng");
+			expect(results[2]?.message).toBe("Adhesive Plastic - SED");
+
+			expect(results[3]?.itemName).toBe("Parcel");
+			expect(results[3]?.quantity).toBe(1);
+			expect(results[3]?.donorName).toBe("Sting3r");
+			expect(results[3]?.message).toBeNull();
+
+			expect(results[4]?.itemName).toBe("Brick");
+			expect(results[4]?.quantity).toBe(1);
+			expect(results[4]?.donorName).toBe("Bricks");
+			expect(results[4]?.message).toBe(
+				"Please use this brick if you do not have a hat to throw in the ring",
+			);
 		});
 	});
 

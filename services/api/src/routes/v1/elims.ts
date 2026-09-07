@@ -29,6 +29,7 @@ import {
 	resetElimsGuildViaIpc,
 	syncElimsGuildViaIpc,
 	syncElimsItemRequestsViaIpc,
+	syncElimsKeyDonationViaIpc,
 } from "../../lib/bot-ipc";
 import { fetchDiscordApi } from "../../lib/discord-auth";
 import { authPlugin } from "../../middleware/auth";
@@ -88,6 +89,8 @@ interface ElimsConfigData {
 	guildName: string;
 	guildIcon: string | null;
 	adminRoleIds: string[];
+	keyDonationChannelId?: string | null;
+	keyDonationEmbedMessageId?: string | null;
 	configuredAt: string;
 	configuredBy: {
 		discordId: string;
@@ -1022,6 +1025,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					tornName: elimsApiKeys.tornName,
 					isValid: elimsApiKeys.isValid,
 					invalidCount: elimsApiKeys.invalidCount,
+					donatedByDiscordId: elimsApiKeys.donatedByDiscordId,
+					donatedByDiscordTag: elimsApiKeys.donatedByDiscordTag,
 					lastUsedAt: elimsApiKeys.lastUsedAt,
 					createdAt: elimsApiKeys.createdAt,
 				})
@@ -1029,7 +1034,10 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(elimsApiKeys.guildId, configData.guildId))
 				.orderBy(desc(elimsApiKeys.createdAt));
 
-			return { keys };
+			return {
+				keys,
+				channelId: configData.keyDonationChannelId ?? null,
+			};
 		},
 		{
 			detail: {
@@ -1134,12 +1142,16 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					apiKeyHash: keyHash,
 					isValid: true,
 					invalidCount: 0,
+					donatedByDiscordId: user?.discordId ?? null,
+					donatedByDiscordTag: user?.username ?? "Dashboard Admin",
 				})
 				.returning({
 					id: elimsApiKeys.id,
 					tornId: elimsApiKeys.tornId,
 					tornName: elimsApiKeys.tornName,
 					isValid: elimsApiKeys.isValid,
+					donatedByDiscordId: elimsApiKeys.donatedByDiscordId,
+					donatedByDiscordTag: elimsApiKeys.donatedByDiscordTag,
 					createdAt: elimsApiKeys.createdAt,
 				});
 
@@ -1214,6 +1226,128 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Delete Elims Guild API Key",
 				description:
 					"Removes a Torn API key configured for the tournament guild.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/api-keys/channel ───────────────────────────────────
+	.get(
+		"/api-keys/channel",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			return { channelId: configData.keyDonationChannelId ?? null };
+		},
+		{
+			detail: {
+				summary: "Get Key Donation Channel",
+				description: "Fetches the configured channel for API key donations.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/elims/api-keys/channel ───────────────────────────────────
+	.put(
+		"/api-keys/channel",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			const newChannelId = body.channelId ? body.channelId.trim() : null;
+
+			const updatedConfig: ElimsConfigData = {
+				...configData,
+				keyDonationChannelId: newChannelId,
+				keyDonationEmbedMessageId:
+					newChannelId !== configData.keyDonationChannelId
+						? null
+						: configData.keyDonationEmbedMessageId,
+				updatedAt: new Date().toISOString(),
+			};
+
+			await db
+				.update(systemStates)
+				.set({
+					data: updatedConfig as unknown as Record<string, unknown>,
+					updatedAt: new Date(),
+				})
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			void syncElimsKeyDonationViaIpc(configData.guildId);
+
+			return { success: true, channelId: newChannelId };
+		},
+		{
+			body: t.Object({
+				channelId: t.Nullable(t.String()),
+			}),
+			detail: {
+				summary: "Update Key Donation Channel",
+				description:
+					"Configures the channel where the persistent key donation embed will be posted.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/api-keys/channel/sync ─────────────────────────────
+	.post(
+		"/api-keys/channel/sync",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			void syncElimsKeyDonationViaIpc(configData.guildId);
+
+			return { success: true, message: "Sync signal dispatched to bot." };
+		},
+		{
+			detail: {
+				summary: "Sync Key Donation Embed",
+				description:
+					"Triggers the bot to immediately refresh or repost the persistent key donation embed.",
 			},
 		},
 	)
@@ -1506,6 +1640,8 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					itemCategory: d.itemCategory,
 					quantity: d.quantity,
 					rawLog: d.rawLog,
+					logTimestamp: d.logTimestamp,
+					logMessage: d.logMessage,
 					isTest: d.isTest,
 					status: d.status,
 					createdAt: d.createdAt.toISOString(),
@@ -1889,6 +2025,61 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Toggle Test Flag on Deposit Log",
 				description:
 					"Toggles the is_test flag on a given armory deposit entry.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/item-requests/clear-logs ──────────────────────────
+	.post(
+		"/item-requests/clear-logs",
+		async ({ user, set }) => {
+			if (user?.role !== "owner") {
+				set.status = 403;
+				return { error: "Only the Sentinel owner can clear tournament logs." };
+			}
+
+			const [elimsGuildState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const elimsGuildData = elimsGuildState?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = elimsGuildData?.guildId ?? "";
+
+			if (!guildId) {
+				set.status = 400;
+				return { error: "No active Elims server configured." };
+			}
+
+			// Clear all requests and deposits for this server
+			const [deletedReqs, deletedDeps] = await Promise.all([
+				db
+					.delete(elimsItemRequests)
+					.where(eq(elimsItemRequests.guildId, guildId))
+					.returning({ id: elimsItemRequests.id }),
+				db
+					.delete(elimsArmoryDeposits)
+					.where(eq(elimsArmoryDeposits.guildId, guildId))
+					.returning({ id: elimsArmoryDeposits.id }),
+			]);
+
+			// Sync with bot so armory storage channel updates live stock immediately
+			void syncElimsItemRequestsViaIpc(guildId);
+
+			return {
+				success: true,
+				clearedRequests: deletedReqs.length,
+				clearedDeposits: deletedDeps.length,
+				message: `Cleared ${deletedReqs.length} item request(s) and ${deletedDeps.length} armory deposit(s).`,
+			};
+		},
+		{
+			detail: {
+				summary: "Clear All Item Requests & Armory Deposits (Owner Only)",
+				description:
+					"Permanently removes all item requests and armory deposits for the active tournament guild.",
 			},
 		},
 	);

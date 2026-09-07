@@ -10,14 +10,7 @@ import {
 	MessageFlags,
 } from "discord.js";
 import type { BotCommand } from "../commands/index";
-import {
-	handleArmoryLogDepositButton,
-	handleArmoryLogModalSubmit,
-	handleArmoryTestCategorySelect,
-	handleArmoryTestDepositButton,
-	handleArmoryTestItemSelect,
-	handleArmoryTestQtyModalSubmit,
-} from "../lib/elims-armory-storage";
+import { handleArmoryStockPageButton } from "../lib/elims-armory-storage";
 import {
 	handleItemGrantingButton,
 	handleItemGrantRejectModalSubmit,
@@ -27,8 +20,11 @@ import {
 	handleItemRequestModalSubmit,
 	handleItemVerifySendButton,
 	handleItemVerifySendModalSubmit,
-	handleItemVerifyTestBypassButton,
 } from "../lib/elims-item-requests";
+import {
+	handleKeyDonationButton,
+	handleKeyDonationModalSubmit,
+} from "../lib/elims-key-donation";
 import { createErrorEmbed } from "../lib/embeds";
 import { handleFactionDirectoryButton } from "../lib/faction-map-channel";
 import { handleFactionMonitoringButton } from "../lib/faction-monitoring-channel";
@@ -67,23 +63,16 @@ export const interactionCreateEvent = {
 
 		try {
 			if (interaction.isButton()) {
-				if (
-					interaction.customId === "elims_request_open" ||
-					interaction.customId === "elims_request_test_open"
-				) {
+				if (interaction.customId === "elims_request_open") {
 					await handleItemRequestButton(interaction);
+				} else if (
+					interaction.customId.startsWith("elims_armory_stock_page:")
+				) {
+					await handleArmoryStockPageButton(interaction);
 				} else if (interaction.customId.startsWith("elims_grant_")) {
 					await handleItemGrantingButton(interaction);
 				} else if (interaction.customId.startsWith("elims_verify_send:")) {
 					await handleItemVerifySendButton(interaction);
-				} else if (
-					interaction.customId.startsWith("elims_verify_test_bypass:")
-				) {
-					await handleItemVerifyTestBypassButton(interaction);
-				} else if (interaction.customId === "elims_armory_log_deposit") {
-					await handleArmoryLogDepositButton(interaction);
-				} else if (interaction.customId === "elims_armory_test_deposit") {
-					await handleArmoryTestDepositButton(interaction);
 				} else if (interaction.customId.startsWith("faction_dir_page:")) {
 					await handleFactionDirectoryButton(interaction);
 				} else if (
@@ -96,6 +85,8 @@ export const interactionCreateEvent = {
 					await handleGiveawayItemPageButton(interaction);
 				} else if (interaction.customId.startsWith("giveaway_entry:")) {
 					await handleGiveawayEntryButton(interaction);
+				} else if (interaction.customId === "elims_donate_key_button") {
+					await handleKeyDonationButton(interaction);
 				}
 				return;
 			}
@@ -105,12 +96,6 @@ export const interactionCreateEvent = {
 					await handleItemRequestCategorySelect(interaction);
 				} else if (interaction.customId.startsWith("elims_item_select")) {
 					await handleItemRequestItemSelect(interaction);
-				} else if (
-					interaction.customId === "elims_armory_test_category_select"
-				) {
-					await handleArmoryTestCategorySelect(interaction);
-				} else if (interaction.customId === "elims_armory_test_item_select") {
-					await handleArmoryTestItemSelect(interaction);
 				} else if (interaction.customId === "giveaway_category_select") {
 					await handleGiveawayCategorySelect(interaction);
 				} else if (interaction.customId.startsWith("giveaway_item_select:")) {
@@ -120,10 +105,7 @@ export const interactionCreateEvent = {
 			}
 
 			if (interaction.isModalSubmit()) {
-				if (
-					interaction.customId.startsWith("elims_request_modal:") ||
-					interaction.customId.startsWith("elims_request_test_modal:")
-				) {
+				if (interaction.customId.startsWith("elims_request_modal:")) {
 					await handleItemRequestModalSubmit(interaction);
 				} else if (
 					interaction.customId.startsWith("elims_grant_reject_modal:")
@@ -133,14 +115,10 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("elims_verify_send_modal:")
 				) {
 					await handleItemVerifySendModalSubmit(interaction);
-				} else if (interaction.customId === "elims_armory_log_modal") {
-					await handleArmoryLogModalSubmit(interaction);
-				} else if (
-					interaction.customId.startsWith("elims_armory_test_qty_modal:")
-				) {
-					await handleArmoryTestQtyModalSubmit(interaction);
 				} else if (interaction.customId.startsWith("giveaway_config_modal:")) {
 					await handleGiveawayModalSubmit(interaction);
+				} else if (interaction.customId === "elims_donate_key_modal") {
+					await handleKeyDonationModalSubmit(interaction);
 				}
 				return;
 			}

@@ -1,13 +1,17 @@
 import {
 	Check,
 	ExternalLink,
+	Hash,
 	Key,
 	Plus,
 	RefreshCw,
+	Save,
+	Send,
 	Server,
 	Trash2,
+	User,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,11 +19,17 @@ import {
 	Card,
 	CardContent,
 	CardDescription,
-	CardFooter,
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatTctTimestamp } from "@/lib/utils";
 import { useElims } from "../contexts/ElimsContext";
@@ -33,12 +43,20 @@ interface GuildRole {
 	managed: boolean;
 }
 
+interface DiscordChannel {
+	id: string;
+	name: string;
+	type: number;
+}
+
 interface ElimsApiKey {
 	id: string;
 	tornId: number;
 	tornName: string;
 	isValid: boolean;
 	invalidCount: number;
+	donatedByDiscordId?: string | null;
+	donatedByDiscordTag?: string | null;
 	lastUsedAt: string | null;
 	createdAt: string;
 }
@@ -59,6 +77,7 @@ export function GuildConfigPage() {
 	);
 	const [roleSearch, setRoleSearch] = useState("");
 	const [savingSettings, setSavingSettings] = useState(false);
+	const [savingGeneral, setSavingGeneral] = useState(false);
 
 	// API Keys state
 	const [apiKeys, setApiKeys] = useState<ElimsApiKey[]>([]);
@@ -67,15 +86,34 @@ export function GuildConfigPage() {
 	const [addingKey, setAddingKey] = useState(false);
 	const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
 
-	// Fetch API keys
+	// Key Donation Channel state
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
+	const [loadingChannels, setLoadingChannels] = useState(false);
+	const [donationChannelId, setDonationChannelId] = useState<string | null>(
+		null,
+	);
+	const [originalDonationChannelId, setOriginalDonationChannelId] = useState<
+		string | null
+	>(null);
+	const [savingChannel, setSavingChannel] = useState(false);
+	const [syncingEmbed, setSyncingEmbed] = useState(false);
+
+	// Fetch API keys and configured donation channel
 	const fetchApiKeys = useCallback(async () => {
 		setLoadingKeys(true);
 		try {
 			const res = await fetch("/api/v1/elims/api-keys");
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			const data = (await res.json()) as { keys?: ElimsApiKey[] };
+			const data = (await res.json()) as {
+				keys?: ElimsApiKey[];
+				channelId?: string | null;
+			};
 			if (data?.keys && Array.isArray(data.keys)) {
 				setApiKeys(data.keys);
+			}
+			if (data?.channelId !== undefined) {
+				setDonationChannelId(data.channelId ?? null);
+				setOriginalDonationChannelId(data.channelId ?? null);
 			}
 		} catch (err) {
 			console.error("Failed to load elims API keys:", err);
@@ -85,9 +123,77 @@ export function GuildConfigPage() {
 		}
 	}, []);
 
+	// Fetch Guild text channels
+	const fetchChannels = useCallback(async () => {
+		if (!guild?.id) return;
+		setLoadingChannels(true);
+		try {
+			const res = await fetch(`/api/v1/elims/guild-channels/${guild.id}`);
+			if (!res.ok) throw new Error("Failed to load guild channels");
+			const data = (await res.json()) as { channels?: DiscordChannel[] };
+			if (data?.channels && Array.isArray(data.channels)) {
+				setChannels(data.channels.filter((c) => c.type === 0 || c.type === 5));
+			}
+		} catch (err) {
+			console.error("Failed to load guild channels:", err);
+		} finally {
+			setLoadingChannels(false);
+		}
+	}, [guild?.id]);
+
 	useEffect(() => {
 		void fetchApiKeys();
-	}, [fetchApiKeys]);
+		void fetchChannels();
+	}, [fetchApiKeys, fetchChannels]);
+
+	const handleSaveDonationChannel = async (): Promise<boolean> => {
+		setSavingChannel(true);
+		try {
+			const res = await fetch("/api/v1/elims/api-keys/channel", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ channelId: donationChannelId }),
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to save key donation channel.");
+			}
+			setOriginalDonationChannelId(donationChannelId);
+			toast.success(
+				donationChannelId
+					? "Key donation channel updated! Persistent embed dispatched."
+					: "Key donation channel disabled.",
+			);
+			return true;
+		} catch (err) {
+			const msg =
+				err instanceof Error ? err.message : "Error saving donation channel";
+			toast.error(msg);
+			return false;
+		} finally {
+			setSavingChannel(false);
+		}
+	};
+
+	const handleSyncEmbed = async () => {
+		setSyncingEmbed(true);
+		try {
+			const res = await fetch("/api/v1/elims/api-keys/channel/sync", {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to sync key donation embed.");
+			}
+			toast.success("Key donation embed synchronization triggered!");
+		} catch (err) {
+			const msg =
+				err instanceof Error ? err.message : "Error syncing donation embed";
+			toast.error(msg);
+		} finally {
+			setSyncingEmbed(false);
+		}
+	};
 
 	const handleAddApiKey = async (e?: React.FormEvent) => {
 		if (e) e.preventDefault();
@@ -197,7 +303,7 @@ export function GuildConfigPage() {
 		});
 	};
 
-	const handleSaveRoles = async () => {
+	const handleSaveRoles = async (): Promise<boolean> => {
 		setSavingSettings(true);
 		try {
 			const res = await fetch("/api/v1/elims/settings", {
@@ -215,9 +321,11 @@ export function GuildConfigPage() {
 
 			toast.success("Elims Admin roles updated successfully!");
 			await refreshStatus();
+			return true;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "Error saving settings";
 			toast.error(msg);
+			return false;
 		} finally {
 			setSavingSettings(false);
 		}
@@ -227,28 +335,58 @@ export function GuildConfigPage() {
 		r.name.toLowerCase().includes(roleSearch.toLowerCase().trim()),
 	);
 
-	const hasUnsavedChanges =
-		selectedRoleIds.size !== adminRoleIds.length ||
-		Array.from(selectedRoleIds).some((id) => !adminRoleIds.includes(id));
+	const originalRoleIdsSet = useMemo(
+		() => new Set(adminRoleIds),
+		[adminRoleIds],
+	);
+
+	const hasRoleChanges = useMemo(() => {
+		if (selectedRoleIds.size !== originalRoleIdsSet.size) return true;
+		for (const id of selectedRoleIds) {
+			if (!originalRoleIdsSet.has(id)) return true;
+		}
+		return false;
+	}, [selectedRoleIds, originalRoleIdsSet]);
+
+	const hasChannelChanges = donationChannelId !== originalDonationChannelId;
+
+	const hasUnsavedChanges = hasRoleChanges || hasChannelChanges;
+
+	const isSaving = savingGeneral || savingSettings || savingChannel;
+
+	const handleSaveAll = async () => {
+		if (!hasUnsavedChanges) {
+			toast.info("No unsaved changes to save.");
+			return;
+		}
+
+		setSavingGeneral(true);
+		try {
+			const tasks: Promise<boolean>[] = [];
+			if (hasRoleChanges) {
+				tasks.push(handleSaveRoles());
+			}
+			if (hasChannelChanges) {
+				tasks.push(handleSaveDonationChannel());
+			}
+			await Promise.all(tasks);
+		} finally {
+			setSavingGeneral(false);
+		}
+	};
+
+	const handleResetChanges = () => {
+		setSelectedRoleIds(new Set(adminRoleIds));
+		setDonationChannelId(originalDonationChannelId);
+		toast.info("Unsaved changes discarded.");
+	};
 
 	return (
 		<div className="flex flex-col gap-6 max-w-5xl w-full mx-auto pb-6">
 			{/* Page Header */}
-			<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-				<div className="flex flex-col gap-1">
-					<div className="flex items-center gap-2">
-						<h1 className="text-2xl font-bold tracking-tight">
-							Guild Configuration
-						</h1>
-					</div>
-					<p className="text-xs text-muted-foreground">
-						Configure server roles and tournament API keys for member
-						verification and operations.
-					</p>
-				</div>
-
-				{isOwner && (
-					<div className="flex items-center gap-2">
+			<div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-4">
+				<div className="flex items-center gap-2">
+					{isOwner && (
 						<Button
 							variant="outline"
 							size="sm"
@@ -258,8 +396,30 @@ export function GuildConfigPage() {
 							<Server className="size-3.5" data-icon="inline-start" />
 							Reconfigure Server
 						</Button>
-					</div>
-				)}
+					)}
+					<Button
+						variant="default"
+						size="sm"
+						onClick={handleSaveAll}
+						disabled={isSaving || !hasUnsavedChanges}
+						className="text-xs cursor-pointer font-medium"
+					>
+						{isSaving ? (
+							<>
+								<RefreshCw
+									className="size-3.5 animate-spin"
+									data-icon="inline-start"
+								/>
+								Saving Settings...
+							</>
+						) : (
+							<>
+								<Save className="size-3.5" data-icon="inline-start" />
+								Save Settings
+							</>
+						)}
+					</Button>
+				</div>
 			</div>
 
 			{/* Role Management Section */}
@@ -350,37 +510,6 @@ export function GuildConfigPage() {
 						)}
 					</div>
 				</CardContent>
-
-				<CardFooter className="flex items-center justify-between border-t border-border/60 pt-4">
-					<span className="text-[11px] text-muted-foreground font-mono">
-						{hasUnsavedChanges
-							? "Unsaved role modifications pending."
-							: "Roles up to date."}
-					</span>
-
-					<Button
-						variant="default"
-						size="sm"
-						onClick={handleSaveRoles}
-						disabled={savingSettings || !hasUnsavedChanges}
-						className="text-xs cursor-pointer"
-					>
-						{savingSettings ? (
-							<>
-								<RefreshCw
-									className="size-3.5 animate-spin"
-									data-icon="inline-start"
-								/>
-								Saving Roles...
-							</>
-						) : (
-							<>
-								<Check className="size-3.5" data-icon="inline-start" />
-								Save Role Settings
-							</>
-						)}
-					</Button>
-				</CardFooter>
 			</Card>
 
 			{/* Tournament API Keys Section */}
@@ -440,6 +569,70 @@ export function GuildConfigPage() {
 						</Button>
 					</form>
 
+					{/* Key Donation Channel Settings */}
+					<div className="rounded-lg border border-border/70 bg-card/60 p-3.5 flex flex-col gap-3">
+						<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+							<div className="flex flex-col gap-0.5">
+								<div className="flex items-center gap-2 flex-wrap">
+									<span className="text-xs font-semibold">
+										Torn API Donation Channel
+									</span>
+								</div>
+							</div>
+
+							{donationChannelId && (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={handleSyncEmbed}
+									disabled={syncingEmbed || loadingChannels}
+									className="text-xs h-7 px-2.5 shrink-0 cursor-pointer"
+									title="Force the bot to refresh or repost the persistent embed in this channel"
+								>
+									{syncingEmbed ? (
+										<>
+											<RefreshCw
+												className="size-3 animate-spin"
+												data-icon="inline-start"
+											/>
+											Syncing Embed...
+										</>
+									) : (
+										<>
+											<Send className="size-3" data-icon="inline-start" />
+											Refresh Embed
+										</>
+									)}
+								</Button>
+							)}
+						</div>
+
+						<Select
+							value={donationChannelId ?? "none"}
+							onValueChange={(val) =>
+								setDonationChannelId(val === "none" ? null : val)
+							}
+							disabled={loadingChannels || isSaving}
+						>
+							<SelectTrigger className="h-9 w-full text-xs">
+								<SelectValue placeholder="Select Discord text channel..." />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="none">
+									<span className="text-muted-foreground">None (Disabled)</span>
+								</SelectItem>
+								{channels.map((ch) => (
+									<SelectItem key={ch.id} value={ch.id}>
+										<div className="flex items-center gap-1.5">
+											<Hash className="size-3 text-muted-foreground" />
+											<span>{ch.name}</span>
+										</div>
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+
 					{/* Keys List */}
 					<div className="border border-border rounded-md overflow-hidden bg-background/30">
 						{loadingKeys ? (
@@ -449,8 +642,8 @@ export function GuildConfigPage() {
 							</div>
 						) : apiKeys.length === 0 ? (
 							<div className="text-center py-8 text-xs text-muted-foreground">
-								No API keys configured. Add a Torn API key above to enable live
-								member verification.
+								No API keys configured. Add a Torn API key above or configure a
+								donation channel to enable live tournament operations.
 							</div>
 						) : (
 							<div className="divide-y divide-border/50">
@@ -464,7 +657,7 @@ export function GuildConfigPage() {
 												<Key className="size-4 text-primary" />
 											</div>
 											<div className="flex flex-col min-w-0">
-												<div className="flex items-center gap-1.5">
+												<div className="flex items-center gap-1.5 flex-wrap">
 													<a
 														href={`https://www.torn.com/profiles.php?XID=${k.tornId}`}
 														target="_blank"
@@ -486,6 +679,16 @@ export function GuildConfigPage() {
 													>
 														{k.isValid ? "ACTIVE" : "INVALID"}
 													</Badge>
+													{k.donatedByDiscordTag && (
+														<Badge
+															variant="secondary"
+															className="text-[9px] font-mono px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/20 flex items-center gap-1"
+															title={`Donated by Discord member: ${k.donatedByDiscordTag}${k.donatedByDiscordId ? ` (${k.donatedByDiscordId})` : ""}`}
+														>
+															<User className="size-2.5 opacity-80" />
+															<span>Donated by @{k.donatedByDiscordTag}</span>
+														</Badge>
+													)}
 												</div>
 												<span className="text-[10px] text-muted-foreground font-mono">
 													Added {formatTctTimestamp(k.createdAt)}
@@ -516,6 +719,53 @@ export function GuildConfigPage() {
 					</div>
 				</CardContent>
 			</Card>
+
+			{/* Floating unsaved changes bar */}
+			{hasUnsavedChanges && (
+				<div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-2xl bg-card/95 backdrop-blur-md border border-border shadow-xl rounded-xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200">
+					<div className="flex items-center gap-2.5 min-w-0">
+						<div className="flex flex-col min-w-0">
+							<span className="text-xs font-semibold text-foreground">
+								Careful — you have unsaved changes!
+							</span>
+						</div>
+					</div>
+
+					<div className="flex items-center gap-2 shrink-0">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handleResetChanges}
+							disabled={isSaving}
+							className="text-xs h-8 cursor-pointer"
+						>
+							Discard
+						</Button>
+						<Button
+							variant="default"
+							size="sm"
+							onClick={handleSaveAll}
+							disabled={isSaving}
+							className="text-xs h-8 cursor-pointer font-medium"
+						>
+							{isSaving ? (
+								<>
+									<RefreshCw
+										className="size-3.5 animate-spin"
+										data-icon="inline-start"
+									/>
+									Saving...
+								</>
+							) : (
+								<>
+									<Save className="size-3.5" data-icon="inline-start" />
+									Save Settings
+								</>
+							)}
+						</Button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

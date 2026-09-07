@@ -38,6 +38,15 @@ export function extractUserAndId(raw: string): {
 		};
 	}
 
+	const bracketMatch = trimmed.match(/^(.+?)\s*\[(\d+)\]$/);
+	if (bracketMatch?.[1] && bracketMatch[2]) {
+		const tornId = Number.parseInt(bracketMatch[2], 10);
+		return {
+			name: bracketMatch[1].trim(),
+			tornId: Number.isNaN(tornId) ? null : tornId,
+		};
+	}
+
 	// Plain text name
 	return {
 		name: trimmed.replace(/^\[|\]$/g, ""),
@@ -59,18 +68,19 @@ function normalizeQuantity(qtyStr: string): number {
 /**
  * Parses a single deposit / received Torn event log line.
  * Supports:
+ * - "23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you"
+ * - "19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED"
  * - "You were sent 16x Serotonin from [Clitasaurus](https://...)"
  * - "00:50:02 - 06/09/26 Clitasaurus sent 16x Serotonin to you"
  * - "You were sent a Parcel from [LinFeng](...) with the message: ..."
- * - "19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: ..."
  */
 export function parseSingleDepositLog(line: string): ParsedDepositLog | null {
 	const trimmed = line.trim();
 	if (!trimmed) return null;
 
-	// Optional timestamp prefix e.g. "00:50:02 - 06/09/26 "
+	// Optional timestamp prefix e.g. "00:50:02 - 06/09/26 " or 4-digit year
 	const tsMatch = trimmed.match(
-		/^(\d{2}:\d{2}:\d{2}\s*-\s*\d{2}\/\d{2}\/\d{2})\s+(.+)$/,
+		/^(\d{2}:\d{2}:\d{2}\s*-\s*\d{2}\/\d{2}\/\d{2,4})\s+(.+)$/,
 	);
 	const timestamp = tsMatch?.[1]?.trim() ?? null;
 	const content = tsMatch?.[2] ?? trimmed;
@@ -159,7 +169,7 @@ export function parseSingleSentLog(line: string): ParsedSentLog | null {
 
 	// Optional timestamp prefix e.g. "04:37:52 - 04/09/26 "
 	const tsMatch = trimmed.match(
-		/^(\d{2}:\d{2}:\d{2}\s*-\s*\d{2}\/\d{2}\/\d{2})\s+(.+)$/,
+		/^(\d{2}:\d{2}:\d{2}\s*-\s*\d{2}\/\d{2}\/\d{2,4})\s+(.+)$/,
 	);
 	const timestamp = tsMatch?.[1]?.trim() ?? null;
 	const content = tsMatch?.[2] ?? trimmed;
