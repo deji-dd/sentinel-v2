@@ -65,7 +65,7 @@ jobs:
         run: bun run db:migrate
 
       - name: Run Tests
-        run: bun test
+        run: bun test --parallel=1
 
   build-and-push:
     name: Build & Push Container Image

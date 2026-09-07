@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isTargetGuild } from "@sentinel/database";
+import { authorizeGuild, isTargetGuild } from "@sentinel/database";
 import { app } from "../src/app";
 
 describe("Elysia API Server - Guild Authorization Endpoints", () => {
@@ -80,6 +80,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 	it("restricts module toggling strictly to bot owner", async () => {
 		const testGuildId = "1096243613681332328";
+		await authorizeGuild(testGuildId);
 
 		// 1. Log in as regular admin (not bot owner)
 		const adminLogin = await app.handle(
