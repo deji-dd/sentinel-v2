@@ -1,0 +1,1 @@
+ALTER TABLE "elims_member_stats" ADD COLUMN "networth" double precision;

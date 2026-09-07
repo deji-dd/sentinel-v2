@@ -93,6 +93,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterAll(async () => {
+		schedulerEvents.removeAllListeners();
 		if (originalState) {
 			await db
 				.insert(systemStates)
@@ -143,6 +144,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterEach(async () => {
+		schedulerEvents.removeAllListeners();
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db
 			.delete(stockLedgers)
@@ -365,7 +367,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 			updatedAt: new Date(),
 		});
 
-		startStocksLedger();
+		startStocksLedger({ initialDelayMs: 60_000 });
 
 		const eventLog: UserLog = {
 			id: LOG_ID_1 as unknown as number,
@@ -377,11 +379,16 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 
 		schedulerEvents.emit("logs_inserted", [eventLog]);
 
-		await new Promise((resolve) => setTimeout(resolve, 100));
-
-		const record = await db.query.stockLedgers.findFirst({
-			where: eq(stockLedgers.id, LOG_ID_1),
-		});
+		// Wait for async event listener to finish writing to DB (poll up to 3s)
+		let record: typeof stockLedgers.$inferSelect | undefined;
+		const start = Date.now();
+		while (Date.now() - start < 3000) {
+			record = await db.query.stockLedgers.findFirst({
+				where: eq(stockLedgers.id, LOG_ID_1),
+			});
+			if (record) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
 
 		expect(record).toBeDefined();
 		expect(record?.stockId).toBe(TEST_STOCK_ID_1);

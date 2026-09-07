@@ -9,6 +9,7 @@ import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
 import { wsBattlestatsLedgerRoutes } from "./routes/ws-battlestats-ledger";
 import { wsCrimeLedgerRoutes } from "./routes/ws-crime-ledger";
+import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
 import { wsGymLedgerRoutes } from "./routes/ws-gym-ledger";
 import { wsLogManagerRoutes } from "./routes/ws-log-manager";
 import { wsStockLedgerRoutes } from "./routes/ws-stocks-ledger";
@@ -35,6 +36,7 @@ export const app = new Elysia()
 	.use(wsBattlestatsLedgerRoutes)
 	.use(wsGymLedgerRoutes)
 	.use(wsStockLedgerRoutes)
+	.use(wsElimsTournamentRoutes)
 	.use(pondRoutes)
 	.use(v1Routes)
 	.use(staticSpaPlugin)

@@ -58,6 +58,7 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterAll(async () => {
+		schedulerEvents.removeAllListeners();
 		if (originalState) {
 			await db
 				.insert(systemStates)
@@ -87,6 +88,7 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterEach(async () => {
+		schedulerEvents.removeAllListeners();
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db.delete(crimeLogs).where(inArray(crimeLogs.id, ALL_TEST_LOG_IDS));
 		await db
@@ -419,7 +421,7 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	test("listens to logs_inserted event and processes crime logs", async () => {
-		startCrimesLedger();
+		startCrimesLedger({ initialDelayMs: 60_000 });
 
 		const eventLog: UserLog = {
 			id: LOG_ID_1 as unknown as string,
@@ -436,12 +438,16 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 
 		schedulerEvents.emit("logs_inserted", [eventLog]);
 
-		// Give async event listener microtask a moment to write to DB
-		await new Promise((resolve) => setTimeout(resolve, 100));
-
-		const record = await db.query.crimeLogs.findFirst({
-			where: eq(crimeLogs.id, LOG_ID_1),
-		});
+		// Wait for async event listener to finish writing to DB (poll up to 3s)
+		let record: CrimeLog | undefined;
+		const start = Date.now();
+		while (Date.now() - start < 3000) {
+			record = await db.query.crimeLogs.findFirst({
+				where: eq(crimeLogs.id, LOG_ID_1),
+			});
+			if (record) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
 
 		expect(record).toBeDefined();
 		expect(record?.crimeId).toBe(1); // "Search the junkyard" -> Crime ID 1

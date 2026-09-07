@@ -7,18 +7,24 @@ import {
 	elimsApiKeys,
 	elimsArmoryDeposits,
 	elimsItemRequests,
+	elimsMemberStats,
+	elimsTeamPlayers,
+	elimsTeamSnapshots,
+	elimsTeams,
 	eq,
 	getArmoryStock,
 	guildConfigs,
 	ilike,
 	or,
 	type SQL,
+	sql,
 	systemStates,
 	tornItems,
 	type WhitelistedItem,
 } from "@sentinel/database";
 import {
 	encryptApiKey,
+	getElimsKeyPool,
 	hashApiKey,
 	isValidApiKey,
 	TornApiClient,
@@ -26,6 +32,7 @@ import {
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import {
+	requestSchedulerAction,
 	resetElimsGuildViaIpc,
 	syncElimsGuildViaIpc,
 	syncElimsItemRequestsViaIpc,
@@ -2080,6 +2087,513 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Clear All Item Requests & Armory Deposits (Owner Only)",
 				description:
 					"Permanently removes all item requests and armory deposits for the active tournament guild.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/hourly-activity ───────────────────────────────────
+	.get(
+		"/hourly-activity",
+		async ({ user, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			// 1. Fetch all 12 teams
+			const teams = await db.select().from(elimsTeams).orderBy(elimsTeams.id);
+
+			// 1. Current hourly activity (most recent snapshot per team per hour)
+			const curRows = await db.execute<{
+				team_id: number;
+				hour_tct: number;
+				current_activity: number;
+			}>(sql`
+				SELECT DISTINCT ON (team_id, hour_tct)
+					team_id,
+					hour_tct,
+					(CASE WHEN eliminated THEN 0 WHEN active_count > 0 THEN active_count ELSE GREATEST(0, attacks / 10) END)::int as current_activity
+				FROM elims_team_snapshots
+				ORDER BY team_id, hour_tct, captured_at DESC
+			`);
+
+			// 2. Average hourly activity (mean across all historical snapshots per team per hour)
+			const avgRows = await db.execute<{
+				team_id: number;
+				hour_tct: number;
+				avg_activity: number;
+			}>(sql`
+				SELECT 
+					team_id, 
+					hour_tct, 
+					ROUND(AVG(CASE WHEN eliminated THEN 0 WHEN active_count > 0 THEN active_count ELSE GREATEST(0, attacks / 10) END))::int as avg_activity
+				FROM elims_team_snapshots
+				GROUP BY team_id, hour_tct
+			`);
+
+			const teamCurrentMap = new Map<number, number[]>();
+			const teamAverageMap = new Map<number, number[]>();
+
+			for (const t of teams) {
+				teamCurrentMap.set(t.id, new Array(24).fill(0));
+				teamAverageMap.set(t.id, new Array(24).fill(0));
+			}
+
+			for (const row of curRows) {
+				const arr = teamCurrentMap.get(row.team_id);
+				if (arr && row.hour_tct >= 0 && row.hour_tct < 24) {
+					arr[row.hour_tct] = row.current_activity;
+				}
+			}
+
+			for (const row of avgRows) {
+				const arr = teamAverageMap.get(row.team_id);
+				if (arr && row.hour_tct >= 0 && row.hour_tct < 24) {
+					arr[row.hour_tct] = row.avg_activity;
+				}
+			}
+
+			const benchmarkHourly = new Array(24).fill(0);
+			const benchmarkCounts = new Array(24).fill(0);
+
+			for (const row of avgRows) {
+				if (row.hour_tct >= 0 && row.hour_tct < 24) {
+					benchmarkHourly[row.hour_tct] =
+						(benchmarkHourly[row.hour_tct] ?? 0) + row.avg_activity;
+					benchmarkCounts[row.hour_tct] =
+						(benchmarkCounts[row.hour_tct] ?? 0) + 1;
+				}
+			}
+
+			for (let h = 0; h < 24; h++) {
+				const c = benchmarkCounts[h] ?? 0;
+				if (c > 0) {
+					benchmarkHourly[h] = Math.round((benchmarkHourly[h] ?? 0) / c);
+				}
+			}
+
+			// 3. Build chronological live timeline for the AreaChart
+			// Grab up to 360 most recent snapshots (30 cycles * 12 teams)
+			const recentSnapshots = await db
+				.select()
+				.from(elimsTeamSnapshots)
+				.orderBy(desc(elimsTeamSnapshots.capturedAt))
+				.limit(360);
+
+			// Group by timestamp (rounded to 5s slice so all teams in the same cycle share the same time slice)
+			const timelineMap = new Map<number, Record<string, unknown>>();
+
+			for (const s of recentSnapshots) {
+				const timeMs = s.capturedAt.getTime();
+				const sliceKey = Math.floor(timeMs / 5000) * 5000;
+				let point = timelineMap.get(sliceKey);
+				if (!point) {
+					const dateObj = new Date(sliceKey);
+					const timeLabel = new Intl.DateTimeFormat("en-GB", {
+						hour: "2-digit",
+						minute: "2-digit",
+						second: "2-digit",
+						timeZone: "UTC",
+					}).format(dateObj);
+
+					point = {
+						timestamp: dateObj.toISOString(),
+						timeLabel,
+						epoch: sliceKey,
+					};
+					timelineMap.set(sliceKey, point);
+				}
+
+				point[`${s.teamId}_active`] = s.activeCount;
+				point[`${s.teamId}_score`] = s.score;
+				point[`${s.teamId}_attacks`] = s.attacks;
+				point[`${s.teamId}_lives`] = s.lives;
+				point[`${s.teamId}_eliminated`] = s.eliminated;
+			}
+
+			// Sort chronological ascending (oldest to newest)
+			const liveTimeline = Array.from(timelineMap.entries())
+				.sort(([a], [b]) => a - b)
+				.map(([, pt]) => pt);
+
+			const teamReports = teams.map((team) => {
+				const currentHours =
+					teamCurrentMap.get(team.id) ?? new Array(24).fill(0);
+				const averageHours =
+					teamAverageMap.get(team.id) ?? new Array(24).fill(0);
+
+				let minHour = 0;
+				let maxHour = 0;
+				let minVal = Number.POSITIVE_INFINITY;
+				let maxVal = Number.NEGATIVE_INFINITY;
+				let total = 0;
+
+				for (let h = 0; h < 24; h++) {
+					const val = averageHours[h] ?? 0;
+					total += val;
+					if (val > 0 && val < minVal) {
+						minVal = val;
+						minHour = h;
+					}
+					if (val > maxVal) {
+						maxVal = val;
+						maxHour = h;
+					}
+				}
+
+				return {
+					teamId: team.id,
+					name: team.name,
+					score: team.score,
+					attacks: team.attacks,
+					membersCount: team.membersCount,
+					lives: team.lives,
+					wins: team.wins,
+					losses: team.losses,
+					position: team.position,
+					eliminated: team.eliminated,
+					eliminatedTimestamp: team.eliminatedTimestamp?.toISOString() ?? null,
+					isMock: team.isMock,
+					hourlyDistribution: averageHours,
+					currentHourly: currentHours,
+					averageHourly: averageHours,
+					leastActiveHour: minVal === Number.POSITIVE_INFINITY ? 0 : minHour,
+					mostActiveHour: maxVal === Number.NEGATIVE_INFINITY ? 0 : maxHour,
+					totalActivity: total,
+					lastSyncedAt: team.lastSyncedAt?.toISOString() ?? null,
+				};
+			});
+
+			const keyPool = await getElimsKeyPool();
+			const isMock = teams.some((t) => t.isMock);
+
+			return {
+				teams: teamReports,
+				benchmarkHourly,
+				liveTimeline,
+				isMock,
+				keyCount: keyPool.length,
+				lastSyncedAt: teams[0]?.lastSyncedAt?.toISOString() ?? null,
+			};
+		},
+		{
+			detail: {
+				summary: "Get Elimination Hourly Activity",
+				description:
+					"Returns hourly distribution of activity per team vs other teams across 0-24h TCT.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/teams/sync ────────────────────────────────────────
+	.post(
+		"/teams/sync",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const res = await requestSchedulerAction<{
+				success?: boolean;
+				error?: string;
+			}>("elims_sync_teams_request", {}, 15000);
+
+			if (res?.error) {
+				set.status = 500;
+				return { error: res.error };
+			}
+
+			return { success: true, message: "Sync command executed." };
+		},
+		{
+			detail: {
+				summary: "Trigger Elimination Teams Sync",
+				description:
+					"Triggers the Scheduler worker to immediately run a collection cycle.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/guild-roles ────────────────────────────────────────
+	.get(
+		"/guild-roles",
+		async ({ user, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = configData?.guildId;
+
+			if (!guildId) {
+				return { roles: [] };
+			}
+
+			const botToken = env.DISCORD_TOKEN;
+			if (!botToken) {
+				return { roles: [] };
+			}
+
+			const roles = await fetchDiscordApi<DiscordRole[]>(
+				`/guilds/${guildId}/roles`,
+				`Bot ${botToken}`,
+			);
+
+			if (!roles) {
+				return { roles: [] };
+			}
+
+			const selectableRoles = roles
+				.filter((r) => r.id !== guildId && r.name !== "@everyone")
+				.sort((a, b) => b.position - a.position)
+				.map((r) => ({
+					id: r.id,
+					name: r.name,
+					color: r.color,
+					position: r.position,
+					managed: r.managed,
+				}));
+
+			return { roles: selectableRoles };
+		},
+		{
+			detail: {
+				summary: "Get Configured Guild Roles",
+				description: "Returns roles for the currently active Elims guild.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/team-stats ─────────────────────────────────────────
+	.get(
+		"/team-stats",
+		async ({ query, user, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = configData?.guildId;
+
+			if (!guildId) {
+				return {
+					members: [],
+					summary: {
+						totalMembers: 0,
+						totalBs: 0,
+						avgBs: 0,
+						sources: {
+							premium: 0,
+							spies: 0,
+							bss: 0,
+							none: 0,
+							unlinked: 0,
+						},
+					},
+				};
+			}
+
+			// Query stored Discord member stats for this guild
+			const memberStatsRows = await db
+				.select()
+				.from(elimsMemberStats)
+				.where(eq(elimsMemberStats.guildId, guildId))
+				.orderBy(desc(elimsMemberStats.bsEstimate));
+
+			// Query tournament player records for Nine Lives (team 88)
+			const teamPlayers = await db
+				.select({
+					id: elimsTeamPlayers.id,
+					score: elimsTeamPlayers.score,
+					attacks: elimsTeamPlayers.attacks,
+				})
+				.from(elimsTeamPlayers)
+				.where(eq(elimsTeamPlayers.teamId, 88));
+
+			const playerStatsMap = new Map<
+				number,
+				{ score: number; attacks: number }
+			>();
+			for (const p of teamPlayers) {
+				playerStatsMap.set(p.id, {
+					score: p.score ?? 0,
+					attacks: p.attacks ?? 0,
+				});
+			}
+
+			// Map members strictly from fetched Discord members, attaching individual score & attacks with 0 fallback
+			const membersWithElims = memberStatsRows.map((m) => {
+				const p = m.tornId ? playerStatsMap.get(m.tornId) : null;
+				return {
+					...m,
+					score: p?.score ?? 0,
+					attacks: p?.attacks ?? 0,
+					lastFetchedAt: (m.lastFetchedAt ?? new Date()).toISOString(),
+				};
+			});
+
+			// Apply search filter
+			let filtered = membersWithElims;
+			if (query.search?.trim()) {
+				const s = query.search.trim().toLowerCase();
+				filtered = filtered.filter((r) => {
+					const nameMatch = r.tornName?.toLowerCase().includes(s);
+					const nickMatch = r.discordNickname?.toLowerCase().includes(s);
+					const idMatch =
+						r.tornId?.toString().includes(s) || r.discordId?.includes(s);
+					return Boolean(nameMatch || nickMatch || idMatch);
+				});
+			}
+
+			// Apply role filter
+			const targetRole = query.roleId;
+			if (targetRole && targetRole !== "all") {
+				filtered = filtered.filter(
+					(r) => Array.isArray(r.roles) && r.roles.includes(targetRole),
+				);
+			}
+
+			// Apply source filter
+			if (query.source && query.source !== "all") {
+				filtered = filtered.filter((r) => r.source === query.source);
+			}
+
+			let totalBs = 0;
+			let bsCount = 0;
+			const sources = {
+				premium: 0,
+				spies: 0,
+				bss: 0,
+				none: 0,
+				unlinked: 0,
+			};
+
+			for (const r of filtered) {
+				if (typeof r.bsEstimate === "number" && r.bsEstimate > 0) {
+					totalBs += r.bsEstimate;
+					bsCount++;
+				}
+				const src = (r.source ?? "none") as keyof typeof sources;
+				if (src in sources) {
+					sources[src]++;
+				} else {
+					sources.none++;
+				}
+			}
+
+			const avgBs = bsCount > 0 ? Math.round(totalBs / bsCount) : 0;
+
+			return {
+				members: filtered,
+				summary: {
+					totalMembers: filtered.length,
+					totalBs,
+					avgBs,
+					estimatedMembers: bsCount,
+					sources,
+				},
+			};
+		},
+		{
+			query: t.Object({
+				search: t.Optional(t.String()),
+				roleId: t.Optional(t.String()),
+				source: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Get Team Member Stats Breakdown",
+				description:
+					"Returns stored member stats with BS estimates, spy details, and stat distributions.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/team-stats/fetch ───────────────────────────────────
+	.post(
+		"/team-stats/fetch",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const guildId = configData?.guildId;
+
+			if (!guildId) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const res = await requestSchedulerAction<{
+				total?: number;
+				newProcessed?: number;
+				resolved?: number;
+				ffScouterHits?: number;
+				error?: string;
+				message?: string;
+			}>(
+				"elims_fetch_member_stats_request",
+				{
+					guildId,
+					roleId: body?.roleId,
+					forceRefresh: body?.forceRefresh,
+				},
+				60000,
+			);
+
+			if (res?.error) {
+				set.status = 500;
+				return { error: res.error };
+			}
+
+			return {
+				success: true,
+				total: res?.total ?? 0,
+				newProcessed: res?.newProcessed ?? 0,
+				resolved: res?.resolved ?? 0,
+				ffScouterHits: res?.ffScouterHits ?? 0,
+				message:
+					res?.message ?? `Processed ${res?.newProcessed ?? 0} member(s).`,
+			};
+		},
+		{
+			body: t.Optional(
+				t.Object({
+					roleId: t.Optional(t.String()),
+					forceRefresh: t.Optional(t.Boolean()),
+				}),
+			),
+			detail: {
+				summary: "Fetch Member Stats",
+				description:
+					"Triggers the Scheduler to fetch member stats for new members with role X.",
 			},
 		},
 	);

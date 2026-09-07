@@ -5,7 +5,12 @@ import type {
 } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
-import { resolveElimsUser, verifyElimsKey } from "../../workers/elimination";
+import {
+	resolveElimsUser,
+	runElimsTrackingCycle,
+	syncTeamMemberStats,
+	verifyElimsKey,
+} from "../../workers/elimination";
 import { reinitializeBattlestatsLedger } from "../../workers/personal/battlestats";
 import { reinitializeCrimeLedger } from "../../workers/personal/crimes";
 import { requestResetLogManager } from "../../workers/personal/log-manager";
@@ -255,6 +260,73 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 								err instanceof Error
 									? err.message
 									: "Torn API verification failed.",
+						},
+					});
+				}
+				return;
+			}
+
+			if (
+				message.action === "elims_fetch_member_stats_request" &&
+				message.requestId &&
+				message.data
+			) {
+				try {
+					const result = await syncTeamMemberStats({
+						guildId: message.data.guildId,
+						roleId: message.data.roleId,
+						forceRefresh: message.data.forceRefresh,
+					});
+					ipcServer.broadcast({
+						action: "elims_fetch_member_stats_response",
+						requestId: message.requestId,
+						data: result,
+					});
+				} catch (err) {
+					logger.error("Elims member stats sync failed via IPC:", err);
+					ipcServer.broadcast({
+						action: "elims_fetch_member_stats_response",
+						requestId: message.requestId,
+						data: {
+							total: 0,
+							newProcessed: 0,
+							resolved: 0,
+							ffScouterHits: 0,
+							error:
+								err instanceof Error
+									? err.message
+									: "Failed to sync member stats.",
+						},
+					});
+				}
+				return;
+			}
+
+			if (message.action === "elims_sync_teams_request" && message.requestId) {
+				try {
+					await runElimsTrackingCycle();
+					ipcServer.broadcast({
+						action: "elims_sync_teams_response",
+						requestId: message.requestId,
+						data: {
+							success: true,
+							isMock: false,
+							teamsCount: 12,
+						},
+					});
+				} catch (err) {
+					logger.error("Elims teams sync failed via IPC:", err);
+					ipcServer.broadcast({
+						action: "elims_sync_teams_response",
+						requestId: message.requestId,
+						data: {
+							success: false,
+							isMock: false,
+							teamsCount: 0,
+							error:
+								err instanceof Error
+									? err.message
+									: "Failed to sync elims teams.",
 						},
 					});
 				}

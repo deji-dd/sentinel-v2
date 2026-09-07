@@ -52,6 +52,7 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterAll(async () => {
+		schedulerEvents.removeAllListeners();
 		if (originalState) {
 			await db
 				.insert(systemStates)
@@ -78,6 +79,7 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterEach(async () => {
+		schedulerEvents.removeAllListeners();
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db
 			.delete(battlestatsLedgers)
@@ -416,8 +418,8 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		expect((spdTotal?.totalGained ?? 0) >= 400).toBe(true);
 	});
 
-	test("listens to logs_inserted event and processes battlestats logs", async () => {
-		startBattlestatsLedger();
+	test("listens to logs_inserted event and processes battlestats gain logs", async () => {
+		startBattlestatsLedger({ initialDelayMs: 60_000 });
 
 		const eventLog: UserLog = {
 			id: LOG_ID_4 as unknown as string,
@@ -436,12 +438,16 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 
 		schedulerEvents.emit("logs_inserted", [eventLog]);
 
-		// Give async event listener microtask a moment to write to DB
-		await new Promise((resolve) => setTimeout(resolve, 100));
-
-		const record = await db.query.battlestatsLedgers.findFirst({
-			where: eq(battlestatsLedgers.id, LOG_ID_4),
-		});
+		// Wait for async event listener to finish writing to DB (poll up to 3s)
+		let record: typeof battlestatsLedgers.$inferSelect | undefined;
+		const start = Date.now();
+		while (Date.now() - start < 3000) {
+			record = await db.query.battlestatsLedgers.findFirst({
+				where: eq(battlestatsLedgers.id, LOG_ID_4),
+			});
+			if (record) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
 
 		expect(record).toBeDefined();
 		expect(record?.statType).toBe("strength");

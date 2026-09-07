@@ -132,6 +132,74 @@ export async function getNextGuildKey(
 }
 
 /**
+ * Fetches all available active tournament keys (all valid elimsApiKeys across guilds or for a specific guild,
+ * combined with valid system keys from apiKeys).
+ */
+export async function getElimsKeyPool(
+	guildId?: string,
+): Promise<ManagedApiKey[]> {
+	const masterKey = process.env.ENCRYPTION_KEY ?? "";
+	const seenKeys = new Set<string>();
+	const pool: ManagedApiKey[] = [];
+
+	const whereCondition = guildId
+		? and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true))
+		: eq(elimsApiKeys.isValid, true);
+
+	const guildKeys = await db
+		.select()
+		.from(elimsApiKeys)
+		.where(whereCondition)
+		.orderBy(elimsApiKeys.lastUsedAt);
+
+	for (const k of guildKeys) {
+		const rawKey =
+			k.apiKeyEncrypted.length > 16 && masterKey
+				? decryptApiKey(k.apiKeyEncrypted, masterKey)
+				: k.apiKeyEncrypted;
+
+		if (
+			!seenKeys.has(rawKey) &&
+			!tornApi.keyHealthManager.isKeyTemporarilyDisabled(rawKey)
+		) {
+			seenKeys.add(rawKey);
+			pool.push({
+				apiKey: rawKey,
+				userId: k.tornId,
+				keyType: "guild",
+			});
+		}
+	}
+
+	try {
+		const systemKeys = await db.query.apiKeys.findMany({
+			where: and(eq(apiKeys.isValid, true), eq(apiKeys.keyType, "system")),
+		});
+
+		for (const k of systemKeys) {
+			const rawKey =
+				k.apiKeyEncrypted.length > 16 && masterKey
+					? decryptApiKey(k.apiKeyEncrypted, masterKey)
+					: k.apiKeyEncrypted;
+
+			if (
+				!seenKeys.has(rawKey) &&
+				!tornApi.keyHealthManager.isKeyTemporarilyDisabled(rawKey)
+			) {
+				seenKeys.add(rawKey);
+				pool.push({
+					apiKey: rawKey,
+					userId: k.userId,
+					keyType: "system",
+				});
+			}
+		}
+	} catch {}
+
+	return pool;
+}
+
+/**
  * Returns the personal API key record for the repository owner.
  * Checks the database first for an active key marked as 'personal',
  * and falls back to process.env.TORN_API_KEY.

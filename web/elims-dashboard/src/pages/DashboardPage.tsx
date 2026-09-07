@@ -3,9 +3,11 @@ import type { DashboardView } from "@/components/AppSidebar";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";
+import { ElimsReportPage } from "./ElimsReportPage";
 import { GiveawaysPage } from "./GiveawaysPage";
 import { GuildConfigPage } from "./GuildConfigPage";
 import { ItemRequestsPage } from "./ItemRequestsPage";
+import { TeamBreakdownPage } from "./TeamBreakdownPage";
 
 export function DashboardPage() {
 	const { isOwner } = useElims();
@@ -15,6 +17,12 @@ export function DashboardPage() {
 	const determineInitialView = (): DashboardView => {
 		if (path === "/guild-config") {
 			return "guild-config";
+		}
+		if (path === "/elims-report") {
+			return "elims-report";
+		}
+		if (path === "/team-breakdown") {
+			return "team-breakdown";
 		}
 		if (path === "/item-requests") {
 			return "item-requests";
@@ -32,14 +40,17 @@ export function DashboardPage() {
 	useEffect(() => {
 		if (path === "/guild-config") {
 			setActiveView("guild-config");
+		} else if (path === "/elims-report") {
+			setActiveView("elims-report");
+		} else if (path === "/team-breakdown") {
+			setActiveView("team-breakdown");
 		} else if (path === "/item-requests") {
 			setActiveView("item-requests");
 		} else if (path === "/giveaways") {
 			setActiveView("giveaways");
 		} else if (path === "/overview") {
-			// Overview is disabled & inaccessible, redirect to item-requests
-			navigate("/item-requests");
-			setActiveView("item-requests");
+			navigate("/elims-report");
+			setActiveView("elims-report");
 		} else if (path === "/") {
 			const target = isOwner ? "/guild-config" : "/item-requests";
 			navigate(target);
@@ -56,6 +67,10 @@ export function DashboardPage() {
 		<DashboardLayout activeView={activeView} onSelectView={handleSelectView}>
 			{activeView === "guild-config" ? (
 				<GuildConfigPage />
+			) : activeView === "elims-report" ? (
+				<ElimsReportPage />
+			) : activeView === "team-breakdown" ? (
+				<TeamBreakdownPage />
 			) : activeView === "giveaways" ? (
 				<GiveawaysPage />
 			) : (

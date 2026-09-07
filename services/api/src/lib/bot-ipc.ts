@@ -45,6 +45,71 @@ export function notifyBotAction(
 }
 
 /**
+ * Sends a request-response IPC message to the Scheduler worker over its Unix domain socket.
+ */
+export function requestSchedulerAction<T = unknown>(
+	action: string,
+	data?: Record<string, unknown>,
+	timeoutMs = 60000,
+): Promise<T | null> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+		const client = net.createConnection(IPC_SOCKET_PATHS.worker);
+		let buffer = "";
+
+		const finish = (result: T | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			client.destroy();
+			resolve(result);
+		};
+
+		const timer = setTimeout(() => {
+			logger.warn(`Scheduler IPC request timed out for action ${action}`);
+			finish(null);
+		}, timeoutMs);
+
+		client.on("connect", () => {
+			client.write(
+				`${JSON.stringify({ action, requestId, ...(data ? { data } : {}) })}\n`,
+			);
+		});
+
+		client.on("data", (chunk) => {
+			buffer += chunk.toString("utf8");
+			let idx = buffer.indexOf("\n");
+			while (idx !== -1) {
+				const line = buffer.slice(0, idx).trim();
+				buffer = buffer.slice(idx + 1);
+				if (line) {
+					try {
+						const msg = JSON.parse(line) as {
+							requestId?: string;
+							data?: T;
+						};
+						if (msg.requestId === requestId) {
+							finish(msg.data ?? null);
+							return;
+						}
+					} catch {}
+				}
+				idx = buffer.indexOf("\n");
+			}
+		});
+
+		client.on("error", (err) => {
+			logger.warn(
+				`Could not reach scheduler via IPC (${action}):`,
+				err.message,
+			);
+			finish(null);
+		});
+	});
+}
+
+/**
  * Dispatches an IPC signal to the Bot to re-synchronize its registered slash commands
  * for the given guild.
  */

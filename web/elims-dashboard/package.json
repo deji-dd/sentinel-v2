@@ -23,6 +23,7 @@
 		"radix-ui": "latest",
 		"react": "latest",
 		"react-dom": "latest",
+		"recharts": "^3.10.1",
 		"sonner": "latest",
 		"tailwind-merge": "latest",
 		"tw-animate-css": "latest"

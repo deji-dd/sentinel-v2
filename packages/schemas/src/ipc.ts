@@ -319,6 +319,44 @@ export type IpcElimsVerifyKeyResponseMessage = {
 	};
 };
 
+export type IpcElimsFetchMemberStatsRequestMessage = {
+	action: "elims_fetch_member_stats_request";
+	requestId: string;
+	data: {
+		guildId: string;
+		roleId?: string;
+		forceRefresh?: boolean;
+	};
+};
+
+export type IpcElimsFetchMemberStatsResponseMessage = {
+	action: "elims_fetch_member_stats_response";
+	requestId: string;
+	data: {
+		total: number;
+		newProcessed: number;
+		resolved: number;
+		ffScouterHits: number;
+		error?: string;
+	};
+};
+
+export type IpcElimsSyncTeamsRequestMessage = {
+	action: "elims_sync_teams_request";
+	requestId: string;
+};
+
+export type IpcElimsSyncTeamsResponseMessage = {
+	action: "elims_sync_teams_response";
+	requestId: string;
+	data: {
+		success: boolean;
+		isMock: boolean;
+		teamsCount: number;
+		error?: string;
+	};
+};
+
 export type IpcReinitializeCrimeLedgerMessage = {
 	action: "reinitialize_crime_ledger";
 	data?: Record<string, unknown>;
@@ -456,6 +494,10 @@ export type IpcMessage =
 	| IpcElimsResolveUserResponseMessage
 	| IpcElimsVerifyKeyRequestMessage
 	| IpcElimsVerifyKeyResponseMessage
+	| IpcElimsFetchMemberStatsRequestMessage
+	| IpcElimsFetchMemberStatsResponseMessage
+	| IpcElimsSyncTeamsRequestMessage
+	| IpcElimsSyncTeamsResponseMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

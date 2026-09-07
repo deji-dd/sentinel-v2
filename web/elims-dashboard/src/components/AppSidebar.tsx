@@ -1,4 +1,4 @@
-import { Gift, LayoutDashboard, LogOut, Package, Sliders } from "lucide-react";
+import { BarChart2, Gift, LogOut, Package, Sliders, Users } from "lucide-react";
 import type * as React from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -13,7 +13,6 @@ import {
 	SidebarGroupLabel,
 	SidebarHeader,
 	SidebarMenu,
-	SidebarMenuBadge,
 	SidebarMenuButton,
 	SidebarMenuItem,
 	SidebarRail,
@@ -25,6 +24,8 @@ import { useRouter } from "../router";
 export type DashboardView =
 	| "overview"
 	| "guild-config"
+	| "elims-report"
+	| "team-breakdown"
 	| "item-requests"
 	| "giveaways";
 
@@ -77,7 +78,7 @@ export function AppSidebar({
 				{/* Administration */}
 				<SidebarGroup>
 					<SidebarGroupLabel className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground px-2">
-						Server Administration
+						Admin
 					</SidebarGroupLabel>
 					<SidebarGroupContent>
 						<SidebarMenu>
@@ -102,10 +103,40 @@ export function AppSidebar({
 				{/* Tournament Operations */}
 				<SidebarGroup>
 					<SidebarGroupLabel className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground px-2">
-						Tournament Operations
+						Elims
 					</SidebarGroupLabel>
 					<SidebarGroupContent>
 						<SidebarMenu>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									isActive={activeView === "elims-report"}
+									onClick={() => {
+										onSelectView("elims-report");
+										navigate("/elims-report");
+									}}
+									tooltip="Elims Report"
+									className="cursor-pointer"
+								>
+									<BarChart2 data-icon="inline-start" />
+									<span>Elims Report</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									isActive={activeView === "team-breakdown"}
+									onClick={() => {
+										onSelectView("team-breakdown");
+										navigate("/team-breakdown");
+									}}
+									tooltip="Team Breakdown"
+									className="cursor-pointer"
+								>
+									<Users data-icon="inline-start" />
+									<span>Team Breakdown</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+
 							<SidebarMenuItem>
 								<SidebarMenuButton
 									isActive={activeView === "item-requests"}
@@ -133,20 +164,6 @@ export function AppSidebar({
 								>
 									<Gift data-icon="inline-start" />
 									<span>Giveaways</span>
-								</SidebarMenuButton>
-							</SidebarMenuItem>
-
-							<SidebarMenuItem>
-								<SidebarMenuButton
-									disabled
-									tooltip="Operations Overview (Coming Soon)"
-									className="opacity-60 cursor-not-allowed pointer-events-none"
-								>
-									<LayoutDashboard data-icon="inline-start" />
-									<span>Overview</span>
-									<SidebarMenuBadge className="text-[9px] font-mono font-normal">
-										Soon
-									</SidebarMenuBadge>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>

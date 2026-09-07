@@ -1,6 +1,7 @@
 import { Logger } from "@sentinel/utils";
 import { startFactionMonitoring } from "./bot/monitoring";
 import { startVerification } from "./bot/verification";
+import { startElimsTeamTracker } from "./elimination/team-tracker";
 import { startBattlestatsLedger } from "./personal/battlestats";
 import { startCompanySync } from "./personal/company";
 import { startCrimesLedger } from "./personal/crimes";
@@ -43,6 +44,7 @@ const WORKERS: WorkerStarter[] = [
 	startBattlestatsLedger,
 	startStocksLedger,
 	startCompanySync,
+	startElimsTeamTracker,
 	// startWealthModule,
 ];
 
