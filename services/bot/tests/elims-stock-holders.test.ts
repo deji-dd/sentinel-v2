@@ -10,6 +10,7 @@ import {
 	getUnassignedStock,
 	reclaimStockFromHolder,
 } from "@sentinel/database";
+import { resolveTornItem } from "../src/lib/elims-armory-storage";
 import { buildStockHolderItemEmbed } from "../src/lib/elims-stock-holders";
 
 describe("Elims Stock Holders Module", () => {
@@ -97,6 +98,56 @@ describe("Elims Stock Holders Module", () => {
 		const reclaimBtn = row.components[1];
 		expect(assignBtn?.data.disabled).toBe(false);
 		expect(reclaimBtn?.data.disabled).toBe(false);
+	});
+
+	test("buildStockHolderItemEmbed sets thumbnail from explicit image or numeric item id fallback", () => {
+		const embedWithExplicitImage = buildStockHolderItemEmbed({
+			item: {
+				id: testItemId,
+				name: testItemName,
+				image: "https://example.com/custom-image.png",
+			},
+			unassigned: 10,
+			totalAvailable: 10,
+			holders: [],
+		});
+		expect(embedWithExplicitImage.embed.data.thumbnail?.url).toBe(
+			"https://example.com/custom-image.png",
+		);
+
+		const embedWithNumericId = buildStockHolderItemEmbed({
+			item: {
+				id: "814",
+				name: "Tyrosine",
+			},
+			unassigned: 1,
+			totalAvailable: 1,
+			holders: [],
+		});
+		expect(embedWithNumericId.embed.data.thumbnail?.url).toBe(
+			"https://www.torn.com/images/items/814/large.png",
+		);
+	});
+
+	test("resolveTornItem resolves images from whitelisted items and Torn CDN", async () => {
+		// From allowedItems
+		const fromAllowed = await resolveTornItem("Tyrosine", [
+			{
+				id: "814",
+				name: "Tyrosine",
+				category: "Weapon",
+				image: "https://www.torn.com/images/items/814/large.png",
+			},
+		]);
+		expect(fromAllowed.image).toBe(
+			"https://www.torn.com/images/items/814/large.png",
+		);
+
+		// Fallback for numeric ID item
+		const fallbackNumeric = await resolveTornItem("814", []);
+		expect(fallbackNumeric.image).toBe(
+			"https://www.torn.com/images/items/814/large.png",
+		);
 	});
 
 	test("buildStockHolderItemEmbed disables buttons when appropriate", () => {

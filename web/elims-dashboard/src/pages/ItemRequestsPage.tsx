@@ -1930,24 +1930,8 @@ export function ItemRequestsPage() {
 									<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
 										<div>
 											<CardTitle className="text-base font-semibold flex items-center gap-2">
-												<Package className="size-4 text-primary" />
 												<span>Requestable Items (In Stock)</span>
 											</CardTitle>
-											<p className="text-xs text-muted-foreground mt-0.5">
-												Armory inventory items are available by default. Toggle
-												off items to disable requests.
-											</p>
-										</div>
-										<div className="flex items-center gap-1.5 flex-wrap">
-											<Badge
-												variant="outline"
-												className="font-mono text-xs border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
-											>
-												{enabledCount} enabled
-											</Badge>
-											<Badge variant="secondary" className="font-mono text-xs">
-												{inStockCount} in stock
-											</Badge>
 										</div>
 									</div>
 								</CardHeader>

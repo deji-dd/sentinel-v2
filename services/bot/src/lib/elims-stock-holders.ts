@@ -116,8 +116,15 @@ export function buildStockHolderItemEmbed(params: {
 			},
 		);
 
-	if (item.image) {
-		embed.setThumbnail(item.image);
+	const resolvedImage =
+		item.image && item.image.trim().length > 0
+			? item.image.trim()
+			: item.id && !Number.isNaN(Number(item.id))
+				? `https://www.torn.com/images/items/${item.id}/large.png`
+				: undefined;
+
+	if (resolvedImage) {
+		embed.setThumbnail(resolvedImage);
 	}
 
 	if (holders.length > 0) {
@@ -293,30 +300,50 @@ async function performStockHoldersChannelSync(
 
 		// 2. Post or edit embeds for all active items
 		for (const itemId of activeItemIds) {
+			const itemStock = stockMap.get(itemId);
 			const whitelisted = allowedItems.find(
-				(i) => i.id.toLowerCase() === itemId.toLowerCase(),
+				(i) =>
+					i.id.toLowerCase() === itemId.toLowerCase() ||
+					i.name.trim().toLowerCase() === itemId.trim().toLowerCase() ||
+					(itemStock &&
+						i.name.trim().toLowerCase() ===
+							itemStock.itemName.trim().toLowerCase()),
 			);
-			const itemStock =
-				stockMap.get(itemId) ??
+			const resolvedStock =
+				itemStock ??
 				(whitelisted
-					? stockMap.get(whitelisted.name.trim().toLowerCase())
+					? (stockMap.get(whitelisted.id) ??
+						stockMap.get(whitelisted.name.trim().toLowerCase()))
 					: undefined);
 			const itemInfo = await resolveTornItem(
-				whitelisted?.name ?? itemStock?.itemName ?? itemId,
+				whitelisted?.name ?? resolvedStock?.itemName ?? itemId,
 				allowedItems,
 			);
 
-			const holders = holdersByItem.get(itemId) ?? [];
-			const totalAvailable = itemStock?.available ?? 0;
+			const holders =
+				holdersByItem.get(itemId) ??
+				(whitelisted ? holdersByItem.get(whitelisted.id) : undefined) ??
+				(itemInfo.id ? holdersByItem.get(itemInfo.id) : undefined) ??
+				[];
+			const totalAvailable = resolvedStock?.available ?? 0;
 			const totalAllocated = holders.reduce((acc, h) => acc + h.quantity, 0);
 			const unassigned = Math.max(0, totalAvailable - totalAllocated);
+
+			const resolvedImage =
+				whitelisted?.image ??
+				itemInfo.image ??
+				(itemInfo.id && !Number.isNaN(Number(itemInfo.id))
+					? `https://www.torn.com/images/items/${itemInfo.id}/large.png`
+					: itemId && !Number.isNaN(Number(itemId))
+						? `https://www.torn.com/images/items/${itemId}/large.png`
+						: undefined);
 
 			const { embed, row } = buildStockHolderItemEmbed({
 				item: {
 					id: itemId,
 					name: whitelisted?.name ?? itemInfo.name,
 					category: whitelisted?.category ?? itemInfo.category,
-					image: whitelisted?.image,
+					image: resolvedImage,
 				},
 				unassigned,
 				totalAvailable,

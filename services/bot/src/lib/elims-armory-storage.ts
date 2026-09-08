@@ -52,7 +52,7 @@ interface UnifiedStockItem {
 export async function resolveTornItem(
 	rawItemName: string,
 	allowedItems?: WhitelistedItem[],
-): Promise<{ id: string; name: string; category: string }> {
+): Promise<{ id: string; name: string; category: string; image?: string }> {
 	const trimmed = rawItemName.trim();
 	const lower = trimmed.toLowerCase();
 
@@ -61,11 +61,18 @@ export async function resolveTornItem(
 		(i) =>
 			i.id.toLowerCase() === lower || i.name.trim().toLowerCase() === lower,
 	);
+	const whitelistedImage =
+		whitelisted?.image ??
+		(whitelisted?.id && !Number.isNaN(Number(whitelisted.id))
+			? `https://www.torn.com/images/items/${whitelisted.id}/large.png`
+			: undefined);
+
 	if (whitelisted?.category && whitelisted.category !== "General") {
 		return {
 			id: whitelisted.id,
 			name: whitelisted.name,
 			category: whitelisted.category,
+			image: whitelistedImage,
 		};
 	}
 
@@ -89,10 +96,20 @@ export async function resolveTornItem(
 		if (row) {
 			const data = (row.data ?? {}) as Record<string, unknown>;
 			const rawType = (data.type ?? data.category ?? "General") as string;
+			const dbImage =
+				typeof data.image === "string" && data.image.length > 0
+					? data.image
+					: undefined;
+			const fallbackImage =
+				row.id && !Number.isNaN(Number(row.id))
+					? `https://www.torn.com/images/items/${row.id}/large.png`
+					: undefined;
+
 			return {
 				id: row.id,
 				name: row.name ?? whitelisted?.name ?? trimmed,
 				category: rawType || "General",
+				image: whitelistedImage ?? dbImage ?? fallbackImage,
 			};
 		}
 	} catch (err) {
@@ -100,10 +117,20 @@ export async function resolveTornItem(
 	}
 
 	// 3. Fallback to whitelisted item details or "external"/"General"
+	const fallbackId =
+		whitelisted?.id ??
+		(trimmed && !Number.isNaN(Number(trimmed)) ? trimmed : "external");
+	const fallbackImage =
+		whitelistedImage ??
+		(fallbackId && !Number.isNaN(Number(fallbackId))
+			? `https://www.torn.com/images/items/${fallbackId}/large.png`
+			: undefined);
+
 	return {
-		id: whitelisted?.id ?? "external",
+		id: fallbackId,
 		name: whitelisted?.name ?? trimmed,
 		category: whitelisted?.category ?? "General",
+		image: fallbackImage,
 	};
 }
 
