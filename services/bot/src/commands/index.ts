@@ -10,6 +10,7 @@ import { assaultCheckCommand } from "./assault-check";
 import { burnMapCommand } from "./burn-map";
 import { configCommand } from "./config";
 import { dashboardCommand } from "./dashboard";
+import { itemRequestHelpCommand } from "./item-request-help";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { ttSelectorCommand } from "./tt-selector";
@@ -57,6 +58,7 @@ export const elimsCommandsList: BotCommand[] = [
 	{ ...dashboardCommand, scope: "both" },
 	{ ...pingCommand, scope: "both" },
 	{ ...purgeCommand, scope: "both" },
+	{ ...itemRequestHelpCommand, scope: "elims" },
 ];
 
 // Global list of all known bot commands for the dispatcher collection
