@@ -1,5 +1,6 @@
 import {
 	and,
+	asc,
 	db,
 	deductHolderStock,
 	type ElimsItemRequestConfig,
@@ -49,23 +50,124 @@ import {
 const ELIMS_CONFIG_ID = "elims:guild_config";
 const ELIMS_ITEM_REQUESTS_CONFIG_ID = "elims:item_requests_config";
 
+export const XANAX_ITEM_ID = "206";
+const XANAX_REGEX = /\bxanax\b/i;
+const XANAX_HOURS_PER_ITEM = 6;
+const MS_PER_HOUR = 60 * 60 * 1000;
+const XANAX_COOLDOWN_PER_ITEM_MS = XANAX_HOURS_PER_ITEM * MS_PER_HOUR;
+
+export function isXanaxItem(itemId: string, itemName?: string): boolean {
+	if (itemId === XANAX_ITEM_ID) return true;
+	if (itemName && XANAX_REGEX.test(itemName)) return true;
+	return false;
+}
+
+export interface XanaxCooldownStatus {
+	isOnCooldown: boolean;
+	cooldownExpiresAt?: Date;
+	remainingMs?: number;
+	totalXanaxInCooldownWindow?: number;
+}
+
+/**
+ * Calculates the active Xanax cooldown for a user based on their approved Xanax requests.
+ * Every approved Xanax imposes a 6-hour cooldown (e.g. 3 Xanax = 18 hours).
+ * Applies retroactively to all past accepted requests.
+ */
+export async function getXanaxCooldownStatus(params: {
+	guildId: string;
+	discordUserId: string;
+	tornId?: number | null;
+	isTest?: boolean;
+	now?: Date;
+}): Promise<XanaxCooldownStatus> {
+	const userCondition = params.tornId
+		? or(
+				eq(elimsItemRequests.discordUserId, params.discordUserId),
+				eq(elimsItemRequests.tornId, params.tornId),
+			)
+		: eq(elimsItemRequests.discordUserId, params.discordUserId);
+
+	const approvedRequests = await db
+		.select({
+			id: elimsItemRequests.id,
+			quantity: elimsItemRequests.quantity,
+			handledAt: elimsItemRequests.handledAt,
+			updatedAt: elimsItemRequests.updatedAt,
+			createdAt: elimsItemRequests.createdAt,
+			itemId: elimsItemRequests.itemId,
+			itemName: elimsItemRequests.itemName,
+		})
+		.from(elimsItemRequests)
+		.where(
+			and(
+				eq(elimsItemRequests.guildId, params.guildId),
+				userCondition,
+				eq(elimsItemRequests.status, "accepted"),
+				eq(elimsItemRequests.isTest, params.isTest ?? false),
+			),
+		)
+		.orderBy(
+			asc(elimsItemRequests.handledAt),
+			asc(elimsItemRequests.updatedAt),
+			asc(elimsItemRequests.createdAt),
+		);
+
+	const nowMs = (params.now ?? new Date()).getTime();
+	let currentCooldownEnd = 0;
+	let totalXanaxCounted = 0;
+
+	for (const req of approvedRequests) {
+		if (!isXanaxItem(req.itemId, req.itemName)) {
+			continue;
+		}
+
+		// Fallback chain ensures historical requests before this update are covered
+		const approvalTime = (
+			req.handledAt ??
+			req.updatedAt ??
+			req.createdAt
+		).getTime();
+		const quantity = req.quantity;
+		const cooldownDurationMs = quantity * XANAX_COOLDOWN_PER_ITEM_MS;
+
+		const start = Math.max(approvalTime, currentCooldownEnd);
+		currentCooldownEnd = start + cooldownDurationMs;
+		totalXanaxCounted += quantity;
+	}
+
+	if (currentCooldownEnd > nowMs) {
+		const remainingMs = currentCooldownEnd - nowMs;
+		return {
+			isOnCooldown: true,
+			cooldownExpiresAt: new Date(currentCooldownEnd),
+			remainingMs,
+			totalXanaxInCooldownWindow: totalXanaxCounted,
+		};
+	}
+
+	return {
+		isOnCooldown: false,
+	};
+}
+
 export type { ResolvedElimsUser, UserCompetitionElimination };
 
 /**
- * Computes unified approved item history for a requester in a guild.
- * Differentiates between test mode and live mode.
+ * Computes unified item history (approved or rejected) for a requester in a guild.
  * Combines quantities of the same item into unified totals (e.g. 10x Xanax instead of 5x Xanax, 5x Xanax).
  */
-export async function getRequesterApprovedHistory(
+export async function getRequesterHistory(
 	guildId: string,
 	discordUserId: string,
-	isTest: boolean,
+	status: "accepted" | "rejected",
+	isTest = false,
 	currentRequestId?: string,
 ): Promise<{ fieldName: string; fieldValue: string }> {
 	const conditions = [
 		eq(elimsItemRequests.guildId, guildId),
 		eq(elimsItemRequests.discordUserId, discordUserId),
-		eq(elimsItemRequests.status, "accepted"),
+		eq(elimsItemRequests.status, status),
 		eq(elimsItemRequests.isTest, isTest),
 	];
 
@@ -73,7 +175,7 @@ export async function getRequesterApprovedHistory(
 		conditions.push(ne(elimsItemRequests.id, currentRequestId));
 	}
 
-	const approvedRequests = await db
+	const requests = await db
 		.select({
 			itemName: elimsItemRequests.itemName,
 			quantity: elimsItemRequests.quantity,
@@ -81,9 +183,10 @@ export async function getRequesterApprovedHistory(
 		.from(elimsItemRequests)
 		.where(and(...conditions));
 
-	const fieldName = `Approved History`;
+	const fieldName =
+		status === "accepted" ? "Approved History" : "Rejected History";
 
-	if (approvedRequests.length === 0) {
+	if (requests.length === 0) {
 		return {
 			fieldName,
 			fieldValue: "None",
@@ -96,7 +199,7 @@ export async function getRequesterApprovedHistory(
 	>();
 	let totalAmount = 0;
 
-	for (const req of approvedRequests) {
+	for (const req of requests) {
 		const key = req.itemName.trim().toLowerCase();
 		const existing = itemTotals.get(key);
 		if (existing) {
@@ -127,6 +230,44 @@ export async function getRequesterApprovedHistory(
 		fieldName,
 		fieldValue,
 	};
+}
+
+/**
+ * Computes unified approved item history for a requester in a guild.
+ * Combines quantities of the same item into unified totals (e.g. 10x Xanax instead of 5x Xanax, 5x Xanax).
+ */
+export async function getRequesterApprovedHistory(
+	guildId: string,
+	discordUserId: string,
+	isTest = false,
+	currentRequestId?: string,
+): Promise<{ fieldName: string; fieldValue: string }> {
+	return getRequesterHistory(
+		guildId,
+		discordUserId,
+		"accepted",
+		isTest,
+		currentRequestId,
+	);
+}
+
+/**
+ * Computes unified rejected item history for a requester in a guild.
+ * Combines quantities of the same item into unified totals.
+ */
+export async function getRequesterRejectedHistory(
+	guildId: string,
+	discordUserId: string,
+	isTest = false,
+	currentRequestId?: string,
+): Promise<{ fieldName: string; fieldValue: string }> {
+	return getRequesterHistory(
+		guildId,
+		discordUserId,
+		"rejected",
+		isTest,
+		currentRequestId,
+	);
 }
 
 /**
@@ -565,6 +706,37 @@ export async function handleItemRequestItemSelect(
 			return;
 		}
 
+		// Guard: 6-hour cooldown per approved item for Xanax
+		if (isXanaxItem(selectedItem.id, selectedItem.name)) {
+			const resolvedUser = await resolveElimsUser(
+				interaction.user.id,
+				interaction.guildId,
+			);
+			const cooldownCheck = await getXanaxCooldownStatus({
+				guildId: interaction.guildId,
+				discordUserId: interaction.user.id,
+				tornId: resolvedUser?.tornId ?? null,
+			});
+
+			if (cooldownCheck.isOnCooldown && cooldownCheck.cooldownExpiresAt) {
+				const expiresTimestamp = Math.floor(
+					cooldownCheck.cooldownExpiresAt.getTime() / 1000,
+				);
+				const embed = createErrorEmbed(
+					"Xanax Cooldown Active",
+					`You cannot request **${itemName}** right now.\n\n` +
+						`Each approved Xanax incurs a **6-hour cooldown** before you can submit another request.\n\n` +
+						`• **Available Again**: <t:${expiresTimestamp}:F> (<t:${expiresTimestamp}:R>)\n\n` +
+						`Please wait until your cooldown expires before requesting Xanax again.`,
+				);
+				await interaction.reply({
+					embeds: [embed],
+					flags: MessageFlags.Ephemeral,
+				});
+				return;
+			}
+		}
+
 		const maxNote = selectedItem.maxRequestable
 			? ` (Max: ${selectedItem.maxRequestable})`
 			: "";
@@ -722,6 +894,33 @@ export async function handleItemRequestModalSubmit(
 			return;
 		}
 
+		// Guard: 6-hour cooldown per approved item for Xanax
+		if (isXanaxItem(item.id, item.name)) {
+			const cooldownCheck = await getXanaxCooldownStatus({
+				guildId: interaction.guildId,
+				discordUserId: interaction.user.id,
+				tornId: resolvedUser?.tornId ?? null,
+			});
+
+			if (cooldownCheck.isOnCooldown && cooldownCheck.cooldownExpiresAt) {
+				const expiresTimestamp = Math.floor(
+					cooldownCheck.cooldownExpiresAt.getTime() / 1000,
+				);
+				const embed = createErrorEmbed(
+					"Xanax Cooldown Active",
+					`You cannot request **${item.name}** right now.\n\n` +
+						`Each approved Xanax incurs a **6-hour cooldown** before you can submit another request.\n\n` +
+						`• **Available Again**: <t:${expiresTimestamp}:F> (<t:${expiresTimestamp}:R>)\n\n` +
+						`Please wait until your cooldown expires before requesting Xanax again.`,
+				);
+				await interaction.reply({
+					embeds: [embed],
+					flags: MessageFlags.Ephemeral,
+				});
+				return;
+			}
+		}
+
 		const [createdRequest] = await db
 			.insert(elimsItemRequests)
 			.values({
@@ -765,8 +964,14 @@ export async function handleItemRequestModalSubmit(
 				.catch(() => null);
 
 			if (grantingChannel && grantingChannel instanceof TextChannel) {
-				const [history, stockMap] = await Promise.all([
+				const [approvedHistory, rejectedHistory, stockMap] = await Promise.all([
 					getRequesterApprovedHistory(
+						interaction.guildId,
+						interaction.user.id,
+						isTest,
+						createdRequest.id,
+					),
+					getRequesterRejectedHistory(
 						interaction.guildId,
 						interaction.user.id,
 						isTest,
@@ -780,12 +985,8 @@ export async function handleItemRequestModalSubmit(
 				const availableStock = itemStock?.available ?? 0;
 
 				const grantEmbed = new EmbedBuilder()
-					.setTitle(
-						isTest
-							? `[TEST] Item Request — ${item.name} x${quantity}`
-							: `Item Request — ${item.name} x${quantity}`,
-					)
-					.setColor(isTest ? EMBED_COLORS.WARNING : 0xf59e0b) // Amber for pending
+					.setTitle(`Item Request — ${item.name} x${quantity}`)
+					.setColor(0xf59e0b) // Amber for pending
 					.addFields(
 						{
 							name: "Requester",
@@ -838,11 +1039,18 @@ export async function handleItemRequestModalSubmit(
 					});
 				}
 
-				grantEmbed.addFields({
-					name: history.fieldName,
-					value: history.fieldValue,
-					inline: false,
-				});
+				grantEmbed.addFields(
+					{
+						name: approvedHistory.fieldName,
+						value: approvedHistory.fieldValue,
+						inline: true,
+					},
+					{
+						name: rejectedHistory.fieldName,
+						value: rejectedHistory.fieldValue,
+						inline: true,
+					},
+				);
 
 				grantEmbed.setFooter({
 					text: `Sentinel`,
@@ -905,7 +1113,7 @@ export async function handleItemRequestModalSubmit(
 }
 
 /**
- * Handles Approve / Reject / Mark as Test buttons in the Granting Channel.
+ * Handles Approve / Reject buttons in the Granting Channel.
  */
 export async function handleItemGrantingButton(
 	interaction: ButtonInteraction,
@@ -973,7 +1181,7 @@ export async function handleItemGrantingButton(
 			return;
 		}
 
-		if (actionType !== "elims_grant_test" && request.status !== "pending") {
+		if (request.status !== "pending") {
 			const embed = createErrorEmbed(
 				"Request Already Resolved",
 				`This request has already been ${request.status} by ${request.handledByUsername ?? "an officer"}.`,
@@ -1069,106 +1277,6 @@ export async function handleItemGrantingButton(
 
 		const guildId = interaction.guildId ?? request.guildId;
 
-		if (actionType === "elims_grant_test") {
-			const updatedTest = !request.isTest;
-			await db
-				.update(elimsItemRequests)
-				.set({ isTest: updatedTest, updatedAt: new Date() })
-				.where(eq(elimsItemRequests.id, requestId));
-
-			const newLabel = updatedTest
-				? "[TEST] Unmark Test"
-				: "[TEST] Mark as Test";
-			const testBtn = new ButtonBuilder()
-				.setCustomId(`elims_grant_test:${request.id}`)
-				.setLabel(newLabel)
-				.setStyle(ButtonStyle.Secondary);
-
-			const components: ButtonBuilder[] = [];
-			// Only re-add Approve/Reject if the request is still pending!
-			if (request.status === "pending") {
-				const approveBtn = new ButtonBuilder()
-					.setCustomId(`elims_grant_accept:${request.id}`)
-					.setLabel("Approve")
-					.setStyle(ButtonStyle.Success);
-
-				const rejectBtn = new ButtonBuilder()
-					.setCustomId(`elims_grant_reject:${request.id}`)
-					.setLabel("Reject")
-					.setStyle(ButtonStyle.Danger);
-
-				components.push(approveBtn, rejectBtn);
-			}
-
-			components.push(testBtn);
-
-			const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-				components,
-			);
-
-			const existingEmbed = interaction.message.embeds[0];
-			if (existingEmbed) {
-				const updatedEmbed = EmbedBuilder.from(existingEmbed);
-				updatedEmbed.setFooter({
-					text: `Sentinel`,
-				});
-
-				const history = await getRequesterApprovedHistory(
-					guildId,
-					request.discordUserId,
-					updatedTest,
-					request.id,
-				);
-
-				const existingFields = existingEmbed.fields
-					? existingEmbed.fields.map((f) => ({
-							name: f.name,
-							value: f.value,
-							inline: f.inline,
-						}))
-					: [];
-
-				const historyFieldIndex = existingFields.findIndex((f) =>
-					f.name.startsWith("Approved History"),
-				);
-
-				if (historyFieldIndex !== -1) {
-					existingFields[historyFieldIndex] = {
-						name: history.fieldName,
-						value: history.fieldValue,
-						inline: false,
-					};
-					updatedEmbed.setFields(existingFields);
-				} else {
-					const resolutionIndex = existingFields.findIndex((f) =>
-						f.name.startsWith("Resolution"),
-					);
-					if (resolutionIndex !== -1) {
-						existingFields.splice(resolutionIndex, 0, {
-							name: history.fieldName,
-							value: history.fieldValue,
-							inline: false,
-						});
-						updatedEmbed.setFields(existingFields);
-					} else {
-						updatedEmbed.addFields({
-							name: history.fieldName,
-							value: history.fieldValue,
-							inline: false,
-						});
-					}
-				}
-
-				await interaction.editReply({
-					embeds: [updatedEmbed],
-					components: [row],
-				});
-			} else {
-				await interaction.editReply({ components: [row] });
-			}
-			return;
-		}
-
 		if (actionType === "elims_grant_accept") {
 			if (config?.stockHoldersChannelId) {
 				await deductHolderStock({
@@ -1263,10 +1371,13 @@ async function resolveItemRequest({
 	if (existingEmbed) {
 		const updatedEmbed = EmbedBuilder.from(existingEmbed);
 
-		const hasHistoryField = existingEmbed.fields.some((f) =>
+		const hasApprovedHistory = existingEmbed.fields.some((f) =>
 			f.name.startsWith("Approved History"),
 		);
-		if (!hasHistoryField) {
+		const hasRejectedHistory = existingEmbed.fields.some((f) =>
+			f.name.startsWith("Rejected History"),
+		);
+		if (!hasApprovedHistory) {
 			const history = await getRequesterApprovedHistory(
 				guildId,
 				request.discordUserId,
@@ -1276,7 +1387,20 @@ async function resolveItemRequest({
 			updatedEmbed.addFields({
 				name: history.fieldName,
 				value: history.fieldValue,
-				inline: false,
+				inline: true,
+			});
+		}
+		if (!hasRejectedHistory) {
+			const rejHistory = await getRequesterRejectedHistory(
+				guildId,
+				request.discordUserId,
+				request.isTest,
+				request.id,
+			);
+			updatedEmbed.addFields({
+				name: rejHistory.fieldName,
+				value: rejHistory.fieldValue,
+				inline: true,
 			});
 		}
 
