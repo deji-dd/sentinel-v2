@@ -113,6 +113,13 @@
 			"when": 1788795000000,
 			"tag": "0015_drop_recreate_elims_sim_tables",
 			"breakpoints": true
+		},
+		{
+			"idx": 16,
+			"version": "7",
+			"when": 1788800000000,
+			"tag": "0016_elims_armory_deposits_bigint",
+			"breakpoints": true
 		}
 	]
 }

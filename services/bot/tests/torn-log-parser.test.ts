@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	extractUserAndId,
+	parseArmoryChatInput,
+	parseBuyLogLine,
 	parseDepositLogs,
 	parseSingleDepositLog,
 	parseSingleSentLog,
@@ -201,23 +203,120 @@ describe("Torn Log Parser", () => {
 			expect(results[4]?.timestamp).toBe("21:08:11 - 09/12/25");
 		});
 
-		test("parses trade log with cash stripped and message attached", () => {
+		test("parses trade log with cash and items with message attached", () => {
 			const log =
 				"The-Don-Salieri [12345] traded 50x Flash Grenade, $5,000,000, 10x Vicodin to you with the message: Good luck [view]";
 			const results = parseDepositLogs(log);
-			expect(results).toHaveLength(2);
+			expect(results).toHaveLength(3);
 
-			expect(results[0]?.itemName).toBe("Flash Grenade");
-			expect(results[0]?.quantity).toBe(50);
+			expect(results[0]?.itemName).toBe("Money");
+			expect(results[0]?.quantity).toBe(5000000);
 			expect(results[0]?.donorName).toBe("The-Don-Salieri");
 			expect(results[0]?.donorTornId).toBe(12345);
 			expect(results[0]?.message).toBe("Good luck");
 
-			expect(results[1]?.itemName).toBe("Vicodin");
-			expect(results[1]?.quantity).toBe(10);
+			expect(results[1]?.itemName).toBe("Flash Grenade");
+			expect(results[1]?.quantity).toBe(50);
 			expect(results[1]?.donorName).toBe("The-Don-Salieri");
 			expect(results[1]?.donorTornId).toBe(12345);
 			expect(results[1]?.message).toBe("Good luck");
+
+			expect(results[2]?.itemName).toBe("Vicodin");
+			expect(results[2]?.quantity).toBe(10);
+			expect(results[2]?.donorName).toBe("The-Don-Salieri");
+			expect(results[2]?.donorTornId).toBe(12345);
+			expect(results[2]?.message).toBe("Good luck");
+		});
+
+		test("parses direct money sent: '01:39:19 - 07/09/26 wrxodus sent $42,743,465 to you'", () => {
+			const log = "01:39:19 - 07/09/26 wrxodus sent $42,743,465 to you";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.itemName).toBe("Money");
+			expect(results[0]?.quantity).toBe(42743465);
+			expect(results[0]?.donorName).toBe("wrxodus");
+			expect(results[0]?.timestamp).toBe("01:39:19 - 07/09/26");
+		});
+
+		test("parses direct money received: 'You were sent $42,743,465 from wrxodus'", () => {
+			const log = "You were sent $42,743,465 from wrxodus";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.itemName).toBe("Money");
+			expect(results[0]?.quantity).toBe(42743465);
+			expect(results[0]?.donorName).toBe("wrxodus");
+		});
+
+		test("parses pure money trade: '22:24:33 - 07/09/26 Friddles traded $150,000,000 to you [view]'", () => {
+			const log =
+				"22:24:33 - 07/09/26 Friddles traded $150,000,000 to you [view]";
+			const results = parseDepositLogs(log);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.itemName).toBe("Money");
+			expect(results[0]?.quantity).toBe(150000000);
+			expect(results[0]?.donorName).toBe("Friddles");
+			expect(results[0]?.timestamp).toBe("22:24:33 - 07/09/26");
+		});
+	});
+
+	describe("parseBuyLogLine", () => {
+		test("parses bazaar purchase: '17:57:08 - 07/09/26 You bought a Donator Pack on BLS-Envoy's bazaar at $23,560,000 each for a total of $23,560,000'", () => {
+			const log =
+				"17:57:08 - 07/09/26 You bought a Donator Pack on BLS-Envoy's bazaar at $23,560,000 each for a total of $23,560,000";
+			const buy = parseBuyLogLine(log);
+			expect(buy).not.toBeNull();
+			expect(buy?.itemName).toBe("Donator Pack");
+			expect(buy?.quantity).toBe(1);
+			expect(buy?.totalCost).toBe(23560000);
+			expect(buy?.priceEach).toBe(23560000);
+			expect(buy?.source).toBe("BLS-Envoy's bazaar");
+			expect(buy?.timestamp).toBe("17:57:08 - 07/09/26");
+		});
+
+		test("parses item market purchase: '07:09:10 - 05/09/26 You bought 249x Smoke Grenade on the item market from someone at $90,500 each for a total of $22,534,500'", () => {
+			const log =
+				"07:09:10 - 05/09/26 You bought 249x Smoke Grenade on the item market from someone at $90,500 each for a total of $22,534,500";
+			const buy = parseBuyLogLine(log);
+			expect(buy).not.toBeNull();
+			expect(buy?.itemName).toBe("Smoke Grenade");
+			expect(buy?.quantity).toBe(249);
+			expect(buy?.totalCost).toBe(22534500);
+			expect(buy?.priceEach).toBe(90500);
+			expect(buy?.source).toBe("the item market from someone");
+			expect(buy?.timestamp).toBe("07:09:10 - 05/09/26");
+		});
+
+		test("parses pharmacy store purchase: '05:10:17 - 05/09/26 You bought 20x Serotonin at $1,300,000 each for a total of $26,000,000 from Pharmacy'", () => {
+			const log =
+				"05:10:17 - 05/09/26 You bought 20x Serotonin at $1,300,000 each for a total of $26,000,000 from Pharmacy";
+			const buy = parseBuyLogLine(log);
+			expect(buy).not.toBeNull();
+			expect(buy?.itemName).toBe("Serotonin");
+			expect(buy?.quantity).toBe(20);
+			expect(buy?.totalCost).toBe(26000000);
+			expect(buy?.priceEach).toBe(1300000);
+			expect(buy?.source).toBe("Pharmacy");
+			expect(buy?.timestamp).toBe("05:10:17 - 05/09/26");
+		});
+	});
+
+	describe("parseArmoryChatInput", () => {
+		test("parses mixed deposits and purchases in a single paste batch", () => {
+			const input = `
+01:39:19 - 07/09/26 wrxodus sent $42,743,465 to you
+17:57:08 - 07/09/26 You bought a Donator Pack on BLS-Envoy's bazaar at $23,560,000 each for a total of $23,560,000
+23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you
+			`;
+			const res = parseArmoryChatInput(input);
+			expect(res.deposits).toHaveLength(2);
+			expect(res.deposits[0]?.itemName).toBe("Money");
+			expect(res.deposits[0]?.quantity).toBe(42743465);
+			expect(res.deposits[1]?.itemName).toBe("Vicodin");
+			expect(res.deposits[1]?.quantity).toBe(2);
+
+			expect(res.buys).toHaveLength(1);
+			expect(res.buys[0]?.itemName).toBe("Donator Pack");
+			expect(res.buys[0]?.totalCost).toBe(23560000);
 		});
 	});
 

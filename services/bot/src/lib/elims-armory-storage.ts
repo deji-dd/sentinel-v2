@@ -24,7 +24,11 @@ import {
 } from "discord.js";
 import { createErrorEmbed, createSuccessEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
-import { type ParsedDepositLog, parseDepositLogs } from "./torn-log-parser";
+import {
+	type ParsedBuyLog,
+	type ParsedDepositLog,
+	parseArmoryChatInput,
+} from "./torn-log-parser";
 
 const ELIMS_ITEM_REQUESTS_CONFIG_ID = "elims:item_requests_config";
 const ITEMS_PER_PAGE = 10;
@@ -126,8 +130,14 @@ export async function buildArmoryStorageEmbed(
 	const allowedItems: WhitelistedItem[] = config?.allowedItems ?? [];
 	const itemMap = new Map<string, UnifiedStockItem>();
 
-	// Only return items that actually have available stock
+	// Only return items that actually have available stock (exclude currency from regular item pagination)
 	for (const stock of stockMap.values()) {
+		if (
+			stock.itemId === "money" ||
+			stock.itemName.trim().toLowerCase() === "money"
+		) {
+			continue;
+		}
 		if (stock.available <= 0) continue;
 
 		// Match with configured items or query tornItems for category and canonical name
@@ -166,16 +176,28 @@ export async function buildArmoryStorageEmbed(
 	const embed = new EmbedBuilder()
 		.setTitle("Eliminations Armory")
 		.setDescription(
-			`**How to Deposit Items:**
-Paste your Torn event log(s) **directly into this channel chat**! Sentinel will automatically record the deposit, update live stock, and post a confirmation receipt.
+			`**How to Deposit Items & Money:**
+Paste your Torn event log(s) **directly into this channel chat**! Sentinel will automatically record the deposit or purchase, update live stock, and post a confirmation receipt.
 
 **Accepted Log Examples:**
 • \`23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you\`
-• \`19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED\`
-• \`05:36:39 - 11/12/25 The-Don-Salieri traded 100x Flash Grenade, 150x Pepper Spray, 18x Xanax to you [view]\`
+• \`01:39:19 - 07/09/26 wrxodus sent $42,743,465 to you\`
+• \`17:57:08 - 07/09/26 You bought a Donator Pack on BLS-Envoy's bazaar at $23,560,000 each for a total of $23,560,000\`
 `,
 		)
 		.setColor(EMBED_COLORS.PRIMARY);
+
+	// Display dedicated Armory Cash balance section if money is tracked
+	const moneyStock = stockMap.get("money");
+	if (moneyStock) {
+		const prefix = moneyStock.available < 0 ? "-$" : "$";
+		const absAvail = Math.abs(moneyStock.available).toLocaleString();
+		embed.addFields({
+			name: "Armory Cash",
+			value: `Available: **${prefix}${absAvail}**  •  Deposited: $${moneyStock.deposited.toLocaleString()}  •  Spent: $${moneyStock.consumed.toLocaleString()}`,
+			inline: false,
+		});
+	}
 
 	if (pageItems.length === 0) {
 		embed.addFields({
@@ -200,7 +222,7 @@ Paste your Torn event log(s) **directly into this channel chat**! Sentinel will 
 
 	const prevBtn = new ButtonBuilder()
 		.setCustomId(`elims_armory_stock_page:${currentPage - 1}`)
-		.setLabel("◀ Previous")
+		.setLabel("Previous")
 		.setStyle(ButtonStyle.Primary)
 		.setDisabled(currentPage <= 1);
 
@@ -212,13 +234,13 @@ Paste your Torn event log(s) **directly into this channel chat**! Sentinel will 
 
 	const nextBtn = new ButtonBuilder()
 		.setCustomId(`elims_armory_stock_page:${currentPage + 1}`)
-		.setLabel("Next ▶")
+		.setLabel("Next")
 		.setStyle(ButtonStyle.Primary)
 		.setDisabled(currentPage >= totalPages);
 
 	const refreshBtn = new ButtonBuilder()
 		.setCustomId(`elims_armory_stock_page:${currentPage}`)
-		.setLabel("🔄 Refresh")
+		.setLabel("Refresh")
 		.setStyle(ButtonStyle.Secondary);
 
 	const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -454,6 +476,7 @@ async function isDuplicateDeposit(
 	const conditions = [
 		eq(elimsArmoryDeposits.guildId, guildId),
 		eq(elimsArmoryDeposits.quantity, parsed.quantity),
+		eq(elimsArmoryDeposits.status, "available"),
 		sql<boolean>`LOWER(${elimsArmoryDeposits.tornName}) = ${donorLower}`,
 		sql<boolean>`(LOWER(${elimsArmoryDeposits.itemName}) = ${itemLower} OR LOWER(${elimsArmoryDeposits.itemName}) = ${resolvedLower})`,
 	];
@@ -474,21 +497,49 @@ async function isDuplicateDeposit(
 }
 
 /**
+ * Detects if an identical purchase log has already been recorded in the database.
+ * Matching criteria: same guildId, timestamp/rawLog, item, and quantity.
+ */
+async function isDuplicateBuy(
+	guildId: string,
+	buy: ParsedBuyLog,
+	resolvedItemName: string,
+): Promise<boolean> {
+	const itemLower = buy.itemName.trim().toLowerCase();
+	const resolvedLower = resolvedItemName.trim().toLowerCase();
+
+	const conditions = [
+		eq(elimsArmoryDeposits.guildId, guildId),
+		eq(elimsArmoryDeposits.quantity, buy.quantity),
+		eq(elimsArmoryDeposits.status, "available"),
+		sql<boolean>`(LOWER(${elimsArmoryDeposits.itemName}) = ${itemLower} OR LOWER(${elimsArmoryDeposits.itemName}) = ${resolvedLower})`,
+	];
+
+	if (buy.timestamp) {
+		conditions.push(eq(elimsArmoryDeposits.logTimestamp, buy.timestamp));
+	} else {
+		conditions.push(eq(elimsArmoryDeposits.rawLog, buy.rawLog));
+	}
+
+	const [existing] = await db
+		.select({ id: elimsArmoryDeposits.id })
+		.from(elimsArmoryDeposits)
+		.where(and(...conditions))
+		.limit(1);
+
+	return Boolean(existing);
+}
+
+/**
  * Handles incoming chat messages in the armory storage channel.
  * Users paste Torn event logs directly into chat.
  *
- * 1. If text cannot be parsed:
- *    - Deletes user's message immediately.
- *    - Sends an error embed with accepted format examples mentioning the user.
- *    - Auto-deletes the error embed after 10 seconds to keep chat clean.
- *
- * 2. If text CAN be parsed:
- *    - Deletes user's raw message immediately.
- *    - Detects duplicate logs (same timestamp, donor, item, quantity).
- *    - If all logs are duplicates, sends an auto-deleting warning (10s) and halts.
- *    - Inserts unique deposit record(s) into database with full metadata.
- *    - Sends a permanent Deposit Receipt embed showing items deposited.
- *    - Schedules a 10-second delayed resend of the Stock Overview embed so it remains at the bottom.
+ * Supports:
+ * 1. Item deposits (sent / traded)
+ * 2. Money deposits (sent / traded)
+ * 3. Item purchases (bought from bazaar, item market, or shop):
+ *    - Adds the purchased item to armory available inventory.
+ *    - Deducts the purchase cost from armory cash balance.
  */
 export async function handleArmoryStorageChatMessage(
 	message: Message,
@@ -564,22 +615,24 @@ export async function handleArmoryStorageChatMessage(
 			}
 		}
 
-		const parsedLogs = parseDepositLogs(message.content);
+		const { deposits: parsedLogs, buys: parsedBuys } = parseArmoryChatInput(
+			message.content,
+		);
 
 		// Case 1: Text could not be parsed
-		if (parsedLogs.length === 0) {
+		if (parsedLogs.length === 0 && parsedBuys.length === 0) {
 			await message.delete().catch(() => {});
 			const reply = await message.channel
 				.send({
 					embeds: [
 						createErrorEmbed(
-							"Unable to Parse Deposit Log",
-							`<@${message.author.id}>, we couldn't recognize any deposit logs in your message. Please paste the exact Torn event log(s).
+							"Unable to Parse Armory Log",
+							`<@${message.author.id}>, we couldn't recognize any deposit or purchase logs in your message. Please paste the exact Torn event log(s).
 
 Accepted Log Examples:
 • \`23:14:09 - 06/09/26 Lunette sent 2x Vicodin to you\`
-• \`19:58:41 - 05/09/26 LinFeng sent a Parcel to you with the message: Adhesive Plastic - SED\`
-• \`05:36:39 - 11/12/25 The-Don-Salieri traded 100x Flash Grenade, 150x Pepper Spray, 18x Xanax to you [view]\`
+• \`01:39:19 - 07/09/26 wrxodus sent $42,743,465 to you\`
+• \`17:57:08 - 07/09/26 You bought a Donator Pack on BLS-Envoy's bazaar at $23,560,000 each for a total of $23,560,000\`
 `,
 						),
 					],
@@ -606,6 +659,13 @@ Accepted Log Examples:
 			timestamp: string | null;
 			message: string | null;
 		}> = [];
+		const insertedBuys: Array<{
+			name: string;
+			quantity: number;
+			totalCost: number;
+			source: string | null;
+			timestamp: string | null;
+		}> = [];
 		const skippedDuplicates: Array<{
 			name: string;
 			quantity: number;
@@ -613,12 +673,12 @@ Accepted Log Examples:
 		}> = [];
 		const seenBatchKeys = new Set<string>();
 
+		// Process standard item & cash deposits
 		for (const parsed of parsedLogs) {
-			// Resolve canonical item info (ID, proper casing, and real Torn category)
-			const itemInfo = await resolveTornItem(
-				parsed.itemName,
-				config.allowedItems,
-			);
+			const isMoney = parsed.itemName.trim().toLowerCase() === "money";
+			const itemInfo = isMoney
+				? { id: "money", name: "Money", category: "Currency" }
+				: await resolveTornItem(parsed.itemName, config.allowedItems);
 			const resolvedItemName = itemInfo.name;
 
 			// Check in-batch duplicates
@@ -632,7 +692,7 @@ Accepted Log Examples:
 				continue;
 			}
 
-			// Check existing database records: same timestamp, donor name, item, and quantity
+			// Check existing database records
 			const isDuplicate = await isDuplicateDeposit(
 				guildId,
 				parsed,
@@ -676,13 +736,97 @@ Accepted Log Examples:
 			});
 		}
 
+		// Process item purchase logs (add item, deduct cash)
+		for (const buy of parsedBuys) {
+			const itemInfo = await resolveTornItem(buy.itemName, config.allowedItems);
+			const resolvedItemName = itemInfo.name;
+
+			// Check in-batch duplicates
+			const batchKey = `${buy.timestamp ?? "no-ts"}|buy|${resolvedItemName.trim().toLowerCase()}|${buy.quantity}|${buy.totalCost}`;
+			if (seenBatchKeys.has(batchKey)) {
+				skippedDuplicates.push({
+					name: resolvedItemName,
+					quantity: buy.quantity,
+					donor: buy.source ?? "Armory Purchase",
+				});
+				continue;
+			}
+
+			// Check existing database records
+			const isDuplicate = await isDuplicateBuy(guildId, buy, resolvedItemName);
+			if (isDuplicate) {
+				skippedDuplicates.push({
+					name: resolvedItemName,
+					quantity: buy.quantity,
+					donor: buy.source ?? "Armory Purchase",
+				});
+				continue;
+			}
+
+			seenBatchKeys.add(batchKey);
+
+			const vendorName = buy.source
+				? buy.source.slice(0, 100)
+				: "Armory Purchase";
+
+			// Record 1: Add purchased items to armory available inventory
+			await db.insert(elimsArmoryDeposits).values({
+				guildId,
+				discordUserId: message.author.id,
+				discordUsername: message.author.username,
+				tornName: vendorName,
+				tornId: null,
+				itemId: itemInfo.id,
+				itemName: resolvedItemName,
+				itemCategory: itemInfo.category,
+				quantity: buy.quantity,
+				rawLog: buy.rawLog,
+				logTimestamp: buy.timestamp ?? null,
+				logMessage: `Bought for $${buy.totalCost.toLocaleString()}${buy.source ? ` (${buy.source})` : ""}`,
+				isTest: false,
+				status: "available",
+			});
+
+			// Record 2: Deduct cash spent from armory cash balance
+			if (buy.totalCost > 0) {
+				await db.insert(elimsArmoryDeposits).values({
+					guildId,
+					discordUserId: message.author.id,
+					discordUsername: message.author.username,
+					tornName: vendorName,
+					tornId: null,
+					itemId: "money",
+					itemName: "Money",
+					itemCategory: "Currency",
+					quantity: buy.totalCost,
+					rawLog: buy.rawLog,
+					logTimestamp: buy.timestamp ?? null,
+					logMessage: `Purchase of ${buy.quantity.toLocaleString()}x ${resolvedItemName}`,
+					isTest: false,
+					status: "spent",
+				});
+			}
+
+			insertedBuys.push({
+				name: resolvedItemName,
+				quantity: buy.quantity,
+				totalCost: buy.totalCost,
+				source: buy.source ?? null,
+				timestamp: buy.timestamp ?? null,
+			});
+		}
+
 		// Case 2a: All logs in message were duplicates -> send auto-deleting warning
-		if (insertedItems.length === 0 && skippedDuplicates.length > 0) {
+		if (
+			insertedItems.length === 0 &&
+			insertedBuys.length === 0 &&
+			skippedDuplicates.length > 0
+		) {
 			const reply = await message.channel
 				.send({
 					embeds: [
 						createErrorEmbed(
-							"Duplicate Deposit Log",
+							"Duplicate Armory Log",
 							`<@${message.author.id}>, the ${
 								skippedDuplicates.length === 1
 									? "log you pasted has"
@@ -701,19 +845,27 @@ Accepted Log Examples:
 			return;
 		}
 
-		if (insertedItems.length === 0) {
+		if (insertedItems.length === 0 && insertedBuys.length === 0) {
 			return;
 		}
 
-		// Build permanent Deposit Receipt Embed (do NOT delete this message)
+		// Build permanent Deposit / Purchase Receipt Embed
+		const totalActions = insertedItems.length + insertedBuys.length;
+		const receiptTitle =
+			insertedBuys.length > 0 && insertedItems.length === 0
+				? "Armory Purchase Recorded"
+				: insertedBuys.length > 0
+					? "Armory Activity Recorded"
+					: "Item Deposit Recorded";
+
 		const receiptEmbed = createSuccessEmbed(
-			"Item Deposit Recorded",
-			`Successfully logged **${insertedItems.length}** item transfer(s):`,
+			receiptTitle,
+			`Successfully recorded **${totalActions}** transaction(s):`,
 		);
 
 		receiptEmbed.addFields(
 			{
-				name: "Deposited By",
+				name: "Logged By",
 				value: `<@${message.author.id}>`,
 				inline: true,
 			},
@@ -724,26 +876,44 @@ Accepted Log Examples:
 			},
 		);
 
-		// Details for each deposited item
-		const itemDetails = insertedItems.map((item) => {
+		// Details for deposited items & money
+		const detailLines: string[] = [];
+
+		for (const item of insertedItems) {
 			const donorDisplay = item.donorId
 				? `[${item.donor} [${item.donorId}]](https://www.torn.com/profiles.php?XID=${item.donorId})`
 				: `**${item.donor}**`;
 			const attachedMsg = item.message ? `\n └ *"${item.message}"*` : "";
 
-			return `• **${item.quantity.toLocaleString()}x** ${item.name} from ${donorDisplay}${attachedMsg}`;
-		});
+			if (item.name === "Money") {
+				detailLines.push(
+					`• **$${item.quantity.toLocaleString()}** from ${donorDisplay}${attachedMsg}`,
+				);
+			} else {
+				detailLines.push(
+					`• **${item.quantity.toLocaleString()}x** ${item.name} from ${donorDisplay}${attachedMsg}`,
+				);
+			}
+		}
+
+		// Details for purchases
+		for (const b of insertedBuys) {
+			const sourceDisplay = b.source ? ` (${b.source})` : "";
+			detailLines.push(
+				`• **${b.quantity.toLocaleString()}x** ${b.name} bought for **$${b.totalCost.toLocaleString()}**${sourceDisplay}\n └ Cash Deducted: **$${b.totalCost.toLocaleString()}**`,
+			);
+		}
 
 		receiptEmbed.addFields({
 			name: "Details",
-			value: itemDetails.slice(0, 15).join("\n"),
+			value: detailLines.slice(0, 15).join("\n"),
 			inline: false,
 		});
 
-		if (itemDetails.length > 15) {
+		if (detailLines.length > 15) {
 			receiptEmbed.addFields({
-				name: "Additional Items",
-				value: `*...and ${itemDetails.length - 15} more item(s)*`,
+				name: "Additional Transactions",
+				value: `*...and ${detailLines.length - 15} more transaction(s)*`,
 				inline: false,
 			});
 		}
@@ -751,7 +921,7 @@ Accepted Log Examples:
 		if (skippedDuplicates.length > 0) {
 			receiptEmbed.addFields({
 				name: "Skipped Duplicates",
-				value: `⚠️ ${skippedDuplicates.length} transfer(s) were skipped because they were already recorded.`,
+				value: `${skippedDuplicates.length} transaction(s) were skipped because they were already recorded.`,
 				inline: false,
 			});
 		}

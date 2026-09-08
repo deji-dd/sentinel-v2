@@ -24,7 +24,7 @@ jobs:
         env:
           POSTGRES_DB: sentinel_db
           POSTGRES_USER: sentinel_user
-          POSTGRES_PASSWORD: e63af385d45ae76c4a8b90b995c2cf1d8c0cf6ca444d3985
+          POSTGRES_PASSWORD: sentinel_password
         ports:
           - 5432:5432
         options: >-
@@ -38,7 +38,7 @@ jobs:
       POSTGRES_PORT: 5432
       POSTGRES_DB: sentinel_db
       POSTGRES_USER: sentinel_user
-      POSTGRES_PASSWORD: e63af385d45ae76c4a8b90b995c2cf1d8c0cf6ca444d3985
+      POSTGRES_PASSWORD: sentinel_password
 
     steps:
       - name: Checkout Code

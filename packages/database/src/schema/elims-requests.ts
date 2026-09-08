@@ -1,4 +1,5 @@
 import {
+	bigint,
 	boolean,
 	integer,
 	jsonb,
@@ -80,12 +81,12 @@ export const elimsArmoryDeposits = pgTable("elims_armory_deposits", {
 	itemId: text("item_id").notNull(),
 	itemName: text("item_name").notNull(),
 	itemCategory: text("item_category").notNull(),
-	quantity: integer("quantity").notNull(),
+	quantity: bigint("quantity", { mode: "number" }).notNull(),
 	rawLog: text("raw_log"),
 	logTimestamp: text("log_timestamp"),
 	logMessage: text("log_message"),
 	isTest: boolean("is_test").default(false).notNull(),
-	status: text("status").default("available").notNull(), // 'available' | 'consumed'
+	status: text("status").default("available").notNull(), // 'available' | 'consumed' | 'spent'
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),

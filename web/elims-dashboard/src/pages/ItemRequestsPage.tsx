@@ -800,6 +800,23 @@ export function ItemRequestsPage() {
 		return map;
 	}, [stockInventory]);
 
+	const armoryCash = useMemo(() => {
+		const moneyItem = stockInventory.find(
+			(s) =>
+				s.itemId === "money" || s.itemName.trim().toLowerCase() === "money",
+		);
+		return (
+			moneyItem ?? {
+				itemId: "money",
+				itemName: "Money",
+				category: "Currency",
+				deposited: 0,
+				consumed: 0,
+				available: 0,
+			}
+		);
+	}, [stockInventory]);
+
 	// ─── Save Configuration ───────────────────────────────────────────────────
 	const handleSaveConfig = async () => {
 		setSavingConfig(true);
@@ -1105,6 +1122,45 @@ export function ItemRequestsPage() {
 						)}
 						<span>Save Settings</span>
 					</Button>
+				</div>
+			</div>
+
+			{/* Armory Cash Balance Summary */}
+			<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-xl border border-border/70 bg-card/50 backdrop-blur-sm shadow-xs">
+				<div className="flex flex-col gap-1">
+					<span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+						Armory Cash Balance
+					</span>
+					<div className="flex items-baseline gap-2">
+						<span
+							className={`text-2xl font-bold font-mono tracking-tight ${
+								armoryCash.available < 0
+									? "text-destructive"
+									: armoryCash.available > 0
+										? "text-foreground"
+										: "text-muted-foreground"
+							}`}
+						>
+							{armoryCash.available < 0 ? "-$" : "$"}
+							{Math.abs(armoryCash.available).toLocaleString()}
+						</span>
+					</div>
+				</div>
+				<div className="flex flex-col gap-1">
+					<span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+						Total Deposited
+					</span>
+					<span className="text-xl font-bold font-mono text-foreground">
+						${armoryCash.deposited.toLocaleString()}
+					</span>
+				</div>
+				<div className="flex flex-col gap-1">
+					<span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+						Total Spent on Buys
+					</span>
+					<span className="text-xl font-bold font-mono text-foreground">
+						${armoryCash.consumed.toLocaleString()}
+					</span>
 				</div>
 			</div>
 
@@ -2401,7 +2457,7 @@ export function ItemRequestsPage() {
 																	className="text-[11px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded w-fit italic truncate max-w-[220px]"
 																	title={dep.logMessage}
 																>
-																	💬 "{dep.logMessage}"
+																	"{dep.logMessage}"
 																</span>
 															)}
 														</div>
@@ -2410,12 +2466,31 @@ export function ItemRequestsPage() {
 													{/* Item & Quantity */}
 													<TableCell>
 														<div className="flex items-center gap-2">
-															<Badge
-																variant="secondary"
-																className="font-mono text-xs px-2 py-0.5 font-bold"
-															>
-																+{dep.quantity}
-															</Badge>
+															{dep.itemId === "money" ||
+															dep.itemName.trim().toLowerCase() === "money" ? (
+																dep.status === "spent" ? (
+																	<Badge
+																		variant="outline"
+																		className="font-mono text-xs px-2 py-0.5 font-bold text-destructive border-destructive/40 bg-destructive/10"
+																	>
+																		-${dep.quantity.toLocaleString()}
+																	</Badge>
+																) : (
+																	<Badge
+																		variant="secondary"
+																		className="font-mono text-xs px-2 py-0.5 font-bold text-emerald-500 bg-emerald-500/10 border-emerald-500/20"
+																	>
+																		+${dep.quantity.toLocaleString()}
+																	</Badge>
+																)
+															) : (
+																<Badge
+																	variant="secondary"
+																	className="font-mono text-xs px-2 py-0.5 font-bold"
+																>
+																	+{dep.quantity.toLocaleString()}
+																</Badge>
+															)}
 															<div className="flex flex-col">
 																<span className="text-xs font-medium text-foreground">
 																	{dep.itemName}
