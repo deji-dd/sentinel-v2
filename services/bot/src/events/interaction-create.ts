@@ -25,6 +25,14 @@ import {
 	handleKeyDonationButton,
 	handleKeyDonationModalSubmit,
 } from "../lib/elims-key-donation";
+import {
+	handleStockHolderAssignButton,
+	handleStockHolderModalSubmit,
+	handleStockHolderReclaimButton,
+	handleStockHolderReclaimModalSubmit,
+	handleStockHolderReclaimSelect,
+	handleStockHolderUserSelect,
+} from "../lib/elims-stock-holders";
 import { createErrorEmbed } from "../lib/embeds";
 import { handleFactionDirectoryButton } from "../lib/faction-map-channel";
 import { handleFactionMonitoringButton } from "../lib/faction-monitoring-channel";
@@ -87,6 +95,17 @@ export const interactionCreateEvent = {
 					await handleGiveawayEntryButton(interaction);
 				} else if (interaction.customId === "elims_donate_key_button") {
 					await handleKeyDonationButton(interaction);
+				} else if (interaction.customId.startsWith("elims_holder_assign:")) {
+					await handleStockHolderAssignButton(interaction);
+				} else if (interaction.customId.startsWith("elims_holder_reclaim:")) {
+					await handleStockHolderReclaimButton(interaction);
+				}
+				return;
+			}
+
+			if (interaction.isUserSelectMenu()) {
+				if (interaction.customId.startsWith("elims_holder_user_select:")) {
+					await handleStockHolderUserSelect(interaction);
 				}
 				return;
 			}
@@ -100,6 +119,10 @@ export const interactionCreateEvent = {
 					await handleGiveawayCategorySelect(interaction);
 				} else if (interaction.customId.startsWith("giveaway_item_select:")) {
 					await handleGiveawayItemSelect(interaction);
+				} else if (
+					interaction.customId.startsWith("elims_holder_reclaim_select:")
+				) {
+					await handleStockHolderReclaimSelect(interaction);
 				}
 				return;
 			}
@@ -119,6 +142,14 @@ export const interactionCreateEvent = {
 					await handleGiveawayModalSubmit(interaction);
 				} else if (interaction.customId === "elims_donate_key_modal") {
 					await handleKeyDonationModalSubmit(interaction);
+				} else if (
+					interaction.customId.startsWith("elims_holder_assign_modal:")
+				) {
+					await handleStockHolderModalSubmit(interaction);
+				} else if (
+					interaction.customId.startsWith("elims_holder_reclaim_modal:")
+				) {
+					await handleStockHolderReclaimModalSubmit(interaction);
 				}
 				return;
 			}

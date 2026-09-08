@@ -15,6 +15,7 @@ export interface WhitelistedItem {
 	marketPrice?: number;
 	image?: string;
 	maxRequestable?: number;
+	disabled?: boolean;
 }
 
 export interface ElimsItemRequestConfig {
@@ -22,10 +23,10 @@ export interface ElimsItemRequestConfig {
 	grantingChannelId: string | null;
 	storageChannelId?: string | null;
 	storageEmbedMessageId?: string | null;
+	stockHoldersChannelId?: string | null;
+	stockHolderMessageIds?: Record<string, string>;
 	requesterRoleIds: string[];
 	managerRoleIds: string[];
-	depositorRoleIds?: string[];
-	depositorUserIds?: string[];
 	allowedItems: WhitelistedItem[];
 	blacklistedUserIds?: string[];
 	embedMessageId?: string | null;
@@ -133,6 +134,25 @@ export const elimsApiKeys = pgTable("elims_api_keys", {
 	donatedByDiscordId: text("donated_by_discord_id"),
 	donatedByDiscordTag: text("donated_by_discord_tag"),
 	lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export const elimsStockHolders = pgTable("elims_stock_holders", {
+	id: text("id")
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	guildId: text("guild_id").notNull(),
+	discordUserId: text("discord_user_id").notNull(),
+	discordUsername: text("discord_username").notNull(),
+	itemId: text("item_id").notNull(),
+	itemName: text("item_name").notNull(),
+	quantity: integer("quantity").notNull(),
+	isTest: boolean("is_test").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),

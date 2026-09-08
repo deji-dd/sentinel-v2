@@ -38,6 +38,11 @@ describe("Elimination Team Tracker Worker", () => {
 		// Clean up existing test records
 		await db
 			.delete(elimsTeamSnapshots)
+			.where(eq(elimsTeamSnapshots.teamId, 70));
+		await db.delete(elimsTeamPlayers).where(eq(elimsTeamPlayers.teamId, 70));
+		await db.delete(elimsTeams).where(eq(elimsTeams.id, 70));
+		await db
+			.delete(elimsTeamSnapshots)
 			.where(eq(elimsTeamSnapshots.isMock, true));
 		await db.delete(elimsTeamPlayers).where(eq(elimsTeamPlayers.isMock, true));
 		await db.delete(elimsTeams).where(eq(elimsTeams.isMock, true));
@@ -50,6 +55,11 @@ describe("Elimination Team Tracker Worker", () => {
 		fetchSpy?.mockRestore();
 		_resetSimulationInMemoryState();
 		await db.delete(apiKeys).where(eq(apiKeys.userId, TEST_KEY_USER_ID));
+		await db
+			.delete(elimsTeamSnapshots)
+			.where(eq(elimsTeamSnapshots.teamId, 70));
+		await db.delete(elimsTeamPlayers).where(eq(elimsTeamPlayers.teamId, 70));
+		await db.delete(elimsTeams).where(eq(elimsTeams.id, 70));
 		await db
 			.delete(elimsTeamSnapshots)
 			.where(eq(elimsTeamSnapshots.isMock, true));
@@ -115,5 +125,102 @@ describe("Elimination Team Tracker Worker", () => {
 		// Subsequent call while within 5m backoff period returns remaining backoff immediately
 		const immediateNextMs = await runElimsTrackingCycle();
 		expect(immediateNextMs).toBe(nextRunMs);
+	});
+
+	test("executes parallel batch requests across all teams and persists player data when API is open", async () => {
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			input: string | URL | Request,
+		) => {
+			const url = String(input);
+
+			if (url.includes("/torn/elimination")) {
+				return new Response(
+					JSON.stringify({
+						elimination: ELIMS_TEAM_IDS.map((id) => ({
+							id,
+							name: DEFAULT_TEAM_NAMES[id] ?? `Team ${id}`,
+							participants: 120,
+							position: 1,
+							score: 1000,
+							lives: 50,
+							wins: 2,
+							losses: 0,
+							eliminated: false,
+							eliminated_timestamp: null,
+						})),
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+
+			if (url.includes("/torn/70/eliminationteam")) {
+				return new Response(
+					JSON.stringify({
+						eliminationteam: [
+							{
+								id: 50001,
+								name: "DocSurgeon",
+								level: 75,
+								score: 15,
+								attacks: 3,
+								last_action: {
+									status: "Online",
+									timestamp: Date.now(),
+									relative: "1 minute ago",
+								},
+							},
+						],
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+
+			// All other teams return empty player lists
+			return new Response(
+				JSON.stringify({
+					eliminationteam: [],
+				}),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch);
+
+		const nextRunMs = await runElimsTrackingCycle();
+		expect(nextRunMs).toBeGreaterThan(Date.now());
+
+		// Verify team record was upserted
+		const team70 = await db.query.elimsTeams.findFirst({
+			where: eq(elimsTeams.id, 70),
+		});
+		expect(team70).toBeDefined();
+		expect(team70?.name).toBe("Brain Surgeons");
+		expect(team70?.score).toBe(15);
+		expect(team70?.attacks).toBe(3);
+		expect(team70?.membersCount).toBe(1);
+
+		// Verify player was upserted
+		const player = await db.query.elimsTeamPlayers.findFirst({
+			where: eq(elimsTeamPlayers.id, 50001),
+		});
+		expect(player).toBeDefined();
+		expect(player?.name).toBe("DocSurgeon");
+		expect(player?.teamId).toBe(70);
+		expect(player?.score).toBe(15);
+		expect(player?.attacks).toBe(3);
+
+		// Verify snapshot was created
+		const snapshot = await db.query.elimsTeamSnapshots.findFirst({
+			where: eq(elimsTeamSnapshots.teamId, 70),
+		});
+		expect(snapshot).toBeDefined();
+		expect(snapshot?.activeCount).toBe(1);
 	});
 });

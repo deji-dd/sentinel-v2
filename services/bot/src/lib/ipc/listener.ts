@@ -14,6 +14,7 @@ import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../elims-key-donation";
 import { autoAssignElimsStatRoles } from "../elims-stat-roles";
+import { syncElimsStockHoldersChannel } from "../elims-stock-holders";
 import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
@@ -249,6 +250,7 @@ export function setupBotIpcListeners(client: Client): void {
 				message.data?.config,
 			);
 			void updateElimsArmoryStorageChannel(client, message.data?.guildId);
+			void syncElimsStockHoldersChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_giveaways") {
 			void updateGiveawayChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_key_donation") {

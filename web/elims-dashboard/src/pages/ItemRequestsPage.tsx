@@ -9,7 +9,6 @@ import {
 	Loader2,
 	MoreHorizontal,
 	Package,
-	Plus,
 	RefreshCw,
 	Save,
 	Search,
@@ -17,6 +16,7 @@ import {
 	SlidersHorizontal,
 	Trash2,
 	User,
+	Users,
 	UserX,
 	X,
 	XCircle,
@@ -59,6 +59,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
 	Table,
 	TableBody,
@@ -78,6 +79,7 @@ export interface WhitelistedItem {
 	marketPrice?: number;
 	image?: string;
 	maxRequestable?: number;
+	disabled?: boolean;
 }
 
 export interface GuildMemberSummary {
@@ -90,9 +92,12 @@ export interface GuildMemberSummary {
 export interface ItemStock {
 	itemId: string;
 	itemName: string;
+	category?: string;
 	deposited: number;
 	consumed: number;
 	available: number;
+	image?: string;
+	marketPrice?: number;
 }
 
 export interface DiscordChannel {
@@ -165,10 +170,9 @@ interface ItemRequestsConfigSnapshot {
 	requestChannelId: string | null;
 	grantingChannelId: string | null;
 	storageChannelId: string | null;
+	stockHoldersChannelId: string | null;
 	requesterRoleIds: string[];
 	managerRoleIds: string[];
-	depositorRoleIds: string[];
-	depositorUserIds: string[];
 	blacklistedUserIds: string[];
 	allowedItems: WhitelistedItem[];
 }
@@ -182,32 +186,40 @@ export function ItemRequestsPage() {
 		null,
 	);
 	const [storageChannelId, setStorageChannelId] = useState<string | null>(null);
+	const [stockHoldersChannelId, setStockHoldersChannelId] = useState<
+		string | null
+	>(null);
 	const [requesterRoleIds, setRequesterRoleIds] = useState<string[]>([]);
 	const [managerRoleIds, setManagerRoleIds] = useState<string[]>([]);
-	const [depositorRoleIds, setDepositorRoleIds] = useState<string[]>([]);
-	const [depositorUserIds, setDepositorUserIds] = useState<string[]>([]);
 	const [blacklistedUserIds, setBlacklistedUserIds] = useState<string[]>([]);
 	const [allowedItems, setAllowedItems] = useState<WhitelistedItem[]>([]);
+	const [stockHolders, setStockHolders] = useState<
+		Array<{
+			id: string;
+			discordUserId: string;
+			discordUsername: string;
+			itemId: string;
+			itemName: string;
+			quantity: number;
+			updatedAt: string;
+		}>
+	>([]);
+	const [loadingStockHolders, setLoadingStockHolders] = useState(false);
 	const [initialConfig, setInitialConfig] =
 		useState<ItemRequestsConfigSnapshot | null>(null);
 	const [loadingConfig, setLoadingConfig] = useState(true);
 	const [savingConfig, setSavingConfig] = useState(false);
 
-	// ─── Server Members for Blacklist & Depositor Search ─────────────────────
+	// ─── Server Members for Blacklist Search ─────────────────────────────────
 	const [guildMembers, setGuildMembers] = useState<GuildMemberSummary[]>([]);
 	const [loadingMembers, setLoadingMembers] = useState(false);
 	const [memberSearchQuery, setMemberSearchQuery] = useState("");
 	const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
 	const memberSearchRef = useRef<HTMLDivElement | null>(null);
 
-	const [depositorMemberSearchQuery, setDepositorMemberSearchQuery] =
-		useState("");
-	const [isDepositorMemberDropdownOpen, setIsDepositorMemberDropdownOpen] =
-		useState(false);
-	const depositorMemberSearchRef = useRef<HTMLDivElement | null>(null);
-
 	// ─── Armory Stock Inventory State ──────────────────────────────────────────
 	const [stockInventory, setStockInventory] = useState<ItemStock[]>([]);
+	const stockInventoryRef = useRef<ItemStock[]>([]);
 	const [loadingStock, setLoadingStock] = useState(false);
 
 	// Channels and Roles options from Discord
@@ -216,11 +228,11 @@ export function ItemRequestsPage() {
 	const [loadingChannels, setLoadingChannels] = useState(false);
 	const [loadingRoles, setLoadingRoles] = useState(false);
 
-	// ─── Whitelist Search State ────────────────────────────────────────────────
-	const [searchQuery, setSearchQuery] = useState("");
-	const [searchResults, setSearchResults] = useState<WhitelistedItem[]>([]);
-	const [isSearching, setIsSearching] = useState(false);
-	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// ─── In-Stock Requestable Items Filter State ──────────────────────────────
+	const [itemFilterQuery, setItemFilterQuery] = useState("");
+	const [itemStatusFilter, setItemStatusFilter] = useState<
+		"all" | "in-stock" | "enabled" | "disabled"
+	>("all");
 
 	// ─── Logs & History State ──────────────────────────────────────────────────
 	const [logs, setLogs] = useState<ItemRequestLog[]>([]);
@@ -253,6 +265,72 @@ export function ItemRequestsPage() {
 	} | null>(null);
 	const depositsAbortControllerRef = useRef<AbortController | null>(null);
 
+	// ─── Stock Inventory Merger Helper ────────────────────────────────────────
+	const mergeStockWithAllowedItems = useCallback(
+		(
+			stockList: ItemStock[],
+			existingAllowed: WhitelistedItem[],
+		): WhitelistedItem[] => {
+			const existingMap = new Map<string, WhitelistedItem>();
+			for (const item of existingAllowed) {
+				if (item.id) existingMap.set(item.id, item);
+				if (item.name) existingMap.set(item.name.trim().toLowerCase(), item);
+			}
+
+			const merged: WhitelistedItem[] = [];
+			const seenKeys = new Set<string>();
+
+			// 1. Add all items from stockList (excluding money)
+			for (const s of stockList) {
+				const lowerName = s.itemName.trim().toLowerCase();
+				if (s.itemId === "money" || lowerName === "money") continue;
+				const key = s.itemId || lowerName;
+				if (seenKeys.has(key)) continue;
+				seenKeys.add(key);
+
+				const existing =
+					existingMap.get(s.itemId) ?? existingMap.get(lowerName);
+				if (existing) {
+					merged.push({
+						...existing,
+						name: s.itemName,
+						category: s.category || existing.category || "General",
+						image: s.image ?? existing.image,
+						marketPrice: s.marketPrice ?? existing.marketPrice,
+						disabled: existing.disabled ?? false,
+					});
+				} else {
+					merged.push({
+						id: s.itemId || s.itemName,
+						name: s.itemName,
+						category: s.category || "General",
+						image: s.image,
+						marketPrice: s.marketPrice,
+						maxRequestable: undefined,
+						disabled: false, // Default enabled!
+					});
+				}
+			}
+
+			// 2. Retain any previously configured items in existingAllowed (if not in stockList)
+			for (const item of existingAllowed) {
+				const lowerName = item.name.trim().toLowerCase();
+				if (item.id === "money" || lowerName === "money") continue;
+				const key = item.id || lowerName;
+				if (!seenKeys.has(key)) {
+					seenKeys.add(key);
+					merged.push({
+						...item,
+						disabled: item.disabled ?? false,
+					});
+				}
+			}
+
+			return merged;
+		},
+		[],
+	);
+
 	// ─── Fetch Stock Inventory ────────────────────────────────────────────────
 	const fetchStock = useCallback(async () => {
 		setLoadingStock(true);
@@ -270,7 +348,20 @@ export function ItemRequestsPage() {
 				"live" in data &&
 				Array.isArray(data.live)
 			) {
-				setStockInventory(data.live as ItemStock[]);
+				const liveList = data.live as ItemStock[];
+				stockInventoryRef.current = liveList;
+				setStockInventory(liveList);
+				setAllowedItems((prev) => mergeStockWithAllowedItems(liveList, prev));
+				setInitialConfig((prev) => {
+					if (!prev) return prev;
+					return {
+						...prev,
+						allowedItems: mergeStockWithAllowedItems(
+							liveList,
+							prev.allowedItems,
+						),
+					};
+				});
 				return data;
 			}
 			return null;
@@ -280,7 +371,7 @@ export function ItemRequestsPage() {
 		} finally {
 			setLoadingStock(false);
 		}
-	}, []);
+	}, [mergeStockWithAllowedItems]);
 
 	// ─── Fetch Channels ───────────────────────────────────────────────────────
 	const fetchChannels = useCallback(async () => {
@@ -369,6 +460,41 @@ export function ItemRequestsPage() {
 		[guild?.id],
 	);
 
+	// ─── Fetch Stock Holders ──────────────────────────────────────────────────
+	const fetchStockHolders = useCallback(async () => {
+		if (!guild?.id) return [];
+		setLoadingStockHolders(true);
+		try {
+			const res = await fetch("/api/v1/elims/item-requests/stock-holders");
+			if (!res.ok) throw new Error("Failed to load stock holders");
+			const data = (await res.json()) as unknown;
+			if (
+				data &&
+				typeof data === "object" &&
+				"holders" in data &&
+				Array.isArray(data.holders)
+			) {
+				const hlds = data.holders as Array<{
+					id: string;
+					discordUserId: string;
+					discordUsername: string;
+					itemId: string;
+					itemName: string;
+					quantity: number;
+					updatedAt: string;
+				}>;
+				setStockHolders(hlds);
+				return hlds;
+			}
+			return [];
+		} catch (err) {
+			console.error("Failed to load stock holders:", err);
+			return [];
+		} finally {
+			setLoadingStockHolders(false);
+		}
+	}, [guild?.id]);
+
 	// ─── Fetch Config ─────────────────────────────────────────────────────────
 	const fetchConfig = useCallback(async () => {
 		setLoadingConfig(true);
@@ -384,26 +510,29 @@ export function ItemRequestsPage() {
 				typeof data.config === "object"
 			) {
 				const cfg = data.config as Record<string, unknown>;
+				const cfgAllowed = (cfg.allowedItems as WhitelistedItem[]) ?? [];
+				const mergedAllowed = mergeStockWithAllowedItems(
+					stockInventoryRef.current,
+					cfgAllowed,
+				);
 				const snapshot: ItemRequestsConfigSnapshot = {
 					requestChannelId: (cfg.requestChannelId as string) ?? null,
 					grantingChannelId: (cfg.grantingChannelId as string) ?? null,
 					storageChannelId: (cfg.storageChannelId as string) ?? null,
+					stockHoldersChannelId: (cfg.stockHoldersChannelId as string) ?? null,
 					requesterRoleIds: (cfg.requesterRoleIds as string[]) ?? [],
 					managerRoleIds: (cfg.managerRoleIds as string[]) ?? [],
-					depositorRoleIds: (cfg.depositorRoleIds as string[]) ?? [],
-					depositorUserIds: (cfg.depositorUserIds as string[]) ?? [],
 					blacklistedUserIds: (cfg.blacklistedUserIds as string[]) ?? [],
-					allowedItems: (cfg.allowedItems as WhitelistedItem[]) ?? [],
+					allowedItems: mergedAllowed,
 				};
 				setRequestChannelId(snapshot.requestChannelId);
 				setGrantingChannelId(snapshot.grantingChannelId);
 				setStorageChannelId(snapshot.storageChannelId);
+				setStockHoldersChannelId(snapshot.stockHoldersChannelId);
 				setRequesterRoleIds(snapshot.requesterRoleIds);
 				setManagerRoleIds(snapshot.managerRoleIds);
-				setDepositorRoleIds(snapshot.depositorRoleIds);
-				setDepositorUserIds(snapshot.depositorUserIds);
 				setBlacklistedUserIds(snapshot.blacklistedUserIds);
-				setAllowedItems(snapshot.allowedItems);
+				setAllowedItems(mergedAllowed);
 				setInitialConfig(snapshot);
 				return cfg;
 			}
@@ -414,13 +543,14 @@ export function ItemRequestsPage() {
 		} finally {
 			setLoadingConfig(false);
 		}
-	}, []);
+	}, [mergeStockWithAllowedItems]);
 
 	// ─── 1. Load Config & Channels & Roles & Stock & Members on Mount ─────────
 	useEffect(() => {
 		if (!guild?.id) return;
 		void fetchConfig();
 		void fetchStock();
+		void fetchStockHolders();
 		void fetchChannels();
 		void fetchRoles();
 		void fetchMembers(false);
@@ -428,6 +558,7 @@ export function ItemRequestsPage() {
 		guild?.id,
 		fetchConfig,
 		fetchStock,
+		fetchStockHolders,
 		fetchChannels,
 		fetchRoles,
 		fetchMembers,
@@ -447,43 +578,6 @@ export function ItemRequestsPage() {
 		return () => document.removeEventListener("mousedown", handleClickOutside);
 	}, []);
 
-	// ─── 2. Debounced Item Search ─────────────────────────────────────────────
-	useEffect(() => {
-		if (debounceTimerRef.current) {
-			clearTimeout(debounceTimerRef.current);
-		}
-
-		if (!searchQuery.trim()) {
-			setSearchResults([]);
-			setIsSearching(false);
-			return;
-		}
-
-		setIsSearching(true);
-		debounceTimerRef.current = setTimeout(() => {
-			fetch(
-				`/api/v1/elims/item-requests/items/search?q=${encodeURIComponent(searchQuery.trim())}`,
-			)
-				.then((res) => (res.ok ? res.json() : null))
-				.then((data: unknown) => {
-					if (
-						data &&
-						typeof data === "object" &&
-						"items" in data &&
-						Array.isArray(data.items)
-					) {
-						setSearchResults(data.items as WhitelistedItem[]);
-					}
-				})
-				.catch((err) => console.error("Search items error:", err))
-				.finally(() => setIsSearching(false));
-		}, 300);
-
-		return () => {
-			if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-		};
-	}, [searchQuery]);
-
 	// Debounce logsSearch to prevent request storm and layout flicker on every keystroke
 	useEffect(() => {
 		const timer = setTimeout(() => {
@@ -492,9 +586,13 @@ export function ItemRequestsPage() {
 		return () => clearTimeout(timer);
 	}, [logsSearch]);
 
+	const logsPageRef = useRef(logsPage);
+	logsPageRef.current = logsPage;
+
 	// ─── 3. Fetch Request Logs ────────────────────────────────────────────────
 	const fetchLogs = useCallback(
-		(page = logsPage, search = debouncedLogsSearch) => {
+		(page?: number, search = debouncedLogsSearch) => {
+			const targetPage = page ?? logsPageRef.current;
 			if (logsAbortControllerRef.current) {
 				logsAbortControllerRef.current.abort();
 			}
@@ -503,7 +601,7 @@ export function ItemRequestsPage() {
 
 			setLogsLoading(true);
 			const params = new URLSearchParams({
-				page: String(page),
+				page: String(targetPage),
 				limit: "15",
 			});
 			if (statusFilter !== "all") params.set("status", statusFilter);
@@ -545,7 +643,7 @@ export function ItemRequestsPage() {
 					}
 				});
 		},
-		[logsPage, statusFilter, debouncedLogsSearch],
+		[statusFilter, debouncedLogsSearch],
 	);
 
 	useEffect(() => {
@@ -560,9 +658,13 @@ export function ItemRequestsPage() {
 		return () => clearTimeout(timer);
 	}, [depositsSearch]);
 
+	const depositsPageRef = useRef(depositsPage);
+	depositsPageRef.current = depositsPage;
+
 	// ─── Fetch Depositor History ──────────────────────────────────────────────
 	const fetchDeposits = useCallback(
-		(page = depositsPage, search = debouncedDepositsSearch) => {
+		(page?: number, search = debouncedDepositsSearch) => {
+			const targetPage = page ?? depositsPageRef.current;
 			if (depositsAbortControllerRef.current) {
 				depositsAbortControllerRef.current.abort();
 			}
@@ -571,7 +673,7 @@ export function ItemRequestsPage() {
 
 			setDepositsLoading(true);
 			const params = new URLSearchParams({
-				page: String(page),
+				page: String(targetPage),
 				limit: "15",
 			});
 			if (search.trim()) params.set("search", search.trim());
@@ -612,7 +714,7 @@ export function ItemRequestsPage() {
 					}
 				});
 		},
-		[depositsPage, debouncedDepositsSearch],
+		[debouncedDepositsSearch],
 	);
 
 	useEffect(() => {
@@ -663,39 +765,33 @@ export function ItemRequestsPage() {
 		}
 	};
 
-	// ─── Toggle Whitelisted Item ──────────────────────────────────────────────
-	const handleAddItem = (item: WhitelistedItem) => {
-		if (allowedItems.some((i) => i.id === item.id)) {
-			toast.info(`${item.name} is already whitelisted.`);
-			return;
-		}
-		setAllowedItems((prev) => [...prev, item]);
-		toast.success(`Added ${item.name} to whitelisted items.`);
+	// ─── Toggle In-Stock Item Status & Actions ────────────────────────────────
+	const handleToggleItemEnabled = (itemId: string, enabled: boolean) => {
+		setAllowedItems((prev) =>
+			prev.map((i) => (i.id === itemId ? { ...i, disabled: !enabled } : i)),
+		);
 	};
 
-	const handleRemoveItem = (itemId: string) => {
-		setAllowedItems((prev) => prev.filter((i) => i.id !== itemId));
+	const handleEnableAll = () => {
+		setAllowedItems((prev) => prev.map((i) => ({ ...i, disabled: false })));
+		toast.success("All stock items enabled for requests.");
+	};
+
+	const handleDisableAll = () => {
+		setAllowedItems((prev) => prev.map((i) => ({ ...i, disabled: true })));
+		toast.info("All stock items disabled for requests.");
 	};
 
 	// ─── Toggle Roles ─────────────────────────────────────────────────────────
-	const toggleRole = (
-		roleId: string,
-		type: "requester" | "manager" | "depositor",
-	) => {
+	const toggleRole = (roleId: string, type: "requester" | "manager") => {
 		if (type === "requester") {
 			setRequesterRoleIds((prev) =>
 				prev.includes(roleId)
 					? prev.filter((id) => id !== roleId)
 					: [...prev, roleId],
 			);
-		} else if (type === "manager") {
-			setManagerRoleIds((prev) =>
-				prev.includes(roleId)
-					? prev.filter((id) => id !== roleId)
-					: [...prev, roleId],
-			);
 		} else {
-			setDepositorRoleIds((prev) =>
+			setManagerRoleIds((prev) =>
 				prev.includes(roleId)
 					? prev.filter((id) => id !== roleId)
 					: [...prev, roleId],
@@ -708,34 +804,6 @@ export function ItemRequestsPage() {
 		setAllowedItems((prev) =>
 			prev.map((i) => (i.id === itemId ? { ...i, maxRequestable: max } : i)),
 		);
-	};
-
-	// ─── Depositor Member Search & Handlers ──────────────────────────────────
-	const filteredDepositorMembers = useMemo(() => {
-		const q = depositorMemberSearchQuery.trim().toLowerCase();
-		if (!q) return guildMembers.slice(0, 30);
-		return guildMembers
-			.filter(
-				(m) =>
-					m.displayName.toLowerCase().includes(q) ||
-					m.username.toLowerCase().includes(q) ||
-					m.id.includes(q),
-			)
-			.slice(0, 30);
-	}, [guildMembers, depositorMemberSearchQuery]);
-
-	const handleSelectMemberToDepositor = (member: GuildMemberSummary) => {
-		if (depositorUserIds.includes(member.id)) {
-			toast.info(`${member.displayName} is already an authorized depositor.`);
-			return;
-		}
-		setDepositorUserIds((prev) => [...prev, member.id]);
-		setDepositorMemberSearchQuery("");
-		setIsDepositorMemberDropdownOpen(false);
-	};
-
-	const handleRemoveDepositorMember = (userId: string) => {
-		setDepositorUserIds((prev) => prev.filter((id) => id !== userId));
 	};
 
 	// ─── Blacklist Member Search & Handlers ──────────────────────────────────
@@ -828,10 +896,9 @@ export function ItemRequestsPage() {
 					requestChannelId: requestChannelId || null,
 					grantingChannelId: grantingChannelId || null,
 					storageChannelId: storageChannelId || null,
+					stockHoldersChannelId: stockHoldersChannelId || null,
 					requesterRoleIds,
 					managerRoleIds,
-					depositorRoleIds,
-					depositorUserIds,
 					blacklistedUserIds,
 					allowedItems,
 				}),
@@ -846,16 +913,16 @@ export function ItemRequestsPage() {
 				requestChannelId: requestChannelId || null,
 				grantingChannelId: grantingChannelId || null,
 				storageChannelId: storageChannelId || null,
+				stockHoldersChannelId: stockHoldersChannelId || null,
 				requesterRoleIds: [...requesterRoleIds],
 				managerRoleIds: [...managerRoleIds],
-				depositorRoleIds: [...depositorRoleIds],
-				depositorUserIds: [...depositorUserIds],
 				blacklistedUserIds: [...blacklistedUserIds],
 				allowedItems: [...allowedItems],
 			});
 
 			toast.success("Item Requests configuration saved successfully!");
 			fetchStock();
+			fetchStockHolders();
 		} catch (err) {
 			const msg =
 				err instanceof Error ? err.message : "Error saving configuration";
@@ -873,6 +940,8 @@ export function ItemRequestsPage() {
 			return true;
 		if ((storageChannelId || null) !== initialConfig.storageChannelId)
 			return true;
+		if ((stockHoldersChannelId || null) !== initialConfig.stockHoldersChannelId)
+			return true;
 
 		// Requester roles
 		if (requesterRoleIds.length !== initialConfig.requesterRoleIds.length)
@@ -885,18 +954,6 @@ export function ItemRequestsPage() {
 			return true;
 		const mgrSet = new Set(initialConfig.managerRoleIds);
 		if (managerRoleIds.some((id) => !mgrSet.has(id))) return true;
-
-		// Depositor roles
-		if (depositorRoleIds.length !== initialConfig.depositorRoleIds.length)
-			return true;
-		const depRoleSet = new Set(initialConfig.depositorRoleIds);
-		if (depositorRoleIds.some((id) => !depRoleSet.has(id))) return true;
-
-		// Depositor users
-		if (depositorUserIds.length !== initialConfig.depositorUserIds.length)
-			return true;
-		const depUserSet = new Set(initialConfig.depositorUserIds);
-		if (depositorUserIds.some((id) => !depUserSet.has(id))) return true;
 
 		// Blacklist
 		if (blacklistedUserIds.length !== initialConfig.blacklistedUserIds.length)
@@ -913,6 +970,7 @@ export function ItemRequestsPage() {
 			const init = allowedMap.get(item.id);
 			if (!init) return true;
 			if (item.maxRequestable !== init.maxRequestable) return true;
+			if (Boolean(item.disabled) !== Boolean(init.disabled)) return true;
 		}
 
 		return false;
@@ -921,10 +979,9 @@ export function ItemRequestsPage() {
 		requestChannelId,
 		grantingChannelId,
 		storageChannelId,
+		stockHoldersChannelId,
 		requesterRoleIds,
 		managerRoleIds,
-		depositorRoleIds,
-		depositorUserIds,
 		blacklistedUserIds,
 		allowedItems,
 	]);
@@ -934,10 +991,9 @@ export function ItemRequestsPage() {
 		setRequestChannelId(initialConfig.requestChannelId);
 		setGrantingChannelId(initialConfig.grantingChannelId);
 		setStorageChannelId(initialConfig.storageChannelId);
+		setStockHoldersChannelId(initialConfig.stockHoldersChannelId);
 		setRequesterRoleIds(initialConfig.requesterRoleIds);
 		setManagerRoleIds(initialConfig.managerRoleIds);
-		setDepositorRoleIds(initialConfig.depositorRoleIds);
-		setDepositorUserIds(initialConfig.depositorUserIds);
 		setBlacklistedUserIds(initialConfig.blacklistedUserIds);
 		setAllowedItems(initialConfig.allowedItems);
 		toast.info("Unsaved changes discarded.");
@@ -993,6 +1049,7 @@ export function ItemRequestsPage() {
 				fetchMembers(true),
 				fetchRoles(),
 				fetchStock(),
+				fetchStockHolders(),
 				fetchConfig(),
 				fetchLogs(logsPage, debouncedLogsSearch),
 				fetchDeposits(depositsPage, debouncedDepositsSearch),
@@ -1011,6 +1068,7 @@ export function ItemRequestsPage() {
 		fetchMembers,
 		fetchRoles,
 		fetchStock,
+		fetchStockHolders,
 		fetchConfig,
 		fetchLogs,
 		fetchDeposits,
@@ -1020,16 +1078,59 @@ export function ItemRequestsPage() {
 		debouncedDepositsSearch,
 	]);
 
-	// Group allowed items by category
+	// Filtered allowed items based on search and status filters
+	const filteredAllowedItems = useMemo(() => {
+		const q = itemFilterQuery.trim().toLowerCase();
+		return allowedItems.filter((item) => {
+			const stock =
+				currentStockMap.get(item.id)?.available ??
+				currentStockMap.get(item.name.trim().toLowerCase())?.available ??
+				0;
+
+			if (itemStatusFilter === "enabled" && item.disabled) return false;
+			if (itemStatusFilter === "disabled" && !item.disabled) return false;
+			if (itemStatusFilter === "in-stock" && stock <= 0) return false;
+
+			if (
+				q &&
+				!item.name.toLowerCase().includes(q) &&
+				!item.category?.toLowerCase().includes(q)
+			) {
+				return false;
+			}
+
+			return true;
+		});
+	}, [allowedItems, currentStockMap, itemFilterQuery, itemStatusFilter]);
+
+	// Group filtered allowed items by category
 	const itemsByCategory = useMemo(() => {
 		const groups: Record<string, WhitelistedItem[]> = {};
-		for (const item of allowedItems) {
+		for (const item of filteredAllowedItems) {
 			const cat = item.category || "General";
 			if (!groups[cat]) groups[cat] = [];
 			groups[cat].push(item);
 		}
 		return groups;
-	}, [allowedItems]);
+	}, [filteredAllowedItems]);
+
+	const enabledCount = useMemo(
+		() => allowedItems.filter((i) => !i.disabled).length,
+		[allowedItems],
+	);
+	const disabledCount = useMemo(
+		() => allowedItems.filter((i) => Boolean(i.disabled)).length,
+		[allowedItems],
+	);
+	const inStockCount = useMemo(() => {
+		return allowedItems.filter((item) => {
+			const stock =
+				currentStockMap.get(item.id)?.available ??
+				currentStockMap.get(item.name.trim().toLowerCase())?.available ??
+				0;
+			return stock > 0;
+		}).length;
+	}, [allowedItems, currentStockMap]);
 
 	if (!hasAdminAccess && !isOwner) {
 		return (
@@ -1086,6 +1187,7 @@ export function ItemRequestsPage() {
 							isRefreshing ||
 							logsLoading ||
 							loadingStock ||
+							loadingStockHolders ||
 							depositsLoading ||
 							loadingChannels ||
 							loadingMembers ||
@@ -1099,6 +1201,7 @@ export function ItemRequestsPage() {
 								isRefreshing ||
 								logsLoading ||
 								loadingStock ||
+								loadingStockHolders ||
 								depositsLoading ||
 								loadingChannels ||
 								loadingMembers
@@ -1166,10 +1269,14 @@ export function ItemRequestsPage() {
 
 			{/* Main Tabs */}
 			<Tabs defaultValue="settings" className="w-full">
-				<TabsList className="grid w-full grid-cols-3 max-w-xl mb-2">
+				<TabsList className="grid w-full grid-cols-4 max-w-2xl mb-2">
 					<TabsTrigger value="settings" className="cursor-pointer gap-2">
 						<SlidersHorizontal className="size-3.5" />
-						<span>Configuration & Items</span>
+						<span>Configuration</span>
+					</TabsTrigger>
+					<TabsTrigger value="stockholders" className="cursor-pointer gap-2">
+						<Users className="size-3.5" />
+						<span>Stock Holders</span>
 					</TabsTrigger>
 					<TabsTrigger value="deposits" className="cursor-pointer gap-2">
 						<span>Depositor History</span>
@@ -1200,9 +1307,6 @@ export function ItemRequestsPage() {
 											className="text-xs font-semibold text-foreground flex items-center justify-between"
 										>
 											<span>Item Requests Channel</span>
-											<span className="text-[10px] text-muted-foreground font-normal">
-												Bot maintains interactive embed here
-											</span>
 										</label>
 										<Select
 											value={requestChannelId ?? "none"}
@@ -1246,9 +1350,6 @@ export function ItemRequestsPage() {
 											className="text-xs font-semibold text-foreground flex items-center justify-between"
 										>
 											<span>Requests Granting Channel</span>
-											<span className="text-[10px] text-muted-foreground font-normal">
-												Review embeds sent here with accept/reject buttons
-											</span>
 										</label>
 										<Select
 											value={grantingChannelId ?? "none"}
@@ -1291,11 +1392,7 @@ export function ItemRequestsPage() {
 											htmlFor="storage-channel-select"
 											className="text-xs font-semibold text-foreground flex items-center justify-between"
 										>
-											<span>Armory Depositor & Storage Channel</span>
-											<span className="text-[10px] text-muted-foreground font-normal">
-												Where members paste deposit logs and bot posts live
-												stock
-											</span>
+											<span>Item Deposit Channel</span>
 										</label>
 										<Select
 											value={storageChannelId ?? "none"}
@@ -1306,6 +1403,49 @@ export function ItemRequestsPage() {
 										>
 											<SelectTrigger
 												id="storage-channel-select"
+												className="w-full font-mono text-xs cursor-pointer"
+											>
+												<SelectValue placeholder="Select a channel..." />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectGroup>
+													<SelectLabel className="text-[10px] uppercase font-mono tracking-wider">
+														Text Channels
+													</SelectLabel>
+													<SelectItem value="none" className="text-xs">
+														-- None Selected --
+													</SelectItem>
+													{channels.map((ch) => (
+														<SelectItem
+															key={ch.id}
+															value={ch.id}
+															className="text-xs font-mono"
+														>
+															#{ch.name}
+														</SelectItem>
+													))}
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+									</div>
+
+									{/* Stock Holders Distribution Channel */}
+									<div className="flex flex-col gap-1.5">
+										<label
+											htmlFor="stock-holders-channel-select"
+											className="text-xs font-semibold text-foreground flex items-center justify-between"
+										>
+											<span>Stock Holders Channel</span>
+										</label>
+										<Select
+											value={stockHoldersChannelId ?? "none"}
+											onValueChange={(val) =>
+												setStockHoldersChannelId(val === "none" ? null : val)
+											}
+											disabled={loadingChannels || loadingConfig}
+										>
+											<SelectTrigger
+												id="stock-holders-channel-select"
 												className="w-full font-mono text-xs cursor-pointer"
 											>
 												<SelectValue placeholder="Select a channel..." />
@@ -1354,11 +1494,7 @@ export function ItemRequestsPage() {
 													: `${requesterRoleIds.length} role(s) selected`}
 											</span>
 										</div>
-										<p className="text-[11px] text-muted-foreground">
-											Leave empty to allow all members in the server to request
-											items. If specified, only members with any of these roles
-											can open requests.
-										</p>
+
 										<Select
 											value={
 												requesterRoleIds.length === 1
@@ -1480,11 +1616,7 @@ export function ItemRequestsPage() {
 													: `${managerRoleIds.length} role(s) selected`}
 											</span>
 										</div>
-										<p className="text-[11px] text-muted-foreground">
-											Roles authorized to click Accept / Reject buttons in the
-											granting channel. (Server Administrators always have
-											permission).
-										</p>
+
 										<Select
 											value={
 												managerRoleIds.length === 1
@@ -1593,294 +1725,6 @@ export function ItemRequestsPage() {
 											</div>
 										)}
 									</div>
-
-									{/* Separator */}
-									<div className="border-t border-border/40 my-1" />
-
-									{/* Allowed Depositor Roles */}
-									<div className="flex flex-col gap-2">
-										<div className="flex items-center justify-between">
-											<span className="text-xs font-semibold text-foreground">
-												Allowed Depositor Roles
-											</span>
-											<span className="text-[10px] text-muted-foreground">
-												{depositorRoleIds.length === 0 &&
-												depositorUserIds.length === 0
-													? "Open to all server members"
-													: `${depositorRoleIds.length} role(s) selected`}
-											</span>
-										</div>
-										<p className="text-[11px] text-muted-foreground">
-											Restrict who can deposit items by pasting logs into the
-											armory channel. Anyone else messaging in that channel will
-											be deleted immediately.
-										</p>
-										<Select
-											value={
-												depositorRoleIds.length === 1
-													? (depositorRoleIds[0] ?? "none")
-													: "none"
-											}
-											onValueChange={(val) => {
-												if (val === "none") {
-													setDepositorRoleIds([]);
-												} else if (!depositorRoleIds.includes(val)) {
-													setDepositorRoleIds((prev) => [...prev, val]);
-												}
-											}}
-											disabled={loadingRoles || loadingConfig}
-										>
-											<SelectTrigger
-												id="depositor-roles-select"
-												className="w-full font-mono text-xs cursor-pointer"
-											>
-												<SelectValue
-													placeholder={
-														depositorRoleIds.length === 0
-															? "-- None (Open to all members) --"
-															: `${depositorRoleIds.length} role(s) selected`
-													}
-												>
-													{depositorRoleIds.length === 0
-														? "-- None (Open to all members) --"
-														: depositorRoleIds.length === 1
-															? (roles.find((r) => r.id === depositorRoleIds[0])
-																	?.name ?? "1 role selected")
-															: `${depositorRoleIds.length} roles selected`}
-												</SelectValue>
-											</SelectTrigger>
-											<SelectContent>
-												<SelectGroup>
-													<SelectLabel className="text-[10px] uppercase font-mono tracking-wider">
-														Server Roles
-													</SelectLabel>
-													<SelectItem
-														value="none"
-														className="text-xs font-mono"
-													>
-														-- None (Open to all members) --
-													</SelectItem>
-													{roles.map((r) => {
-														const isAdded = depositorRoleIds.includes(r.id);
-														return (
-															<SelectItem
-																key={r.id}
-																value={r.id}
-																className="text-xs font-mono"
-															>
-																<div className="flex items-center gap-2">
-																	<span
-																		className="size-2 rounded-full shrink-0"
-																		style={{
-																			backgroundColor: formatRoleColor(r.color),
-																		}}
-																	/>
-																	<span>{r.name}</span>
-																	{isAdded && (
-																		<span className="text-[10px] text-primary ml-1">
-																			(Selected)
-																		</span>
-																	)}
-																</div>
-															</SelectItem>
-														);
-													})}
-												</SelectGroup>
-											</SelectContent>
-										</Select>
-
-										{/* Selected Depositor Roles Badges */}
-										{depositorRoleIds.length > 0 && (
-											<div className="flex flex-wrap gap-1.5 pt-1">
-												{depositorRoleIds.map((id) => {
-													const r = roles.find((role) => role.id === id);
-													return (
-														<Badge
-															key={id}
-															variant="secondary"
-															className="gap-1.5 text-xs font-mono py-0.5 px-2 border border-border/80 bg-background/80"
-														>
-															<span
-																className="size-2 rounded-full shrink-0"
-																style={{
-																	backgroundColor: r
-																		? formatRoleColor(r.color)
-																		: "#94a3b8",
-																}}
-															/>
-															<span>{r?.name ?? id}</span>
-															<button
-																type="button"
-																onClick={() => toggleRole(id, "depositor")}
-																title="Remove role"
-																className="text-muted-foreground hover:text-foreground cursor-pointer ml-0.5"
-															>
-																<X className="size-3" />
-															</button>
-														</Badge>
-													);
-												})}
-											</div>
-										)}
-									</div>
-
-									{/* Allowed Specific Depositor Members */}
-									<div className="flex flex-col gap-2 pt-2">
-										<div className="flex items-center justify-between">
-											<span className="text-xs font-semibold text-foreground">
-												Allowed Depositor Members
-											</span>
-											<span className="text-[10px] text-muted-foreground">
-												{depositorUserIds.length} member(s) allowed
-											</span>
-										</div>
-										<p className="text-[11px] text-muted-foreground">
-											Explicitly permit individual members to deposit in
-											addition to any role permissions.
-										</p>
-
-										<div ref={depositorMemberSearchRef} className="relative">
-											<div className="relative flex-1">
-												<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-												<Input
-													placeholder={
-														loadingMembers
-															? "Loading server members..."
-															: "Search server members by name, username, or ID..."
-													}
-													value={depositorMemberSearchQuery}
-													onChange={(e) => {
-														setDepositorMemberSearchQuery(e.target.value);
-														setIsDepositorMemberDropdownOpen(true);
-													}}
-													onFocus={() => setIsDepositorMemberDropdownOpen(true)}
-													onKeyDown={(e) => {
-														if (e.key === "Enter") {
-															e.preventDefault();
-															if (
-																filteredDepositorMembers[0] &&
-																depositorMemberSearchQuery.trim().length > 0
-															) {
-																handleSelectMemberToDepositor(
-																	filteredDepositorMembers[0],
-																);
-															}
-														}
-													}}
-													className="pl-8 text-xs font-mono"
-												/>
-												{loadingMembers && (
-													<Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 size-3.5 animate-spin text-muted-foreground" />
-												)}
-											</div>
-
-											{/* Search Dropdown */}
-											{isDepositorMemberDropdownOpen && (
-												<div className="absolute top-full left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md p-1">
-													{loadingMembers ? (
-														<div className="p-2 text-center text-xs text-muted-foreground">
-															Loading members...
-														</div>
-													) : filteredDepositorMembers.length === 0 ? (
-														<div className="p-2 text-center text-xs text-muted-foreground">
-															No members found
-														</div>
-													) : (
-														filteredDepositorMembers.map((m) => {
-															const isAlreadyAdded = depositorUserIds.includes(
-																m.id,
-															);
-															return (
-																<button
-																	key={m.id}
-																	type="button"
-																	onClick={() =>
-																		handleSelectMemberToDepositor(m)
-																	}
-																	disabled={isAlreadyAdded}
-																	className={`w-full flex items-center justify-between p-2 rounded text-xs text-left transition-colors ${
-																		isAlreadyAdded
-																			? "opacity-50 cursor-not-allowed bg-muted/40"
-																			: "hover:bg-muted/60 cursor-pointer"
-																	}`}
-																>
-																	<div className="flex items-center gap-2 min-w-0">
-																		{m.avatar ? (
-																			<img
-																				src={m.avatar}
-																				alt={m.displayName}
-																				className="size-5 rounded-full object-cover shrink-0"
-																			/>
-																		) : (
-																			<div className="size-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-																				<User className="size-3 text-primary" />
-																			</div>
-																		)}
-																		<div className="flex flex-col min-w-0">
-																			<span className="font-medium truncate text-foreground">
-																				{m.displayName}
-																			</span>
-																			<span className="text-[10px] text-muted-foreground font-mono truncate">
-																				@{m.username} • {m.id}
-																			</span>
-																		</div>
-																	</div>
-																	{isAlreadyAdded && (
-																		<span className="text-[10px] text-primary shrink-0 ml-2 font-mono">
-																			Allowed
-																		</span>
-																	)}
-																</button>
-															);
-														})
-													)}
-												</div>
-											)}
-										</div>
-
-										{/* Allowed Depositor Badges */}
-										{depositorUserIds.length > 0 && (
-											<div className="flex flex-wrap gap-1.5 pt-1">
-												{depositorUserIds.map((userId) => {
-													const member = guildMembers.find(
-														(m) => m.id === userId,
-													);
-													return (
-														<Badge
-															key={userId}
-															variant="secondary"
-															className="gap-1.5 text-xs font-mono py-1 px-2 border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 flex items-center"
-														>
-															{member?.avatar ? (
-																<img
-																	src={member.avatar}
-																	alt={member.displayName}
-																	className="size-3.5 rounded-full object-cover shrink-0"
-																/>
-															) : (
-																<User className="size-3 shrink-0" />
-															)}
-															<span className="font-sans font-medium text-foreground">
-																{member?.displayName ??
-																	member?.username ??
-																	userId}
-															</span>
-															<button
-																type="button"
-																onClick={() =>
-																	handleRemoveDepositorMember(userId)
-																}
-																title="Remove allowed depositor"
-																className="text-muted-foreground hover:text-destructive cursor-pointer ml-1"
-															>
-																<X className="size-3" />
-															</button>
-														</Badge>
-													);
-												})}
-											</div>
-										)}
-									</div>
 								</CardContent>
 							</Card>
 
@@ -1889,7 +1733,6 @@ export function ItemRequestsPage() {
 								<CardHeader className="pb-3">
 									<div className="flex items-center justify-between">
 										<CardTitle className="text-base font-semibold flex items-center gap-2">
-											<UserX className="size-4 text-destructive" />
 											<span>Blacklist</span>
 										</CardTitle>
 										<Badge
@@ -1901,11 +1744,6 @@ export function ItemRequestsPage() {
 									</div>
 								</CardHeader>
 								<CardContent className="flex flex-col gap-4">
-									<p className="text-[11px] text-muted-foreground">
-										Search and select server members to block from item requests
-										and armory storage.
-									</p>
-
 									{/* Member Search Bar & Dropdown */}
 									<div ref={memberSearchRef} className="relative">
 										<div className="flex items-center gap-2">
@@ -1916,7 +1754,7 @@ export function ItemRequestsPage() {
 													placeholder={
 														loadingMembers
 															? "Loading server members..."
-															: "Search server member by name, username, or ID..."
+															: "Search by name, username, or ID..."
 													}
 													value={memberSearchQuery}
 													onFocus={() => setIsMemberDropdownOpen(true)}
@@ -2085,116 +1923,203 @@ export function ItemRequestsPage() {
 							</Card>
 						</div>
 
-						{/* Whitelisted Items Curator */}
+						{/* In-Stock Requestable Items Curator */}
 						<div className="lg:col-span-7 flex flex-col h-full">
 							<Card className="border-border/80 shadow-xs flex flex-col h-full min-h-[600px] lg:min-h-0">
 								<CardHeader className="pb-3 shrink-0">
-									<div className="flex items-center justify-between">
-										<CardTitle className="text-base font-semibold flex items-center gap-2">
-											Items Whitelist
-										</CardTitle>
-										<Badge variant="outline" className="font-mono text-xs">
-											{allowedItems.length} whitelisted
-										</Badge>
+									<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+										<div>
+											<CardTitle className="text-base font-semibold flex items-center gap-2">
+												<Package className="size-4 text-primary" />
+												<span>Requestable Items (In Stock)</span>
+											</CardTitle>
+											<p className="text-xs text-muted-foreground mt-0.5">
+												Armory inventory items are available by default. Toggle
+												off items to disable requests.
+											</p>
+										</div>
+										<div className="flex items-center gap-1.5 flex-wrap">
+											<Badge
+												variant="outline"
+												className="font-mono text-xs border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+											>
+												{enabledCount} enabled
+											</Badge>
+											<Badge variant="secondary" className="font-mono text-xs">
+												{inStockCount} in stock
+											</Badge>
+										</div>
 									</div>
 								</CardHeader>
 
-								<CardContent className="flex flex-col gap-4 flex-1 min-h-0">
-									{/* Debounced Search Input */}
-									<div className="relative shrink-0">
-										<Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-										<Input
-											type="text"
-											placeholder="Search Torn items by name..."
-											value={searchQuery}
-											onChange={(e) => setSearchQuery(e.target.value)}
-											className="pl-8 text-xs font-mono"
-										/>
-										{isSearching && (
-											<Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 size-3.5 animate-spin text-muted-foreground" />
-										)}
-									</div>
-
-									{/* Search Results Dropdown/Box */}
-									{searchQuery.trim().length > 0 && (
-										<div className="flex flex-col gap-1.5 p-2 rounded-lg border border-border/80 bg-background shadow-md max-h-56 overflow-y-auto shrink-0">
-											<span className="text-[10px] font-mono text-muted-foreground uppercase px-1">
-												Search Results ({searchResults.length})
-											</span>
-											{searchResults.length === 0 && !isSearching ? (
-												<div className="text-xs text-muted-foreground p-3 text-center">
-													No matching Torn items found.
-												</div>
-											) : (
-												searchResults.map((item) => {
-													const alreadyAdded = allowedItems.some(
-														(i) => i.id === item.id,
-													);
-													return (
-														<div
-															key={item.id}
-															className="flex items-center justify-between gap-3 p-1.5 rounded-md hover:bg-muted/50 transition-colors"
-														>
-															<div className="flex items-center gap-2.5 min-w-0">
-																{item.image ? (
-																	<img
-																		src={item.image}
-																		alt={item.name}
-																		className="size-7 object-contain rounded bg-muted/40 p-0.5 border border-border/40 shrink-0"
-																	/>
-																) : (
-																	<div className="size-7 rounded bg-muted flex items-center justify-center text-[10px] font-mono shrink-0">
-																		IT
-																	</div>
-																)}
-																<div className="flex flex-col min-w-0">
-																	<span className="text-xs font-medium text-foreground truncate">
-																		{item.name}
-																	</span>
-																	<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono">
-																		<span>{item.category}</span>
-																		<span>•</span>
-																		<span>
-																			{formatCurrency(item.marketPrice)}
-																		</span>
-																	</div>
-																</div>
-															</div>
-
-															<Button
-																variant={alreadyAdded ? "secondary" : "default"}
-																size="xs"
-																disabled={alreadyAdded}
-																onClick={() => handleAddItem(item)}
-																className="cursor-pointer gap-1 shrink-0"
-															>
-																{alreadyAdded ? (
-																	<>
-																		<Check className="size-3" />
-																		<span>Added</span>
-																	</>
-																) : (
-																	<>
-																		<Plus className="size-3" />
-																		<span>Add</span>
-																	</>
-																)}
-															</Button>
-														</div>
-													);
-												})
+								<CardContent className="flex flex-col gap-3 flex-1 min-h-0">
+									{/* Search Filter & Status Controls */}
+									<div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+										<div className="relative flex-1">
+											<Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+											<Input
+												type="text"
+												placeholder="Filter in-stock items by name or category..."
+												value={itemFilterQuery}
+												onChange={(e) => setItemFilterQuery(e.target.value)}
+												className="pl-8 pr-7 text-xs font-mono h-8"
+											/>
+											{itemFilterQuery && (
+												<button
+													type="button"
+													onClick={() => setItemFilterQuery("")}
+													className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+													title="Clear filter"
+												>
+													<X className="size-3" />
+												</button>
 											)}
 										</div>
-									)}
 
-									{/* Currently Whitelisted Items List Grouped by Category */}
+										{/* Quick Status Filters */}
+										<div className="flex items-center gap-1 bg-muted/40 p-0.5 rounded-lg border border-border/60 shrink-0">
+											<Button
+												type="button"
+												variant={
+													itemStatusFilter === "all" ? "secondary" : "ghost"
+												}
+												size="xs"
+												onClick={() => setItemStatusFilter("all")}
+												className="text-[11px] h-7 px-2 font-mono cursor-pointer"
+											>
+												All ({allowedItems.length})
+											</Button>
+											<Button
+												type="button"
+												variant={
+													itemStatusFilter === "in-stock"
+														? "secondary"
+														: "ghost"
+												}
+												size="xs"
+												onClick={() => setItemStatusFilter("in-stock")}
+												className="text-[11px] h-7 px-2 font-mono cursor-pointer"
+											>
+												In Stock ({inStockCount})
+											</Button>
+											<Button
+												type="button"
+												variant={
+													itemStatusFilter === "enabled" ? "secondary" : "ghost"
+												}
+												size="xs"
+												onClick={() => setItemStatusFilter("enabled")}
+												className="text-[11px] h-7 px-2 font-mono cursor-pointer"
+											>
+												Enabled ({enabledCount})
+											</Button>
+											<Button
+												type="button"
+												variant={
+													itemStatusFilter === "disabled"
+														? "secondary"
+														: "ghost"
+												}
+												size="xs"
+												onClick={() => setItemStatusFilter("disabled")}
+												className="text-[11px] h-7 px-2 font-mono cursor-pointer"
+											>
+												Disabled ({disabledCount})
+											</Button>
+										</div>
+									</div>
+
+									{/* Quick Action Toolbar */}
+									<div className="flex items-center justify-between text-xs text-muted-foreground px-0.5 shrink-0">
+										<span className="text-[10px] font-mono">
+											Showing {filteredAllowedItems.length} of{" "}
+											{allowedItems.length} items
+										</span>
+										<div className="flex items-center gap-1.5">
+											<Button
+												type="button"
+												variant="outline"
+												size="xs"
+												onClick={handleEnableAll}
+												className="h-6 text-[10px] font-mono cursor-pointer gap-1"
+											>
+												<Check className="size-3 text-emerald-500" />
+												Enable All
+											</Button>
+											<Button
+												type="button"
+												variant="outline"
+												size="xs"
+												onClick={handleDisableAll}
+												className="h-6 text-[10px] font-mono cursor-pointer text-muted-foreground gap-1"
+											>
+												<X className="size-3 text-destructive" />
+												Disable All
+											</Button>
+											<Button
+												type="button"
+												variant="ghost"
+												size="xs"
+												onClick={() => void fetchStock()}
+												disabled={loadingStock}
+												className="h-6 text-[10px] font-mono cursor-pointer gap-1"
+												title="Refresh live armory inventory"
+											>
+												<RefreshCw
+													className={`size-3 ${loadingStock ? "animate-spin" : ""}`}
+												/>
+												Sync Stock
+											</Button>
+										</div>
+									</div>
+
+									{/* In-Stock Items List Grouped by Category */}
 									<div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto pr-1">
 										{allowedItems.length === 0 ? (
+											<div className="flex flex-col items-center justify-center p-8 border border-dashed border-border/80 rounded-lg text-center gap-2.5 text-muted-foreground my-auto">
+												<Package className="size-8 stroke-[1.2] text-muted-foreground/60" />
+												<div className="flex flex-col gap-1">
+													<p className="text-xs font-semibold text-foreground">
+														No items currently in armory stock
+													</p>
+													<p className="text-[11px] text-muted-foreground max-w-sm">
+														Items deposited into armory storage will
+														automatically appear here as requestable items
+														(enabled by default).
+													</p>
+												</div>
+												<Button
+													type="button"
+													variant="outline"
+													size="xs"
+													onClick={() => void fetchStock()}
+													disabled={loadingStock}
+													className="mt-1 cursor-pointer gap-1 text-xs"
+												>
+													<RefreshCw
+														className={`size-3 ${loadingStock ? "animate-spin" : ""}`}
+													/>
+													<span>Refresh Inventory</span>
+												</Button>
+											</div>
+										) : filteredAllowedItems.length === 0 ? (
 											<div className="flex flex-col items-center justify-center p-8 border border-dashed border-border/80 rounded-lg text-center gap-2 text-muted-foreground my-auto">
-												<Package className="size-8 stroke-[1.2]" />
+												<Search className="size-6 stroke-[1.5] text-muted-foreground/60" />
 												<p className="text-xs font-medium">
-													No items whitelisted yet
+													No items match your filter criteria
 												</p>
+												<Button
+													type="button"
+													variant="ghost"
+													size="xs"
+													onClick={() => {
+														setItemFilterQuery("");
+														setItemStatusFilter("all");
+													}}
+													className="text-xs text-primary cursor-pointer"
+												>
+													Reset filters
+												</Button>
 											</div>
 										) : (
 											Object.entries(itemsByCategory).map(
@@ -2225,47 +2150,91 @@ export function ItemRequestsPage() {
 																		item.name.trim().toLowerCase(),
 																	)?.available ??
 																	0;
+																const isItemDisabled = Boolean(item.disabled);
+
 																return (
 																	<div
 																		key={item.id}
-																		className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-background border border-border/70 hover:border-border transition-colors"
+																		className={`flex items-center justify-between gap-3 p-2.5 rounded-lg border transition-all ${
+																			isItemDisabled
+																				? "bg-muted/20 border-border/40 opacity-60"
+																				: "bg-background border-border/70 hover:border-border shadow-xs"
+																		}`}
 																	>
+																		{/* Left: Item Thumbnail & Info */}
 																		<div className="flex items-center gap-2.5 min-w-0 flex-1">
 																			{item.image ? (
 																				<img
 																					src={item.image}
 																					alt={item.name}
-																					className="size-7 object-contain rounded shrink-0 bg-muted/40 p-0.5 border border-border/40"
+																					className={`size-8 object-contain rounded shrink-0 bg-muted/40 p-0.5 border border-border/40 ${
+																						isItemDisabled
+																							? "grayscale opacity-50"
+																							: ""
+																					}`}
 																				/>
 																			) : (
-																				<div className="size-7 rounded bg-muted/60 flex items-center justify-center text-[10px] font-mono shrink-0">
+																				<div className="size-8 rounded bg-muted/60 flex items-center justify-center text-[10px] font-mono shrink-0">
 																					IT
 																				</div>
 																			)}
 																			<div className="flex flex-col min-w-0">
-																				<span className="text-xs font-semibold text-foreground truncate">
-																					{item.name}
-																				</span>
-																				<div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground flex-wrap">
-																					<span>
-																						{formatCurrency(item.marketPrice)}
+																				<div className="flex items-center gap-1.5">
+																					<span
+																						className={`text-xs font-semibold truncate ${
+																							isItemDisabled
+																								? "text-muted-foreground line-through decoration-muted-foreground/40"
+																								: "text-foreground"
+																						}`}
+																					>
+																						{item.name}
 																					</span>
-																					<span>•</span>
+																					{isItemDisabled && (
+																						<Badge
+																							variant="outline"
+																							className="text-[9px] font-mono px-1 py-0 text-muted-foreground border-border/60"
+																						>
+																							Disabled
+																						</Badge>
+																					)}
+																				</div>
+																				<div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground flex-wrap">
+																					{item.marketPrice !== undefined &&
+																						item.marketPrice > 0 && (
+																							<>
+																								<span>
+																									{formatCurrency(
+																										item.marketPrice,
+																									)}
+																								</span>
+																								<span>•</span>
+																							</>
+																						)}
 																					<span
 																						className={`font-semibold ${
 																							stock > 0
 																								? "text-emerald-600 dark:text-emerald-400"
-																								: "text-muted-foreground"
+																								: "text-amber-500/90"
 																						}`}
 																					>
-																						{stock} in stock
+																						{stock > 0
+																							? `${stock.toLocaleString()} in stock`
+																							: "0 in stock"}
 																					</span>
 																				</div>
 																			</div>
 																		</div>
 
+																		{/* Right: Controls (Option to disable/enable & Max limit) */}
 																		<div className="flex items-center gap-2 shrink-0">
-																			<div className="flex items-center gap-1 bg-muted/40 px-2 py-1 rounded border border-border/60">
+																			{/* Max Limit Input */}
+																			<div
+																				className={`flex items-center gap-1 bg-muted/40 px-2 py-1 rounded border border-border/60 transition-opacity ${
+																					isItemDisabled
+																						? "opacity-30 pointer-events-none"
+																						: ""
+																				}`}
+																			>
 																				<label
 																					htmlFor={`max-${item.id}`}
 																					className="text-[10px] font-mono text-muted-foreground whitespace-nowrap"
@@ -2277,8 +2246,9 @@ export function ItemRequestsPage() {
 																					id={`max-${item.id}`}
 																					type="number"
 																					min="1"
-																					max="1000"
+																					max="10000"
 																					placeholder="∞"
+																					disabled={isItemDisabled}
 																					value={item.maxRequestable ?? ""}
 																					onKeyDown={(e) => {
 																						if (
@@ -2314,17 +2284,26 @@ export function ItemRequestsPage() {
 																				/>
 																			</div>
 
-																			<Button
-																				variant="ghost"
-																				size="icon-xs"
-																				onClick={() =>
-																					handleRemoveItem(item.id)
-																				}
-																				title="Remove Item"
-																				className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer shrink-0"
-																			>
-																				<Trash2 className="size-3.5" />
-																			</Button>
+																			{/* Option to Disable/Enable Toggle */}
+																			<div className="flex items-center gap-1 pl-1">
+																				<Switch
+																					id={`toggle-${item.id}`}
+																					size="sm"
+																					checked={!isItemDisabled}
+																					onCheckedChange={(checked) =>
+																						handleToggleItemEnabled(
+																							item.id,
+																							checked,
+																						)
+																					}
+																					title={
+																						isItemDisabled
+																							? "Click to enable requests for this item"
+																							: "Click to disable requests for this item"
+																					}
+																					aria-label={`Enable or disable requests for ${item.name}`}
+																				/>
+																			</div>
 																		</div>
 																	</div>
 																);
@@ -2338,20 +2317,103 @@ export function ItemRequestsPage() {
 								</CardContent>
 
 								<CardFooter className="pt-3 border-t border-border/60 flex items-center justify-between text-xs text-muted-foreground shrink-0">
-									{allowedItems.length > 0 && (
+									<span className="font-mono text-[11px]">
+										{enabledCount} of {allowedItems.length} items requestable
+									</span>
+									<div className="flex items-center gap-2">
 										<Button
+											type="button"
 											variant="ghost"
 											size="xs"
-											onClick={() => setAllowedItems([])}
-											className="text-destructive hover:bg-destructive/10 cursor-pointer"
+											onClick={handleDisableAll}
+											className="text-muted-foreground hover:text-foreground cursor-pointer text-xs"
 										>
-											Clear All
+											Disable All
 										</Button>
-									)}
+										<Button
+											type="button"
+											variant="ghost"
+											size="xs"
+											onClick={handleEnableAll}
+											className="text-primary hover:text-primary/80 cursor-pointer text-xs font-medium"
+										>
+											Enable All
+										</Button>
+									</div>
 								</CardFooter>
 							</Card>
 						</div>
 					</div>
+				</TabsContent>
+
+				{/* ─── TAB: Stock Holders ──────────────────────────────────────────────── */}
+				<TabsContent value="stockholders" className="flex flex-col gap-4 mt-4">
+					<Card className="border-border/80 shadow-xs">
+						<CardHeader className="pb-3">
+							<CardTitle className="text-base font-semibold flex items-center gap-2">
+								<span>Item Stock Holders</span>
+							</CardTitle>
+						</CardHeader>
+
+						<CardContent className="p-0">
+							<div className="relative overflow-x-auto">
+								<Table>
+									<TableHeader className="bg-muted/30">
+										<TableRow className="text-[11px] font-mono uppercase tracking-wider">
+											<TableHead>Holder Member</TableHead>
+											<TableHead>Discord User ID</TableHead>
+											<TableHead>Item Name</TableHead>
+											<TableHead className="text-right">
+												Quantity Held
+											</TableHead>
+											<TableHead className="text-right">Last Updated</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{loadingStockHolders ? (
+											["sh-1", "sh-2", "sh-3"].map((key) => (
+												<TableRow key={key}>
+													<TableCell colSpan={5}>
+														<Skeleton className="h-9 w-full" />
+													</TableCell>
+												</TableRow>
+											))
+										) : stockHolders.length === 0 ? (
+											<TableRow>
+												<TableCell
+													colSpan={5}
+													className="text-center py-10 text-xs text-muted-foreground"
+												>
+													No members currently hold items. Use the Discord Stock
+													Holders channel to assign stock.
+												</TableCell>
+											</TableRow>
+										) : (
+											stockHolders.map((sh) => (
+												<TableRow key={sh.id}>
+													<TableCell className="font-medium text-xs">
+														@{sh.discordUsername}
+													</TableCell>
+													<TableCell className="font-mono text-xs text-muted-foreground">
+														{sh.discordUserId}
+													</TableCell>
+													<TableCell className="font-medium text-xs">
+														{sh.itemName}
+													</TableCell>
+													<TableCell className="text-right font-mono font-bold text-xs">
+														{sh.quantity.toLocaleString()}x
+													</TableCell>
+													<TableCell className="text-right font-mono text-xs text-muted-foreground">
+														{formatTctTimestamp(sh.updatedAt)}
+													</TableCell>
+												</TableRow>
+											))
+										)}
+									</TableBody>
+								</Table>
+							</div>
+						</CardContent>
+					</Card>
 				</TabsContent>
 
 				{/* ─── TAB 2: Depositor History ──────────────────────────────────────── */}

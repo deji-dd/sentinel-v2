@@ -74,7 +74,7 @@ export function extractUserAndId(raw: string): {
  */
 function normalizeQuantity(qtyStr: string): number {
 	const lower = qtyStr.trim().toLowerCase();
-	if (lower === "a" || lower === "an") return 1;
+	if (lower === "a" || lower === "an" || lower === "some") return 1;
 	const cleaned = lower.replace(/x$/, "");
 	const parsed = Number.parseInt(cleaned, 10);
 	return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
@@ -127,9 +127,9 @@ export function parseDepositLogLine(line: string): ParsedDepositLog[] {
 		];
 	}
 
-	// Pattern 1b: Items received: "You were sent (a|an|\d+x|\d+) (ITEM) from (DONOR)( with the message: (MSG))?"
+	// Pattern 1b: Items received: "You were sent (a|an|some|\d+x|\d+) (ITEM) from (DONOR)( with the message: (MSG))?"
 	const p1Match = content.match(
-		/^You were sent\s+(a|an|\d+x|\d+)\s+(.+?)\s+from\s+(.+?)(?:\s+with the message:\s*(.*))?$/i,
+		/^You were sent\s+(a|an|some|\d+x|\d+)\s+(.+?)\s+from\s+(.+?)(?:\s+with the message:\s*(.*))?$/i,
 	);
 	if (p1Match?.[1] && p1Match[2] && p1Match[3]) {
 		const quantity = normalizeQuantity(p1Match[1]);
@@ -176,9 +176,9 @@ export function parseDepositLogLine(line: string): ParsedDepositLog[] {
 		];
 	}
 
-	// Pattern 2b: Items sent: "(DONOR) sent (a|an|\d+x|\d+) (ITEM) to you(?:\s+with the message:\s*(.*))?"
+	// Pattern 2b: Items sent: "(DONOR) sent (a|an|some|\d+x|\d+) (ITEM) to you(?:\s+with the message:\s*(.*))?"
 	const p2Match = content.match(
-		/^(.+?)\s+sent\s+(a|an|\d+x|\d+)\s+(.+?)\s+to you(?:\s+with the message:\s*(.*))?$/i,
+		/^(.+?)\s+sent\s+(a|an|some|\d+x|\d+)\s+(.+?)\s+to you(?:\s+with the message:\s*(.*))?$/i,
 	);
 	if (p2Match?.[1] && p2Match[2] && p2Match[3]) {
 		const { name: donorName, tornId: donorTornId } = extractUserAndId(
@@ -243,7 +243,7 @@ export function parseDepositLogLine(line: string): ParsedDepositLog[] {
 				.filter(Boolean);
 
 			for (const chunk of chunks) {
-				const qMatch = chunk.match(/^(a|an|\d+x|\d+)\s+(.+)$/i);
+				const qMatch = chunk.match(/^(a|an|some|\d+x|\d+)\s+(.+)$/i);
 				let quantity = 1;
 				let itemName = chunk;
 				if (qMatch?.[1] && qMatch[2]) {
@@ -287,7 +287,7 @@ export function parseBuyLogLine(line: string): ParsedBuyLog | null {
 	const timestamp = tsMatch?.[1]?.trim() ?? null;
 	const content = tsMatch?.[2] ?? trimmed;
 
-	const buyMatch = content.match(/^You bought\s+(a|an|\d+x|\d+)\s+(.+)$/i);
+	const buyMatch = content.match(/^You bought\s+(a|an|some|\d+x|\d+)\s+(.+)$/i);
 	if (!buyMatch?.[1] || !buyMatch[2]) return null;
 
 	const quantity = normalizeQuantity(buyMatch[1]);
@@ -429,9 +429,9 @@ export function parseSingleSentLog(line: string): ParsedSentLog | null {
 	const timestamp = tsMatch?.[1]?.trim() ?? null;
 	const content = tsMatch?.[2] ?? trimmed;
 
-	// Pattern: "You sent (a|an|\d+x|\d+) (ITEM) to (RECIPIENT)"
+	// Pattern: "You sent (a|an|some|\d+x|\d+) (ITEM) to (RECIPIENT)"
 	const match = content.match(
-		/^You sent\s+(a|an|\d+x|\d+)\s+(.+?)\s+to\s+(.+)$/i,
+		/^You sent\s+(a|an|some|\d+x|\d+)\s+(.+?)\s+to\s+(.+)$/i,
 	);
 	if (!match?.[1] || !match[2] || !match[3]) {
 		return null;

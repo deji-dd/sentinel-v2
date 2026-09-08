@@ -401,5 +401,83 @@ describe("Torn Log Parser", () => {
 			});
 			expect(valid.isValid).toBe(true);
 		});
+
+		test("parses '07:11:15 - 08/09/26 You sent some Tyrosine to LoneBlackBear'", () => {
+			const log = "07:11:15 - 08/09/26 You sent some Tyrosine to LoneBlackBear";
+			const parsed = parseSingleSentLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(1);
+			expect(parsed?.itemName).toBe("Tyrosine");
+			expect(parsed?.recipientName).toBe("LoneBlackBear");
+			if (!parsed) throw new Error("Expected parsed log not to be null");
+
+			const valid = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "LoneBlackBear",
+				itemName: "Tyrosine",
+				quantity: 1,
+			});
+			expect(valid.isValid).toBe(true);
+		});
+	});
+
+	describe("handling 'some' quantifier for uncountable items (e.g. drugs)", () => {
+		test("parses '07:11:15 - 08/09/26 LoneBlackBear sent some Tyrosine to you'", () => {
+			const log = "07:11:15 - 08/09/26 LoneBlackBear sent some Tyrosine to you";
+			const parsed = parseSingleDepositLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(1);
+			expect(parsed?.itemName).toBe("Tyrosine");
+			expect(parsed?.donorName).toBe("LoneBlackBear");
+			expect(parsed?.donorTornId).toBeNull();
+			expect(parsed?.timestamp).toBe("07:11:15 - 08/09/26");
+			expect(parsed?.message).toBeNull();
+		});
+
+		test("parses 'LoneBlackBear sent some Tyrosine to you with the message: For the chain'", () => {
+			const log =
+				"LoneBlackBear sent some Tyrosine to you with the message: For the chain";
+			const parsed = parseSingleDepositLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(1);
+			expect(parsed?.itemName).toBe("Tyrosine");
+			expect(parsed?.donorName).toBe("LoneBlackBear");
+			expect(parsed?.message).toBe("For the chain");
+		});
+
+		test("parses 'You were sent some Tyrosine from [LoneBlackBear](https://www.torn.com/profiles.php?XID=123456)'", () => {
+			const log =
+				"You were sent some Tyrosine from [LoneBlackBear](https://www.torn.com/profiles.php?XID=123456)";
+			const parsed = parseSingleDepositLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(1);
+			expect(parsed?.itemName).toBe("Tyrosine");
+			expect(parsed?.donorName).toBe("LoneBlackBear");
+			expect(parsed?.donorTornId).toBe(123456);
+		});
+
+		test("parses 'some' in parseArmoryChatInput", () => {
+			const input = `
+				07:11:15 - 08/09/26 LoneBlackBear sent some Tyrosine to you
+				07:12:00 - 08/09/26 PlayerTwo sent 5x Xanax to you
+			`;
+			const res = parseArmoryChatInput(input);
+			expect(res.deposits).toHaveLength(2);
+			expect(res.deposits[0]?.itemName).toBe("Tyrosine");
+			expect(res.deposits[0]?.quantity).toBe(1);
+			expect(res.deposits[0]?.donorName).toBe("LoneBlackBear");
+			expect(res.deposits[1]?.itemName).toBe("Xanax");
+			expect(res.deposits[1]?.quantity).toBe(5);
+		});
+
+		test("parses trade with 'some Tyrosine'", () => {
+			const log =
+				"LoneBlackBear traded some Tyrosine, 2x Morphine to you [view]";
+			const res = parseDepositLogs(log);
+			expect(res).toHaveLength(2);
+			expect(res[0]?.itemName).toBe("Tyrosine");
+			expect(res[0]?.quantity).toBe(1);
+			expect(res[1]?.itemName).toBe("Morphine");
+			expect(res[1]?.quantity).toBe(2);
+		});
 	});
 });

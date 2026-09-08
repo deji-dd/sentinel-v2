@@ -1,10 +1,12 @@
 import {
 	and,
 	db,
+	deductHolderStock,
 	type ElimsItemRequestConfig,
 	elimsItemRequests,
 	eq,
 	getArmoryStock,
+	getStockHolders,
 	ne,
 	systemStates,
 } from "@sentinel/database";
@@ -28,6 +30,7 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from "discord.js";
+import { syncElimsStockHoldersChannel } from "./elims-stock-holders";
 import { buildVerificationReminderMessage } from "./elims-verification-reminder";
 import {
 	createBaseEmbed,
@@ -283,10 +286,11 @@ export async function handleItemRequestButton(
 			.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
 		const config = reqState?.data as unknown as ElimsItemRequestConfig | null;
 
-		if (!config || config.allowedItems.length === 0) {
+		const activeItems = config?.allowedItems?.filter((i) => !i.disabled) ?? [];
+		if (!config || activeItems.length === 0) {
 			const embed = createErrorEmbed(
 				"Item Requests Unavailable",
-				"Item requests are currently not configured or no items are whitelisted.",
+				"Item requests are currently not configured or no items are available for request.",
 			);
 			await interaction.reply({
 				embeds: [embed],
@@ -343,7 +347,7 @@ export async function handleItemRequestButton(
 
 		// Extract unique categories (max 25 for select menu)
 		const categories = Array.from(
-			new Set(config.allowedItems.map((i) => i.category || "General")),
+			new Set(activeItems.map((i) => i.category || "General")),
 		).slice(0, 25);
 
 		const selectMenu = new StringSelectMenuBuilder()
@@ -405,8 +409,10 @@ export async function handleItemRequestCategorySelect(
 
 		if (!config) return;
 
-		const itemsInCategory = config.allowedItems
-			.filter((i) => (i.category || "General") === selectedCategory)
+		const itemsInCategory = (config.allowedItems ?? [])
+			.filter(
+				(i) => !i.disabled && (i.category || "General") === selectedCategory,
+			)
 			.slice(0, 25);
 
 		if (itemsInCategory.length === 0) {
@@ -482,10 +488,21 @@ export async function handleItemRequestItemSelect(
 		}
 
 		const selectedItem = config?.allowedItems.find(
-			(i) => i.id === selectedItemId,
+			(i) => i.id === selectedItemId && !i.disabled,
 		);
-		const itemName = selectedItem?.name ?? "Item";
-		const maxNote = selectedItem?.maxRequestable
+		if (!selectedItem) {
+			const embed = createErrorEmbed(
+				"Item Unavailable",
+				"The selected item is disabled or no longer available for request.",
+			);
+			await interaction.reply({
+				embeds: [embed],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+		const itemName = selectedItem.name ?? "Item";
+		const maxNote = selectedItem.maxRequestable
 			? ` (Max: ${selectedItem.maxRequestable})`
 			: "";
 
@@ -583,11 +600,13 @@ export async function handleItemRequestModalSubmit(
 			return;
 		}
 
-		const item = config?.allowedItems.find((i) => i.id === itemId);
+		const item = config?.allowedItems.find(
+			(i) => i.id === itemId && !i.disabled,
+		);
 		if (!item) {
 			const embed = createErrorEmbed(
 				"Item Unavailable",
-				"The requested item is no longer available in the whitelist.",
+				"The requested item is disabled or no longer available in the whitelist.",
 			);
 			await interaction.reply({
 				embeds: [embed],
@@ -903,27 +922,58 @@ export async function handleItemGrantingButton(
 
 		if (actionType === "elims_grant_accept") {
 			const guildId = interaction.guildId ?? request.guildId;
-			const stockMap = await getArmoryStock(guildId, request.isTest);
-			const itemStock =
-				stockMap.get(request.itemId) ??
-				stockMap.get(request.itemName.trim().toLowerCase());
-			const availableStock = itemStock?.available ?? 0;
 
-			if (availableStock < request.quantity) {
-				const missing = request.quantity - availableStock;
-				const embed = createErrorEmbed(
-					"Insufficient Storage Stock",
-					`Cannot approve request for **${request.quantity.toLocaleString()}x ${request.itemName}**.\n\n` +
-						`• **In Storage:** ${availableStock.toLocaleString()}\n` +
-						`• **Requested:** ${request.quantity.toLocaleString()}\n` +
-						`• **Missing:** ${missing.toLocaleString()} item(s)\n\n` +
-						`Please wait for more deposits to be logged before approving this request.`,
+			// If Stock Holders channel is configured, approver MUST hold enough stock in their personal custody
+			if (config?.stockHoldersChannelId) {
+				const holders = await getStockHolders(
+					guildId,
+					request.isTest,
+					request.itemId,
 				);
-				await interaction.reply({
-					embeds: [embed],
-					flags: MessageFlags.Ephemeral,
-				});
-				return;
+				const holder = holders.find(
+					(h) => h.discordUserId === interaction.user.id,
+				);
+				const heldQuantity = holder?.quantity ?? 0;
+
+				if (!holder || heldQuantity < request.quantity) {
+					const embed = createErrorEmbed(
+						"Insufficient Holder Stock",
+						`Cannot approve request for **${request.quantity.toLocaleString()}x ${request.itemName}**.\n\n` +
+							`• **You Currently Hold:** ${heldQuantity.toLocaleString()} item(s)\n` +
+							`• **Requested:** ${request.quantity.toLocaleString()} item(s)\n\n` +
+							(!holder
+								? `You are not registered as a stock holder for this item. Please have an armory manager assign stock to you in the Stock Holders channel.`
+								: `You need **${(request.quantity - heldQuantity).toLocaleString()} more** of this item assigned to you before you can approve this request.`),
+					);
+					await interaction.reply({
+						embeds: [embed],
+						flags: MessageFlags.Ephemeral,
+					});
+					return;
+				}
+			} else {
+				const stockMap = await getArmoryStock(guildId, request.isTest);
+				const itemStock =
+					stockMap.get(request.itemId) ??
+					stockMap.get(request.itemName.trim().toLowerCase());
+				const availableStock = itemStock?.available ?? 0;
+
+				if (availableStock < request.quantity) {
+					const missing = request.quantity - availableStock;
+					const embed = createErrorEmbed(
+						"Insufficient Storage Stock",
+						`Cannot approve request for **${request.quantity.toLocaleString()}x ${request.itemName}**.\n\n` +
+							`• **In Storage:** ${availableStock.toLocaleString()}\n` +
+							`• **Requested:** ${request.quantity.toLocaleString()}\n` +
+							`• **Missing:** ${missing.toLocaleString()} item(s)\n\n` +
+							`Please wait for more deposits to be logged before approving this request.`,
+					);
+					await interaction.reply({
+						embeds: [embed],
+						flags: MessageFlags.Ephemeral,
+					});
+					return;
+				}
 			}
 		}
 
@@ -1033,6 +1083,17 @@ export async function handleItemGrantingButton(
 		}
 
 		if (actionType === "elims_grant_accept") {
+			if (config?.stockHoldersChannelId) {
+				await deductHolderStock({
+					guildId,
+					discordUserId: interaction.user.id,
+					itemId: request.itemId,
+					quantity: request.quantity,
+					isTest: request.isTest,
+				});
+				void syncElimsStockHoldersChannel(interaction.client, guildId);
+			}
+
 			await resolveItemRequest({
 				request,
 				status: "accepted",

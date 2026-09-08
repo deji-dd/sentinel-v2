@@ -22,6 +22,7 @@ import {
 	type Message,
 	TextChannel,
 } from "discord.js";
+import { syncElimsStockHoldersChannel } from "./elims-stock-holders";
 import { createErrorEmbed, createSuccessEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import {
@@ -582,39 +583,6 @@ export async function handleArmoryStorageChatMessage(
 			return;
 		}
 
-		// Check if depositor restrictions (roles or specific members) are configured
-		const allowedRoles = config.depositorRoleIds ?? [];
-		const allowedUsers = config.depositorUserIds ?? [];
-		if (allowedRoles.length > 0 || allowedUsers.length > 0) {
-			const memberRoles = message.member
-				? Array.from(message.member.roles.cache.keys())
-				: [];
-			const hasAllowedRole = allowedRoles.some((rId) =>
-				memberRoles.includes(rId),
-			);
-			const isAllowedUser = allowedUsers.includes(message.author.id);
-
-			if (!hasAllowedRole && !isAllowedUser) {
-				await message.delete().catch(() => {});
-				const reply = await message.channel
-					.send({
-						embeds: [
-							createErrorEmbed(
-								"Access Denied",
-								`<@${message.author.id}>, you are not authorized to deposit items in this channel.`,
-							),
-						],
-					})
-					.catch(() => null);
-				if (reply) {
-					setTimeout(() => {
-						reply.delete().catch(() => {});
-					}, 5000);
-				}
-				return;
-			}
-		}
-
 		const { deposits: parsedLogs, buys: parsedBuys } = parseArmoryChatInput(
 			message.content,
 		);
@@ -939,6 +907,7 @@ Accepted Log Examples:
 		// Resend the paginated Armory Stock Overview embed at the bottom after a 10s delay
 		if (message.client) {
 			scheduleArmoryStorageResend(message.client, guildId, 10000);
+			void syncElimsStockHoldersChannel(message.client, guildId);
 		}
 	} catch (err) {
 		logger.error("Error in handleArmoryStorageChatMessage:", err);

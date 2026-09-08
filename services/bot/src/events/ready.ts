@@ -9,6 +9,7 @@ import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../lib/elims-key-donation";
+import { syncElimsStockHoldersChannel } from "../lib/elims-stock-holders";
 import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
 import { updateFactionRevivesChannel } from "../lib/faction-monitoring-channel";
@@ -66,6 +67,11 @@ export const readyEvent = {
 		// Synchronize Elims Armory Storage Channel if configured
 		await updateElimsArmoryStorageChannel(client).catch((err) => {
 			logger.warn("Failed to sync Elims Armory Storage embed on boot:", err);
+		});
+
+		// Synchronize Elims Stock Holders Channel if configured
+		await syncElimsStockHoldersChannel(client).catch((err) => {
+			logger.warn("Failed to sync Elims Stock Holders embeds on boot:", err);
 		});
 
 		// Synchronize Giveaway Channel if configured

@@ -4,9 +4,15 @@ import {
 	elimsTeamSnapshots,
 	elimsTeams,
 	eq,
+	sql,
 	systemStates,
 } from "@sentinel/database";
-import { getElimsKeyPool, TornError, tornApi } from "@sentinel/torn-api";
+import {
+	getElimsKeyPool,
+	type ManagedApiKey,
+	TornError,
+	tornApi,
+} from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { ScheduledRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
@@ -112,47 +118,37 @@ export function _resetSimulationInMemoryState(): void {
 
 /**
  * Fetches base tournament overview from /torn/elimination
- * Returns true if succeeded.
+ * Uses the key pool with failover to ensure authoritative team standings and participant counts are retrieved.
+ * Returns array of teams if succeeded, or null on failure.
  */
 async function syncEliminationBaseData(
-	probeKey: string,
-	probeUserId: number,
-): Promise<boolean> {
-	try {
-		const res = (await tornApi.get("/torn/elimination", {
-			apiKey: probeKey,
-			userId: probeUserId,
-		})) as TornEliminationTeamsResponse;
+	keys: ManagedApiKey[],
+): Promise<TornEliminationTeamItem[] | null> {
+	const maxTries = Math.min(3, keys.length);
+	for (let i = 0; i < maxTries; i++) {
+		const keyEntry = keys[i];
+		if (!keyEntry) continue;
 
-		if (res.elimination && Array.isArray(res.elimination)) {
-			const teams = res.elimination;
-			const now = new Date();
+		try {
+			const res = (await tornApi.get("/torn/elimination", {
+				apiKey: keyEntry.apiKey,
+				userId: keyEntry.userId,
+			})) as TornEliminationTeamsResponse;
 
-			for (const t of teams) {
-				const teamId = t.id;
-				const elimTimestamp = t.eliminated_timestamp
-					? new Date(t.eliminated_timestamp * 1000)
-					: null;
+			if (res.elimination && Array.isArray(res.elimination)) {
+				const teams = res.elimination;
+				const now = new Date();
 
-				await db
-					.insert(elimsTeams)
-					.values({
-						id: teamId,
-						name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
-						membersCount: t.participants ?? 0,
-						position: t.position ?? 1,
-						score: t.score ?? 0,
-						lives: t.lives ?? 0,
-						wins: t.wins ?? 0,
-						losses: t.losses ?? 0,
-						eliminated: t.eliminated ?? false,
-						eliminatedTimestamp: elimTimestamp,
-						isMock: false,
-						updatedAt: now,
-					})
-					.onConflictDoUpdate({
-						target: elimsTeams.id,
-						set: {
+				for (const t of teams) {
+					const teamId = t.id;
+					const elimTimestamp = t.eliminated_timestamp
+						? new Date(t.eliminated_timestamp * 1000)
+						: null;
+
+					await db
+						.insert(elimsTeams)
+						.values({
+							id: teamId,
 							name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
 							membersCount: t.participants ?? 0,
 							position: t.position ?? 1,
@@ -164,18 +160,40 @@ async function syncEliminationBaseData(
 							eliminatedTimestamp: elimTimestamp,
 							isMock: false,
 							updatedAt: now,
-						},
-					});
+						})
+						.onConflictDoUpdate({
+							target: elimsTeams.id,
+							set: {
+								name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
+								membersCount: t.participants ?? 0,
+								position: t.position ?? 1,
+								score: t.score ?? 0,
+								lives: t.lives ?? 0,
+								wins: t.wins ?? 0,
+								losses: t.losses ?? 0,
+								eliminated: t.eliminated ?? false,
+								eliminatedTimestamp: elimTimestamp,
+								isMock: false,
+								updatedAt: now,
+							},
+						});
+				}
+				logger.info(
+					`Synced base metadata for ${teams.length} elimination teams from /torn/elimination.`,
+				);
+				return teams;
 			}
-			logger.info(
-				`Synced base metadata for ${teams.length} elimination teams from /torn/elimination.`,
+		} catch (err) {
+			if (err instanceof TornError && err.code === 32) {
+				throw err;
+			}
+			logger.warn(
+				`Failed fetching /torn/elimination base standings with key (attempt ${i + 1}/${maxTries}):`,
+				err,
 			);
-			return true;
 		}
-	} catch (err) {
-		logger.warn("Failed fetching /torn/elimination base standings:", err);
 	}
-	return false;
+	return null;
 }
 
 /**
@@ -206,8 +224,20 @@ export async function runElimsTrackingCycle(): Promise<number> {
 	const probeKey = keys[0]?.apiKey ?? "";
 	const probeUserId = keys[0]?.userId ?? 0;
 
-	// 1. Sync authoritative base elimination team standings (/torn/elimination)
-	await syncEliminationBaseData(probeKey, probeUserId);
+	// 1. Sync authoritative base elimination team standings (/torn/elimination) BEFORE team collection
+	let baseTeams: TornEliminationTeamItem[] | null = null;
+	try {
+		baseTeams = await syncEliminationBaseData(keys);
+	} catch (err) {
+		if (err instanceof TornError && err.code === 32) {
+			lastCode32CheckTime = Date.now();
+			logger.info(
+				"Torn Elimination API is closed (Code 32: Closed until attacking period starts). Pausing live checks for 5m...",
+			);
+			await wipeMockData();
+			return lastCode32CheckTime + CODE_32_BACKOFF_MS;
+		}
+	}
 
 	// 2. Probe live API to check if attacking period has started
 	try {
@@ -237,53 +267,136 @@ export async function runElimsTrackingCycle(): Promise<number> {
 		logger.warn("Live API probe warning:", err);
 	}
 
-	// ─── LIVE COLLECTION ────────────────────────────────────────────────────────
+	// ─── LIVE PARALLEL BATCH COLLECTION ─────────────────────────────────────────
+	const teamCountMap = new Map<number, number>();
+	if (baseTeams && baseTeams.length > 0) {
+		for (const t of baseTeams) {
+			teamCountMap.set(t.id, t.participants);
+		}
+	}
+
+	interface TeamPageQuery {
+		teamId: number;
+		offset: number;
+	}
+
+	const queries: TeamPageQuery[] = [];
+	for (const teamId of ELIMS_TEAM_IDS) {
+		let participants = teamCountMap.get(teamId);
+		if (participants === undefined || participants <= 0) {
+			const dbTeam = await db.query.elimsTeams.findFirst({
+				where: eq(elimsTeams.id, teamId),
+			});
+			participants =
+				dbTeam?.membersCount && dbTeam.membersCount > 0
+					? dbTeam.membersCount
+					: 2500;
+		}
+
+		// Dynamically calculate page count based on live participants count + 1 buffer page
+		const pageCount = Math.ceil(participants / 100) + 1;
+		for (let p = 0; p < pageCount; p++) {
+			queries.push({
+				teamId,
+				offset: p * 100,
+			});
+		}
+	}
+
 	logger.info(
-		`Beginning live collection across ${ELIMS_TEAM_IDS.length} elimination teams...`,
+		`Dispatching ${queries.length} parallel requests across ${keys.length} keys for ${ELIMS_TEAM_IDS.length} elimination teams...`,
 	);
 	const startTime = Date.now();
+
+	const results = await tornApi.executeBatchSettled(
+		"/torn/{id}/eliminationteam",
+		queries,
+		(q) => ({
+			pathParams: { id: q.teamId },
+			queryParams: { limit: 100, offset: q.offset },
+		}),
+		keys,
+	);
+
+	// Detect Code 32 if attacking period closed mid-flight
+	for (const r of results) {
+		if (
+			r.status === "rejected" &&
+			r.reason instanceof TornError &&
+			r.reason.code === 32
+		) {
+			lastCode32CheckTime = Date.now();
+			logger.info(
+				"Torn Elimination API closed during batch pagination (code 32). Pausing live checks for 5m.",
+			);
+			await wipeMockData();
+			return lastCode32CheckTime + CODE_32_BACKOFF_MS;
+		}
+	}
+
+	const teamPlayersMap = new Map<
+		number,
+		Map<number, TornEliminationPlayerApiItem>
+	>();
+	for (const teamId of ELIMS_TEAM_IDS) {
+		teamPlayersMap.set(teamId, new Map());
+	}
+
 	let totalCallsExecuted = 0;
-	const currentHourTct = new Date().getUTCHours();
+	for (let i = 0; i < queries.length; i++) {
+		const query = queries[i];
+		const result = results[i];
+		if (!query || !result) continue;
+
+		if (result.status === "fulfilled") {
+			totalCallsExecuted++;
+			const data = result.value as TornEliminationResponse;
+			const players = data.eliminationteam ?? [];
+			const map = teamPlayersMap.get(query.teamId);
+			if (map) {
+				for (const p of players) {
+					map.set(p.id, p);
+				}
+			}
+		} else {
+			logger.warn(
+				`Failed fetching page for team ${query.teamId} at offset ${query.offset}:`,
+				result.reason,
+			);
+		}
+	}
+
+	const nowCapture = new Date();
+	const currentHourTct = nowCapture.getUTCHours();
 
 	for (const teamId of ELIMS_TEAM_IDS) {
-		let offset = 0;
-		let hasMore = true;
+		const playersMap = teamPlayersMap.get(teamId);
+		const uniquePlayers = playersMap ? Array.from(playersMap.values()) : [];
+
 		let teamTotalScore = 0;
 		let teamTotalAttacks = 0;
-		let teamPlayerCount = 0;
 		let teamActiveCount = 0;
-		const nowCapture = new Date();
 
-		while (hasMore) {
-			try {
-				const res = (await tornApi.get("/torn/{id}/eliminationteam", {
-					pathParams: { id: teamId },
-					queryParams: { limit: 100, offset },
-				})) as TornEliminationResponse;
+		for (const p of uniquePlayers) {
+			teamTotalScore += p.score ?? 0;
+			teamTotalAttacks += p.attacks ?? 0;
+			if (
+				p.last_action?.status === "Online" ||
+				p.last_action?.status === "Idle"
+			) {
+				teamActiveCount++;
+			}
+		}
 
-				totalCallsExecuted++;
-
-				const players = res.eliminationteam ?? [];
-				if (players.length === 0) {
-					hasMore = false;
-					break;
-				}
-
-				teamPlayerCount += players.length;
-
-				for (const p of players) {
-					teamTotalScore += p.score ?? 0;
-					teamTotalAttacks += p.attacks ?? 0;
-					if (
-						p.last_action?.status === "Online" ||
-						p.last_action?.status === "Idle"
-					) {
-						teamActiveCount++;
-					}
-
-					await db
-						.insert(elimsTeamPlayers)
-						.values({
+		// Bulk upsert players in chunks of 500
+		if (uniquePlayers.length > 0) {
+			const CHUNK_SIZE = 500;
+			for (let c = 0; c < uniquePlayers.length; c += CHUNK_SIZE) {
+				const chunk = uniquePlayers.slice(c, c + CHUNK_SIZE);
+				await db
+					.insert(elimsTeamPlayers)
+					.values(
+						chunk.map((p) => ({
 							id: p.id,
 							teamId,
 							name: p.name,
@@ -294,41 +407,21 @@ export async function runElimsTrackingCycle(): Promise<number> {
 							status: p.status,
 							isMock: false,
 							updatedAt: nowCapture,
-						})
-						.onConflictDoUpdate({
-							target: elimsTeamPlayers.id,
-							set: {
-								name: p.name,
-								level: p.level,
-								score: p.score ?? 0,
-								attacks: p.attacks ?? 0,
-								lastAction: p.last_action,
-								status: p.status,
-								isMock: false,
-								updatedAt: nowCapture,
-							},
-						});
-				}
-
-				const nextLink = res._metadata?.links?.next;
-				if (!nextLink || players.length < 100) {
-					hasMore = false;
-				} else {
-					offset += players.length;
-				}
-			} catch (err) {
-				if (err instanceof TornError && err.code === 32) {
-					lastCode32CheckTime = Date.now();
-					logger.info(
-						"Torn Elimination API closed during pagination (code 32). Pausing live checks for 5m.",
-					);
-					return lastCode32CheckTime + CODE_32_BACKOFF_MS;
-				}
-				logger.error(
-					`Failed fetching page for team ${teamId} at offset ${offset}:`,
-					err,
-				);
-				hasMore = false;
+						})),
+					)
+					.onConflictDoUpdate({
+						target: elimsTeamPlayers.id,
+						set: {
+							name: sql`excluded.name`,
+							level: sql`excluded.level`,
+							score: sql`excluded.score`,
+							attacks: sql`excluded.attacks`,
+							lastAction: sql`excluded.last_action`,
+							status: sql`excluded.status`,
+							isMock: false,
+							updatedAt: nowCapture,
+						},
+					});
 			}
 		}
 
@@ -340,7 +433,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 				name: DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
 				score: teamTotalScore,
 				attacks: teamTotalAttacks,
-				membersCount: teamPlayerCount,
+				membersCount: uniquePlayers.length,
 				isMock: false,
 				lastSyncedAt: nowCapture,
 			})
@@ -349,7 +442,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 				set: {
 					score: teamTotalScore,
 					attacks: teamTotalAttacks,
-					membersCount: teamPlayerCount,
+					membersCount: uniquePlayers.length,
 					isMock: false,
 					lastSyncedAt: nowCapture,
 					updatedAt: nowCapture,
@@ -365,7 +458,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			teamId,
 			score: teamTotalScore,
 			attacks: teamTotalAttacks,
-			membersCount: teamPlayerCount,
+			membersCount: uniquePlayers.length,
 			activeCount: teamActiveCount,
 			lives: existingTeam?.lives ?? 50,
 			position: existingTeam?.position ?? 0,

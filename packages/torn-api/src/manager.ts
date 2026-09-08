@@ -588,6 +588,50 @@ export class ManagedTornApiClient {
 			}),
 		);
 	}
+
+	/**
+	 * Distributes batch requests in parallel across available API keys using fair round-robin.
+	 * Uses Promise.allSettled so individual failures do not abort the entire batch.
+	 */
+	async executeBatchSettled<P extends keyof paths, Item>(
+		path: P,
+		items: Item[],
+		buildParams?: (item: Item) => {
+			pathParams?: OperationPathParams<PathOperation<P>>;
+			queryParams?: OperationQueryParams<PathOperation<P>>;
+		},
+		keys?: ManagedApiKey[],
+	): Promise<PromiseSettledResult<OperationResponse<PathOperation<P>>>[]> {
+		let keyPool = keys && keys.length > 0 ? keys : await getSystemKeyPool();
+		if (keyPool.length === 0) {
+			throw new Error("No API keys provided for batch execution.");
+		}
+
+		// Filter out temporarily disabled keys if active keys remain
+		const activeKeys = keyPool.filter(
+			(k) => !this.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+		);
+		if (activeKeys.length > 0) {
+			keyPool = activeKeys;
+		}
+
+		return Promise.allSettled(
+			items.map((item) => {
+				const keyEntry = keyPool[systemKeyIndex % keyPool.length];
+				if (!keyEntry) {
+					throw new Error("No API keys provided for batch execution.");
+				}
+				systemKeyIndex = (systemKeyIndex + 1) % keyPool.length;
+				const params = buildParams ? buildParams(item) : {};
+				return this.get(path, {
+					apiKey: keyEntry.apiKey,
+					userId: keyEntry.userId,
+					pathParams: params.pathParams,
+					queryParams: params.queryParams,
+				});
+			}),
+		);
+	}
 }
 
 export const tornApi = new ManagedTornApiClient();

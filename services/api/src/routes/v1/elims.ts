@@ -13,8 +13,10 @@ import {
 	elimsTeams,
 	eq,
 	getArmoryStock,
+	getStockHolders,
 	guildConfigs,
 	ilike,
+	inArray,
 	or,
 	type SQL,
 	sql,
@@ -1381,6 +1383,10 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				const defaultConfig: ElimsItemRequestConfig = {
 					requestChannelId: null,
 					grantingChannelId: null,
+					storageChannelId: null,
+					storageEmbedMessageId: null,
+					stockHoldersChannelId: null,
+					stockHolderMessageIds: {},
 					requesterRoleIds: [],
 					managerRoleIds: [],
 					allowedItems: [],
@@ -1442,15 +1448,27 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					existingConfig?.storageEmbedMessageId ??
 					null);
 
+			// If stock holders channel changed, message IDs cannot be reused
+			const stockHoldersChannelChanged =
+				existingConfig?.stockHoldersChannelId &&
+				body.stockHoldersChannelId !== undefined &&
+				body.stockHoldersChannelId !== existingConfig.stockHoldersChannelId;
+
+			const stockHolderMessageIds = stockHoldersChannelChanged
+				? {}
+				: (body.stockHolderMessageIds ??
+					existingConfig?.stockHolderMessageIds ??
+					{});
+
 			const configPayload: ElimsItemRequestConfig = {
 				requestChannelId: body.requestChannelId ?? null,
 				grantingChannelId: body.grantingChannelId ?? null,
 				storageChannelId: body.storageChannelId ?? null,
 				storageEmbedMessageId,
+				stockHoldersChannelId: body.stockHoldersChannelId ?? null,
+				stockHolderMessageIds,
 				requesterRoleIds: body.requesterRoleIds ?? [],
 				managerRoleIds: body.managerRoleIds ?? [],
-				depositorRoleIds: body.depositorRoleIds ?? [],
-				depositorUserIds: body.depositorUserIds ?? [],
 				allowedItems: body.allowedItems ?? [],
 				blacklistedUserIds: body.blacklistedUserIds ?? [],
 				embedMessageId,
@@ -1499,10 +1517,10 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				grantingChannelId: t.Nullable(t.String()),
 				storageChannelId: t.Optional(t.Nullable(t.String())),
 				storageEmbedMessageId: t.Optional(t.Nullable(t.String())),
+				stockHoldersChannelId: t.Optional(t.Nullable(t.String())),
+				stockHolderMessageIds: t.Optional(t.Record(t.String(), t.String())),
 				requesterRoleIds: t.Array(t.String()),
 				managerRoleIds: t.Array(t.String()),
-				depositorRoleIds: t.Optional(t.Array(t.String())),
-				depositorUserIds: t.Optional(t.Array(t.String())),
 				allowedItems: t.Array(
 					t.Object({
 						id: t.String(),
@@ -1511,6 +1529,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 						marketPrice: t.Optional(t.Number()),
 						image: t.Optional(t.String()),
 						maxRequestable: t.Optional(t.Number()),
+						disabled: t.Optional(t.Boolean()),
 					}),
 				),
 				blacklistedUserIds: t.Optional(t.Array(t.String())),
@@ -1519,7 +1538,41 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 			detail: {
 				summary: "Update Item Requests Configuration",
 				description:
-					"Updates request/grant/storage channels, requester/manager roles, and whitelisted items.",
+					"Updates request/grant/storage/stock-holders channels, requester/manager roles, and whitelisted items.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/item-requests/stock-holders ─────────────────────────
+	.get(
+		"/item-requests/stock-holders",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [elimsGuildState] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+			const elimsGuildData = elimsGuildState?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			const targetGuildId = elimsGuildData?.guildId;
+			if (!targetGuildId) {
+				return { holders: [] };
+			}
+
+			const holders = await getStockHolders(targetGuildId, false);
+			return { holders };
+		},
+		{
+			detail: {
+				summary: "Get Elims Stock Holders",
+				description:
+					"Returns all active item stock holders and their allocations.",
 			},
 		},
 	)
@@ -1558,6 +1611,48 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 
 			const liveList = Array.from(liveStockMap.values());
 			const testList = Array.from(testStockMap.values());
+
+			// Enrich items with image, marketPrice, and category from tornItems
+			const allItemIds = new Set<string>();
+			for (const s of [...liveList, ...testList]) {
+				if (s.itemId && s.itemId !== "money") {
+					allItemIds.add(s.itemId);
+				}
+			}
+
+			if (allItemIds.size > 0) {
+				const dbItems = await db
+					.select({
+						id: tornItems.id,
+						name: tornItems.name,
+						data: tornItems.data,
+					})
+					.from(tornItems)
+					.where(inArray(tornItems.id, Array.from(allItemIds)));
+
+				const tornItemById = new Map(dbItems.map((it) => [it.id, it]));
+				const tornItemByName = new Map(
+					dbItems.map((it) => [it.name?.trim().toLowerCase() ?? "", it]),
+				);
+
+				for (const s of [...liveList, ...testList]) {
+					const ti =
+						tornItemById.get(s.itemId) ??
+						tornItemByName.get(s.itemName.trim().toLowerCase());
+					if (ti) {
+						const d = (ti.data ?? {}) as Record<string, unknown>;
+						const v = (d.value ?? {}) as Record<string, unknown>;
+						if (!s.category || s.category === "General") {
+							s.category = (d.type ??
+								d.category ??
+								s.category ??
+								"General") as string;
+						}
+						s.image = typeof d.image === "string" ? d.image : undefined;
+						s.marketPrice = Number(v.market_price ?? v.buy_price ?? 0);
+					}
+				}
+			}
 
 			return {
 				inventory: {
