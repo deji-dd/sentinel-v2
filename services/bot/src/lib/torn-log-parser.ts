@@ -28,7 +28,9 @@ export interface ParsedSentLog {
 	quantity: number;
 	recipientName: string;
 	recipientTornId: number | null;
+	message?: string | null;
 	timestamp?: string | null;
+	logDate?: Date | null;
 	rawLog: string;
 }
 
@@ -410,8 +412,72 @@ export function parseDepositLogs(input: string): ParsedDepositLog[] {
 }
 
 /**
+ * Parses a Torn timestamp string (TCT / UTC) into a JavaScript Date.
+ * Supports "HH:mm:ss - DD/MM/YY" and "HH:mm:ss - DD/MM/YYYY".
+ */
+export function parseTornTimestamp(timestampStr: string): Date | null {
+	const trimmed = timestampStr.trim();
+	const match = trimmed.match(
+		/^(\d{1,2}):(\d{2}):(\d{2})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/,
+	);
+	if (
+		!match?.[1] ||
+		!match[2] ||
+		!match[3] ||
+		!match[4] ||
+		!match[5] ||
+		!match[6]
+	) {
+		return null;
+	}
+
+	const hours = Number.parseInt(match[1], 10);
+	const minutes = Number.parseInt(match[2], 10);
+	const seconds = Number.parseInt(match[3], 10);
+	const day = Number.parseInt(match[4], 10);
+	const month = Number.parseInt(match[5], 10);
+	const rawYear = Number.parseInt(match[6], 10);
+	const year = match[6].length === 2 ? 2000 + rawYear : rawYear;
+
+	if (
+		hours > 23 ||
+		minutes > 59 ||
+		seconds > 59 ||
+		month < 1 ||
+		month > 12 ||
+		day < 1 ||
+		day > 31
+	) {
+		return null;
+	}
+
+	const date = new Date(
+		Date.UTC(year, month - 1, day, hours, minutes, seconds),
+	);
+	if (Number.isNaN(date.getTime())) {
+		return null;
+	}
+	return date;
+}
+
+/**
+ * Formats a Date into Torn City Time (TCT / UTC) string format: "HH:mm:ss - DD/MM/YY".
+ */
+export function formatTctTimestamp(date: Date): string {
+	const pad = (n: number) => n.toString().padStart(2, "0");
+	const hours = pad(date.getUTCHours());
+	const minutes = pad(date.getUTCMinutes());
+	const seconds = pad(date.getUTCSeconds());
+	const day = pad(date.getUTCDate());
+	const month = pad(date.getUTCMonth() + 1);
+	const year = pad(date.getUTCFullYear() % 100);
+	return `${hours}:${minutes}:${seconds} - ${day}/${month}/${year}`;
+}
+
+/**
  * Parses a single sent / verification Torn event log line.
  * Supports:
+ * - "16:12:24 - 08/09/26 You sent 3x Xanax to Night-Execution with the message: Prelicked"
  * - "04:37:52 - 04/09/26 You sent a Business Class Ticket to BabyLuST"
  * - "00:37:23 - 04/09/26 You sent 5x Flash Grenade to Fahquetu"
  * - "14:02:49 - 30/11/25 You sent an Armor Cache to ladyK"
@@ -424,14 +490,14 @@ export function parseSingleSentLog(line: string): ParsedSentLog | null {
 
 	// Optional timestamp prefix e.g. "04:37:52 - 04/09/26 "
 	const tsMatch = trimmed.match(
-		/^(\d{2}:\d{2}:\d{2}\s*-\s*\d{2}\/\d{2}\/\d{2,4})\s+(.+)$/,
+		/^(\d{1,2}:\d{2}:\d{2}\s*-\s*\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+)$/,
 	);
 	const timestamp = tsMatch?.[1]?.trim() ?? null;
 	const content = tsMatch?.[2] ?? trimmed;
 
-	// Pattern: "You sent (a|an|some|\d+x|\d+) (ITEM) to (RECIPIENT)"
+	// Pattern: "You sent (a|an|some|\d+x|\d+) (ITEM) to (RECIPIENT)( with the message: (MSG))?"
 	const match = content.match(
-		/^You sent\s+(a|an|some|\d+x|\d+)\s+(.+?)\s+to\s+(.+)$/i,
+		/^You sent\s+(a|an|some|\d+x|\d+)\s+(.+?)\s+to\s+(.+?)(?:\s+with the message:\s*(.*))?$/i,
 	);
 	if (!match?.[1] || !match[2] || !match[3]) {
 		return null;
@@ -442,13 +508,17 @@ export function parseSingleSentLog(line: string): ParsedSentLog | null {
 	const { name: recipientName, tornId: recipientTornId } = extractUserAndId(
 		match[3],
 	);
+	const message = match[4]?.trim() || null;
+	const logDate = timestamp ? parseTornTimestamp(timestamp) : null;
 
 	return {
 		itemName,
 		quantity,
 		recipientName,
 		recipientTornId,
+		message,
 		timestamp,
+		logDate,
 		rawLog: trimmed,
 	};
 }
@@ -458,6 +528,7 @@ export function parseSingleSentLog(line: string): ParsedSentLog | null {
  * - Recipient name matching is STRICTLY CASE-SENSITIVE per specifications.
  * - Item name is matched case-insensitively.
  * - Quantity must be greater than or equal to requested quantity.
+ * - When requestCreatedAt is provided, verifies that log timestamp is after (or equal to) the request timestamp.
  */
 export function validateSentLogAgainstRequest(
 	parsedLog: ParsedSentLog,
@@ -466,6 +537,7 @@ export function validateSentLogAgainstRequest(
 		recipientTornId?: number | null;
 		itemName: string;
 		quantity: number;
+		requestCreatedAt?: Date | string | number | null;
 	},
 ): { isValid: boolean; error?: string } {
 	// Case-sensitive recipient name check
@@ -497,6 +569,37 @@ export function validateSentLogAgainstRequest(
 			isValid: false,
 			error: `Quantity mismatch: expected at least ${expected.quantity}x ${expected.itemName}, but log shows only ${parsedLog.quantity}x.`,
 		};
+	}
+
+	// Timestamp verification if request timestamp is provided
+	if (expected.requestCreatedAt) {
+		const requestTime =
+			expected.requestCreatedAt instanceof Date
+				? expected.requestCreatedAt.getTime()
+				: typeof expected.requestCreatedAt === "string" ||
+						typeof expected.requestCreatedAt === "number"
+					? new Date(expected.requestCreatedAt).getTime()
+					: null;
+
+		if (requestTime !== null && !Number.isNaN(requestTime)) {
+			if (!parsedLog.timestamp || !parsedLog.logDate) {
+				return {
+					isValid: false,
+					error:
+						"Log timestamp is required for verification. Please copy the full Torn event log including the timestamp prefix (e.g. `16:12:24 - 08/09/26 You sent...`).",
+				};
+			}
+
+			const requestSec = Math.floor(requestTime / 1000);
+			const logSec = Math.floor(parsedLog.logDate.getTime() / 1000);
+
+			if (logSec < requestSec) {
+				return {
+					isValid: false,
+					error: `Log timestamp (${parsedLog.timestamp} TCT) is before the request timestamp (${formatTctTimestamp(new Date(requestTime))} TCT). The log must be from after the request was created.`,
+				};
+			}
+		}
 	}
 
 	return { isValid: true };

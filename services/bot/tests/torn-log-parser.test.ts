@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	extractUserAndId,
+	formatTctTimestamp,
 	parseArmoryChatInput,
 	parseBuyLogLine,
 	parseDepositLogs,
 	parseSingleDepositLog,
 	parseSingleSentLog,
+	parseTornTimestamp,
 	validateSentLogAgainstRequest,
 } from "../src/lib/torn-log-parser";
 
@@ -417,6 +419,112 @@ describe("Torn Log Parser", () => {
 				quantity: 1,
 			});
 			expect(valid.isValid).toBe(true);
+		});
+
+		test("parses log with message: '16:12:24 - 08/09/26 You sent 3x Xanax to Night-Execution with the message: Prelicked'", () => {
+			const log =
+				"16:12:24 - 08/09/26 You sent 3x Xanax to Night-Execution with the message: Prelicked";
+			const parsed = parseSingleSentLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(3);
+			expect(parsed?.itemName).toBe("Xanax");
+			expect(parsed?.recipientName).toBe("Night-Execution");
+			expect(parsed?.message).toBe("Prelicked");
+			expect(parsed?.timestamp).toBe("16:12:24 - 08/09/26");
+			expect(parsed?.logDate).toEqual(
+				new Date(Date.UTC(2026, 8, 8, 16, 12, 24)),
+			);
+			if (!parsed) throw new Error("Expected parsed log not to be null");
+
+			// Valid when request was created before send (e.g. 16:10:00)
+			const requestCreatedAt = new Date(Date.UTC(2026, 8, 8, 16, 10, 0));
+			const valid = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "Night-Execution",
+				itemName: "Xanax",
+				quantity: 3,
+				requestCreatedAt,
+			});
+			expect(valid.isValid).toBe(true);
+
+			// Invalid when request was created AFTER send (gaming prevention, e.g. 16:15:00)
+			const futureRequestCreatedAt = new Date(Date.UTC(2026, 8, 8, 16, 15, 0));
+			const invalidGaming = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "Night-Execution",
+				itemName: "Xanax",
+				quantity: 3,
+				requestCreatedAt: futureRequestCreatedAt,
+			});
+			expect(invalidGaming.isValid).toBe(false);
+			expect(invalidGaming.error).toContain("is before the request timestamp");
+		});
+
+		test("parses log with markdown recipient link and message", () => {
+			const log =
+				"16:12:24 - 08/09/26 You sent 3x Xanax to [Night-Execution](https://www.torn.com/profiles.php?XID=123456) with the message: Prelicked";
+			const parsed = parseSingleSentLog(log);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.quantity).toBe(3);
+			expect(parsed?.itemName).toBe("Xanax");
+			expect(parsed?.recipientName).toBe("Night-Execution");
+			expect(parsed?.recipientTornId).toBe(123456);
+			expect(parsed?.message).toBe("Prelicked");
+			if (!parsed) throw new Error("Expected parsed log not to be null");
+
+			const valid = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "Night-Execution",
+				recipientTornId: 123456,
+				itemName: "Xanax",
+				quantity: 3,
+				requestCreatedAt: new Date(Date.UTC(2026, 8, 8, 16, 0, 0)),
+			});
+			expect(valid.isValid).toBe(true);
+		});
+
+		test("rejects log missing timestamp when requestCreatedAt is enforced", () => {
+			const log =
+				"You sent 3x Xanax to Night-Execution with the message: Prelicked";
+			const parsed = parseSingleSentLog(log);
+			expect(parsed).not.toBeNull();
+			if (!parsed) throw new Error("Expected parsed log not to be null");
+
+			const res = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "Night-Execution",
+				itemName: "Xanax",
+				quantity: 3,
+				requestCreatedAt: new Date(Date.UTC(2026, 8, 8, 16, 0, 0)),
+			});
+			expect(res.isValid).toBe(false);
+			expect(res.error).toContain("Log timestamp is required");
+		});
+
+		test("accepts log within the same second as request creation", () => {
+			const log = "16:12:24 - 08/09/26 You sent 1x Xanax to Player";
+			const parsed = parseSingleSentLog(log);
+			expect(parsed).not.toBeNull();
+			if (!parsed) throw new Error("Expected parsed log not to be null");
+
+			// Same second with subsecond ms on request
+			const reqTime = new Date("2026-09-08T16:12:24.750Z");
+			const res = validateSentLogAgainstRequest(parsed, {
+				recipientTornName: "Player",
+				itemName: "Xanax",
+				quantity: 1,
+				requestCreatedAt: reqTime,
+			});
+			expect(res.isValid).toBe(true);
+		});
+
+		test("parseTornTimestamp and formatTctTimestamp helpers", () => {
+			const parsed = parseTornTimestamp("16:12:24 - 08/09/26");
+			expect(parsed).toEqual(new Date(Date.UTC(2026, 8, 8, 16, 12, 24)));
+			if (!parsed) throw new Error("Expected parsed date not to be null");
+			expect(formatTctTimestamp(parsed)).toBe("16:12:24 - 08/09/26");
+
+			expect(parseTornTimestamp("invalid")).toBeNull();
+			expect(parseTornTimestamp("25:00:00 - 08/09/26")).toBeNull();
+			expect(parseTornTimestamp("16:60:00 - 08/09/26")).toBeNull();
+			expect(parseTornTimestamp("16:00:00 - 32/09/26")).toBeNull();
+			expect(parseTornTimestamp("16:00:00 - 08/13/26")).toBeNull();
 		});
 	});
 

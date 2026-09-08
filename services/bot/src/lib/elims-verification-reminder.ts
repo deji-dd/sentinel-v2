@@ -8,6 +8,7 @@ import {
 } from "discord.js";
 import { EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
+import { formatTctTimestamp } from "./torn-log-parser";
 
 /**
  * Builds the verification reminder embed & buttons sent to an approver.
@@ -19,6 +20,7 @@ export function buildVerificationReminderMessage(request: {
 	tornName: string | null;
 	tornId: number | null;
 	handledAt: Date | null;
+	createdAt?: Date | null;
 	isTest: boolean;
 }): { embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> } {
 	const shortId = request.id.slice(0, 8);
@@ -26,17 +28,22 @@ export function buildVerificationReminderMessage(request: {
 		? `[${request.tornName ?? "Player"} [${request.tornId}]](https://www.torn.com/profiles.php?XID=${request.tornId})`
 		: `**${request.tornName ?? "Unknown"}**`;
 
+	const timeInfo = request.createdAt
+		? `\n*Request Time:* \`${formatTctTimestamp(request.createdAt)} TCT\``
+		: "";
+
 	const embed = new EmbedBuilder()
 		.setTitle(`Verification Pending — Request #${shortId}`)
 		.setColor(EMBED_COLORS.WARNING)
 		.setDescription(
-			`You approved an item request for **${request.quantity.toLocaleString()}x ${request.itemName}** to ${targetProfile}.\n\n` +
+			`You approved an item request for **${request.quantity.toLocaleString()}x ${request.itemName}** to ${targetProfile}.${timeInfo}\n\n` +
 				"**Next Step:** Send the items in Torn, copy your event log, and click **Verify Send** below.\n\n" +
-				"*Example Log:*\n`04:37:52 - 04/09/26 You sent " +
-				`${request.quantity === 1 ? "a " : `${request.quantity}x `}${request.itemName} to ${request.tornName ?? "Player"}\``,
+				"*Example Log:*\n`16:12:24 - 08/09/26 You sent " +
+				`${request.quantity === 1 ? "a " : `${request.quantity}x `}${request.itemName} to ${request.tornName ?? "Player"}` +
+				" with the message: Prelicked`\n\n",
 		)
 		.setFooter({
-			text: `Sentinel`,
+			text: "Sentinel",
 		})
 		.setTimestamp(new Date());
 
@@ -99,6 +106,7 @@ export async function checkPendingVerificationReminders(
 					tornName: req.tornName,
 					tornId: req.tornId,
 					handledAt: req.handledAt,
+					createdAt: req.createdAt,
 					isTest: req.isTest,
 				});
 

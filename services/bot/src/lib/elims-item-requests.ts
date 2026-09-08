@@ -8,6 +8,7 @@ import {
 	getArmoryStock,
 	getStockHolders,
 	ne,
+	or,
 	systemStates,
 } from "@sentinel/database";
 import type {
@@ -460,6 +461,45 @@ export async function handleItemRequestCategorySelect(
 }
 
 /**
+ * Checks if a user already has an active pending request for a given item.
+ * Matches on Discord User ID or verified Torn ID.
+ */
+export async function hasPendingItemRequest(params: {
+	guildId: string;
+	discordUserId: string;
+	itemId: string;
+	tornId?: number | null;
+	isTest?: boolean;
+}): Promise<{ hasPending: boolean; existingRequestId?: string }> {
+	const userCondition = params.tornId
+		? or(
+				eq(elimsItemRequests.discordUserId, params.discordUserId),
+				eq(elimsItemRequests.tornId, params.tornId),
+			)
+		: eq(elimsItemRequests.discordUserId, params.discordUserId);
+
+	const [existing] = await db
+		.select({ id: elimsItemRequests.id })
+		.from(elimsItemRequests)
+		.where(
+			and(
+				eq(elimsItemRequests.guildId, params.guildId),
+				userCondition,
+				eq(elimsItemRequests.itemId, params.itemId),
+				eq(elimsItemRequests.status, "pending"),
+				eq(elimsItemRequests.isTest, params.isTest ?? false),
+			),
+		)
+		.limit(1);
+
+	if (existing) {
+		return { hasPending: true, existingRequestId: existing.id };
+	}
+
+	return { hasPending: false };
+}
+
+/**
  * Handles Item StringSelectMenu selection -> displays Discord Modal for quantity.
  */
 export async function handleItemRequestItemSelect(
@@ -467,7 +507,7 @@ export async function handleItemRequestItemSelect(
 ): Promise<void> {
 	try {
 		const selectedItemId = interaction.values[0];
-		if (!selectedItemId) return;
+		if (!selectedItemId || !interaction.guildId) return;
 
 		const [reqState] = await db
 			.select()
@@ -502,6 +542,29 @@ export async function handleItemRequestItemSelect(
 			return;
 		}
 		const itemName = selectedItem.name ?? "Item";
+
+		// Guard: Reject if user already has an active pending request for this item
+		const pendingCheck = await hasPendingItemRequest({
+			guildId: interaction.guildId,
+			discordUserId: interaction.user.id,
+			itemId: selectedItemId,
+		});
+
+		if (pendingCheck.hasPending) {
+			const reqTag = pendingCheck.existingRequestId
+				? ` (Request #${pendingCheck.existingRequestId.slice(0, 8)})`
+				: "";
+			const embed = createErrorEmbed(
+				"Pending Request Exists",
+				`You already have a pending request for **${itemName}**${reqTag}.\n\nPlease wait for your existing request to be reviewed before requesting this item again.`,
+			);
+			await interaction.reply({
+				embeds: [embed],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+
 		const maxNote = selectedItem.maxRequestable
 			? ` (Max: ${selectedItem.maxRequestable})`
 			: "";
@@ -634,6 +697,30 @@ export async function handleItemRequestModalSubmit(
 			interaction.user.id,
 			interaction.guildId,
 		);
+
+		// Guard: Reject if user already has an active pending request for this item
+		const pendingCheck = await hasPendingItemRequest({
+			guildId: interaction.guildId,
+			discordUserId: interaction.user.id,
+			itemId: item.id,
+			tornId: resolvedUser?.tornId ?? null,
+			isTest,
+		});
+
+		if (pendingCheck.hasPending) {
+			const reqTag = pendingCheck.existingRequestId
+				? ` (Request #${pendingCheck.existingRequestId.slice(0, 8)})`
+				: "";
+			const embed = createErrorEmbed(
+				"Pending Request Exists",
+				`You already have a pending request for **${item.name}**${reqTag}.\n\nPlease wait for your existing request to be reviewed before submitting another request for this item.`,
+			);
+			await interaction.reply({
+				embeds: [embed],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
 
 		const [createdRequest] = await db
 			.insert(elimsItemRequests)
@@ -1248,6 +1335,7 @@ async function resolveItemRequest({
 						tornName: request.tornName,
 						tornId: request.tornId,
 						handledAt: new Date(),
+						createdAt: request.createdAt,
 						isTest: request.isTest,
 					});
 
@@ -1375,7 +1463,7 @@ export async function handleItemVerifySendButton(
 			.setLabel("Torn Sent Event Log")
 			.setStyle(TextInputStyle.Paragraph)
 			.setPlaceholder(
-				"e.g.: 04:37:52 - 04/09/26 You sent 5x Flash Grenade to Fahquetu",
+				"e.g.: 16:12:24 - 08/09/26 You sent 3x Xanax to Fahquetu with the message: Prelicked",
 			)
 			.setRequired(true)
 			.setMaxLength(1000);
@@ -1412,6 +1500,7 @@ export async function handleItemVerifySendModalSubmit(
 					createErrorEmbed(
 						"Invalid Sent Log",
 						"Could not parse a valid Torn sent log. Example formats:\n" +
+							"• `16:12:24 - 08/09/26 You sent 3x Xanax to Fahquetu with the message: Prelicked`\n" +
 							"• `04:37:52 - 04/09/26 You sent 5x Flash Grenade to Fahquetu`\n" +
 							"• `You sent a Business Class Ticket to BabyLuST`",
 					),
@@ -1432,12 +1521,13 @@ export async function handleItemVerifySendModalSubmit(
 			return;
 		}
 
-		// Validate against request (case-sensitive recipient name check)
+		// Validate against request (case-sensitive recipient name check & timestamp verification)
 		const validation = validateSentLogAgainstRequest(parsed, {
 			recipientTornName: request.tornName ?? "",
 			recipientTornId: request.tornId,
 			itemName: request.itemName,
 			quantity: request.quantity,
+			requestCreatedAt: request.createdAt,
 		});
 
 		if (!validation.isValid) {

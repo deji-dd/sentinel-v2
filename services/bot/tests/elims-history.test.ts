@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { and, db, elimsItemRequests, eq } from "@sentinel/database";
-import { getRequesterApprovedHistory } from "../src/lib/elims-item-requests";
+import {
+	getRequesterApprovedHistory,
+	hasPendingItemRequest,
+} from "../src/lib/elims-item-requests";
 
 describe("getRequesterApprovedHistory", () => {
 	const testGuildId = `guild-test-${crypto.randomUUID()}`;
@@ -162,5 +165,151 @@ describe("getRequesterApprovedHistory", () => {
 			);
 			expect(excludedHistory.fieldValue).toContain("**Total**: 25 items");
 		}
+	});
+});
+
+describe("hasPendingItemRequest guard", () => {
+	const testGuildId = `guild-guard-${crypto.randomUUID()}`;
+	const testUserId = `user-guard-${crypto.randomUUID()}`;
+	const testAltUserId = `user-alt-${crypto.randomUUID()}`;
+	const sharedTornId = 998877;
+
+	beforeAll(async () => {
+		await db
+			.delete(elimsItemRequests)
+			.where(eq(elimsItemRequests.guildId, testGuildId));
+	});
+
+	afterAll(async () => {
+		await db
+			.delete(elimsItemRequests)
+			.where(eq(elimsItemRequests.guildId, testGuildId));
+	});
+
+	test("returns hasPending: false when user has no requests", async () => {
+		const res = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "206",
+		});
+		expect(res.hasPending).toBe(false);
+	});
+
+	test("returns hasPending: true when user already has a pending request for the same item", async () => {
+		const [created] = await db
+			.insert(elimsItemRequests)
+			.values({
+				guildId: testGuildId,
+				discordUserId: testUserId,
+				discordUsername: "GuardUser",
+				tornId: sharedTornId,
+				tornName: "GuardTornUser",
+				itemId: "206",
+				itemName: "Xanax",
+				itemCategory: "Drugs",
+				quantity: 5,
+				status: "pending",
+				isTest: false,
+			})
+			.returning();
+
+		const checkSameItem = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "206",
+		});
+		expect(checkSameItem.hasPending).toBe(true);
+		expect(checkSameItem.existingRequestId).toBe(created?.id);
+
+		// Different item should NOT be blocked
+		const checkDifferentItem = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "367", // Flash Grenade
+		});
+		expect(checkDifferentItem.hasPending).toBe(false);
+
+		// Anti-alt guard: same Torn ID on different Discord account should ALSO be blocked
+		const checkAltAccount = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testAltUserId,
+			itemId: "206",
+			tornId: sharedTornId,
+		});
+		expect(checkAltAccount.hasPending).toBe(true);
+		expect(checkAltAccount.existingRequestId).toBe(created?.id);
+	});
+
+	test("returns hasPending: false once request is accepted or rejected", async () => {
+		// Update status to accepted
+		await db
+			.update(elimsItemRequests)
+			.set({ status: "accepted" })
+			.where(
+				and(
+					eq(elimsItemRequests.guildId, testGuildId),
+					eq(elimsItemRequests.discordUserId, testUserId),
+					eq(elimsItemRequests.itemId, "206"),
+				),
+			);
+
+		const checkAfterAccepted = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "206",
+		});
+		expect(checkAfterAccepted.hasPending).toBe(false);
+
+		// Update status to rejected
+		await db
+			.update(elimsItemRequests)
+			.set({ status: "rejected" })
+			.where(
+				and(
+					eq(elimsItemRequests.guildId, testGuildId),
+					eq(elimsItemRequests.discordUserId, testUserId),
+					eq(elimsItemRequests.itemId, "206"),
+				),
+			);
+
+		const checkAfterRejected = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "206",
+		});
+		expect(checkAfterRejected.hasPending).toBe(false);
+	});
+
+	test("distinguishes live and test requests", async () => {
+		// Insert test request for item 500
+		await db.insert(elimsItemRequests).values({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			discordUsername: "GuardUser",
+			itemId: "500",
+			itemName: "TestItem",
+			itemCategory: "General",
+			quantity: 1,
+			status: "pending",
+			isTest: true,
+		});
+
+		// Live check for item 500 should be false
+		const checkLive = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "500",
+			isTest: false,
+		});
+		expect(checkLive.hasPending).toBe(false);
+
+		// Test check for item 500 should be true
+		const checkTest = await hasPendingItemRequest({
+			guildId: testGuildId,
+			discordUserId: testUserId,
+			itemId: "500",
+			isTest: true,
+		});
+		expect(checkTest.hasPending).toBe(true);
 	});
 });
