@@ -734,18 +734,6 @@ export function ItemRequestsPage() {
 		setIsDepositorMemberDropdownOpen(false);
 	};
 
-	const handleAddDepositorMember = () => {
-		const trimmed = depositorMemberSearchQuery.trim();
-		if (!trimmed) return;
-		if (depositorUserIds.includes(trimmed)) {
-			toast.info("User is already an authorized depositor.");
-			return;
-		}
-		setDepositorUserIds((prev) => [...prev, trimmed]);
-		setDepositorMemberSearchQuery("");
-		setIsDepositorMemberDropdownOpen(false);
-	};
-
 	const handleRemoveDepositorMember = (userId: string) => {
 		setDepositorUserIds((prev) => prev.filter((id) => id !== userId));
 	};
@@ -1696,31 +1684,38 @@ export function ItemRequestsPage() {
 										</p>
 
 										<div ref={depositorMemberSearchRef} className="relative">
-											<div className="flex items-center gap-2">
-												<div className="relative flex-1">
-													<Input
-														placeholder="Search server members by name or ID..."
-														value={depositorMemberSearchQuery}
-														onChange={(e) => {
-															setDepositorMemberSearchQuery(e.target.value);
-															setIsDepositorMemberDropdownOpen(true);
-														}}
-														onFocus={() =>
-															setIsDepositorMemberDropdownOpen(true)
+											<div className="relative flex-1">
+												<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+												<Input
+													placeholder={
+														loadingMembers
+															? "Loading server members..."
+															: "Search server members by name, username, or ID..."
+													}
+													value={depositorMemberSearchQuery}
+													onChange={(e) => {
+														setDepositorMemberSearchQuery(e.target.value);
+														setIsDepositorMemberDropdownOpen(true);
+													}}
+													onFocus={() => setIsDepositorMemberDropdownOpen(true)}
+													onKeyDown={(e) => {
+														if (e.key === "Enter") {
+															e.preventDefault();
+															if (
+																filteredDepositorMembers[0] &&
+																depositorMemberSearchQuery.trim().length > 0
+															) {
+																handleSelectMemberToDepositor(
+																	filteredDepositorMembers[0],
+																);
+															}
 														}
-														className="text-xs font-mono pr-8"
-													/>
-												</div>
-												<Button
-													variant="outline"
-													size="sm"
-													onClick={handleAddDepositorMember}
-													disabled={!depositorMemberSearchQuery.trim()}
-													className="text-xs shrink-0 cursor-pointer"
-												>
-													<Plus className="size-3.5 mr-1" />
-													Add
-												</Button>
+													}}
+													className="pl-8 text-xs font-mono"
+												/>
+												{loadingMembers && (
+													<Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 size-3.5 animate-spin text-muted-foreground" />
+												)}
 											</div>
 
 											{/* Search Dropdown */}

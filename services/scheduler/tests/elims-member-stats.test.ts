@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { apiKeys, db, elimsMemberStats, eq } from "@sentinel/database";
 import { fetchFFScouterStats } from "@sentinel/torn-api";
 import * as botIpc from "../src/lib/ipc/listener";
-import { syncTeamMemberStats } from "../src/workers/elimination/member-stats-sync";
+import {
+	runElimsMemberStatsCycle,
+	syncTeamMemberStats,
+} from "../src/workers/elimination";
 
 describe("Elims Member Stats & FFScouter Integration", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
@@ -251,5 +254,60 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 			.from(elimsMemberStats)
 			.where(eq(elimsMemberStats.discordId, "user-1"));
 		expect(updatedUser1?.bsEstimate).toBe(500000000);
+	});
+
+	test("syncTeamMemberStats auto-prunes members who lost the team role", async () => {
+		process.env.FF_SCOUTER_KEY = "test-ff-key";
+		botSpy = spyOn(botIpc, "requestGuildMembersFromBot").mockResolvedValue([
+			{
+				discordId: "user-1",
+				currentRoleIds: ["role-elims", "role-verified"],
+				currentNickname: "PlayerOne",
+			},
+			{
+				discordId: "user-2",
+				currentRoleIds: ["role-verified"], // Lost role-elims!
+				currentNickname: "PlayerTwo",
+			},
+		]);
+
+		// Pre-populate DB with user-1 and user-2
+		await db.insert(elimsMemberStats).values([
+			{
+				id: `stat-${crypto.randomUUID()}`,
+				guildId: TEST_GUILD_ID,
+				discordId: "user-1",
+				roles: ["role-elims"],
+				tornId: 1001,
+				tornName: "TornUserOne",
+				bsEstimate: 500000000,
+			},
+			{
+				id: `stat-${crypto.randomUUID()}`,
+				guildId: TEST_GUILD_ID,
+				discordId: "user-2",
+				roles: ["role-elims"],
+				tornId: 1002,
+				tornName: "TornUserTwo",
+				bsEstimate: 800000000,
+			},
+		]);
+
+		await syncTeamMemberStats({
+			guildId: TEST_GUILD_ID,
+			roleId: "role-elims",
+		});
+
+		// user-2 should be auto-pruned
+		const remaining = await db
+			.select()
+			.from(elimsMemberStats)
+			.where(eq(elimsMemberStats.guildId, TEST_GUILD_ID));
+		expect(remaining.length).toBe(1);
+		expect(remaining[0]?.discordId).toBe("user-1");
+	});
+
+	test("runElimsMemberStatsCycle runs cleanly and respects disabled config", async () => {
+		await expect(runElimsMemberStatsCycle()).resolves.toBeUndefined();
 	});
 });

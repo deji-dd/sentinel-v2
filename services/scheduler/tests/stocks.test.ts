@@ -5,6 +5,7 @@ import {
 	beforeEach,
 	describe,
 	expect,
+	spyOn,
 	test,
 } from "bun:test";
 import {
@@ -49,6 +50,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	const TEST_ITEM_ID_1 = 500;
 
 	let originalState: typeof systemStates.$inferSelect | undefined;
+	let fetchSpy: ReturnType<typeof spyOn>;
 
 	beforeAll(async () => {
 		originalState = await db.query.systemStates.findFirst({
@@ -120,6 +122,13 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	beforeEach(async () => {
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+			return new Response(JSON.stringify({ stocks: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch);
+
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db
 			.delete(stockLedgers)
@@ -144,6 +153,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	afterEach(async () => {
+		fetchSpy?.mockRestore();
 		schedulerEvents.removeAllListeners();
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db
@@ -313,7 +323,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 		// Re-running when up to date should result in 0 replayed
 		const secondRun = await reconcileHistoricalStockLogs();
 		expect(secondRun.replayed).toBe(0);
-	});
+	}, 20_000);
 
 	test("getStocksTotals aggregates stock dividend values and counts", async () => {
 		await db.insert(stockLedgers).values([

@@ -321,12 +321,60 @@ export function TeamBreakdownPage() {
 		}
 	}, [selectedRoleId]);
 
+	const [configuredTeamRoleId, setConfiguredTeamRoleId] = useState<
+		string | null
+	>(null);
+	const [savingTeamRole, setSavingTeamRole] = useState(false);
+
+	const fetchTeamStatsConfig = useCallback(async () => {
+		try {
+			const res = await api.api.v1.elims["team-stats"].config.get();
+			if (res.data && "teamRoleId" in res.data) {
+				const saved = res.data.teamRoleId;
+				setConfiguredTeamRoleId(saved ?? null);
+				if (saved && selectedRoleId === "all") {
+					setSelectedRoleId(saved);
+				}
+			}
+		} catch {}
+	}, [selectedRoleId]);
+
+	const handleSaveTeamRole = async () => {
+		setSavingTeamRole(true);
+		try {
+			const nextRole = selectedRoleId === "all" ? null : selectedRoleId;
+			const res = await api.api.v1.elims["team-stats"].config.put({
+				teamRoleId: nextRole,
+				autoSyncTeamStats: true,
+			});
+			if (res.data) {
+				setConfiguredTeamRoleId(nextRole);
+				toast.success(
+					nextRole && selectedRoleName
+						? `Set "${selectedRoleName}" as official team role. Background automated sync is active.`
+						: "Cleared official team role.",
+				);
+			} else if (res.error) {
+				toast.error("Failed to update team role configuration.");
+			}
+		} catch (err) {
+			toast.error(
+				err instanceof Error
+					? err.message
+					: "Failed to update team role configuration.",
+			);
+		} finally {
+			setSavingTeamRole(false);
+		}
+	};
+
 	useEffect(() => {
 		if (isOwner) {
 			fetchRoles();
 			fetchStatRoles();
+			fetchTeamStatsConfig();
 		}
-	}, [fetchRoles, fetchStatRoles, isOwner]);
+	}, [fetchRoles, fetchStatRoles, fetchTeamStatsConfig, isOwner]);
 
 	useEffect(() => {
 		fetchMembersStats();
@@ -813,6 +861,24 @@ export function TeamBreakdownPage() {
 										))}
 									</SelectContent>
 								</Select>
+
+								{selectedRoleId !== "all" && (
+									<Button
+										variant={
+											selectedRoleId === configuredTeamRoleId
+												? "secondary"
+												: "outline"
+										}
+										size="sm"
+										onClick={handleSaveTeamRole}
+										disabled={savingTeamRole}
+										className="h-8 text-xs font-mono"
+									>
+										{selectedRoleId === configuredTeamRoleId
+											? "Team Role (Auto-Sync)"
+											: "Set as Team Role"}
+									</Button>
+								)}
 
 								<Button
 									onClick={() => handleGetMembersStats(false)}

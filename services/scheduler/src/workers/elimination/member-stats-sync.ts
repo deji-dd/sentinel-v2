@@ -23,6 +23,7 @@ export interface SyncMemberStatsResult {
 	newProcessed: number;
 	resolved: number;
 	ffScouterHits: number;
+	prunedCount?: number;
 	error?: string;
 	message?: string;
 }
@@ -101,6 +102,27 @@ export async function syncTeamMemberStats(
 		existingMap.set(r.discordId, r);
 	}
 
+	// Auto-prune members who no longer possess the target role or left the server
+	let prunedCount = 0;
+	if (targetRole) {
+		const currentRoleDiscordIds = new Set(
+			filteredMembers.map((m) => m.discordId),
+		);
+		const toPrune = existingRecords.filter(
+			(r) => !currentRoleDiscordIds.has(r.discordId),
+		);
+		if (toPrune.length > 0) {
+			logger.info(
+				`Auto-pruning ${toPrune.length} member(s) who no longer hold target role ${targetRole}...`,
+			);
+			for (const p of toPrune) {
+				await db.delete(elimsMemberStats).where(eq(elimsMemberStats.id, p.id));
+				existingMap.delete(p.discordId);
+			}
+			prunedCount = toPrune.length;
+		}
+	}
+
 	// Determine which members need processing:
 	// - New members not in DB
 	// - Existing members with missing stats (ffScouterStats is null or bsEstimate is null)
@@ -121,7 +143,11 @@ export async function syncTeamMemberStats(
 			newProcessed: 0,
 			resolved: 0,
 			ffScouterHits: 0,
-			message: "All members already synchronized with full stats.",
+			prunedCount,
+			message:
+				prunedCount > 0
+					? `Pruned ${prunedCount} member(s) who no longer hold the role. Remaining members are up to date.`
+					: "All members already synchronized with full stats.",
 		};
 	}
 
@@ -325,6 +351,7 @@ export async function syncTeamMemberStats(
 		newProcessed: membersToProcess.length,
 		resolved: resolvedCount,
 		ffScouterHits: ffHits,
+		prunedCount,
 		error: ffScouterError,
 		message: ffScouterError
 			? `Processed ${membersToProcess.length} member(s), but FFScouter error: ${ffScouterError}`

@@ -99,6 +99,8 @@ interface ElimsConfigData {
 	adminRoleIds: string[];
 	keyDonationChannelId?: string | null;
 	keyDonationEmbedMessageId?: string | null;
+	teamRoleId?: string | null;
+	autoSyncTeamStats?: boolean;
 	configuredAt: string;
 	configuredBy: {
 		discordId: string;
@@ -2773,6 +2775,99 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Save and Assign Roles Based on Stat Distribution",
 				description:
 					"Saves stat distribution role mappings and instructs Discord bot to auto-assign roles.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/team-stats/config ───────────────────────────────────
+	.get(
+		"/team-stats/config",
+		async ({ user, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			return {
+				teamRoleId: configData?.teamRoleId ?? null,
+				autoSyncTeamStats: configData?.autoSyncTeamStats ?? false,
+			};
+		},
+		{
+			detail: {
+				summary: "Get Team Breakdown Automation Config",
+				description:
+					"Returns configured team role ID and auto-sync setting for background execution.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/elims/team-stats/config ───────────────────────────────────
+	.put(
+		"/team-stats/config",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const currentData = existing.data as unknown as ElimsConfigData;
+			const updatedData: ElimsConfigData = {
+				...currentData,
+				teamRoleId:
+					body.teamRoleId !== undefined
+						? body.teamRoleId
+						: currentData.teamRoleId,
+				autoSyncTeamStats:
+					body.autoSyncTeamStats !== undefined
+						? body.autoSyncTeamStats
+						: currentData.autoSyncTeamStats,
+				updatedAt: new Date().toISOString(),
+			};
+
+			await db
+				.update(systemStates)
+				.set({
+					data: updatedData as unknown as Record<string, unknown>,
+					updatedAt: new Date(),
+				})
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			return {
+				success: true,
+				teamRoleId: updatedData.teamRoleId,
+				autoSyncTeamStats: updatedData.autoSyncTeamStats,
+				message: "Team breakdown automated configuration updated.",
+			};
+		},
+		{
+			body: t.Object({
+				teamRoleId: t.Optional(t.Nullable(t.String())),
+				autoSyncTeamStats: t.Optional(t.Boolean()),
+			}),
+			detail: {
+				summary: "Update Team Breakdown Automation Config",
+				description:
+					"Sets the team role ID and toggles automated background stat syncing.",
 			},
 		},
 	);
