@@ -7,6 +7,7 @@ import { staticSpaPlugin } from "./middleware/static-spa";
 import { healthRoutes } from "./routes/health";
 import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
+import { fetchElimsUsers } from "./routes/v1/elims";
 import { wsBattlestatsLedgerRoutes } from "./routes/ws-battlestats-ledger";
 import { wsCrimeLedgerRoutes } from "./routes/ws-crime-ledger";
 import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
@@ -39,6 +40,18 @@ export const app = new Elysia()
 	.use(wsElimsTournamentRoutes)
 	.use(pondRoutes)
 	.use(v1Routes)
+	.get("/api/elims/users", async ({ query, set }) => {
+		set.headers["access-control-allow-origin"] = "*";
+		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
+		set.headers["access-control-allow-headers"] = "*";
+		return await fetchElimsUsers(query as Record<string, string | undefined>);
+	})
+	.get("/api/users", async ({ query, set }) => {
+		set.headers["access-control-allow-origin"] = "*";
+		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
+		set.headers["access-control-allow-headers"] = "*";
+		return await fetchElimsUsers(query as Record<string, string | undefined>);
+	})
 	.use(staticSpaPlugin)
 
 	.onError(({ code, error, set }) => {

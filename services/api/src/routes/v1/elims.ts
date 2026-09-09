@@ -22,6 +22,8 @@ import {
 	sql,
 	systemStates,
 	tornItems,
+	verificationLogs,
+	verifiedUsers,
 	type WhitelistedItem,
 } from "@sentinel/database";
 import {
@@ -238,8 +240,284 @@ export async function verifyElimsAdmin(
 	return userRoles.some((r) => targetRoleSet.has(r));
 }
 
+export interface ElimsUserItem {
+	id: number | string;
+	name: string;
+	tornId?: number | null;
+	tornName?: string | null;
+	discordId?: string;
+	discordName?: string;
+}
+
+export interface ElimsUsersQuery {
+	type?: string;
+	strict?: string;
+	fresh?: string;
+}
+
+let elimsUsersCache: {
+	timestamp: number;
+	data: Array<{
+		id: number | string;
+		name: string;
+		tornId: number | null;
+		tornName: string | null;
+		discordId: string;
+		discordName: string;
+	}>;
+} | null = null;
+
+export async function fetchElimsUsers(
+	query: ElimsUsersQuery = {},
+): Promise<ElimsUserItem[]> {
+	const [existing] = await db
+		.select()
+		.from(systemStates)
+		.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+	const configData = existing?.data as unknown as ElimsConfigData | undefined;
+	const guildId = configData?.guildId;
+	if (!guildId) {
+		return [];
+	}
+
+	const bypassCache = query.fresh === "true";
+	let rawUsers =
+		elimsUsersCache &&
+		!bypassCache &&
+		Date.now() - elimsUsersCache.timestamp < 60_000
+			? elimsUsersCache.data
+			: null;
+
+	if (!rawUsers) {
+		// 1. Fetch verified users linked through verification_logs for this guild
+		const verifiedLogUsers = await db
+			.selectDistinctOn([verificationLogs.discordId], {
+				discordId: verificationLogs.discordId,
+				tornId: verifiedUsers.tornId,
+				tornName: verifiedUsers.tornName,
+				newNickname: verificationLogs.newNickname,
+			})
+			.from(verificationLogs)
+			.innerJoin(
+				verifiedUsers,
+				eq(verificationLogs.discordId, verifiedUsers.discordId),
+			)
+			.where(eq(verificationLogs.guildId, guildId));
+
+		// 2. Fetch stored elims_member_stats for this guild
+		const memberStatsRows = await db
+			.select({
+				discordId: elimsMemberStats.discordId,
+				discordUsername: elimsMemberStats.discordUsername,
+				discordNickname: elimsMemberStats.discordNickname,
+				tornId: elimsMemberStats.tornId,
+				tornName: elimsMemberStats.tornName,
+			})
+			.from(elimsMemberStats)
+			.where(eq(elimsMemberStats.guildId, guildId));
+
+		const knownByDiscordId = new Map<
+			string,
+			{
+				tornId: number | null;
+				tornName: string | null;
+				discordName: string | null;
+			}
+		>();
+
+		for (const row of verifiedLogUsers) {
+			knownByDiscordId.set(row.discordId, {
+				tornId: row.tornId,
+				tornName: row.tornName,
+				discordName: row.tornName || row.newNickname,
+			});
+		}
+
+		for (const row of memberStatsRows) {
+			const prev = knownByDiscordId.get(row.discordId);
+			knownByDiscordId.set(row.discordId, {
+				tornId: row.tornId ?? prev?.tornId ?? null,
+				tornName: row.tornName ?? prev?.tornName ?? null,
+				discordName:
+					row.discordNickname ||
+					row.discordUsername ||
+					prev?.discordName ||
+					null,
+			});
+		}
+
+		// 3. Attempt to fetch live members from Discord REST API
+		const botToken = env.DISCORD_TOKEN;
+		let liveMembers: Array<{
+			id: string;
+			username: string;
+			displayName: string;
+		}> | null = null;
+
+		if (botToken) {
+			const allFetched: Array<{
+				id: string;
+				username: string;
+				displayName: string;
+			}> = [];
+			let after: string | undefined;
+
+			for (let page = 0; page < 5; page++) {
+				const queryStr = `limit=1000${after ? `&after=${after}` : ""}`;
+				const batch = await fetchDiscordApi<DiscordGuildMember[]>(
+					`/guilds/${guildId}/members?${queryStr}`,
+					`Bot ${botToken}`,
+				);
+
+				if (!batch || !Array.isArray(batch) || batch.length === 0) break;
+
+				for (const m of batch) {
+					if (!m.user || m.user.bot) continue;
+					allFetched.push({
+						id: m.user.id,
+						username: m.user.username,
+						displayName: m.nick || m.user.global_name || m.user.username,
+					});
+				}
+
+				if (batch.length < 1000) break;
+				const lastMember = batch[batch.length - 1];
+				after = lastMember?.user?.id;
+				if (!after) break;
+			}
+
+			if (allFetched.length > 0) {
+				liveMembers = allFetched;
+			}
+		}
+
+		const combined: Array<{
+			id: number | string;
+			name: string;
+			tornId: number | null;
+			tornName: string | null;
+			discordId: string;
+			discordName: string;
+		}> = [];
+
+		if (liveMembers && liveMembers.length > 0) {
+			for (const m of liveMembers) {
+				const known = knownByDiscordId.get(m.id);
+				const tornId = known?.tornId ?? null;
+				const tornName = known?.tornName ?? null;
+				const discordId = m.id;
+				const discordName = m.displayName || known?.discordName || m.username;
+
+				combined.push({
+					id: tornId ?? discordId,
+					name: tornName || discordName,
+					tornId,
+					tornName,
+					discordId,
+					discordName,
+				});
+			}
+		} else {
+			for (const [discordId, info] of knownByDiscordId.entries()) {
+				const tornId = info.tornId;
+				const tornName = info.tornName;
+				const discordName = info.discordName || tornName || "Unknown";
+
+				combined.push({
+					id: tornId ?? discordId,
+					name: tornName || discordName,
+					tornId,
+					tornName,
+					discordId,
+					discordName,
+				});
+			}
+		}
+
+		combined.sort((a, b) =>
+			String(a.name).localeCompare(String(b.name), undefined, {
+				sensitivity: "base",
+			}),
+		);
+
+		elimsUsersCache = {
+			timestamp: Date.now(),
+			data: combined,
+		};
+		rawUsers = combined;
+	}
+
+	const type = query.type?.toLowerCase();
+	const isStrict = query.strict === "true";
+
+	if (type === "discord") {
+		return rawUsers.map((u) => ({
+			id: u.discordId,
+			name: u.discordName,
+			...(isStrict
+				? {}
+				: {
+						tornId: u.tornId,
+						tornName: u.tornName,
+						discordId: u.discordId,
+						discordName: u.discordName,
+					}),
+		}));
+	}
+
+	if (type === "torn") {
+		return rawUsers
+			.filter((u) => u.tornId !== null)
+			.map((u) => ({
+				id: u.tornId as number,
+				name: u.tornName ?? u.name,
+				...(isStrict
+					? {}
+					: {
+							tornId: u.tornId,
+							tornName: u.tornName,
+							discordId: u.discordId,
+							discordName: u.discordName,
+						}),
+			}));
+	}
+
+	if (isStrict) {
+		return rawUsers.map((u) => ({
+			id: u.id,
+			name: u.name,
+		}));
+	}
+
+	return rawUsers;
+}
+
 export const elimsRoutes = new Elysia({ prefix: "/elims" })
 	.use(authPlugin)
+
+	// ─── GET /api/v1/elims/users ───────────────────────────────────────────────
+	.get(
+		"/users",
+		async ({ query, set }) => {
+			set.headers["access-control-allow-origin"] = "*";
+			set.headers["access-control-allow-methods"] = "GET, OPTIONS";
+			set.headers["access-control-allow-headers"] = "*";
+			return await fetchElimsUsers(query);
+		},
+		{
+			query: t.Object({
+				type: t.Optional(t.String()),
+				strict: t.Optional(t.String()),
+				fresh: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "List Elims Server Users",
+				description:
+					"Public endpoint returning a JSON array of current users in the Elims server with name and id fields.",
+			},
+		},
+	)
 
 	// ─── GET /api/v1/elims/status ─────────────────────────────────────────────
 	.get(
