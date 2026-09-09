@@ -5,6 +5,7 @@ import {
 	type ElimsItemRequestConfig,
 	eq,
 	getArmoryStock,
+	getHolderStock,
 	getStockHolders,
 	getUnassignedStock,
 	reclaimStockFromHolder,
@@ -17,6 +18,7 @@ import {
 	ButtonBuilder,
 	type ButtonInteraction,
 	ButtonStyle,
+	type ChatInputCommandInteraction,
 	type Client,
 	EmbedBuilder,
 	MessageFlags,
@@ -39,6 +41,7 @@ const ELIMS_ITEM_REQUESTS_CONFIG_ID = "elims:item_requests_config";
 export {
 	assignStockToHolder,
 	deductHolderStock,
+	getHolderStock,
 	getStockHolders,
 	getUnassignedStock,
 	reclaimStockFromHolder,
@@ -56,7 +59,8 @@ export function hasManagerPermission(
 		| ButtonInteraction
 		| UserSelectMenuInteraction
 		| StringSelectMenuInteraction
-		| ModalSubmitInteraction,
+		| ModalSubmitInteraction
+		| ChatInputCommandInteraction,
 	config: ElimsItemRequestConfig | null | undefined,
 ): boolean {
 	const member = interaction.member;

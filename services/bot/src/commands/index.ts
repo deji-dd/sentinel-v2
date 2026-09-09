@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import { allianceMapCommand } from "./alliance-map";
 import { assaultCheckCommand } from "./assault-check";
+import { assignedStockCommand } from "./assigned-stock";
 import { burnMapCommand } from "./burn-map";
 import { configCommand } from "./config";
 import { dashboardCommand } from "./dashboard";
@@ -16,6 +17,8 @@ import { purgeCommand } from "./purge";
 import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
+
+export { assignedStockCommand };
 
 export type BotModule =
 	| "verification"
@@ -59,6 +62,7 @@ export const elimsCommandsList: BotCommand[] = [
 	{ ...pingCommand, scope: "both" },
 	{ ...purgeCommand, scope: "both" },
 	{ ...itemRequestHelpCommand, scope: "elims" },
+	{ ...assignedStockCommand, scope: "elims" },
 ];
 
 // Global list of all known bot commands for the dispatcher collection

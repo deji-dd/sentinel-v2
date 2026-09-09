@@ -193,6 +193,39 @@ export async function getStockHolders(
 }
 
 /**
+ * Returns all active stock allocations for a specific user in a guild.
+ */
+export async function getHolderStock(
+	guildId: string,
+	discordUserId: string,
+	isTest = false,
+): Promise<StockHolderAllocation[]> {
+	const rows = await db
+		.select()
+		.from(elimsStockHolders)
+		.where(
+			and(
+				eq(elimsStockHolders.guildId, guildId),
+				eq(elimsStockHolders.discordUserId, discordUserId),
+				eq(elimsStockHolders.isTest, isTest),
+				sql`${elimsStockHolders.quantity} > 0`,
+			),
+		);
+
+	return rows.map((r) => ({
+		id: r.id,
+		guildId: r.guildId,
+		discordUserId: r.discordUserId,
+		discordUsername: r.discordUsername,
+		itemId: r.itemId,
+		itemName: r.itemName,
+		quantity: r.quantity,
+		isTest: r.isTest,
+		updatedAt: r.updatedAt,
+	}));
+}
+
+/**
  * Calculates unassigned armory stock for an item:
  * Unassigned = max(0, Total Available In Armory - Sum(Allocated to Holders))
  */
