@@ -34,7 +34,9 @@ export const clientContextPlugin = new Elysia({
 	} else if (
 		clientHeader === "elims-dashboard" ||
 		host.startsWith("elims.blasted-labs.tech") ||
-		origin.startsWith("https://elims.blasted-labs.tech")
+		host.startsWith("api.elims.blasted-labs.tech") ||
+		origin.startsWith("https://elims.blasted-labs.tech") ||
+		origin.startsWith("https://api.elims.blasted-labs.tech")
 	) {
 		clientApp = "elims-dashboard";
 	} else if (

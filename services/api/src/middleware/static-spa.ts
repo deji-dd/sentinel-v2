@@ -26,17 +26,34 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 	"*",
 	async ({ request, set }) => {
 		const url = new URL(request.url);
+		const host = request.headers.get("host") ?? "";
+		const origin = request.headers.get("origin") ?? "";
 
-		// Bypass API, Swagger, and system routes
+		if (
+			host.startsWith("api.elims") &&
+			(url.pathname === "/" || url.pathname === "")
+		) {
+			set.headers["content-type"] = "application/json; charset=utf-8";
+			set.headers["access-control-allow-origin"] = "*";
+			return {
+				service: "api.elims.blasted-labs.tech",
+				status: "online",
+				endpoints: {
+					users: "/users",
+					usersApi: "/api/users",
+					usersV1: "/api/v1/elims/users",
+				},
+			};
+		}
+
+		// Bypass API, Swagger, and system routes, or api subdomains
 		if (
 			url.pathname.startsWith("/api") ||
-			url.pathname.startsWith("/swagger")
+			url.pathname.startsWith("/swagger") ||
+			host.startsWith("api.")
 		) {
 			return;
 		}
-
-		const host = request.headers.get("host") ?? "";
-		const origin = request.headers.get("origin") ?? "";
 
 		let appDir = "web/bot-dashboard/dist";
 

@@ -9,6 +9,7 @@ export const env = {
 		"https://sentinel.blasted-labs.tech",
 		"https://tt-selector.blasted-labs.tech",
 		"https://elims.blasted-labs.tech",
+		"https://api.elims.blasted-labs.tech",
 		"https://sentinel.ayodejib.dev",
 		"https://aquasense.ayodejib.dev",
 		"https://api.ayodejib.dev",

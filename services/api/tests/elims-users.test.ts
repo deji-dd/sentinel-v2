@@ -94,4 +94,35 @@ describe("Elims Server Users Public Endpoint", () => {
 			expect(typeof first?.name).toBe("string");
 		}
 	});
+
+	it("GET /users on api.elims.blasted-labs.tech host returns 200 with JSON array", async () => {
+		const res = await app.handle(
+			new Request("https://api.elims.blasted-labs.tech/users", {
+				headers: {
+					host: "api.elims.blasted-labs.tech",
+				},
+			}),
+		);
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("access-control-allow-origin")).toBe("*");
+
+		const users = (await res.json()) as Array<Record<string, unknown>>;
+		expect(Array.isArray(users)).toBe(true);
+	});
+
+	it("GET / on api.elims.blasted-labs.tech returns status with endpoint info", async () => {
+		const res = await app.handle(
+			new Request("https://api.elims.blasted-labs.tech/", {
+				headers: {
+					host: "api.elims.blasted-labs.tech",
+				},
+			}),
+		);
+
+		expect(res.status).toBe(200);
+		const data = (await res.json()) as Record<string, unknown>;
+		expect(data.service).toBe("api.elims.blasted-labs.tech");
+		expect(data.status).toBe("online");
+	});
 });

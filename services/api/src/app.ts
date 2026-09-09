@@ -40,13 +40,25 @@ export const app = new Elysia()
 	.use(wsElimsTournamentRoutes)
 	.use(pondRoutes)
 	.use(v1Routes)
-	.get("/api/elims/users", async ({ query, set }) => {
+	.get("/users", async ({ query, set }) => {
 		set.headers["access-control-allow-origin"] = "*";
 		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
 		set.headers["access-control-allow-headers"] = "*";
 		return await fetchElimsUsers(query as Record<string, string | undefined>);
 	})
 	.get("/api/users", async ({ query, set }) => {
+		set.headers["access-control-allow-origin"] = "*";
+		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
+		set.headers["access-control-allow-headers"] = "*";
+		return await fetchElimsUsers(query as Record<string, string | undefined>);
+	})
+	.get("/api/v1/users", async ({ query, set }) => {
+		set.headers["access-control-allow-origin"] = "*";
+		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
+		set.headers["access-control-allow-headers"] = "*";
+		return await fetchElimsUsers(query as Record<string, string | undefined>);
+	})
+	.get("/api/elims/users", async ({ query, set }) => {
 		set.headers["access-control-allow-origin"] = "*";
 		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
 		set.headers["access-control-allow-headers"] = "*";
