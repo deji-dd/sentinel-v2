@@ -202,7 +202,7 @@ describe("Elimination Team Tracker Worker", () => {
 		});
 		expect(team70).toBeDefined();
 		expect(team70?.name).toBe("Brain Surgeons");
-		expect(team70?.score).toBe(15);
+		expect(team70?.score).toBe(1000);
 		expect(team70?.attacks).toBe(3);
 		expect(team70?.membersCount).toBe(1);
 
@@ -221,6 +221,8 @@ describe("Elimination Team Tracker Worker", () => {
 			where: eq(elimsTeamSnapshots.teamId, 70),
 		});
 		expect(snapshot).toBeDefined();
+		expect(snapshot?.score).toBe(1000);
+		expect(snapshot?.attacks).toBe(3);
 		expect(snapshot?.activeCount).toBe(1);
 	});
 });

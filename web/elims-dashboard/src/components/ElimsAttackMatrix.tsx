@@ -80,6 +80,25 @@ export interface AttackMatrixResponse {
 	timeframe: "all" | "24h" | "1h";
 }
 
+function mergeAttackMatrixData(
+	incoming: AttackMatrixResponse,
+	prev: AttackMatrixResponse | null,
+): AttackMatrixResponse {
+	if (!prev) return incoming;
+	const prevScoreMap = new Map(prev.teams.map((t) => [t.id, t.score]));
+	const mergedTeams = incoming.teams.map((team) => {
+		const prevScore = prevScoreMap.get(team.id);
+		if (team.score === 0 && !team.eliminated && prevScore && prevScore > 0) {
+			return { ...team, score: prevScore };
+		}
+		return team;
+	});
+	return {
+		...incoming,
+		teams: mergedTeams,
+	};
+}
+
 export function ElimsAttackMatrix() {
 	const [data, setData] = useState<AttackMatrixResponse | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -96,7 +115,7 @@ export function ElimsAttackMatrix() {
 			});
 			if (res.data && "teams" in res.data) {
 				const responseData = res.data as unknown as AttackMatrixResponse;
-				setData(responseData);
+				setData((prev) => mergeAttackMatrixData(responseData, prev));
 				// Default selected team to team 88 or first alive team
 				setSelectedTeamId((prev) => {
 					if (prev) return prev;
@@ -146,7 +165,7 @@ export function ElimsAttackMatrix() {
 						const message = JSON.parse(event.data);
 						if (message.type === "elims_attack_matrix" && message.data) {
 							const responseData = message.data as AttackMatrixResponse;
-							setData(responseData);
+							setData((prev) => mergeAttackMatrixData(responseData, prev));
 							setLoading(false);
 							setSelectedTeamId((prev) => {
 								if (prev) return prev;

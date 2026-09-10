@@ -100,6 +100,25 @@ type SortField =
 	| "winRate";
 type SortOrder = "asc" | "desc";
 
+function mergeHourlyActivityData(
+	incoming: HourlyActivityResponse,
+	prev: HourlyActivityResponse | null,
+): HourlyActivityResponse {
+	if (!prev) return incoming;
+	const prevScoreMap = new Map(prev.teams.map((t) => [t.teamId, t.score]));
+	const mergedTeams = incoming.teams.map((team) => {
+		const prevScore = prevScoreMap.get(team.teamId);
+		if (team.score === 0 && !team.eliminated && prevScore && prevScore > 0) {
+			return { ...team, score: prevScore };
+		}
+		return team;
+	});
+	return {
+		...incoming,
+		teams: mergedTeams,
+	};
+}
+
 export function ElimsReportPage() {
 	const [data, setData] = useState<HourlyActivityResponse | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -129,7 +148,7 @@ export function ElimsReportPage() {
 			const res = await api.api.v1.elims["hourly-activity"].get();
 			if (res.data) {
 				const resData = res.data as unknown as HourlyActivityResponse;
-				setData(resData);
+				setData((prev) => mergeHourlyActivityData(resData, prev));
 			}
 		} catch (err) {
 			toast.error(
@@ -167,7 +186,12 @@ export function ElimsReportPage() {
 					try {
 						const message = JSON.parse(event.data);
 						if (message.type === "elims_snapshot" && message.data) {
-							setData(message.data as HourlyActivityResponse);
+							setData((prev) =>
+								mergeHourlyActivityData(
+									message.data as HourlyActivityResponse,
+									prev,
+								),
+							);
 							setLoading(false);
 						}
 					} catch {

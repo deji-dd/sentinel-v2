@@ -170,7 +170,11 @@ async function syncEliminationBaseData(
 								name: t.name ?? DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
 								membersCount: t.participants ?? 0,
 								position: t.position ?? 1,
-								score: t.score ?? 0,
+								score: t.eliminated
+									? (t.score ?? 0)
+									: t.score && t.score > 0
+										? t.score
+										: sql`CASE WHEN elims_teams.score > 0 THEN elims_teams.score ELSE ${t.score ?? 0} END`,
 								lives: t.lives ?? 0,
 								wins: t.wins ?? 0,
 								losses: t.losses ?? 0,
@@ -382,12 +386,10 @@ export async function runElimsTrackingCycle(): Promise<number> {
 		const playersMap = teamPlayersMap.get(teamId);
 		const uniquePlayers = playersMap ? Array.from(playersMap.values()) : [];
 
-		let teamTotalScore = 0;
 		let teamTotalAttacks = 0;
 		let teamActiveCount = 0;
 
 		for (const p of uniquePlayers) {
-			teamTotalScore += p.score ?? 0;
 			teamTotalAttacks += p.attacks ?? 0;
 			if (
 				p.last_action?.status === "Online" ||
@@ -440,7 +442,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			.values({
 				id: teamId,
 				name: DEFAULT_TEAM_NAMES[teamId] ?? `Team ${teamId}`,
-				score: teamTotalScore,
+				score: 0,
 				attacks: teamTotalAttacks,
 				membersCount: uniquePlayers.length,
 				isMock: false,
@@ -449,9 +451,11 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			.onConflictDoUpdate({
 				target: elimsTeams.id,
 				set: {
-					score: teamTotalScore,
 					attacks: teamTotalAttacks,
-					membersCount: uniquePlayers.length,
+					membersCount:
+						uniquePlayers.length > 0
+							? uniquePlayers.length
+							: sql`elims_teams.members_count`,
 					isMock: false,
 					lastSyncedAt: nowCapture,
 					updatedAt: nowCapture,
@@ -465,9 +469,12 @@ export async function runElimsTrackingCycle(): Promise<number> {
 		// Insert snapshot for hourly distribution tracking
 		await db.insert(elimsTeamSnapshots).values({
 			teamId,
-			score: teamTotalScore,
+			score: existingTeam?.score ?? 0,
 			attacks: teamTotalAttacks,
-			membersCount: uniquePlayers.length,
+			membersCount:
+				uniquePlayers.length > 0
+					? uniquePlayers.length
+					: (existingTeam?.membersCount ?? 0),
 			activeCount: teamActiveCount,
 			lives: existingTeam?.lives ?? 50,
 			position: existingTeam?.position ?? 0,
