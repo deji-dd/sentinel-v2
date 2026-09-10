@@ -14,11 +14,12 @@ import { dashboardCommand } from "./dashboard";
 import { itemRequestHelpCommand } from "./item-request-help";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
+import { teamBreakdownCommand } from "./team-breakdown";
 import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
-export { assignedStockCommand };
+export { assignedStockCommand, teamBreakdownCommand };
 
 export type BotModule =
 	| "verification"
@@ -63,6 +64,7 @@ export const elimsCommandsList: BotCommand[] = [
 	{ ...purgeCommand, scope: "both" },
 	{ ...itemRequestHelpCommand, scope: "elims" },
 	{ ...assignedStockCommand, scope: "elims" },
+	{ ...teamBreakdownCommand, scope: "elims" },
 ];
 
 // Global list of all known bot commands for the dispatcher collection

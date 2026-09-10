@@ -10,6 +10,10 @@ import {
 	MessageFlags,
 } from "discord.js";
 import type { BotCommand } from "../commands/index";
+import {
+	handleTeamBreakdownSelect,
+	TEAM_BREAKDOWN_SELECT_ID,
+} from "../commands/team-breakdown";
 import { handleArmoryStockPageButton } from "../lib/elims-armory-storage";
 import {
 	handleItemGrantingButton,
@@ -123,6 +127,8 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("elims_holder_reclaim_select:")
 				) {
 					await handleStockHolderReclaimSelect(interaction);
+				} else if (interaction.customId === TEAM_BREAKDOWN_SELECT_ID) {
+					await handleTeamBreakdownSelect(interaction);
 				}
 				return;
 			}
