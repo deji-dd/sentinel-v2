@@ -1016,8 +1016,8 @@ export async function handleItemRequestModalSubmit(
 
 				if (resolvedUser?.competition) {
 					grantEmbed.addFields({
-						name: "Score & Attacks",
-						value: `Score: **${resolvedUser.competition.score.toLocaleString()}** • Attacks: **${resolvedUser.competition.attacks.toLocaleString()}**`,
+						name: "Attacks",
+						value: `Attacks: **${resolvedUser.competition.attacks.toLocaleString()}**`,
 						inline: true,
 					});
 				} else if (
@@ -1027,17 +1027,6 @@ export async function handleItemRequestModalSubmit(
 					grantEmbed.addFields({
 						name: "Attacks",
 						value: `**${resolvedUser.attacks.toLocaleString()}**`,
-						inline: true,
-					});
-				}
-
-				if (
-					resolvedUser?.attacksWon !== null &&
-					resolvedUser?.attacksWon !== undefined
-				) {
-					grantEmbed.addFields({
-						name: "Player Attacks (Won)",
-						value: `**${resolvedUser.attacksWon.toLocaleString()}**`,
 						inline: true,
 					});
 				}
