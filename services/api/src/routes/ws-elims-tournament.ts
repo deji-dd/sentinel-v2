@@ -1,6 +1,7 @@
 import { db, elimsTeams, sql } from "@sentinel/database";
 import { getElimsKeyPool } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
+import { getElimsAttackMatrixSnapshot } from "../lib/elims-attack-stats";
 
 export async function getElimsTournamentSnapshot() {
 	const teams = await db
@@ -185,6 +186,11 @@ setInterval(async () => {
 		try {
 			const snapshot = await getElimsTournamentSnapshot();
 			broadcastElimsTournamentState(snapshot);
+			const attackSnapshot = await getElimsAttackMatrixSnapshot();
+			broadcastElimsTournamentState({
+				type: "elims_attack_matrix",
+				data: attackSnapshot,
+			});
 		} catch {
 			// ignore broadcast errors
 		}
@@ -197,11 +203,17 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 		body: t.Object({
 			type: t.String(),
 			timestamp: t.Optional(t.Number()),
+			timeframe: t.Optional(t.String()),
 		}),
 		async open(ws) {
 			activeSockets.add(ws as unknown as { send: (msg: unknown) => void });
 			const snapshot = await getElimsTournamentSnapshot();
 			ws.send(snapshot);
+			const attackSnapshot = await getElimsAttackMatrixSnapshot();
+			ws.send({
+				type: "elims_attack_matrix",
+				data: attackSnapshot,
+			});
 		},
 		close(ws) {
 			activeSockets.delete(ws as unknown as { send: (msg: unknown) => void });
@@ -215,6 +227,18 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 			} else if (message.type === "refresh") {
 				const snapshot = await getElimsTournamentSnapshot();
 				ws.send(snapshot);
+				const attackSnapshot = await getElimsAttackMatrixSnapshot();
+				ws.send({
+					type: "elims_attack_matrix",
+					data: attackSnapshot,
+				});
+			} else if (message.type === "get_attack_matrix") {
+				const tf = (message.timeframe as "all" | "24h" | "1h") ?? "all";
+				const attackSnapshot = await getElimsAttackMatrixSnapshot(tf);
+				ws.send({
+					type: "elims_attack_matrix",
+					data: attackSnapshot,
+				});
 			}
 		},
 	},

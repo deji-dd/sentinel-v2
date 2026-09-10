@@ -1,8 +1,7 @@
-import { ArrowDownLeft, ArrowUpRight, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
 	Card,
 	CardContent,
@@ -84,29 +83,28 @@ export interface AttackMatrixResponse {
 export function ElimsAttackMatrix() {
 	const [data, setData] = useState<AttackMatrixResponse | null>(null);
 	const [loading, setLoading] = useState(true);
-	const [refreshing, setRefreshing] = useState(false);
+	const [wsConnected, setWsConnected] = useState(false);
 	const [timeframe, setTimeframe] = useState<"all" | "24h" | "1h">("all");
 	const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
+	const wsRef = useRef<WebSocket | null>(null);
 
+	// 1. REST fallback / initial fetch
 	const fetchAttackData = useCallback(async () => {
 		try {
-			setRefreshing(true);
 			const res = await api.api.v1.elims["attack-matrix"].get({
 				query: { timeframe },
 			});
 			if (res.data && "teams" in res.data) {
 				const responseData = res.data as unknown as AttackMatrixResponse;
 				setData(responseData);
-				// Default selected team to the first team (or team with most attacks) if none selected
-				if (!selectedTeamId && responseData.teams.length > 0) {
-					// Prefer team 88 (Nine Lives) if present, otherwise first alive team
+				// Default selected team to team 88 or first alive team
+				setSelectedTeamId((prev) => {
+					if (prev) return prev;
 					const defaultTeam =
 						responseData.teams.find((t) => t.id === 88) ??
 						responseData.teams[0];
-					if (defaultTeam) {
-						setSelectedTeamId(defaultTeam.id);
-					}
-				}
+					return defaultTeam?.id ?? null;
+				});
 			}
 		} catch (err) {
 			toast.error(
@@ -116,15 +114,92 @@ export function ElimsAttackMatrix() {
 			);
 		} finally {
 			setLoading(false);
-			setRefreshing(false);
 		}
-	}, [timeframe, selectedTeamId]);
+	}, [timeframe]);
 
+	// Initial fetch
 	useEffect(() => {
 		fetchAttackData();
-		const interval = setInterval(fetchAttackData, 10000); // 10s auto-refresh
-		return () => clearInterval(interval);
 	}, [fetchAttackData]);
+
+	// 2. Real-time WebSocket streaming
+	useEffect(() => {
+		let ws: WebSocket | null = null;
+		let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+		function connect() {
+			try {
+				const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+				const wsUrl = `${protocol}//${window.location.host}/api/ws/elims-tournament`;
+				ws = new WebSocket(wsUrl);
+				wsRef.current = ws;
+
+				ws.onopen = () => {
+					setWsConnected(true);
+					if (ws?.readyState === WebSocket.OPEN) {
+						ws.send(JSON.stringify({ type: "get_attack_matrix", timeframe }));
+					}
+				};
+
+				ws.onmessage = (event) => {
+					try {
+						const message = JSON.parse(event.data);
+						if (message.type === "elims_attack_matrix" && message.data) {
+							const responseData = message.data as AttackMatrixResponse;
+							setData(responseData);
+							setLoading(false);
+							setSelectedTeamId((prev) => {
+								if (prev) return prev;
+								const defaultTeam =
+									responseData.teams.find((t) => t.id === 88) ??
+									responseData.teams[0];
+								return defaultTeam?.id ?? null;
+							});
+						}
+					} catch {
+						// silent json parse ignore
+					}
+				};
+
+				ws.onerror = () => {
+					setWsConnected(false);
+				};
+
+				ws.onclose = () => {
+					setWsConnected(false);
+					reconnectTimeout = setTimeout(connect, 3000);
+				};
+			} catch {
+				setWsConnected(false);
+			}
+		}
+
+		connect();
+
+		return () => {
+			if (reconnectTimeout) clearTimeout(reconnectTimeout);
+			if (ws) {
+				ws.close();
+				wsRef.current = null;
+			}
+		};
+	}, [timeframe]);
+
+	// 3. Fallback polling only when WebSocket is disconnected
+	useEffect(() => {
+		if (wsConnected) return;
+		const interval = setInterval(fetchAttackData, 6000);
+		return () => clearInterval(interval);
+	}, [wsConnected, fetchAttackData]);
+
+	const handleTimeframeChange = (val: "all" | "24h" | "1h") => {
+		setTimeframe(val);
+		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+			wsRef.current.send(
+				JSON.stringify({ type: "get_attack_matrix", timeframe: val }),
+			);
+		}
+	};
 
 	const selectedBreakdown = useMemo(() => {
 		if (!data || !selectedTeamId) return null;
@@ -183,7 +258,9 @@ export function ElimsAttackMatrix() {
 					{/* Timeframe Filter */}
 					<Tabs
 						value={timeframe}
-						onValueChange={(val) => setTimeframe(val as "all" | "24h" | "1h")}
+						onValueChange={(val) =>
+							handleTimeframeChange(val as "all" | "24h" | "1h")
+						}
 					>
 						<TabsList className="h-8">
 							<TabsTrigger value="all" className="text-xs px-2.5">
@@ -220,19 +297,6 @@ export function ElimsAttackMatrix() {
 							</SelectContent>
 						</Select>
 					</div>
-
-					<Button
-						variant="ghost"
-						size="icon"
-						onClick={fetchAttackData}
-						disabled={refreshing}
-						className="size-8 cursor-pointer"
-						title="Refresh Attack Telemetry"
-					>
-						<RefreshCw
-							className={`size-3.5 ${refreshing ? "animate-spin" : ""}`}
-						/>
-					</Button>
 				</div>
 			</div>
 
