@@ -939,6 +939,8 @@ export async function handleItemRequestModalSubmit(
 				metadata: {
 					competition: resolvedUser?.competition ?? null,
 					networth: resolvedUser?.networth ?? null,
+					attacks: resolvedUser?.attacks ?? null,
+					attacksWon: resolvedUser?.attacksWon ?? null,
 				},
 			})
 			.returning();
@@ -1016,6 +1018,26 @@ export async function handleItemRequestModalSubmit(
 					grantEmbed.addFields({
 						name: "Score & Attacks",
 						value: `Score: **${resolvedUser.competition.score.toLocaleString()}** • Attacks: **${resolvedUser.competition.attacks.toLocaleString()}**`,
+						inline: true,
+					});
+				} else if (
+					resolvedUser?.attacks !== null &&
+					resolvedUser?.attacks !== undefined
+				) {
+					grantEmbed.addFields({
+						name: "Attacks",
+						value: `**${resolvedUser.attacks.toLocaleString()}**`,
+						inline: true,
+					});
+				}
+
+				if (
+					resolvedUser?.attacksWon !== null &&
+					resolvedUser?.attacksWon !== undefined
+				) {
+					grantEmbed.addFields({
+						name: "Player Attacks (Won)",
+						value: `**${resolvedUser.attacksWon.toLocaleString()}**`,
 						inline: true,
 					});
 				}

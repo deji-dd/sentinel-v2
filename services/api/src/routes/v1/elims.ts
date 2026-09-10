@@ -2626,7 +2626,10 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					teamId: team.id,
 					name: team.name,
 					score: team.score,
-					attacks: team.attacks,
+					attacks:
+						team.wins + team.losses > 0
+							? team.wins + team.losses
+							: team.attacks,
 					membersCount: team.membersCount,
 					lives: team.lives,
 					wins: team.wins,

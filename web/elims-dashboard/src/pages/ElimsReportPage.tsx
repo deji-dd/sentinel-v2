@@ -298,10 +298,13 @@ export function ElimsReportPage() {
 					valA = a.activeCount ?? 0;
 					valB = b.activeCount ?? 0;
 					break;
-				case "attacks":
-					valA = a.attacks;
-					valB = b.attacks;
+				case "attacks": {
+					const attA = a.wins + a.losses > 0 ? a.wins + a.losses : a.attacks;
+					const attB = b.wins + b.losses > 0 ? b.wins + b.losses : b.attacks;
+					valA = attA;
+					valB = attB;
 					break;
+				}
 				case "wins":
 					valA = a.wins;
 					valB = b.wins;
@@ -625,6 +628,8 @@ export function ElimsReportPage() {
 											sortedTeams.map((t, idx) => {
 												const isElim = t.eliminated || t.lives <= 0;
 												const totalBattles = t.wins + t.losses;
+												const attacksCount =
+													totalBattles > 0 ? totalBattles : t.attacks;
 												const winRate =
 													totalBattles > 0
 														? ((t.wins / totalBattles) * 100).toFixed(1)
@@ -762,7 +767,7 @@ export function ElimsReportPage() {
 
 														{/* Attacks */}
 														<TableCell className="text-right tabular-nums font-medium">
-															{t.attacks.toLocaleString()}
+															{attacksCount.toLocaleString()}
 														</TableCell>
 
 														{/* Record & Win Rate */}

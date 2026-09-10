@@ -1,4 +1,10 @@
-import { db, elimsApiKeys, eq } from "@sentinel/database";
+import {
+	db,
+	elimsApiKeys,
+	elimsTeamPlayers,
+	elimsTeams,
+	eq,
+} from "@sentinel/database";
 import type {
 	ResolvedElimsUser,
 	UserCompetitionElimination,
@@ -42,7 +48,7 @@ export async function resolveElimsUser(
 				queryParams: {
 					id: discordId,
 					selections: ["profile", "competition", "personalstats"],
-					cat: "networth",
+					cat: "popular",
 				},
 				apiKey: candidate.apiKey,
 				userId: candidate.userId,
@@ -52,8 +58,24 @@ export async function resolveElimsUser(
 				score?: number;
 				team?: string;
 				attacks?: number;
+				competition?: {
+					name?: string;
+					score?: number;
+					team?: string;
+					attacks?: number;
+				};
 				personalstats?: {
 					networth?: { total?: number } | number;
+					attacking?: {
+						attacks?: {
+							won?: number;
+							lost?: number;
+							stalemate?: number;
+							assist?: number;
+						};
+					};
+					attackswon?: number;
+					attackslost?: number;
 				};
 			};
 
@@ -64,17 +86,72 @@ export async function resolveElimsUser(
 				continue;
 			}
 
+			const rawComp =
+				res.competition ?? (typeof res.score === "number" ? res : undefined);
 			let competition: UserCompetitionElimination | null = null;
-			if (typeof res.score === "number") {
+			if (
+				rawComp &&
+				(typeof rawComp.score === "number" ||
+					typeof rawComp.attacks === "number")
+			) {
 				competition = {
-					name: res.name ?? "Elimination",
-					score: res.score,
-					team: res.team ?? "Unknown",
-					attacks: res.attacks ?? 0,
+					name: rawComp.name ?? "Elimination",
+					score: rawComp.score ?? 0,
+					team: rawComp.team ?? "Unknown",
+					attacks: rawComp.attacks ?? 0,
 				};
 			}
 
+			// If competition stats not present in main payload, query /user/{id}/competition directly
+			if (!competition && tornId) {
+				try {
+					const compRes = (await tornApi.get("/user/{id}/competition", {
+						pathParams: { id: tornId },
+						apiKey: candidate.apiKey,
+						userId: candidate.userId,
+					})) as {
+						competition?: {
+							name?: string;
+							score?: number;
+							team?: string;
+							attacks?: number;
+						};
+					};
+
+					if (compRes?.competition) {
+						competition = {
+							name: compRes.competition.name ?? "Elimination",
+							score: compRes.competition.score ?? 0,
+							team: compRes.competition.team ?? "Unknown",
+							attacks: compRes.competition.attacks ?? 0,
+						};
+					}
+				} catch {
+					// Fallback silently if user is not in an active competition
+				}
+			}
+
+			// Fallback to local DB elimsTeamPlayers if API returned null
+			if (!competition && tornId) {
+				const dbPlayer = await db.query.elimsTeamPlayers.findFirst({
+					where: eq(elimsTeamPlayers.id, tornId),
+				});
+				if (dbPlayer) {
+					const dbTeam = await db.query.elimsTeams.findFirst({
+						where: eq(elimsTeams.id, dbPlayer.teamId),
+					});
+					competition = {
+						name: "Elimination",
+						score: dbPlayer.score,
+						team: dbTeam?.name ?? `Team ${dbPlayer.teamId}`,
+						attacks: dbPlayer.attacks,
+					};
+				}
+			}
+
 			let networth: number | null = null;
+			let attacksWon: number | null = null;
+
 			if (res.personalstats) {
 				if (typeof res.personalstats.networth === "number") {
 					networth = res.personalstats.networth;
@@ -84,6 +161,16 @@ export async function resolveElimsUser(
 					typeof res.personalstats.networth.total === "number"
 				) {
 					networth = res.personalstats.networth.total;
+				}
+
+				if (typeof res.personalstats.attackswon === "number") {
+					attacksWon = res.personalstats.attackswon;
+				} else if (
+					typeof res.personalstats.attacking === "object" &&
+					res.personalstats.attacking !== null &&
+					typeof res.personalstats.attacking.attacks?.won === "number"
+				) {
+					attacksWon = res.personalstats.attacking.attacks.won;
 				}
 			}
 
@@ -99,6 +186,8 @@ export async function resolveElimsUser(
 				tornName,
 				competition,
 				networth,
+				attacks: competition?.attacks ?? null,
+				attacksWon,
 			};
 		} catch (err) {
 			logger.warn(

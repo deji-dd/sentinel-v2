@@ -289,6 +289,8 @@ export interface ResolvedElimsUser {
 	tornName: string;
 	competition?: UserCompetitionElimination | null;
 	networth?: number | null;
+	attacks?: number | null;
+	attacksWon?: number | null;
 }
 
 export type IpcElimsResolveUserRequestMessage = {

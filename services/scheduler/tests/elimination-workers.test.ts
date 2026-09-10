@@ -194,7 +194,58 @@ describe("Elimination Workers & Guild Key Management via @sentinel/torn-api", ()
 			expect(result?.competition?.score).toBe(142);
 			expect(result?.competition?.team).toBe("Team Fire");
 			expect(result?.competition?.attacks).toBe(88);
+			expect(result?.attacks).toBe(88);
 			expect(result?.networth).toBe(500000000);
+		});
+
+		test("resolves competition via /user/{id}/competition fallback and personalstats attacks won", async () => {
+			fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+				input: string | URL | Request,
+			) => {
+				const url = String(input);
+				if (url.includes("/user/") && url.includes("/competition")) {
+					return new Response(
+						JSON.stringify({
+							competition: {
+								name: "Elimination",
+								score: 95,
+								team: "Brain Surgeons",
+								attacks: 42,
+							},
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+
+				return new Response(
+					JSON.stringify({
+						profile: {
+							id: 778899,
+							name: "ElimsChampion",
+						},
+						personalstats: {
+							networth: 250000000,
+							attacking: {
+								attacks: {
+									won: 3450,
+									lost: 120,
+								},
+							},
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}) as unknown as typeof fetch);
+
+			const result = await resolveElimsUser(TEST_DISCORD_ID, TEST_GUILD_ID);
+
+			expect(result).not.toBeNull();
+			expect(result?.tornId).toBe(778899);
+			expect(result?.competition?.attacks).toBe(42);
+			expect(result?.competition?.score).toBe(95);
+			expect(result?.attacks).toBe(42);
+			expect(result?.attacksWon).toBe(3450);
+			expect(result?.networth).toBe(250000000);
 		});
 
 		test("fails over to next guild key if first key encounters a key error", async () => {

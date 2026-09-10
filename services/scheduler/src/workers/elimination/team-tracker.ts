@@ -1,12 +1,10 @@
 import {
 	db,
-	elimsTeamAttacks,
 	elimsTeamPlayers,
 	elimsTeamSnapshots,
 	elimsTeams,
 	eq,
 	sql,
-	systemStates,
 } from "@sentinel/database";
 import {
 	getElimsKeyPool,
@@ -93,26 +91,6 @@ interface TornEliminationResponse {
 }
 
 /**
- * Wipes all mock data from the database once live API is accessible or during cleanups.
- */
-export async function wipeMockData(): Promise<void> {
-	try {
-		await db
-			.delete(elimsTeamSnapshots)
-			.where(eq(elimsTeamSnapshots.isMock, true));
-		await db.delete(elimsTeamPlayers).where(eq(elimsTeamPlayers.isMock, true));
-		await db.delete(elimsTeams).where(eq(elimsTeams.isMock, true));
-		await db.delete(elimsTeamAttacks).where(eq(elimsTeamAttacks.isMock, true));
-		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, ELIMS_SIMULATION_STATE_ID));
-		logger.info("Successfully purged mock elimination data from database.");
-	} catch (err) {
-		logger.error("Failed to purge mock elimination data:", err);
-	}
-}
-
-/**
  * Helper to reset in-memory state (used by test suites).
  */
 export function _resetSimulationInMemoryState(): void {
@@ -148,6 +126,7 @@ async function syncEliminationBaseData(
 						? new Date(t.eliminated_timestamp * 1000)
 						: null;
 
+					const totalAttacks = (t.wins ?? 0) + (t.losses ?? 0);
 					await db
 						.insert(elimsTeams)
 						.values({
@@ -156,6 +135,7 @@ async function syncEliminationBaseData(
 							membersCount: t.participants ?? 0,
 							position: t.position ?? 1,
 							score: t.score ?? 0,
+							attacks: totalAttacks,
 							lives: t.lives ?? 0,
 							wins: t.wins ?? 0,
 							losses: t.losses ?? 0,
@@ -175,6 +155,8 @@ async function syncEliminationBaseData(
 									: t.score && t.score > 0
 										? t.score
 										: sql`CASE WHEN elims_teams.score > 0 THEN elims_teams.score ELSE ${t.score ?? 0} END`,
+								attacks:
+									totalAttacks > 0 ? totalAttacks : sql`elims_teams.attacks`,
 								lives: t.lives ?? 0,
 								wins: t.wins ?? 0,
 								losses: t.losses ?? 0,
@@ -209,9 +191,6 @@ async function syncEliminationBaseData(
  * Performs base standings checks and live team player collection when open.
  */
 export async function runElimsTrackingCycle(): Promise<number> {
-	// 0. Auto-purge any residual mock or simulation data
-	await wipeMockData();
-
 	const now = Date.now();
 
 	// If within Code 32 backoff period, pause checks
@@ -241,7 +220,6 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			logger.info(
 				"Torn Elimination API is closed (Code 32: Closed until attacking period starts). Pausing live checks for 5m...",
 			);
-			await wipeMockData();
 			return lastCode32CheckTime + CODE_32_BACKOFF_MS;
 		}
 	}
@@ -258,15 +236,13 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			userId: probeUserId,
 		});
 
-		// If probe succeeded without error, live API is active! Purge any leftover mock data
-		await wipeMockData();
+		// Probe succeeded without error: live API is active
 	} catch (err) {
 		if (err instanceof TornError && err.code === 32) {
 			lastCode32CheckTime = Date.now();
 			logger.info(
 				"Torn Elimination API is closed (Code 32: Closed until attacking period starts). Pausing live checks for 5m...",
 			);
-			await wipeMockData();
 			return lastCode32CheckTime + CODE_32_BACKOFF_MS;
 		}
 
@@ -336,7 +312,6 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			logger.info(
 				"Torn Elimination API closed during batch pagination (code 32). Pausing live checks for 5m.",
 			);
-			await wipeMockData();
 			return lastCode32CheckTime + CODE_32_BACKOFF_MS;
 		}
 	}
@@ -451,7 +426,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			.onConflictDoUpdate({
 				target: elimsTeams.id,
 				set: {
-					attacks: teamTotalAttacks,
+					attacks: sql`CASE WHEN (elims_teams.wins + elims_teams.losses) > 0 THEN (elims_teams.wins + elims_teams.losses) ELSE ${teamTotalAttacks} END`,
 					membersCount:
 						uniquePlayers.length > 0
 							? uniquePlayers.length
@@ -466,11 +441,16 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			where: eq(elimsTeams.id, teamId),
 		});
 
+		const totalAttacks =
+			(existingTeam?.wins ?? 0) + (existingTeam?.losses ?? 0) > 0
+				? (existingTeam?.wins ?? 0) + (existingTeam?.losses ?? 0)
+				: teamTotalAttacks;
+
 		// Insert snapshot for hourly distribution tracking
 		await db.insert(elimsTeamSnapshots).values({
 			teamId,
 			score: existingTeam?.score ?? 0,
-			attacks: teamTotalAttacks,
+			attacks: totalAttacks,
 			membersCount:
 				uniquePlayers.length > 0
 					? uniquePlayers.length
