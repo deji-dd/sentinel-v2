@@ -8,12 +8,14 @@ import {
 	elimsArmoryDeposits,
 	elimsItemRequests,
 	elimsMemberStats,
+	elimsTeamAttacks,
 	elimsTeamPlayers,
 	elimsTeamSnapshots,
 	elimsTeams,
 	eq,
 	getArmoryStock,
 	getStockHolders,
+	gte,
 	guildConfigs,
 	ilike,
 	inArray,
@@ -2661,6 +2663,252 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Get Elimination Hourly Activity",
 				description:
 					"Returns hourly distribution of activity per team vs other teams across 0-24h TCT.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/attack-matrix ─────────────────────────────────────
+	.get(
+		"/attack-matrix",
+		async ({ user, query, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { error: "Unauthorized" };
+			}
+
+			const timeframe = query.timeframe ?? "all";
+			let minDate: Date | null = null;
+			if (timeframe === "1h") {
+				minDate = new Date(Date.now() - 60 * 60 * 1000);
+			} else if (timeframe === "24h") {
+				minDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+			}
+
+			// 1. Fetch all teams
+			const teams = await db.select().from(elimsTeams).orderBy(elimsTeams.id);
+			const teamNameMap = new Map<number, string>();
+			for (const t of teams) {
+				teamNameMap.set(t.id, t.name);
+			}
+
+			// 2. Fetch attacks aggregation
+			const conditions = minDate
+				? [gte(elimsTeamAttacks.detectedAt, minDate)]
+				: [];
+
+			const matrixCounts = await db
+				.select({
+					attackerTeamId: elimsTeamAttacks.attackerTeamId,
+					victimTeamId: elimsTeamAttacks.victimTeamId,
+					attackCount: count(),
+				})
+				.from(elimsTeamAttacks)
+				.where(conditions.length > 0 ? and(...conditions) : undefined)
+				.groupBy(
+					elimsTeamAttacks.attackerTeamId,
+					elimsTeamAttacks.victimTeamId,
+				);
+
+			// Initialize 12x12 matrix
+			const matrix: Record<number, Record<number, number>> = {};
+			for (const t1 of teams) {
+				const row: Record<number, number> = {};
+				for (const t2 of teams) {
+					row[t2.id] = 0;
+				}
+				matrix[t1.id] = row;
+			}
+
+			let totalRecordedAttacks = 0;
+			for (const row of matrixCounts) {
+				const teamRow = matrix[row.attackerTeamId];
+				if (teamRow && row.victimTeamId in teamRow) {
+					teamRow[row.victimTeamId] = row.attackCount;
+				}
+				totalRecordedAttacks += row.attackCount;
+			}
+
+			// Build per-team breakdown (incoming vs outgoing)
+			const teamBreakdowns: Record<
+				number,
+				{
+					teamId: number;
+					teamName: string;
+					incoming: {
+						total: number;
+						byTeam: Array<{
+							teamId: number;
+							teamName: string;
+							count: number;
+							percentage: number;
+						}>;
+					};
+					outgoing: {
+						total: number;
+						byTeam: Array<{
+							teamId: number;
+							teamName: string;
+							count: number;
+							percentage: number;
+						}>;
+					};
+					topThreat: {
+						teamId: number;
+						teamName: string;
+						count: number;
+						percentage: number;
+					} | null;
+					topTarget: {
+						teamId: number;
+						teamName: string;
+						count: number;
+						percentage: number;
+					} | null;
+				}
+			> = {};
+
+			for (const t of teams) {
+				const teamId = t.id;
+				const teamName = t.name;
+
+				// Outgoing: attacks launched by teamId
+				let totalOutgoing = 0;
+				const outgoingList: Array<{
+					teamId: number;
+					teamName: string;
+					count: number;
+				}> = [];
+
+				// Incoming: attacks received by teamId
+				let totalIncoming = 0;
+				const incomingList: Array<{
+					teamId: number;
+					teamName: string;
+					count: number;
+				}> = [];
+
+				for (const other of teams) {
+					if (other.id === teamId) continue;
+
+					const outCount = matrix[teamId]?.[other.id] ?? 0;
+					if (outCount > 0) {
+						totalOutgoing += outCount;
+						outgoingList.push({
+							teamId: other.id,
+							teamName: other.name,
+							count: outCount,
+						});
+					}
+
+					const inCount = matrix[other.id]?.[teamId] ?? 0;
+					if (inCount > 0) {
+						totalIncoming += inCount;
+						incomingList.push({
+							teamId: other.id,
+							teamName: other.name,
+							count: inCount,
+						});
+					}
+				}
+
+				outgoingList.sort((a, b) => b.count - a.count);
+				incomingList.sort((a, b) => b.count - a.count);
+
+				const outgoingByTeam = outgoingList.map((item) => ({
+					...item,
+					percentage:
+						totalOutgoing > 0
+							? Math.round((item.count / totalOutgoing) * 1000) / 10
+							: 0,
+				}));
+
+				const incomingByTeam = incomingList.map((item) => ({
+					...item,
+					percentage:
+						totalIncoming > 0
+							? Math.round((item.count / totalIncoming) * 1000) / 10
+							: 0,
+				}));
+
+				const topThreat = incomingByTeam[0] ?? null;
+				const topTarget = outgoingByTeam[0] ?? null;
+
+				teamBreakdowns[teamId] = {
+					teamId,
+					teamName,
+					incoming: {
+						total: totalIncoming,
+						byTeam: incomingByTeam,
+					},
+					outgoing: {
+						total: totalOutgoing,
+						byTeam: outgoingByTeam,
+					},
+					topThreat,
+					topTarget,
+				};
+			}
+
+			// 3. Fetch up to 25 recent attacks for the live ticker
+			const recentRaw = await db
+				.select({
+					id: elimsTeamAttacks.id,
+					attackerId: elimsTeamAttacks.attackerId,
+					attackerName: elimsTeamAttacks.attackerName,
+					attackerTeamId: elimsTeamAttacks.attackerTeamId,
+					victimId: elimsTeamAttacks.victimId,
+					victimName: elimsTeamAttacks.victimName,
+					victimTeamId: elimsTeamAttacks.victimTeamId,
+					details: elimsTeamAttacks.details,
+					detectedAt: elimsTeamAttacks.detectedAt,
+				})
+				.from(elimsTeamAttacks)
+				.where(conditions.length > 0 ? and(...conditions) : undefined)
+				.orderBy(desc(elimsTeamAttacks.detectedAt))
+				.limit(25);
+
+			const recentAttacks = recentRaw.map((r) => ({
+				id: r.id,
+				attackerId: r.attackerId,
+				attackerName: r.attackerName,
+				attackerTeamId: r.attackerTeamId,
+				attackerTeamName:
+					teamNameMap.get(r.attackerTeamId) ?? `Team ${r.attackerTeamId}`,
+				victimId: r.victimId,
+				victimName: r.victimName,
+				victimTeamId: r.victimTeamId,
+				victimTeamName:
+					teamNameMap.get(r.victimTeamId) ?? `Team ${r.victimTeamId}`,
+				details: r.details,
+				detectedAt: r.detectedAt.toISOString(),
+			}));
+
+			return {
+				teams: teams.map((t) => ({
+					id: t.id,
+					name: t.name,
+					lives: t.lives,
+					score: t.score,
+					position: t.position,
+					eliminated: t.eliminated,
+				})),
+				matrix,
+				teamBreakdowns,
+				recentAttacks,
+				totalRecordedAttacks,
+				timeframe,
+			};
+		},
+		{
+			query: t.Object({
+				timeframe: t.Optional(
+					t.Union([t.Literal("all"), t.Literal("24h"), t.Literal("1h")]),
+				),
+			}),
+			detail: {
+				summary: "Get Elimination Attack Matrix & Breakdown",
+				description:
+					"Returns the 12x12 inter-team attack matrix and per-team incoming/outgoing percentage breakdowns.",
 			},
 		},
 	)

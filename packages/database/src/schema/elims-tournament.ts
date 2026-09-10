@@ -1,11 +1,13 @@
 import {
 	boolean,
 	doublePrecision,
+	index,
 	integer,
 	jsonb,
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const elimsTeams = pgTable("elims_teams", {
@@ -117,3 +119,36 @@ export const elimsMemberStats = pgTable("elims_member_stats", {
 		.defaultNow()
 		.notNull(),
 });
+
+export const elimsTeamAttacks = pgTable(
+	"elims_team_attacks",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		attackerId: integer("attacker_id").notNull(),
+		attackerName: text("attacker_name").notNull(),
+		attackerTeamId: integer("attacker_team_id").notNull(),
+		victimId: integer("victim_id").notNull(),
+		victimName: text("victim_name").notNull(),
+		victimTeamId: integer("victim_team_id").notNull(),
+		hospitalUntil: integer("hospital_until").notNull(),
+		details: text("details"),
+		isMock: boolean("is_mock").default(false).notNull(),
+		detectedAt: timestamp("detected_at", {
+			withTimezone: true,
+			mode: "date",
+		})
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("elims_attacks_victim_until_idx").on(
+			table.victimId,
+			table.hospitalUntil,
+		),
+		index("elims_attacks_attacker_team_idx").on(table.attackerTeamId),
+		index("elims_attacks_victim_team_idx").on(table.victimTeamId),
+		index("elims_attacks_detected_at_idx").on(table.detectedAt),
+	],
+);

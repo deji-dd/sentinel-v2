@@ -1,5 +1,6 @@
 import {
 	db,
+	elimsTeamAttacks,
 	elimsTeamPlayers,
 	elimsTeamSnapshots,
 	elimsTeams,
@@ -16,6 +17,7 @@ import {
 import { Logger } from "@sentinel/utils";
 import { ScheduledRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
+import { queueAttackAnalysis } from "./attack-analyzer";
 
 const logger = new Logger("Scheduler", "ElimsTeamTracker");
 
@@ -100,6 +102,7 @@ export async function wipeMockData(): Promise<void> {
 			.where(eq(elimsTeamSnapshots.isMock, true));
 		await db.delete(elimsTeamPlayers).where(eq(elimsTeamPlayers.isMock, true));
 		await db.delete(elimsTeams).where(eq(elimsTeams.isMock, true));
+		await db.delete(elimsTeamAttacks).where(eq(elimsTeamAttacks.isMock, true));
 		await db
 			.delete(systemStates)
 			.where(eq(systemStates.id, ELIMS_SIMULATION_STATE_ID));
@@ -369,6 +372,12 @@ export async function runElimsTrackingCycle(): Promise<number> {
 	const nowCapture = new Date();
 	const currentHourTct = nowCapture.getUTCHours();
 
+	// Asynchronously offload attack analysis without awaiting to keep team tracker non-blocking
+	queueAttackAnalysis({
+		capturedAt: nowCapture,
+		teamPlayersMap,
+	});
+
 	for (const teamId of ELIMS_TEAM_IDS) {
 		const playersMap = teamPlayersMap.get(teamId);
 		const uniquePlayers = playersMap ? Array.from(playersMap.values()) : [];
@@ -478,7 +487,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 	const rateLimitPerKey = 50; // calls per minute per key
 	const totalThroughputPerSec = (keyCount * rateLimitPerKey) / 60;
 	const estimatedDurationMs = (lastTotalCalls / totalThroughputPerSec) * 1000;
-	const dynamicCadenceMs = Math.max(15_000, Math.ceil(estimatedDurationMs));
+	const dynamicCadenceMs = Math.max(3_000, Math.ceil(estimatedDurationMs));
 
 	logger.info(
 		`Live cycle complete in ${Date.now() - startTime}ms (${totalCallsExecuted} API calls across ${keyCount} keys). Next cadence: ${Math.round(dynamicCadenceMs / 1000)}s.`,

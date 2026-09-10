@@ -1,3 +1,4 @@
+export * from "./attack-analyzer";
 export * from "./key-verifier";
 export * from "./member-stats-sync";
 export * from "./member-stats-worker";

@@ -3,7 +3,9 @@ import {
 	ArrowDown,
 	ArrowUp,
 	ArrowUpDown,
+	BarChart3,
 	Search,
+	Swords,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +22,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ElimsAttackMatrix } from "../components/ElimsAttackMatrix";
 import { api } from "../lib/api";
 
 export interface TeamReportItem {
@@ -101,6 +104,9 @@ export function ElimsReportPage() {
 	const [data, setData] = useState<HourlyActivityResponse | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [wsConnected, setWsConnected] = useState(false);
+	const [activeTab, setActiveTab] = useState<"standings" | "attacks">(
+		"standings",
+	);
 
 	// Hourly Distribution view tab: "current" (last hour data) vs "average" (all data)
 	const [distributionMode, setDistributionMode] = useState<
@@ -333,565 +339,596 @@ export function ElimsReportPage() {
 
 	return (
 		<div className="flex flex-col gap-6 p-6">
-			{/* Page Header */}
+			{/* Page Header with Mode Tabs */}
 			<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
 				<div className="flex flex-wrap items-center gap-3">
-					{data?.isMock ? (
-						<Badge variant="secondary" className="font-mono text-xs">
-							Simulation Mode
-						</Badge>
-					) : (
-						<Badge variant="default" className="font-mono text-xs">
-							Live
-						</Badge>
-					)}
-				</div>
-			</div>
-
-			{/* Elimination Banner (if any team eliminated) */}
-			{eliminatedTeams.length > 0 && (
-				<div className="border border-destructive/40 bg-destructive/10 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-					<div className="flex items-center gap-2">
-						<AlertTriangle className="size-4 text-destructive shrink-0" />
-						<span className="font-bold text-destructive">
-							ELIMINATION ALERT:
-						</span>
-						<span>
-							{eliminatedTeams.length} team(s) reached 0 lives and have been
-							eliminated! {burnedTickets.toLocaleString()} tickets burned.
-						</span>
-					</div>
-					<div className="flex flex-wrap items-center gap-2">
-						{eliminatedTeams.map((t) => (
-							<Badge
-								key={t.teamId}
-								variant="destructive"
-								className="text-[11px] font-mono"
-							>
-								{t.name} (0 Lives)
-								{t.eliminatedTimestamp &&
-									` • ${new Date(t.eliminatedTimestamp).toISOString().substring(11, 16)} TCT`}
-							</Badge>
-						))}
-					</div>
-				</div>
-			)}
-
-			{/* 1. Live Sortable Tournament Standings Table */}
-			<Card>
-				<CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-4 pb-3">
-					<div className="flex flex-wrap items-center gap-3">
-						{/* Status Filter Tabs */}
-						<Tabs
-							value={statusFilter}
-							onValueChange={(val) =>
-								setStatusFilter(val as "all" | "active" | "eliminated")
-							}
-						>
-							<TabsList className="h-8">
-								<TabsTrigger value="all" className="text-xs px-2.5">
-									All ({teams.length})
-								</TabsTrigger>
-								<TabsTrigger value="active" className="text-xs px-2.5">
-									Active ({aliveTeams.length})
-								</TabsTrigger>
-								{eliminatedTeams.length > 0 && (
-									<TabsTrigger value="eliminated" className="text-xs px-2.5">
-										Eliminated ({eliminatedTeams.length})
-									</TabsTrigger>
-								)}
-							</TabsList>
-						</Tabs>
-
-						{/* Search Input */}
-						<div className="relative w-40 sm:w-52">
-							<Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
-							<Input
-								placeholder="Search teams..."
-								value={searchQuery}
-								onChange={(e) => setSearchQuery(e.target.value)}
-								className="h-8 pl-8 text-xs font-mono"
-							/>
-						</div>
-					</div>
-				</CardHeader>
-
-				<CardContent className="p-0">
-					<div className="overflow-x-auto">
-						<Table>
-							<TableHeader>
-								<TableRow className="hover:bg-transparent">
-									{/* Position */}
-									<TableHead
-										onClick={() => handleSort("position")}
-										className="w-16 font-mono text-xs cursor-pointer select-none hover:text-foreground"
-									>
-										<div className="flex items-center gap-1">
-											<span>#</span>
-											{sortField === "position" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Team Name */}
-									<TableHead
-										onClick={() => handleSort("name")}
-										className="min-w-44 font-mono text-xs cursor-pointer select-none hover:text-foreground"
-									>
-										<div className="flex items-center gap-1">
-											<span>Team</span>
-											{sortField === "name" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Status / Lives */}
-									<TableHead
-										onClick={() => handleSort("lives")}
-										className="w-40 font-mono text-xs cursor-pointer select-none hover:text-foreground"
-									>
-										<div className="flex items-center gap-1">
-											<span>Lives</span>
-											{sortField === "lives" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Tickets / Score */}
-									<TableHead
-										onClick={() => handleSort("score")}
-										className="w-32 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
-									>
-										<div className="flex items-center justify-end gap-1">
-											<span>Tickets</span>
-											{sortField === "score" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Active Players */}
-									<TableHead
-										onClick={() => handleSort("activeCount")}
-										className="w-28 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
-									>
-										<div className="flex items-center justify-end gap-1">
-											<span>Active</span>
-											{sortField === "activeCount" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Attacks */}
-									<TableHead
-										onClick={() => handleSort("attacks")}
-										className="w-24 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
-									>
-										<div className="flex items-center justify-end gap-1">
-											<span>Attacks</span>
-											{sortField === "attacks" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Win Rate / Record */}
-									<TableHead
-										onClick={() => handleSort("winRate")}
-										className="w-36 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
-									>
-										<div className="flex items-center justify-end gap-1">
-											<span>Record (W/L)</span>
-											{sortField === "winRate" ? (
-												sortOrder === "asc" ? (
-													<ArrowUp className="size-3" />
-												) : (
-													<ArrowDown className="size-3" />
-												)
-											) : (
-												<ArrowUpDown className="size-3 opacity-30" />
-											)}
-										</div>
-									</TableHead>
-
-									{/* Peak Hour */}
-									<TableHead className="w-24 font-mono text-xs text-center">
-										Peak TCT
-									</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{sortedTeams.length === 0 ? (
-									<TableRow>
-										<TableCell
-											colSpan={8}
-											className="h-24 text-center text-sm font-mono text-muted-foreground"
-										>
-											No teams matching your filter.
-										</TableCell>
-									</TableRow>
-								) : (
-									sortedTeams.map((t, idx) => {
-										const isElim = t.eliminated || t.lives <= 0;
-										const totalBattles = t.wins + t.losses;
-										const winRate =
-											totalBattles > 0
-												? ((t.wins / totalBattles) * 100).toFixed(1)
-												: "0.0";
-										const activeMembers =
-											t.activeCount ??
-											(isElim ? 0 : Math.round(t.membersCount * 0.2));
-										const ticketPct =
-											totalActiveTickets > 0 && !isElim
-												? ((t.score / totalActiveTickets) * 100).toFixed(1)
-												: "0.0";
-
-										// Health bar color transition
-										const healthPct = Math.max(
-											0,
-											Math.min(100, (t.lives / 50) * 100),
-										);
-										const healthColor =
-											t.lives >= 35
-												? "bg-emerald-500"
-												: t.lives >= 15
-													? "bg-amber-500"
-													: "bg-red-500";
-
-										return (
-											<TableRow
-												key={t.teamId}
-												className={`transition-colors font-mono text-xs ${
-													isElim
-														? "opacity-60 bg-destructive/5 hover:bg-destructive/10"
-														: "hover:bg-muted/40"
-												}`}
-											>
-												{/* Rank / Position */}
-												<TableCell className="font-bold tabular-nums">
-													{isElim ? (
-														<span className="text-muted-foreground">OUT</span>
-													) : t.position === 1 ? (
-														<Badge className="bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 border-amber-500/40 text-xs px-2 py-0">
-															#1
-														</Badge>
-													) : t.position === 2 ? (
-														<Badge
-															variant="secondary"
-															className="text-xs px-2 py-0"
-														>
-															#2
-														</Badge>
-													) : t.position === 3 ? (
-														<Badge
-															variant="outline"
-															className="text-xs px-2 py-0 border-amber-700/40 text-amber-700"
-														>
-															#3
-														</Badge>
-													) : (
-														<span className="text-muted-foreground pl-1.5">
-															#{t.position || idx + 1}
-														</span>
-													)}
-												</TableCell>
-
-												{/* Team Name */}
-												<TableCell>
-													<div className="flex items-center gap-1.5">
-														<span
-															className={`font-semibold ${
-																isElim
-																	? "line-through text-muted-foreground"
-																	: ""
-															}`}
-														>
-															{t.name}
-														</span>
-														<span className="text-[10px] text-muted-foreground font-normal">
-															#{t.teamId}
-														</span>
-													</div>
-												</TableCell>
-
-												{/* Lives & Health Bar */}
-												<TableCell>
-													{isElim ? (
-														<Badge
-															variant="destructive"
-															className="text-[10px] font-mono uppercase"
-														>
-															Eliminated
-															{t.eliminatedTimestamp &&
-																` (${new Date(t.eliminatedTimestamp).toISOString().substring(11, 16)} TCT)`}
-														</Badge>
-													) : (
-														<div className="flex flex-col gap-1 w-32">
-															<div className="flex items-center justify-between text-[11px] tabular-nums">
-																<span className="font-medium">
-																	{t.lives}/50 lives
-																</span>
-																<span className="text-[10px] text-muted-foreground">
-																	{healthPct.toFixed(0)}%
-																</span>
-															</div>
-															<div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
-																<div
-																	className={`h-full rounded-full transition-all duration-500 ${healthColor}`}
-																	style={{ width: `${healthPct}%` }}
-																/>
-															</div>
-														</div>
-													)}
-												</TableCell>
-
-												{/* Tickets / Score */}
-												<TableCell className="text-right tabular-nums">
-													<div className="font-bold text-sm">
-														{t.score.toLocaleString()}
-													</div>
-													{!isElim && (
-														<div className="text-[10px] text-muted-foreground">
-															{ticketPct}% pool
-														</div>
-													)}
-												</TableCell>
-
-												{/* Active Players */}
-												<TableCell className="text-right tabular-nums">
-													<div className="font-medium">
-														{activeMembers.toLocaleString()}
-													</div>
-													<div className="text-[10px] text-muted-foreground">
-														of {t.membersCount.toLocaleString()}
-													</div>
-												</TableCell>
-
-												{/* Attacks */}
-												<TableCell className="text-right tabular-nums font-medium">
-													{t.attacks.toLocaleString()}
-												</TableCell>
-
-												{/* Record & Win Rate */}
-												<TableCell className="text-right tabular-nums">
-													<div className="font-medium">
-														{t.wins}W - {t.losses}L
-													</div>
-													<div className="text-[10px] text-muted-foreground">
-														{winRate}% WR
-													</div>
-												</TableCell>
-
-												{/* Peak TCT Hour */}
-												<TableCell className="text-center font-mono text-xs tabular-nums text-muted-foreground">
-													{formatHour(t.mostActiveHour)}
-												</TableCell>
-											</TableRow>
-										);
-									})
-								)}
-							</TableBody>
-						</Table>
-					</div>
-				</CardContent>
-			</Card>
-
-			{/* 2. Hourly Distribution Heatmap Matrix across 00-23 TCT */}
-			<Card>
-				<CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4">
-					<div>
-						<CardTitle>Hourly Activity Distribution</CardTitle>
-						<p className="text-xs text-muted-foreground mt-1">
-							{distributionMode === "current"
-								? "Current: Most recent recorded activity per hour"
-								: "Average: Historical mean activity across all recorded tournament data"}
-						</p>
-					</div>
 					<Tabs
-						value={distributionMode}
+						value={activeTab}
 						onValueChange={(val) =>
-							setDistributionMode(val as "current" | "average")
+							setActiveTab(val as "standings" | "attacks")
 						}
-						className="w-auto"
 					>
-						<TabsList className="h-8">
-							<TabsTrigger value="current" className="text-xs px-3">
-								Current (Last Hour)
+						<TabsList className="h-9">
+							<TabsTrigger
+								value="standings"
+								className="text-xs px-3 gap-1.5 cursor-pointer"
+							>
+								<BarChart3 className="size-3.5" />
+								Standings & Activity
 							</TabsTrigger>
-							<TabsTrigger value="average" className="text-xs px-3">
-								Average (All Data)
+							<TabsTrigger
+								value="attacks"
+								className="text-xs px-3 gap-1.5 cursor-pointer"
+							>
+								<Swords className="size-3.5 text-destructive" />
+								Attack Flow
 							</TabsTrigger>
 						</TabsList>
 					</Tabs>
-				</CardHeader>
-				<CardContent>
-					<div className="overflow-x-auto">
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead className="w-40 font-mono text-xs">Team</TableHead>
-									<TableHead className="w-16 font-mono text-xs text-center">
-										Lives
-									</TableHead>
-									<TableHead className="w-16 font-mono text-xs text-center">
-										Least
-									</TableHead>
-									<TableHead className="w-16 font-mono text-xs text-center">
-										Most
-									</TableHead>
-									{HOURS.map((h) => {
-										const isCurrent = h === currentTctHour;
-										return (
-											<TableHead
-												key={h}
-												className={`w-9 font-mono text-[10px] text-center p-1 ${
-													isCurrent
-														? "text-primary font-bold bg-primary/10 rounded-t"
-														: ""
-												}`}
-												title={
-													isCurrent
-														? `Hour ${formatHour(h)} TCT (Current TCT Hour)`
-														: undefined
-												}
-											>
-												{String(h).padStart(2, "0")}
-											</TableHead>
-										);
-									})}
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{teams.map((t) => {
-									const isElim = t.eliminated || t.lives <= 0;
-									const dist =
-										distributionMode === "current"
-											? (t.currentHourly ?? t.hourlyDistribution)
-											: (t.averageHourly ?? t.hourlyDistribution);
-									const stats = getHourStats(dist);
+				</div>
+			</div>
 
-									return (
-										<TableRow
-											key={t.teamId}
-											className={isElim ? "opacity-60" : ""}
-										>
-											<TableCell className="font-mono text-xs font-medium whitespace-nowrap">
-												<div className="flex items-center gap-1.5">
-													<span
-														className={
-															isElim ? "line-through text-muted-foreground" : ""
-														}
-													>
-														{t.name}
-													</span>
-													{isElim && (
-														<Badge
-															variant="destructive"
-															className="text-[9px] px-1 py-0 h-4 uppercase"
-														>
-															Out
-														</Badge>
+			{activeTab === "attacks" ? (
+				<ElimsAttackMatrix />
+			) : (
+				<>
+					{/* Elimination Banner (if any team eliminated) */}
+					{eliminatedTeams.length > 0 && (
+						<div className="border border-destructive/40 bg-destructive/10 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+							<div className="flex items-center gap-2">
+								<AlertTriangle className="size-4 text-destructive shrink-0" />
+								<span className="font-bold text-destructive">
+									ELIMINATION ALERT:
+								</span>
+								<span>
+									{eliminatedTeams.length} team(s) reached 0 lives and have been
+									eliminated! {burnedTickets.toLocaleString()} tickets burned.
+								</span>
+							</div>
+							<div className="flex flex-wrap items-center gap-2">
+								{eliminatedTeams.map((t) => (
+									<Badge
+										key={t.teamId}
+										variant="destructive"
+										className="text-[11px] font-mono"
+									>
+										{t.name} (0 Lives)
+										{t.eliminatedTimestamp &&
+											` • ${new Date(t.eliminatedTimestamp).toISOString().substring(11, 16)} TCT`}
+									</Badge>
+								))}
+							</div>
+						</div>
+					)}
+
+					{/* 1. Live Sortable Tournament Standings Table */}
+					<Card>
+						<CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-4 pb-3">
+							<div className="flex flex-wrap items-center gap-3">
+								{/* Status Filter Tabs */}
+								<Tabs
+									value={statusFilter}
+									onValueChange={(val) =>
+										setStatusFilter(val as "all" | "active" | "eliminated")
+									}
+								>
+									<TabsList className="h-8">
+										<TabsTrigger value="all" className="text-xs px-2.5">
+											All ({teams.length})
+										</TabsTrigger>
+										<TabsTrigger value="active" className="text-xs px-2.5">
+											Active ({aliveTeams.length})
+										</TabsTrigger>
+										{eliminatedTeams.length > 0 && (
+											<TabsTrigger
+												value="eliminated"
+												className="text-xs px-2.5"
+											>
+												Eliminated ({eliminatedTeams.length})
+											</TabsTrigger>
+										)}
+									</TabsList>
+								</Tabs>
+
+								{/* Search Input */}
+								<div className="relative w-40 sm:w-52">
+									<Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+									<Input
+										placeholder="Search teams..."
+										value={searchQuery}
+										onChange={(e) => setSearchQuery(e.target.value)}
+										className="h-8 pl-8 text-xs font-mono"
+									/>
+								</div>
+							</div>
+						</CardHeader>
+
+						<CardContent className="p-0">
+							<div className="overflow-x-auto">
+								<Table>
+									<TableHeader>
+										<TableRow className="hover:bg-transparent">
+											{/* Position */}
+											<TableHead
+												onClick={() => handleSort("position")}
+												className="w-16 font-mono text-xs cursor-pointer select-none hover:text-foreground"
+											>
+												<div className="flex items-center gap-1">
+													<span>#</span>
+													{sortField === "position" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
 													)}
 												</div>
-											</TableCell>
-											<TableCell className="font-mono text-xs text-center tabular-nums">
-												{t.lives}/50
-											</TableCell>
-											<TableCell className="font-mono text-xs text-center text-muted-foreground">
-												{formatHour(stats.least)}
-											</TableCell>
-											<TableCell className="font-mono text-xs text-center font-semibold text-emerald-500">
-												{formatHour(stats.most)}
-											</TableCell>
-											{HOURS.map((h) => {
-												const val = dist[h] ?? 0;
-												const ratio = val / maxActivity;
+											</TableHead>
 
-												let cellClass = "bg-muted/10 text-muted-foreground/40";
-												if (isElim) {
-													cellClass = "bg-muted/5 text-muted-foreground/20";
-												} else if (ratio > 0.75) {
-													cellClass =
-														"bg-emerald-500/80 text-emerald-950 font-bold dark:text-white";
-												} else if (ratio > 0.5) {
-													cellClass =
-														"bg-emerald-500/50 text-foreground font-semibold";
-												} else if (ratio > 0.25) {
-													cellClass = "bg-emerald-500/25 text-foreground";
-												} else if (ratio > 0) {
-													cellClass = "bg-emerald-500/10 text-foreground/80";
-												}
+											{/* Team Name */}
+											<TableHead
+												onClick={() => handleSort("name")}
+												className="min-w-44 font-mono text-xs cursor-pointer select-none hover:text-foreground"
+											>
+												<div className="flex items-center gap-1">
+													<span>Team</span>
+													{sortField === "name" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Status / Lives */}
+											<TableHead
+												onClick={() => handleSort("lives")}
+												className="w-40 font-mono text-xs cursor-pointer select-none hover:text-foreground"
+											>
+												<div className="flex items-center gap-1">
+													<span>Lives</span>
+													{sortField === "lives" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Tickets / Score */}
+											<TableHead
+												onClick={() => handleSort("score")}
+												className="w-32 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
+											>
+												<div className="flex items-center justify-end gap-1">
+													<span>Tickets</span>
+													{sortField === "score" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Active Players */}
+											<TableHead
+												onClick={() => handleSort("activeCount")}
+												className="w-28 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
+											>
+												<div className="flex items-center justify-end gap-1">
+													<span>Active</span>
+													{sortField === "activeCount" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Attacks */}
+											<TableHead
+												onClick={() => handleSort("attacks")}
+												className="w-24 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
+											>
+												<div className="flex items-center justify-end gap-1">
+													<span>Attacks</span>
+													{sortField === "attacks" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Win Rate / Record */}
+											<TableHead
+												onClick={() => handleSort("winRate")}
+												className="w-36 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
+											>
+												<div className="flex items-center justify-end gap-1">
+													<span>Record (W/L)</span>
+													{sortField === "winRate" ? (
+														sortOrder === "asc" ? (
+															<ArrowUp className="size-3" />
+														) : (
+															<ArrowDown className="size-3" />
+														)
+													) : (
+														<ArrowUpDown className="size-3 opacity-30" />
+													)}
+												</div>
+											</TableHead>
+
+											{/* Peak Hour */}
+											<TableHead className="w-24 font-mono text-xs text-center">
+												Peak TCT
+											</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{sortedTeams.length === 0 ? (
+											<TableRow>
+												<TableCell
+													colSpan={8}
+													className="h-24 text-center text-sm font-mono text-muted-foreground"
+												>
+													No teams matching your filter.
+												</TableCell>
+											</TableRow>
+										) : (
+											sortedTeams.map((t, idx) => {
+												const isElim = t.eliminated || t.lives <= 0;
+												const totalBattles = t.wins + t.losses;
+												const winRate =
+													totalBattles > 0
+														? ((t.wins / totalBattles) * 100).toFixed(1)
+														: "0.0";
+												const activeMembers =
+													t.activeCount ??
+													(isElim ? 0 : Math.round(t.membersCount * 0.2));
+												const ticketPct =
+													totalActiveTickets > 0 && !isElim
+														? ((t.score / totalActiveTickets) * 100).toFixed(1)
+														: "0.0";
+
+												// Health bar color transition
+												const healthPct = Math.max(
+													0,
+													Math.min(100, (t.lives / 50) * 100),
+												);
+												const healthColor =
+													t.lives >= 35
+														? "bg-emerald-500"
+														: t.lives >= 15
+															? "bg-amber-500"
+															: "bg-red-500";
 
 												return (
-													<TableCell
-														key={h}
-														className={`p-1 text-center font-mono text-[10px] tabular-nums border border-border/20 ${cellClass}`}
-														title={`${t.name} @ ${formatHour(h)}: ${val} activity (${distributionMode === "current" ? "Latest Snapshot" : "Average"})`}
+													<TableRow
+														key={t.teamId}
+														className={`transition-colors font-mono text-xs ${
+															isElim
+																? "opacity-60 bg-destructive/5 hover:bg-destructive/10"
+																: "hover:bg-muted/40"
+														}`}
 													>
-														{val > 0 ? val : "·"}
-													</TableCell>
+														{/* Rank / Position */}
+														<TableCell className="font-bold tabular-nums">
+															{isElim ? (
+																<span className="text-muted-foreground">
+																	OUT
+																</span>
+															) : t.position === 1 ? (
+																<Badge className="bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 border-amber-500/40 text-xs px-2 py-0">
+																	#1
+																</Badge>
+															) : t.position === 2 ? (
+																<Badge
+																	variant="secondary"
+																	className="text-xs px-2 py-0"
+																>
+																	#2
+																</Badge>
+															) : t.position === 3 ? (
+																<Badge
+																	variant="outline"
+																	className="text-xs px-2 py-0 border-amber-700/40 text-amber-700"
+																>
+																	#3
+																</Badge>
+															) : (
+																<span className="text-muted-foreground pl-1.5">
+																	#{t.position || idx + 1}
+																</span>
+															)}
+														</TableCell>
+
+														{/* Team Name */}
+														<TableCell>
+															<div className="flex items-center gap-1.5">
+																<span
+																	className={`font-semibold ${
+																		isElim
+																			? "line-through text-muted-foreground"
+																			: ""
+																	}`}
+																>
+																	{t.name}
+																</span>
+																<span className="text-[10px] text-muted-foreground font-normal">
+																	#{t.teamId}
+																</span>
+															</div>
+														</TableCell>
+
+														{/* Lives & Health Bar */}
+														<TableCell>
+															{isElim ? (
+																<Badge
+																	variant="destructive"
+																	className="text-[10px] font-mono uppercase"
+																>
+																	Eliminated
+																	{t.eliminatedTimestamp &&
+																		` (${new Date(t.eliminatedTimestamp).toISOString().substring(11, 16)} TCT)`}
+																</Badge>
+															) : (
+																<div className="flex flex-col gap-1 w-32">
+																	<div className="flex items-center justify-between text-[11px] tabular-nums">
+																		<span className="font-medium">
+																			{t.lives}/50 lives
+																		</span>
+																		<span className="text-[10px] text-muted-foreground">
+																			{healthPct.toFixed(0)}%
+																		</span>
+																	</div>
+																	<div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+																		<div
+																			className={`h-full rounded-full transition-all duration-500 ${healthColor}`}
+																			style={{ width: `${healthPct}%` }}
+																		/>
+																	</div>
+																</div>
+															)}
+														</TableCell>
+
+														{/* Tickets / Score */}
+														<TableCell className="text-right tabular-nums">
+															<div className="font-bold text-sm">
+																{t.score.toLocaleString()}
+															</div>
+															{!isElim && (
+																<div className="text-[10px] text-muted-foreground">
+																	{ticketPct}% pool
+																</div>
+															)}
+														</TableCell>
+
+														{/* Active Players */}
+														<TableCell className="text-right tabular-nums">
+															<div className="font-medium">
+																{activeMembers.toLocaleString()}
+															</div>
+															<div className="text-[10px] text-muted-foreground">
+																of {t.membersCount.toLocaleString()}
+															</div>
+														</TableCell>
+
+														{/* Attacks */}
+														<TableCell className="text-right tabular-nums font-medium">
+															{t.attacks.toLocaleString()}
+														</TableCell>
+
+														{/* Record & Win Rate */}
+														<TableCell className="text-right tabular-nums">
+															<div className="font-medium">
+																{t.wins}W - {t.losses}L
+															</div>
+															<div className="text-[10px] text-muted-foreground">
+																{winRate}% WR
+															</div>
+														</TableCell>
+
+														{/* Peak TCT Hour */}
+														<TableCell className="text-center font-mono text-xs tabular-nums text-muted-foreground">
+															{formatHour(t.mostActiveHour)}
+														</TableCell>
+													</TableRow>
+												);
+											})
+										)}
+									</TableBody>
+								</Table>
+							</div>
+						</CardContent>
+					</Card>
+
+					{/* 2. Hourly Distribution Heatmap Matrix across 00-23 TCT */}
+					<Card>
+						<CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4">
+							<div>
+								<CardTitle>Hourly Activity Distribution</CardTitle>
+								<p className="text-xs text-muted-foreground mt-1">
+									{distributionMode === "current"
+										? "Current: Most recent recorded activity per hour"
+										: "Average: Historical mean activity across all recorded tournament data"}
+								</p>
+							</div>
+							<Tabs
+								value={distributionMode}
+								onValueChange={(val) =>
+									setDistributionMode(val as "current" | "average")
+								}
+								className="w-auto"
+							>
+								<TabsList className="h-8">
+									<TabsTrigger value="current" className="text-xs px-3">
+										Current (Last Hour)
+									</TabsTrigger>
+									<TabsTrigger value="average" className="text-xs px-3">
+										Average (All Data)
+									</TabsTrigger>
+								</TabsList>
+							</Tabs>
+						</CardHeader>
+						<CardContent>
+							<div className="overflow-x-auto">
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead className="w-40 font-mono text-xs">
+												Team
+											</TableHead>
+											<TableHead className="w-16 font-mono text-xs text-center">
+												Lives
+											</TableHead>
+											<TableHead className="w-16 font-mono text-xs text-center">
+												Least
+											</TableHead>
+											<TableHead className="w-16 font-mono text-xs text-center">
+												Most
+											</TableHead>
+											{HOURS.map((h) => {
+												const isCurrent = h === currentTctHour;
+												return (
+													<TableHead
+														key={h}
+														className={`w-9 font-mono text-[10px] text-center p-1 ${
+															isCurrent
+																? "text-primary font-bold bg-primary/10 rounded-t"
+																: ""
+														}`}
+														title={
+															isCurrent
+																? `Hour ${formatHour(h)} TCT (Current TCT Hour)`
+																: undefined
+														}
+													>
+														{String(h).padStart(2, "0")}
+													</TableHead>
 												);
 											})}
 										</TableRow>
-									);
-								})}
-							</TableBody>
-						</Table>
-					</div>
+									</TableHeader>
+									<TableBody>
+										{teams.map((t) => {
+											const isElim = t.eliminated || t.lives <= 0;
+											const dist =
+												distributionMode === "current"
+													? (t.currentHourly ?? t.hourlyDistribution)
+													: (t.averageHourly ?? t.hourlyDistribution);
+											const stats = getHourStats(dist);
 
-					<div className="flex items-center justify-end gap-2 mt-4 text-[11px] font-mono text-muted-foreground">
-						<span>Activity Scale:</span>
-						<span className="inline-block size-3 rounded bg-muted/20 border" />
-						<span>0</span>
-						<span className="inline-block size-3 rounded bg-emerald-500/10" />
-						<span>Low</span>
-						<span className="inline-block size-3 rounded bg-emerald-500/50" />
-						<span>Med</span>
-						<span className="inline-block size-3 rounded bg-emerald-500/80" />
-						<span>Peak</span>
-					</div>
-				</CardContent>
-			</Card>
+											return (
+												<TableRow
+													key={t.teamId}
+													className={isElim ? "opacity-60" : ""}
+												>
+													<TableCell className="font-mono text-xs font-medium whitespace-nowrap">
+														<div className="flex items-center gap-1.5">
+															<span
+																className={
+																	isElim
+																		? "line-through text-muted-foreground"
+																		: ""
+																}
+															>
+																{t.name}
+															</span>
+															{isElim && (
+																<Badge
+																	variant="destructive"
+																	className="text-[9px] px-1 py-0 h-4 uppercase"
+																>
+																	Out
+																</Badge>
+															)}
+														</div>
+													</TableCell>
+													<TableCell className="font-mono text-xs text-center tabular-nums">
+														{t.lives}/50
+													</TableCell>
+													<TableCell className="font-mono text-xs text-center text-muted-foreground">
+														{formatHour(stats.least)}
+													</TableCell>
+													<TableCell className="font-mono text-xs text-center font-semibold text-emerald-500">
+														{formatHour(stats.most)}
+													</TableCell>
+													{HOURS.map((h) => {
+														const val = dist[h] ?? 0;
+														const ratio = val / maxActivity;
+
+														let cellClass =
+															"bg-muted/10 text-muted-foreground/40";
+														if (isElim) {
+															cellClass = "bg-muted/5 text-muted-foreground/20";
+														} else if (ratio > 0.75) {
+															cellClass =
+																"bg-emerald-500/80 text-emerald-950 font-bold dark:text-white";
+														} else if (ratio > 0.5) {
+															cellClass =
+																"bg-emerald-500/50 text-foreground font-semibold";
+														} else if (ratio > 0.25) {
+															cellClass = "bg-emerald-500/25 text-foreground";
+														} else if (ratio > 0) {
+															cellClass =
+																"bg-emerald-500/10 text-foreground/80";
+														}
+
+														return (
+															<TableCell
+																key={h}
+																className={`p-1 text-center font-mono text-[10px] tabular-nums border border-border/20 ${cellClass}`}
+																title={`${t.name} @ ${formatHour(h)}: ${val} activity (${distributionMode === "current" ? "Latest Snapshot" : "Average"})`}
+															>
+																{val > 0 ? val : "·"}
+															</TableCell>
+														);
+													})}
+												</TableRow>
+											);
+										})}
+									</TableBody>
+								</Table>
+							</div>
+
+							<div className="flex items-center justify-end gap-2 mt-4 text-[11px] font-mono text-muted-foreground">
+								<span>Activity Scale:</span>
+								<span className="inline-block size-3 rounded bg-muted/20 border" />
+								<span>0</span>
+								<span className="inline-block size-3 rounded bg-emerald-500/10" />
+								<span>Low</span>
+								<span className="inline-block size-3 rounded bg-emerald-500/50" />
+								<span>Med</span>
+								<span className="inline-block size-3 rounded bg-emerald-500/80" />
+								<span>Peak</span>
+							</div>
+						</CardContent>
+					</Card>
+				</>
+			)}
 		</div>
 	);
 }
