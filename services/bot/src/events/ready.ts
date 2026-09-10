@@ -11,7 +11,7 @@ import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../lib/elims-key-donation";
 import {
 	startLiveDataSyncLoop,
-	updateElimsLiveDataMessage,
+	updateElimsLiveDataChannel,
 } from "../lib/elims-live-data";
 import { syncElimsStockHoldersChannel } from "../lib/elims-stock-holders";
 import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
@@ -89,7 +89,7 @@ export const readyEvent = {
 		});
 
 		// Synchronize Elims Live Data Standings embed if configured
-		await updateElimsLiveDataMessage(client).catch((err) => {
+		await updateElimsLiveDataChannel(client).catch((err) => {
 			logger.warn("Failed to sync Elims Live Data embed on boot:", err);
 		});
 

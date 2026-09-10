@@ -30,10 +30,6 @@ import {
 	handleKeyDonationModalSubmit,
 } from "../lib/elims-key-donation";
 import {
-	ELIMS_LIVE_DATA_REFRESH_ID,
-	handleLiveDataRefreshButton,
-} from "../lib/elims-live-data";
-import {
 	handleStockHolderAssignButton,
 	handleStockHolderModalSubmit,
 	handleStockHolderReclaimButton,
@@ -107,8 +103,6 @@ export const interactionCreateEvent = {
 					await handleStockHolderAssignButton(interaction);
 				} else if (interaction.customId.startsWith("elims_holder_reclaim:")) {
 					await handleStockHolderReclaimButton(interaction);
-				} else if (interaction.customId === ELIMS_LIVE_DATA_REFRESH_ID) {
-					await handleLiveDataRefreshButton(interaction);
 				}
 				return;
 			}

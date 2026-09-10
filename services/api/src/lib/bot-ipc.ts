@@ -196,6 +196,24 @@ export async function syncElimsKeyDonationViaIpc(
 }
 
 /**
+ * Dispatches an IPC signal to the Bot to synchronize the Elims Live Data module
+ * (persistent standings embed maintenance).
+ */
+export async function syncElimsLiveDataViaIpc(
+	guildId: string,
+	options?: {
+		previousChannelId?: string | null;
+		previousMessageId?: string | null;
+	},
+): Promise<boolean> {
+	return notifyBotAction("sync_elims_live_data", {
+		guildId,
+		previousChannelId: options?.previousChannelId,
+		previousMessageId: options?.previousMessageId,
+	});
+}
+
+/**
  * Dispatches an IPC signal to the Bot when a guild is authorized in Sentinel.
  */
 export async function syncAuthorizedGuildsViaIpc(

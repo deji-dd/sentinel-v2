@@ -42,6 +42,7 @@ import {
 	syncElimsGuildViaIpc,
 	syncElimsItemRequestsViaIpc,
 	syncElimsKeyDonationViaIpc,
+	syncElimsLiveDataViaIpc,
 } from "../../lib/bot-ipc";
 import { fetchDiscordApi } from "../../lib/discord-auth";
 import { getElimsAttackMatrixSnapshot } from "../../lib/elims-attack-stats";
@@ -104,6 +105,8 @@ interface ElimsConfigData {
 	adminRoleIds: string[];
 	keyDonationChannelId?: string | null;
 	keyDonationEmbedMessageId?: string | null;
+	liveDataChannelId?: string | null;
+	liveDataEmbedMessageId?: string | null;
 	teamRoleId?: string | null;
 	autoSyncTeamStats?: boolean;
 	configuredAt: string;
@@ -1639,6 +1642,137 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Sync Key Donation Embed",
 				description:
 					"Triggers the bot to immediately refresh or repost the persistent key donation embed.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/live-data/channel ──────────────────────────────────
+	.get(
+		"/live-data/channel",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			return { channelId: configData.liveDataChannelId ?? null };
+		},
+		{
+			detail: {
+				summary: "Get Live Data Channel",
+				description:
+					"Fetches the configured channel for live tournament standings.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/elims/live-data/channel ──────────────────────────────────
+	.put(
+		"/live-data/channel",
+		async ({ body, user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			const newChannelId = body.channelId ? body.channelId.trim() : null;
+
+			const updatedConfig: ElimsConfigData = {
+				...configData,
+				liveDataChannelId: newChannelId,
+				liveDataEmbedMessageId:
+					newChannelId !== configData.liveDataChannelId
+						? null
+						: configData.liveDataEmbedMessageId,
+				updatedAt: new Date().toISOString(),
+			};
+
+			await db
+				.update(systemStates)
+				.set({
+					data: updatedConfig as unknown as Record<string, unknown>,
+					updatedAt: new Date(),
+				})
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const channelChanged = newChannelId !== configData.liveDataChannelId;
+			void syncElimsLiveDataViaIpc(configData.guildId, {
+				previousChannelId: channelChanged
+					? (configData.liveDataChannelId ?? null)
+					: null,
+				previousMessageId: channelChanged
+					? (configData.liveDataEmbedMessageId ?? null)
+					: null,
+			});
+
+			return { success: true, channelId: newChannelId };
+		},
+		{
+			body: t.Object({
+				channelId: t.Nullable(t.String()),
+			}),
+			detail: {
+				summary: "Update Live Data Channel",
+				description:
+					"Configures the channel where the persistent live standings embed will be posted.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/live-data/channel/sync ────────────────────────────
+	.post(
+		"/live-data/channel/sync",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			if (!existing?.init || !existing.data) {
+				set.status = 400;
+				return { error: "Elims guild is not configured." };
+			}
+
+			const configData = existing.data as unknown as ElimsConfigData;
+			void syncElimsLiveDataViaIpc(configData.guildId);
+
+			return { success: true, message: "Sync signal dispatched to bot." };
+		},
+		{
+			detail: {
+				summary: "Sync Live Data Embed",
+				description:
+					"Triggers the bot to immediately refresh or repost the persistent live data embed.",
 			},
 		},
 	)

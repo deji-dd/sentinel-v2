@@ -6,6 +6,7 @@ import {
 	Hash,
 	Key,
 	Plus,
+	Radio,
 	RefreshCw,
 	Save,
 	Send,
@@ -115,6 +116,16 @@ export function GuildConfigPage() {
 	const [savingChannel, setSavingChannel] = useState(false);
 	const [syncingEmbed, setSyncingEmbed] = useState(false);
 
+	// Live Standings Channel state
+	const [liveDataChannelId, setLiveDataChannelId] = useState<string | null>(
+		null,
+	);
+	const [originalLiveDataChannelId, setOriginalLiveDataChannelId] = useState<
+		string | null
+	>(null);
+	const [savingLiveDataChannel, setSavingLiveDataChannel] = useState(false);
+	const [syncingLiveDataEmbed, setSyncingLiveDataEmbed] = useState(false);
+
 	// Fetch API keys and configured donation channel
 	const fetchApiKeys = useCallback(async () => {
 		setLoadingKeys(true);
@@ -140,6 +151,21 @@ export function GuildConfigPage() {
 		}
 	}, []);
 
+	// Fetch configured live data standings channel
+	const fetchLiveDataChannel = useCallback(async () => {
+		try {
+			const res = await fetch("/api/v1/elims/live-data/channel");
+			if (!res.ok) return;
+			const data = (await res.json()) as { channelId?: string | null };
+			if (data?.channelId !== undefined) {
+				setLiveDataChannelId(data.channelId ?? null);
+				setOriginalLiveDataChannelId(data.channelId ?? null);
+			}
+		} catch (err) {
+			console.error("Failed to load live standings channel:", err);
+		}
+	}, []);
+
 	// Fetch Guild text channels
 	const fetchChannels = useCallback(async () => {
 		if (!guild?.id) return;
@@ -161,7 +187,8 @@ export function GuildConfigPage() {
 	useEffect(() => {
 		void fetchApiKeys();
 		void fetchChannels();
-	}, [fetchApiKeys, fetchChannels]);
+		void fetchLiveDataChannel();
+	}, [fetchApiKeys, fetchChannels, fetchLiveDataChannel]);
 
 	const handleSaveDonationChannel = async (): Promise<boolean> => {
 		setSavingChannel(true);
@@ -209,6 +236,55 @@ export function GuildConfigPage() {
 			toast.error(msg);
 		} finally {
 			setSyncingEmbed(false);
+		}
+	};
+
+	const handleSaveLiveDataChannel = async (): Promise<boolean> => {
+		setSavingLiveDataChannel(true);
+		try {
+			const res = await fetch("/api/v1/elims/live-data/channel", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ channelId: liveDataChannelId }),
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to save live standings channel.");
+			}
+			setOriginalLiveDataChannelId(liveDataChannelId);
+			toast.success(
+				liveDataChannelId
+					? "Live standings channel updated! Embed dispatched."
+					: "Live standings channel disabled.",
+			);
+			return true;
+		} catch (err) {
+			const msg =
+				err instanceof Error ? err.message : "Error saving live data channel";
+			toast.error(msg);
+			return false;
+		} finally {
+			setSavingLiveDataChannel(false);
+		}
+	};
+
+	const handleSyncLiveDataEmbed = async () => {
+		setSyncingLiveDataEmbed(true);
+		try {
+			const res = await fetch("/api/v1/elims/live-data/channel/sync", {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to sync live standings embed.");
+			}
+			toast.success("Live standings embed synchronization triggered!");
+		} catch (err) {
+			const msg =
+				err instanceof Error ? err.message : "Error syncing live data embed";
+			toast.error(msg);
+		} finally {
+			setSyncingLiveDataEmbed(false);
 		}
 	};
 
@@ -366,10 +442,14 @@ export function GuildConfigPage() {
 	}, [selectedRoleIds, originalRoleIdsSet]);
 
 	const hasChannelChanges = donationChannelId !== originalDonationChannelId;
+	const hasLiveDataChannelChanges =
+		liveDataChannelId !== originalLiveDataChannelId;
 
-	const hasUnsavedChanges = hasRoleChanges || hasChannelChanges;
+	const hasUnsavedChanges =
+		hasRoleChanges || hasChannelChanges || hasLiveDataChannelChanges;
 
-	const isSaving = savingGeneral || savingSettings || savingChannel;
+	const isSaving =
+		savingGeneral || savingSettings || savingChannel || savingLiveDataChannel;
 
 	const handleSaveAll = async () => {
 		if (!hasUnsavedChanges) {
@@ -386,6 +466,9 @@ export function GuildConfigPage() {
 			if (hasChannelChanges) {
 				tasks.push(handleSaveDonationChannel());
 			}
+			if (hasLiveDataChannelChanges) {
+				tasks.push(handleSaveLiveDataChannel());
+			}
 			await Promise.all(tasks);
 		} finally {
 			setSavingGeneral(false);
@@ -395,6 +478,7 @@ export function GuildConfigPage() {
 	const handleResetChanges = () => {
 		setSelectedRoleIds(new Set(adminRoleIds));
 		setDonationChannelId(originalDonationChannelId);
+		setLiveDataChannelId(originalLiveDataChannelId);
 		toast.info("Unsaved changes discarded.");
 	};
 
@@ -525,6 +609,102 @@ export function GuildConfigPage() {
 								);
 							})
 						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* Live Standings Channel Section */}
+			<Card className="border-border/80 shadow-xs">
+				<CardHeader>
+					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+						<div>
+							<CardTitle className="text-base flex items-center gap-2">
+								<Radio className="size-4 text-primary" />
+								<span>Live Standings Channel</span>
+							</CardTitle>
+							<CardDescription className="text-xs mt-1">
+								Designate a Discord text channel where Sentinel automatically
+								posts and maintains the real-time Elimination Standings embed,
+								synced every 10 seconds.
+							</CardDescription>
+						</div>
+						<Badge
+							variant="outline"
+							className={`text-[10px] font-mono w-fit px-2 py-0.5 ${
+								liveDataChannelId
+									? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+									: "text-muted-foreground"
+							}`}
+						>
+							{liveDataChannelId ? "SYNC ACTIVE (10s)" : "DISABLED"}
+						</Badge>
+					</div>
+				</CardHeader>
+
+				<CardContent className="flex flex-col gap-3">
+					<div className="rounded-lg border border-border/70 bg-card/60 p-3.5 flex flex-col gap-3">
+						<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+							<div className="flex flex-col gap-0.5">
+								<span className="text-xs font-semibold">
+									Discord Broadcast Channel
+								</span>
+								<span className="text-[11px] text-muted-foreground">
+									The bot will maintain a persistent standings message sorted by
+									wins with live W/L ratio, tickets, and lives.
+								</span>
+							</div>
+
+							{liveDataChannelId && (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={handleSyncLiveDataEmbed}
+									disabled={syncingLiveDataEmbed || loadingChannels}
+									className="text-xs h-7 px-2.5 shrink-0 cursor-pointer"
+									title="Force Sentinel to immediately refresh or repost the persistent standings embed"
+								>
+									{syncingLiveDataEmbed ? (
+										<>
+											<RefreshCw
+												className="size-3 animate-spin"
+												data-icon="inline-start"
+											/>
+											Syncing Embed...
+										</>
+									) : (
+										<>
+											<Send className="size-3" data-icon="inline-start" />
+											Refresh Embed
+										</>
+									)}
+								</Button>
+							)}
+						</div>
+
+						<Select
+							value={liveDataChannelId ?? "none"}
+							onValueChange={(val) =>
+								setLiveDataChannelId(val === "none" ? null : val)
+							}
+							disabled={loadingChannels || isSaving}
+						>
+							<SelectTrigger className="h-9 w-full text-xs">
+								<SelectValue placeholder="Select Discord text channel..." />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="none">
+									<span className="text-muted-foreground">None (Disabled)</span>
+								</SelectItem>
+								{channels.map((ch) => (
+									<SelectItem key={ch.id} value={ch.id}>
+										<div className="flex items-center gap-1.5">
+											<Hash className="size-3 text-muted-foreground" />
+											<span>{ch.name}</span>
+										</div>
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
 					</div>
 				</CardContent>
 			</Card>

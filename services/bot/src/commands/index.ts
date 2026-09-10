@@ -12,7 +12,6 @@ import { burnMapCommand } from "./burn-map";
 import { configCommand } from "./config";
 import { dashboardCommand } from "./dashboard";
 import { itemRequestHelpCommand } from "./item-request-help";
-import { liveDataCommand } from "./live-data";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { teamBreakdownCommand } from "./team-breakdown";
@@ -20,7 +19,7 @@ import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
-export { assignedStockCommand, liveDataCommand, teamBreakdownCommand };
+export { assignedStockCommand, teamBreakdownCommand };
 
 export type BotModule =
 	| "verification"
@@ -66,7 +65,6 @@ export const elimsCommandsList: BotCommand[] = [
 	{ ...itemRequestHelpCommand, scope: "elims" },
 	{ ...assignedStockCommand, scope: "elims" },
 	{ ...teamBreakdownCommand, scope: "elims" },
-	{ ...liveDataCommand, scope: "elims" },
 ];
 
 // Global list of all known bot commands for the dispatcher collection

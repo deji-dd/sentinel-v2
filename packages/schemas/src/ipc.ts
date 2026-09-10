@@ -269,6 +269,15 @@ export type IpcSyncElimsKeyDonationMessage = {
 	};
 };
 
+export type IpcSyncElimsLiveDataMessage = {
+	action: "sync_elims_live_data";
+	data?: {
+		guildId?: string;
+		previousChannelId?: string | null;
+		previousMessageId?: string | null;
+	};
+};
+
 export type IpcElimsAssignStatRolesMessage = {
 	action: "elims_assign_stat_roles";
 	data?: {
@@ -500,6 +509,7 @@ export type IpcMessage =
 	| IpcSyncElimsItemRequestsMessage
 	| IpcSyncElimsGiveawaysMessage
 	| IpcSyncElimsKeyDonationMessage
+	| IpcSyncElimsLiveDataMessage
 	| IpcElimsAssignStatRolesMessage
 	| IpcElimsResolveUserRequestMessage
 	| IpcElimsResolveUserResponseMessage

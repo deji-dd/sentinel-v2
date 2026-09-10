@@ -13,6 +13,7 @@ import { handleCronVerificationProgress } from "../cron-verification-logger";
 import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../elims-key-donation";
+import { updateElimsLiveDataChannel } from "../elims-live-data";
 import { autoAssignElimsStatRoles } from "../elims-stat-roles";
 import { syncElimsStockHoldersChannel } from "../elims-stock-holders";
 import { updateFactionMapChannel } from "../faction-map-channel";
@@ -255,6 +256,11 @@ export function setupBotIpcListeners(client: Client): void {
 			void updateGiveawayChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_key_donation") {
 			void updateElimsKeyDonationChannel(client, message.data?.guildId);
+		} else if (message.action === "sync_elims_live_data") {
+			void updateElimsLiveDataChannel(client, message.data?.guildId, {
+				previousChannelId: message.data?.previousChannelId,
+				previousMessageId: message.data?.previousMessageId,
+			});
 		} else if (message.action === "elims_assign_stat_roles") {
 			const guildId = message.data?.guildId;
 			const roleMappings = message.data?.roleMappings as
@@ -274,6 +280,7 @@ export function setupBotIpcListeners(client: Client): void {
 				void updateElimsItemRequestsChannel(client, guildId);
 				void updateGiveawayChannel(client, guildId);
 				void updateElimsKeyDonationChannel(client, guildId);
+				void updateElimsLiveDataChannel(client, guildId);
 			}
 		} else if (message.action === "reset_elims_guild") {
 			logger.info("Elims guild configuration was reset via IPC.");
