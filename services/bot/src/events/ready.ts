@@ -9,6 +9,10 @@ import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../lib/elims-key-donation";
+import {
+	startLiveDataSyncLoop,
+	updateElimsLiveDataMessage,
+} from "../lib/elims-live-data";
 import { syncElimsStockHoldersChannel } from "../lib/elims-stock-holders";
 import { startVerificationReminderScheduler } from "../lib/elims-verification-reminder";
 import { updateFactionMapChannel } from "../lib/faction-map-channel";
@@ -83,6 +87,14 @@ export const readyEvent = {
 		await updateElimsKeyDonationChannel(client).catch((err) => {
 			logger.warn("Failed to sync Elims Key Donation embed on boot:", err);
 		});
+
+		// Synchronize Elims Live Data Standings embed if configured
+		await updateElimsLiveDataMessage(client).catch((err) => {
+			logger.warn("Failed to sync Elims Live Data embed on boot:", err);
+		});
+
+		// Start background loop for Elims Live Data standings (every 10s)
+		startLiveDataSyncLoop(client, 10000);
 
 		// Start background giveaway scheduler (15s cadence)
 		startGiveawayScheduler(client);

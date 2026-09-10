@@ -299,8 +299,8 @@ export function ElimsReportPage() {
 					valB = b.activeCount ?? 0;
 					break;
 				case "attacks":
-					valA = a.attacks;
-					valB = b.attacks;
+					valA = a.wins;
+					valB = b.wins;
 					break;
 				case "wins":
 					valA = a.wins;
@@ -311,12 +311,12 @@ export function ElimsReportPage() {
 					valB = b.losses;
 					break;
 				case "winRate": {
-					const rateA =
-						a.wins + a.losses > 0 ? (a.wins / (a.wins + a.losses)) * 100 : 0;
-					const rateB =
-						b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
-					valA = rateA;
-					valB = rateB;
+					const ratioA =
+						a.losses > 0 ? a.wins / a.losses : a.wins > 0 ? a.wins : 0;
+					const ratioB =
+						b.losses > 0 ? b.wins / b.losses : b.wins > 0 ? b.wins : 0;
+					valA = ratioA;
+					valB = ratioB;
 					break;
 				}
 			}
@@ -586,13 +586,13 @@ export function ElimsReportPage() {
 												</div>
 											</TableHead>
 
-											{/* Win Rate / Record */}
+											{/* W/L Ratio */}
 											<TableHead
 												onClick={() => handleSort("winRate")}
 												className="w-36 font-mono text-xs cursor-pointer select-none text-right hover:text-foreground"
 											>
 												<div className="flex items-center justify-end gap-1">
-													<span>Record (W/L)</span>
+													<span>W/L Ratio</span>
 													{sortField === "winRate" ? (
 														sortOrder === "asc" ? (
 															<ArrowUp className="size-3" />
@@ -629,6 +629,12 @@ export function ElimsReportPage() {
 													totalBattles > 0
 														? ((t.wins / totalBattles) * 100).toFixed(1)
 														: "0.0";
+												const wlRatio =
+													t.losses > 0
+														? (t.wins / t.losses).toFixed(2)
+														: t.wins > 0
+															? `${t.wins.toFixed(2)}`
+															: "0.00";
 												const activeMembers =
 													t.activeCount ??
 													(isElim ? 0 : Math.round(t.membersCount * 0.2));
@@ -760,18 +766,16 @@ export function ElimsReportPage() {
 															</div>
 														</TableCell>
 
-														{/* Attacks */}
+														{/* Attacks (wins from API) */}
 														<TableCell className="text-right tabular-nums font-medium">
-															{t.attacks.toLocaleString()}
+															{t.wins.toLocaleString()}
 														</TableCell>
 
-														{/* Record & Win Rate */}
+														{/* W/L Ratio & Record */}
 														<TableCell className="text-right tabular-nums">
-															<div className="font-medium">
-																{t.wins}W - {t.losses}L
-															</div>
+															<div className="font-medium">{wlRatio}</div>
 															<div className="text-[10px] text-muted-foreground">
-																{winRate}% WR
+																{t.wins}W - {t.losses}L ({winRate}%)
 															</div>
 														</TableCell>
 
