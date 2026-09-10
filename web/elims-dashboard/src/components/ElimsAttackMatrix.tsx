@@ -163,7 +163,7 @@ export function ElimsAttackMatrix() {
 		function connect() {
 			try {
 				const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-				const wsUrl = `${protocol}//${window.location.host}/api/ws/elims-tournament`;
+				const wsUrl = `${protocol}//${window.location.host}/api/ws/elims-tournament?timeframe=${timeframeRef.current}`;
 				ws = new WebSocket(wsUrl);
 				wsRef.current = ws;
 

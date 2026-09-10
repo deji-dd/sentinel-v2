@@ -173,18 +173,18 @@ export async function getElimsTournamentSnapshot() {
 }
 
 interface ElimsSocketEntry {
-	send: (msg: unknown) => void;
+	ws: { send: (msg: unknown) => void };
 	attackMatrixTimeframe: ElimsAttackMatrixTimeframe;
 }
 
-const activeSockets = new Map<unknown, ElimsSocketEntry>();
+const activeSockets = new Map<string, ElimsSocketEntry>();
 
 export function broadcastElimsTournamentState(data: unknown) {
-	for (const [ws, entry] of activeSockets) {
+	for (const [id, entry] of activeSockets) {
 		try {
-			entry.send(data);
+			entry.ws.send(data);
 		} catch {
-			activeSockets.delete(ws);
+			activeSockets.delete(id);
 		}
 	}
 }
@@ -210,17 +210,17 @@ setInterval(async () => {
 				snapshotMap.set(tf, await getElimsAttackMatrixSnapshot(tf));
 			}
 
-			for (const [ws, entry] of activeSockets) {
+			for (const [id, entry] of activeSockets) {
 				try {
 					const attackSnapshot = snapshotMap.get(entry.attackMatrixTimeframe);
 					if (attackSnapshot) {
-						entry.send({
+						entry.ws.send({
 							type: "elims_attack_matrix",
 							data: attackSnapshot,
 						});
 					}
 				} catch {
-					activeSockets.delete(ws);
+					activeSockets.delete(id);
 				}
 			}
 		} catch {
@@ -232,26 +232,37 @@ setInterval(async () => {
 export const wsElimsTournamentRoutes = new Elysia().ws(
 	"/api/ws/elims-tournament",
 	{
+		query: t.Object({
+			timeframe: t.Optional(t.String()),
+		}),
 		body: t.Object({
 			type: t.String(),
 			timestamp: t.Optional(t.Number()),
 			timeframe: t.Optional(t.String()),
 		}),
 		async open(ws) {
-			activeSockets.set(ws, {
-				send: (msg: unknown) => ws.send(msg),
-				attackMatrixTimeframe: "all",
+			const queryTf = ws.data.query?.timeframe as
+				| ElimsAttackMatrixTimeframe
+				| undefined;
+			const initialTf: ElimsAttackMatrixTimeframe =
+				queryTf === "24h" || queryTf === "12h" || queryTf === "1h"
+					? queryTf
+					: "all";
+
+			activeSockets.set(ws.id, {
+				ws,
+				attackMatrixTimeframe: initialTf,
 			});
 			const snapshot = await getElimsTournamentSnapshot();
 			ws.send(snapshot);
-			const attackSnapshot = await getElimsAttackMatrixSnapshot("all");
+			const attackSnapshot = await getElimsAttackMatrixSnapshot(initialTf);
 			ws.send({
 				type: "elims_attack_matrix",
 				data: attackSnapshot,
 			});
 		},
 		close(ws) {
-			activeSockets.delete(ws);
+			activeSockets.delete(ws.id);
 		},
 		async message(ws, message) {
 			if (message.type === "ping") {
@@ -262,7 +273,7 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 			} else if (message.type === "refresh") {
 				const snapshot = await getElimsTournamentSnapshot();
 				ws.send(snapshot);
-				const entry = activeSockets.get(ws);
+				const entry = activeSockets.get(ws.id);
 				const tf = entry?.attackMatrixTimeframe ?? "all";
 				const attackSnapshot = await getElimsAttackMatrixSnapshot(tf);
 				ws.send({
@@ -275,9 +286,15 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 					| undefined;
 				const tf: ElimsAttackMatrixTimeframe =
 					rawTf === "24h" || rawTf === "12h" || rawTf === "1h" ? rawTf : "all";
-				const entry = activeSockets.get(ws);
+				const entry = activeSockets.get(ws.id);
 				if (entry) {
 					entry.attackMatrixTimeframe = tf;
+					entry.ws = ws;
+				} else {
+					activeSockets.set(ws.id, {
+						ws,
+						attackMatrixTimeframe: tf,
+					});
 				}
 				const attackSnapshot = await getElimsAttackMatrixSnapshot(tf);
 				ws.send({
