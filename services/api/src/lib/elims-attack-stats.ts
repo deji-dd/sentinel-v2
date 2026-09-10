@@ -44,6 +44,8 @@ export interface RecentAttackItem {
 	detectedAt: string;
 }
 
+export type ElimsAttackMatrixTimeframe = "all" | "24h" | "12h" | "1h";
+
 export interface AttackMatrixSnapshot {
 	teams: Array<{
 		id: number;
@@ -57,15 +59,17 @@ export interface AttackMatrixSnapshot {
 	teamBreakdowns: Record<number, TeamAttackBreakdown>;
 	recentAttacks: RecentAttackItem[];
 	totalRecordedAttacks: number;
-	timeframe: "all" | "24h" | "1h";
+	timeframe: ElimsAttackMatrixTimeframe;
 }
 
 export async function getElimsAttackMatrixSnapshot(
-	timeframe: "all" | "24h" | "1h" = "all",
+	timeframe: ElimsAttackMatrixTimeframe = "all",
 ): Promise<AttackMatrixSnapshot> {
 	let minDate: Date | null = null;
 	if (timeframe === "1h") {
 		minDate = new Date(Date.now() - 60 * 60 * 1000);
+	} else if (timeframe === "12h") {
+		minDate = new Date(Date.now() - 12 * 60 * 60 * 1000);
 	} else if (timeframe === "24h") {
 		minDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
 	}

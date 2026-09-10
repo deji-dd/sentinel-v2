@@ -1,7 +1,11 @@
 import { db, elimsTeams, sql } from "@sentinel/database";
 import { getElimsKeyPool } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
-import { getElimsAttackMatrixSnapshot } from "../lib/elims-attack-stats";
+import {
+	type AttackMatrixSnapshot,
+	type ElimsAttackMatrixTimeframe,
+	getElimsAttackMatrixSnapshot,
+} from "../lib/elims-attack-stats";
 
 export async function getElimsTournamentSnapshot() {
 	const teams = await db
@@ -168,12 +172,17 @@ export async function getElimsTournamentSnapshot() {
 	};
 }
 
-const activeSockets = new Set<{ send: (msg: unknown) => void }>();
+interface ElimsSocketEntry {
+	send: (msg: unknown) => void;
+	attackMatrixTimeframe: ElimsAttackMatrixTimeframe;
+}
+
+const activeSockets = new Map<unknown, ElimsSocketEntry>();
 
 export function broadcastElimsTournamentState(data: unknown) {
-	for (const ws of activeSockets) {
+	for (const [ws, entry] of activeSockets) {
 		try {
-			ws.send(data);
+			entry.send(data);
 		} catch {
 			activeSockets.delete(ws);
 		}
@@ -186,11 +195,34 @@ setInterval(async () => {
 		try {
 			const snapshot = await getElimsTournamentSnapshot();
 			broadcastElimsTournamentState(snapshot);
-			const attackSnapshot = await getElimsAttackMatrixSnapshot();
-			broadcastElimsTournamentState({
-				type: "elims_attack_matrix",
-				data: attackSnapshot,
-			});
+
+			// Gather requested timeframes across active subscribers
+			const neededTimeframes = new Set<ElimsAttackMatrixTimeframe>();
+			for (const entry of activeSockets.values()) {
+				neededTimeframes.add(entry.attackMatrixTimeframe);
+			}
+
+			const snapshotMap = new Map<
+				ElimsAttackMatrixTimeframe,
+				AttackMatrixSnapshot
+			>();
+			for (const tf of neededTimeframes) {
+				snapshotMap.set(tf, await getElimsAttackMatrixSnapshot(tf));
+			}
+
+			for (const [ws, entry] of activeSockets) {
+				try {
+					const attackSnapshot = snapshotMap.get(entry.attackMatrixTimeframe);
+					if (attackSnapshot) {
+						entry.send({
+							type: "elims_attack_matrix",
+							data: attackSnapshot,
+						});
+					}
+				} catch {
+					activeSockets.delete(ws);
+				}
+			}
 		} catch {
 			// ignore broadcast errors
 		}
@@ -206,17 +238,20 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 			timeframe: t.Optional(t.String()),
 		}),
 		async open(ws) {
-			activeSockets.add(ws as unknown as { send: (msg: unknown) => void });
+			activeSockets.set(ws, {
+				send: (msg: unknown) => ws.send(msg),
+				attackMatrixTimeframe: "all",
+			});
 			const snapshot = await getElimsTournamentSnapshot();
 			ws.send(snapshot);
-			const attackSnapshot = await getElimsAttackMatrixSnapshot();
+			const attackSnapshot = await getElimsAttackMatrixSnapshot("all");
 			ws.send({
 				type: "elims_attack_matrix",
 				data: attackSnapshot,
 			});
 		},
 		close(ws) {
-			activeSockets.delete(ws as unknown as { send: (msg: unknown) => void });
+			activeSockets.delete(ws);
 		},
 		async message(ws, message) {
 			if (message.type === "ping") {
@@ -227,13 +262,23 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 			} else if (message.type === "refresh") {
 				const snapshot = await getElimsTournamentSnapshot();
 				ws.send(snapshot);
-				const attackSnapshot = await getElimsAttackMatrixSnapshot();
+				const entry = activeSockets.get(ws);
+				const tf = entry?.attackMatrixTimeframe ?? "all";
+				const attackSnapshot = await getElimsAttackMatrixSnapshot(tf);
 				ws.send({
 					type: "elims_attack_matrix",
 					data: attackSnapshot,
 				});
 			} else if (message.type === "get_attack_matrix") {
-				const tf = (message.timeframe as "all" | "24h" | "1h") ?? "all";
+				const rawTf = message.timeframe as
+					| ElimsAttackMatrixTimeframe
+					| undefined;
+				const tf: ElimsAttackMatrixTimeframe =
+					rawTf === "24h" || rawTf === "12h" || rawTf === "1h" ? rawTf : "all";
+				const entry = activeSockets.get(ws);
+				if (entry) {
+					entry.attackMatrixTimeframe = tf;
+				}
 				const attackSnapshot = await getElimsAttackMatrixSnapshot(tf);
 				ws.send({
 					type: "elims_attack_matrix",

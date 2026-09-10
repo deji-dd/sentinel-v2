@@ -64,6 +64,8 @@ export interface RecentAttackItem {
 	detectedAt: string;
 }
 
+export type AttackMatrixTimeframe = "all" | "24h" | "12h" | "1h";
+
 export interface AttackMatrixResponse {
 	teams: Array<{
 		id: number;
@@ -77,7 +79,7 @@ export interface AttackMatrixResponse {
 	teamBreakdowns: Record<number, TeamAttackBreakdown>;
 	recentAttacks: RecentAttackItem[];
 	totalRecordedAttacks: number;
-	timeframe: "all" | "24h" | "1h";
+	timeframe: AttackMatrixTimeframe;
 }
 
 function mergeAttackMatrixData(
@@ -103,45 +105,57 @@ export function ElimsAttackMatrix() {
 	const [data, setData] = useState<AttackMatrixResponse | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [wsConnected, setWsConnected] = useState(false);
-	const [timeframe, setTimeframe] = useState<"all" | "24h" | "1h">("all");
+	const [timeframe, setTimeframe] = useState<AttackMatrixTimeframe>("all");
+	const timeframeRef = useRef<AttackMatrixTimeframe>("all");
+	timeframeRef.current = timeframe;
 	const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
 	const wsRef = useRef<WebSocket | null>(null);
 
 	// 1. REST fallback / initial fetch
-	const fetchAttackData = useCallback(async () => {
-		try {
-			const res = await api.api.v1.elims["attack-matrix"].get({
-				query: { timeframe },
-			});
-			if (res.data && "teams" in res.data) {
-				const responseData = res.data as unknown as AttackMatrixResponse;
-				setData((prev) => mergeAttackMatrixData(responseData, prev));
-				// Default selected team to team 88 or first alive team
-				setSelectedTeamId((prev) => {
-					if (prev) return prev;
-					const defaultTeam =
-						responseData.teams.find((t) => t.id === 88) ??
-						responseData.teams[0];
-					return defaultTeam?.id ?? null;
+	const fetchAttackData = useCallback(
+		async (targetTimeframe?: AttackMatrixTimeframe) => {
+			const tf = targetTimeframe ?? timeframeRef.current;
+			try {
+				const res = await api.api.v1.elims["attack-matrix"].get({
+					query: { timeframe: tf },
 				});
+				if (res.data && "teams" in res.data) {
+					const responseData = res.data as unknown as AttackMatrixResponse;
+					if (
+						responseData.timeframe &&
+						responseData.timeframe !== timeframeRef.current
+					) {
+						return;
+					}
+					setData((prev) => mergeAttackMatrixData(responseData, prev));
+					// Default selected team to team 88 or first alive team
+					setSelectedTeamId((prev) => {
+						if (prev) return prev;
+						const defaultTeam =
+							responseData.teams.find((t) => t.id === 88) ??
+							responseData.teams[0];
+						return defaultTeam?.id ?? null;
+					});
+				}
+			} catch (err) {
+				toast.error(
+					err instanceof Error
+						? err.message
+						: "Failed to load attack telemetry data.",
+				);
+			} finally {
+				setLoading(false);
 			}
-		} catch (err) {
-			toast.error(
-				err instanceof Error
-					? err.message
-					: "Failed to load attack telemetry data.",
-			);
-		} finally {
-			setLoading(false);
-		}
-	}, [timeframe]);
+		},
+		[],
+	);
 
-	// Initial fetch
+	// Fetch data when timeframe changes
 	useEffect(() => {
-		fetchAttackData();
-	}, [fetchAttackData]);
+		fetchAttackData(timeframe);
+	}, [timeframe, fetchAttackData]);
 
-	// 2. Real-time WebSocket streaming
+	// 2. Real-time WebSocket streaming (persistent connection)
 	useEffect(() => {
 		let ws: WebSocket | null = null;
 		let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -156,7 +170,12 @@ export function ElimsAttackMatrix() {
 				ws.onopen = () => {
 					setWsConnected(true);
 					if (ws?.readyState === WebSocket.OPEN) {
-						ws.send(JSON.stringify({ type: "get_attack_matrix", timeframe }));
+						ws.send(
+							JSON.stringify({
+								type: "get_attack_matrix",
+								timeframe: timeframeRef.current,
+							}),
+						);
 					}
 				};
 
@@ -165,6 +184,13 @@ export function ElimsAttackMatrix() {
 						const message = JSON.parse(event.data);
 						if (message.type === "elims_attack_matrix" && message.data) {
 							const responseData = message.data as AttackMatrixResponse;
+							// Prevent mismatched broadcast timeframe from overriding user selection
+							if (
+								responseData.timeframe &&
+								responseData.timeframe !== timeframeRef.current
+							) {
+								return;
+							}
 							setData((prev) => mergeAttackMatrixData(responseData, prev));
 							setLoading(false);
 							setSelectedTeamId((prev) => {
@@ -202,17 +228,20 @@ export function ElimsAttackMatrix() {
 				wsRef.current = null;
 			}
 		};
-	}, [timeframe]);
+	}, []);
 
 	// 3. Fallback polling only when WebSocket is disconnected
 	useEffect(() => {
 		if (wsConnected) return;
-		const interval = setInterval(fetchAttackData, 6000);
+		const interval = setInterval(() => {
+			fetchAttackData(timeframeRef.current);
+		}, 6000);
 		return () => clearInterval(interval);
 	}, [wsConnected, fetchAttackData]);
 
-	const handleTimeframeChange = (val: "all" | "24h" | "1h") => {
+	const handleTimeframeChange = (val: AttackMatrixTimeframe) => {
 		setTimeframe(val);
+		timeframeRef.current = val;
 		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 			wsRef.current.send(
 				JSON.stringify({ type: "get_attack_matrix", timeframe: val }),
@@ -278,7 +307,7 @@ export function ElimsAttackMatrix() {
 					<Tabs
 						value={timeframe}
 						onValueChange={(val) =>
-							handleTimeframeChange(val as "all" | "24h" | "1h")
+							handleTimeframeChange(val as AttackMatrixTimeframe)
 						}
 					>
 						<TabsList className="h-8">
@@ -287,6 +316,9 @@ export function ElimsAttackMatrix() {
 							</TabsTrigger>
 							<TabsTrigger value="24h" className="text-xs px-2.5">
 								Last 24h
+							</TabsTrigger>
+							<TabsTrigger value="12h" className="text-xs px-2.5">
+								Last 12h
 							</TabsTrigger>
 							<TabsTrigger value="1h" className="text-xs px-2.5">
 								Last 1h

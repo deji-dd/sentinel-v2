@@ -2681,7 +2681,12 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 		{
 			query: t.Object({
 				timeframe: t.Optional(
-					t.Union([t.Literal("all"), t.Literal("24h"), t.Literal("1h")]),
+					t.Union([
+						t.Literal("all"),
+						t.Literal("24h"),
+						t.Literal("12h"),
+						t.Literal("1h"),
+					]),
 				),
 			}),
 			detail: {
