@@ -126,7 +126,6 @@ async function syncEliminationBaseData(
 						? new Date(t.eliminated_timestamp * 1000)
 						: null;
 
-					const totalAttacks = (t.wins ?? 0) + (t.losses ?? 0);
 					await db
 						.insert(elimsTeams)
 						.values({
@@ -135,7 +134,7 @@ async function syncEliminationBaseData(
 							membersCount: t.participants ?? 0,
 							position: t.position ?? 1,
 							score: t.score ?? 0,
-							attacks: totalAttacks,
+							attacks: 0,
 							lives: t.lives ?? 0,
 							wins: t.wins ?? 0,
 							losses: t.losses ?? 0,
@@ -155,8 +154,6 @@ async function syncEliminationBaseData(
 									: t.score && t.score > 0
 										? t.score
 										: sql`CASE WHEN elims_teams.score > 0 THEN elims_teams.score ELSE ${t.score ?? 0} END`,
-								attacks:
-									totalAttacks > 0 ? totalAttacks : sql`elims_teams.attacks`,
 								lives: t.lives ?? 0,
 								wins: t.wins ?? 0,
 								losses: t.losses ?? 0,
@@ -426,7 +423,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			.onConflictDoUpdate({
 				target: elimsTeams.id,
 				set: {
-					attacks: sql`CASE WHEN (elims_teams.wins + elims_teams.losses) > 0 THEN (elims_teams.wins + elims_teams.losses) ELSE ${teamTotalAttacks} END`,
+					attacks: teamTotalAttacks,
 					membersCount:
 						uniquePlayers.length > 0
 							? uniquePlayers.length
@@ -441,16 +438,11 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			where: eq(elimsTeams.id, teamId),
 		});
 
-		const totalAttacks =
-			(existingTeam?.wins ?? 0) + (existingTeam?.losses ?? 0) > 0
-				? (existingTeam?.wins ?? 0) + (existingTeam?.losses ?? 0)
-				: teamTotalAttacks;
-
 		// Insert snapshot for hourly distribution tracking
 		await db.insert(elimsTeamSnapshots).values({
 			teamId,
 			score: existingTeam?.score ?? 0,
-			attacks: totalAttacks,
+			attacks: teamTotalAttacks,
 			membersCount:
 				uniquePlayers.length > 0
 					? uniquePlayers.length

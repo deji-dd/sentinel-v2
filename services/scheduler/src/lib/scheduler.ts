@@ -239,3 +239,15 @@ export function triggerWorkerByName(workerName: string): boolean {
 	}
 	return false;
 }
+
+/**
+ * Stops and unregisters an active in-memory worker runner by its worker name.
+ */
+export function stopWorkerByName(workerName: string): boolean {
+	const runner = activeRunners.get(workerName);
+	if (runner) {
+		runner.stop();
+		return true;
+	}
+	return false;
+}

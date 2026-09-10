@@ -9,6 +9,7 @@ import {
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
 import { schedulerEvents } from "../src/lib/events";
+import { stopWorkerByName } from "../src/lib/scheduler";
 import {
 	getCompanySyncState,
 	loadCompanySyncState,
@@ -52,6 +53,8 @@ describe("Personal Company Sync Worker", () => {
 		if (getPersonalSpy) {
 			getPersonalSpy.mockRestore();
 		}
+		schedulerEvents.removeAllListeners("company_pay_received");
+		stopWorkerByName("personal_company_sync");
 		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 		await db.delete(companyDailyProfits);
@@ -223,13 +226,17 @@ describe("Personal Company Sync Worker", () => {
 			}) as unknown as typeof tornApi.getPersonal,
 		);
 
-		startCompanySync({ initialDelayMs: 0 });
+		startCompanySync({ initialDelayMs: 60_000 });
 
 		// Emit event
 		schedulerEvents.emit("company_pay_received");
 
-		// Wait briefly for async handler
-		await new Promise((r) => setTimeout(r, 100));
+		// Wait for async event listener to trigger getPersonal (poll up to 3s)
+		const start = Date.now();
+		while (Date.now() - start < 3000) {
+			if (getPersonalSpy.mock.calls.length > 0) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
 
 		expect(getPersonalSpy).toHaveBeenCalled();
 	});

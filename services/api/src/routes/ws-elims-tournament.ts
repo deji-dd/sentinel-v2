@@ -132,8 +132,7 @@ export async function getElimsTournamentSnapshot() {
 			teamId: team.id,
 			name: team.name,
 			score: team.score,
-			attacks:
-				team.wins + team.losses > 0 ? team.wins + team.losses : team.attacks,
+			attacks: team.attacks,
 			membersCount: team.membersCount,
 			activeCount:
 				teamLatestActiveMap.get(team.id) ??
