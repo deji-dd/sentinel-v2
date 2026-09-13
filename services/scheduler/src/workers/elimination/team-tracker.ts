@@ -5,6 +5,7 @@ import {
 	elimsTeams,
 	eq,
 	sql,
+	systemStates,
 } from "@sentinel/database";
 import {
 	getElimsKeyPool,
@@ -13,7 +14,7 @@ import {
 	tornApi,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
-import { ScheduledRunner } from "../../lib/scheduler";
+import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import { queueAttackAnalysis } from "./attack-analyzer";
 
@@ -188,6 +189,25 @@ async function syncEliminationBaseData(
  * Performs base standings checks and live team player collection when open.
  */
 export async function runElimsTrackingCycle(): Promise<number> {
+	// Check if elims workers have been powered off in guild config
+	try {
+		const [configRecord] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, "elims:guild_config"));
+		const configData = configRecord?.data as
+			| { workersStopped?: boolean }
+			| undefined;
+		if (configData?.workersStopped) {
+			logger.info(
+				"Elims workers are powered off in guild config. Pausing team tracker for 60s...",
+			);
+			return Date.now() + 60_000;
+		}
+	} catch (err) {
+		logger.warn("Failed checking elims workersStopped state:", err);
+	}
+
 	const now = Date.now();
 
 	// If within Code 32 backoff period, pause checks
@@ -478,14 +498,10 @@ export async function runElimsTrackingCycle(): Promise<number> {
 export const startElimsTeamTracker: WorkerStarter = (options?: {
 	initialDelayMs?: number;
 }) => {
-	const runner = new ScheduledRunner({
+	startEventDrivenRunner({
 		worker: "elims_team_tracker",
 		defaultCadenceSeconds: 30,
 		initialDelayMs: options?.initialDelayMs ?? 1000,
 		handler: runElimsTrackingCycle,
-	});
-
-	runner.start().catch((err) => {
-		logger.error("Failed to start Elims Team Tracker worker:", err);
 	});
 };

@@ -1,16 +1,22 @@
 import {
+	Activity,
+	AlertTriangle,
 	Check,
 	ChevronLeft,
 	ChevronRight,
+	Cpu,
 	ExternalLink,
 	Hash,
 	Key,
 	Plus,
+	Power,
+	PowerOff,
 	Radio,
 	RefreshCw,
 	Save,
 	Send,
 	Server,
+	ShieldCheck,
 	Trash2,
 	User,
 } from "lucide-react";
@@ -78,7 +84,8 @@ function formatRoleColor(color: number): string {
 }
 
 export function GuildConfigPage() {
-	const { guild, isOwner, adminRoleIds, refreshStatus } = useElims();
+	const { guild, isOwner, adminRoleIds, workersStopped, refreshStatus } =
+		useElims();
 	const { navigate } = useRouter();
 
 	const [roles, setRoles] = useState<GuildRole[]>([]);
@@ -125,6 +132,11 @@ export function GuildConfigPage() {
 	>(null);
 	const [savingLiveDataChannel, setSavingLiveDataChannel] = useState(false);
 	const [syncingLiveDataEmbed, setSyncingLiveDataEmbed] = useState(false);
+
+	// Elimination Workers state
+	const [stoppingWorkers, setStoppingWorkers] = useState(false);
+	const [startingWorkers, setStartingWorkers] = useState(false);
+	const [stopConfirm, setStopConfirm] = useState(false);
 
 	// Fetch API keys and configured donation channel
 	const fetchApiKeys = useCallback(async () => {
@@ -189,6 +201,55 @@ export function GuildConfigPage() {
 		void fetchChannels();
 		void fetchLiveDataChannel();
 	}, [fetchApiKeys, fetchChannels, fetchLiveDataChannel]);
+
+	const handleStopWorkers = async () => {
+		if (!stopConfirm) {
+			setStopConfirm(true);
+			return;
+		}
+		setStoppingWorkers(true);
+		try {
+			const res = await fetch("/api/v1/elims/worker/stop", {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to stop workers.");
+			}
+			const data = (await res.json()) as { message?: string };
+			toast.success(
+				data.message ?? "Elimination background workers powered off.",
+			);
+			await refreshStatus();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : "Error stopping workers";
+			toast.error(msg);
+		} finally {
+			setStoppingWorkers(false);
+			setStopConfirm(false);
+		}
+	};
+
+	const handleStartWorkers = async () => {
+		setStartingWorkers(true);
+		try {
+			const res = await fetch("/api/v1/elims/worker/start", {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json()) as { error?: string };
+				throw new Error(data.error ?? "Failed to start workers.");
+			}
+			const data = (await res.json()) as { message?: string };
+			toast.success(data.message ?? "Elimination background workers resumed.");
+			await refreshStatus();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : "Error starting workers";
+			toast.error(msg);
+		} finally {
+			setStartingWorkers(false);
+		}
+	};
 
 	const handleSaveDonationChannel = async (): Promise<boolean> => {
 		setSavingChannel(true);
@@ -985,6 +1046,175 @@ export function GuildConfigPage() {
 									</div>
 								)}
 							</div>
+						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* Elimination Engine & Background Workers Section */}
+			<Card className="border-border/80 shadow-xs">
+				<CardHeader>
+					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+						<div>
+							<CardTitle className="text-base flex items-center gap-2">
+								<Cpu className="size-4 text-primary" />
+								<span>Elimination Engine & Background Workers</span>
+							</CardTitle>
+							<CardDescription className="text-xs mt-1">
+								Manage the automated background workers that poll tournament
+								scores, compute live attack flow, and synchronize member battle
+								stats.
+							</CardDescription>
+						</div>
+						<Badge
+							variant="outline"
+							className={`text-[10px] font-mono w-fit px-2 py-0.5 flex items-center gap-1.5 ${
+								workersStopped
+									? "bg-rose-500/10 text-rose-500 border-rose-500/30"
+									: "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+							}`}
+						>
+							<span
+								className={`size-1.5 rounded-full ${
+									workersStopped
+										? "bg-rose-500"
+										: "bg-emerald-500 animate-pulse"
+								}`}
+							/>
+							{workersStopped
+								? "POWERED OFF (WORKERS HALTED)"
+								: "WORKERS ACTIVE"}
+						</Badge>
+					</div>
+				</CardHeader>
+
+				<CardContent className="flex flex-col gap-4">
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+						<div className="rounded-lg border border-border/60 bg-muted/20 p-3 flex flex-col gap-1.5">
+							<div className="flex items-center justify-between">
+								<span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+									<Activity className="size-3.5 text-primary" />
+									Team Live Tracker
+								</span>
+								<Badge
+									variant="secondary"
+									className="font-mono text-[9px] px-1.5 py-0 h-4"
+								>
+									elims_team_tracker
+								</Badge>
+							</div>
+							<p className="text-[11px] text-muted-foreground leading-relaxed">
+								Polls all 12 tournament teams every ~30s, computing score
+								progression, lives remaining, and real-time attack matrices.
+							</p>
+							<div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+								<span className="size-1.5 rounded-full bg-muted-foreground/60" />
+								Status: {workersStopped ? "Halted" : "Running cadence (30s)"}
+							</div>
+						</div>
+
+						<div className="rounded-lg border border-border/60 bg-muted/20 p-3 flex flex-col gap-1.5">
+							<div className="flex items-center justify-between">
+								<span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+									<ShieldCheck className="size-3.5 text-primary" />
+									Member Stats & Auto-Assign
+								</span>
+								<Badge
+									variant="secondary"
+									className="font-mono text-[9px] px-1.5 py-0 h-4"
+								>
+									elims_member_stats_worker
+								</Badge>
+							</div>
+							<p className="text-[11px] text-muted-foreground leading-relaxed">
+								Polls Torn member battle stats every 15m and automatically
+								updates Discord bracket roles according to configured
+								thresholds.
+							</p>
+							<div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+								<span className="size-1.5 rounded-full bg-muted-foreground/60" />
+								Status: {workersStopped ? "Halted" : "Running cadence (15m)"}
+							</div>
+						</div>
+					</div>
+
+					{/* Informational Data Preservation Guarantee */}
+					<div className="rounded-lg border border-primary/20 bg-primary/5 p-3 flex items-start gap-2.5 text-xs text-muted-foreground">
+						<AlertTriangle className="size-4 text-primary shrink-0 mt-0.5" />
+						<div className="flex flex-col gap-0.5">
+							<span className="font-semibold text-foreground text-xs">
+								Data Preservation Guarantee
+							</span>
+							<span className="text-[11px] leading-relaxed">
+								Powering off workers halts all background API queries and
+								automated Discord actions immediately.
+								<strong> No data is deleted</strong> — all tournament scores,
+								member stats, attack feeds, and configuration are permanently
+								preserved for historical reference and review.
+							</span>
+						</div>
+					</div>
+
+					{/* Action Controls */}
+					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1 border-t border-border/50">
+						<div className="flex flex-col">
+							<span className="text-xs font-medium text-foreground">
+								{workersStopped
+									? "Resume Background Processing"
+									: "Halt Background Processing"}
+							</span>
+							<span className="text-[11px] text-muted-foreground">
+								{workersStopped
+									? "Turn the elimination workers back on to resume real-time tracking."
+									: "Power off workers if your tournament campaign is concluded."}
+							</span>
+						</div>
+
+						{workersStopped ? (
+							<Button
+								id="elims-power-on-btn"
+								variant="default"
+								size="sm"
+								onClick={handleStartWorkers}
+								disabled={startingWorkers}
+								className="gap-1.5 text-xs font-mono h-8 cursor-pointer shrink-0"
+							>
+								{startingWorkers ? (
+									<>
+										<RefreshCw className="size-3.5 animate-spin" />
+										Starting Workers...
+									</>
+								) : (
+									<>
+										<Power className="size-3.5" />
+										Power On / Resume Workers
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								id="elims-power-off-btn"
+								variant={stopConfirm ? "destructive" : "outline"}
+								size="sm"
+								onClick={handleStopWorkers}
+								disabled={stoppingWorkers}
+								onBlur={() => setStopConfirm(false)}
+								className="gap-1.5 text-xs font-mono h-8 cursor-pointer shrink-0"
+							>
+								{stoppingWorkers ? (
+									<>
+										<RefreshCw className="size-3.5 animate-spin" />
+										Stopping Workers...
+									</>
+								) : (
+									<>
+										<PowerOff className="size-3.5" />
+										{stopConfirm
+											? "Click again to confirm Power Off"
+											: "Power Off Workers"}
+									</>
+								)}
+							</Button>
 						)}
 					</div>
 				</CardContent>

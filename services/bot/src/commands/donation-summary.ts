@@ -1,4 +1,4 @@
-import { db, elimsArmoryDeposits, sql } from "@sentinel/database";
+import { and, db, elimsArmoryDeposits, eq, sql } from "@sentinel/database";
 import {
 	AttachmentBuilder,
 	type ChatInputCommandInteraction,
@@ -20,14 +20,20 @@ interface DonationRow {
 }
 
 /**
- * Queries all armory deposit records and aggregates total donated quantity
- * per unique (donator, item) pair, returning a sorted CSV attachment.
+ * Queries all armory deposit records for the given guild (excluding test data)
+ * and aggregates total donated quantity per unique (donator, item) pair,
+ * returning a sorted CSV attachment.
  */
-async function generateDonationSummary(): Promise<{
+export async function generateDonationSummary(guildId?: string): Promise<{
 	attachment: AttachmentBuilder;
 	totalRows: number;
 	totalItems: number;
 }> {
+	const conditions = [eq(elimsArmoryDeposits.isTest, false)];
+	if (guildId) {
+		conditions.push(eq(elimsArmoryDeposits.guildId, guildId));
+	}
+
 	const rows = await db
 		.select({
 			tornId: elimsArmoryDeposits.tornId,
@@ -38,6 +44,7 @@ async function generateDonationSummary(): Promise<{
 			totalQuantity: sql<number>`CAST(SUM(${elimsArmoryDeposits.quantity}) AS INTEGER)`,
 		})
 		.from(elimsArmoryDeposits)
+		.where(and(...conditions))
 		.groupBy(
 			elimsArmoryDeposits.tornId,
 			elimsArmoryDeposits.tornName,
@@ -116,7 +123,7 @@ export const donationSummaryCommand: BotCommand = {
 
 		try {
 			const { attachment, totalRows, totalItems } =
-				await generateDonationSummary();
+				await generateDonationSummary(interaction.guildId);
 
 			const embed = createSuccessEmbed(
 				"Donation Summary",

@@ -1,4 +1,4 @@
-import { db, workerSchedules } from "@sentinel/database";
+import { db, eq, systemStates, workerSchedules } from "@sentinel/database";
 import type {
 	GuildMemberVerificationInput,
 	IpcMessage,
@@ -8,6 +8,8 @@ import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
 import {
 	resolveElimsUser,
 	runElimsTrackingCycle,
+	startElimsMemberStatsWorker,
+	startElimsTeamTracker,
 	syncTeamMemberStats,
 	verifyElimsKey,
 } from "../../workers/elimination";
@@ -17,7 +19,7 @@ import { requestResetLogManager } from "../../workers/personal/log-manager";
 import { reinitializeStocksLedger } from "../../workers/personal/stocks";
 import { initWealthTracking } from "../../workers/personal/wealth";
 
-import { triggerWorkerByName } from "../scheduler";
+import { stopWorkerByName, triggerWorkerByName } from "../scheduler";
 import { runBulkGuildVerification, runVerificationJob } from "../verification";
 import { setActiveIpcServer } from "./server";
 
@@ -428,6 +430,86 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 				} catch (err) {
 					logger.error(`Failed to force trigger worker '${workerName}':`, err);
 				}
+			}
+
+			if (message.action === "elims_stop_workers" && message.requestId) {
+				const stopped: string[] = [];
+				const ELIMS_WORKER_NAMES = [
+					"elims_team_tracker",
+					"elims_member_stats_worker",
+				];
+				for (const name of ELIMS_WORKER_NAMES) {
+					if (stopWorkerByName(name)) {
+						stopped.push(name);
+						logger.info(`Stopped elims worker '${name}' via IPC command.`);
+					}
+				}
+
+				try {
+					const [existing] = await db
+						.select()
+						.from(systemStates)
+						.where(eq(systemStates.id, "elims:guild_config"));
+					if (existing?.data) {
+						const updatedData = {
+							...(existing.data as Record<string, unknown>),
+							workersStopped: true,
+							updatedAt: new Date().toISOString(),
+						};
+						await db
+							.update(systemStates)
+							.set({ data: updatedData, updatedAt: new Date() })
+							.where(eq(systemStates.id, "elims:guild_config"));
+					}
+				} catch (err) {
+					logger.error("Failed persisting workersStopped: true:", err);
+				}
+
+				ipcServer.broadcast({
+					action: "elims_stop_workers_response",
+					requestId: message.requestId,
+					data: { stopped, workersStopped: true },
+				});
+			}
+
+			if (message.action === "elims_start_workers" && message.requestId) {
+				const started: string[] = [];
+
+				try {
+					const [existing] = await db
+						.select()
+						.from(systemStates)
+						.where(eq(systemStates.id, "elims:guild_config"));
+					if (existing?.data) {
+						const updatedData = {
+							...(existing.data as Record<string, unknown>),
+							workersStopped: false,
+							updatedAt: new Date().toISOString(),
+						};
+						await db
+							.update(systemStates)
+							.set({ data: updatedData, updatedAt: new Date() })
+							.where(eq(systemStates.id, "elims:guild_config"));
+					}
+				} catch (err) {
+					logger.error("Failed persisting workersStopped: false:", err);
+				}
+
+				try {
+					startElimsTeamTracker({ initialDelayMs: 0 });
+					started.push("elims_team_tracker");
+					startElimsMemberStatsWorker({ initialDelayMs: 1000 });
+					started.push("elims_member_stats_worker");
+					logger.info("Resumed/started elims workers via IPC command.");
+				} catch (err) {
+					logger.error("Failed to restart elims workers:", err);
+				}
+
+				ipcServer.broadcast({
+					action: "elims_start_workers_response",
+					requestId: message.requestId,
+					data: { started, workersStopped: false },
+				});
 			}
 		},
 	);

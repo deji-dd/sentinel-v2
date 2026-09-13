@@ -139,7 +139,6 @@ export function ElimsReportPage() {
 	>("all");
 	const [sortField, setSortField] = useState<SortField>("position");
 	const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
-
 	const wsRef = useRef<WebSocket | null>(null);
 
 	// 1. REST fallback fetcher

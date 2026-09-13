@@ -483,6 +483,34 @@ export type IpcWealthStateUpdatedMessage = {
 	};
 };
 
+export type IpcElimsStopWorkersRequestMessage = {
+	action: "elims_stop_workers";
+	requestId: string;
+};
+
+export type IpcElimsStopWorkersResponseMessage = {
+	action: "elims_stop_workers_response";
+	requestId: string;
+	data: {
+		stopped: string[];
+		workersStopped?: boolean;
+	};
+};
+
+export type IpcElimsStartWorkersRequestMessage = {
+	action: "elims_start_workers";
+	requestId: string;
+};
+
+export type IpcElimsStartWorkersResponseMessage = {
+	action: "elims_start_workers_response";
+	requestId: string;
+	data: {
+		started: string[];
+		workersStopped?: boolean;
+	};
+};
+
 /**
  * Discriminated union of ALL strongly-typed IPC messages in Sentinel V2.
  */
@@ -519,6 +547,10 @@ export type IpcMessage =
 	| IpcElimsFetchMemberStatsResponseMessage
 	| IpcElimsSyncTeamsRequestMessage
 	| IpcElimsSyncTeamsResponseMessage
+	| IpcElimsStopWorkersRequestMessage
+	| IpcElimsStopWorkersResponseMessage
+	| IpcElimsStartWorkersRequestMessage
+	| IpcElimsStartWorkersResponseMessage
 	| IpcReinitializeCrimeLedgerMessage
 	| IpcCrimeLedgerStateUpdatedMessage
 	| IpcReinitializeGymLedgerMessage

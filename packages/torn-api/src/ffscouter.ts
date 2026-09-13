@@ -1,3 +1,7 @@
+import {
+	getPlayerStatCacheRaw,
+	upsertPlayerStatCacheRaw,
+} from "@sentinel/database";
 import { Logger } from "../../utils";
 
 const logger = new Logger("FFScouter");
@@ -52,9 +56,11 @@ export interface FFScouterTargetResult {
 }
 
 /**
- * Fetches player stats from FFScouter API using strictly the provided key (from FF_SCOUTER_KEY).
+ * Low-level FFScouter API fetch.
  * Batches player IDs up to 200 items per request (API maximum is 205).
- * Errors are caught and handled cleanly without mocking.
+ * Errors are caught and re-thrown without swallowing.
+ *
+ * @internal — prefer `getPlayerStats` which adds a 30-day DB cache layer.
  */
 export async function fetchFFScouterStats(
 	playerIds: number[],
@@ -118,4 +124,66 @@ export async function fetchFFScouterStats(
 	}
 
 	return results;
+}
+
+/**
+ * Centralised entry point for FFScouter player stats with a 30-day DB cache.
+ *
+ * 1. Checks the `player_stat_cache` table for non-expired entries.
+ * 2. Returns cached results immediately for fresh IDs.
+ * 3. Fetches only stale/missing IDs from the live FFScouter API.
+ * 4. Persists newly fetched results back into the cache (TTL = 30 days).
+ * 5. Returns the merged set of cached + freshly fetched results.
+ *
+ * @param playerIds - Torn player IDs to look up.
+ * @param apiKey    - Optional API key override (falls back to FF_SCOUTER_KEY env var).
+ */
+export async function getPlayerStats(
+	playerIds: number[],
+	apiKey?: string,
+): Promise<FFScouterTargetResult[]> {
+	const uniqueIds = Array.from(new Set(playerIds.filter((id) => id > 0)));
+	if (uniqueIds.length === 0) {
+		return [];
+	}
+
+	// 1. Batch-check the DB cache for all requested IDs
+	const cacheHits = await getPlayerStatCacheRaw(uniqueIds);
+
+	const cachedResults: FFScouterTargetResult[] = [];
+	const staleIds: number[] = [];
+
+	for (const id of uniqueIds) {
+		const hit = cacheHits.get(id);
+		if (hit) {
+			cachedResults.push(hit as unknown as FFScouterTargetResult);
+		} else {
+			staleIds.push(id);
+		}
+	}
+
+	logger.info(
+		`Player stats cache: ${cachedResults.length} hit(s), ${staleIds.length} miss(es) out of ${uniqueIds.length} requested.`,
+	);
+
+	if (staleIds.length === 0) {
+		return cachedResults;
+	}
+
+	// 2. Fetch missing/stale IDs from the live API
+	const freshResults = await fetchFFScouterStats(staleIds, apiKey);
+
+	// 3. Persist fresh results into the cache
+	if (freshResults.length > 0) {
+		await upsertPlayerStatCacheRaw(
+			freshResults as unknown as Array<{
+				player_id: number;
+				source?: string | null;
+				[key: string]: unknown;
+			}>,
+		);
+	}
+
+	// 4. Return merged results (cached + fresh)
+	return [...cachedResults, ...freshResults];
 }

@@ -22,6 +22,7 @@ export interface ElimsContextValue {
 	reason: string;
 	guild: ElimsGuildSummary | null;
 	adminRoleIds: string[];
+	workersStopped: boolean;
 	loading: boolean;
 	refreshStatus: () => Promise<void>;
 	recheckAccess: () => Promise<{ success: boolean; hasAdminAccess: boolean }>;
@@ -34,6 +35,7 @@ const ElimsContext = createContext<ElimsContextValue>({
 	reason: "loading",
 	guild: null,
 	adminRoleIds: [],
+	workersStopped: false,
 	loading: true,
 	refreshStatus: async () => {},
 	recheckAccess: async () => ({ success: false, hasAdminAccess: false }),
@@ -47,6 +49,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 	const [reason, setReason] = useState("loading");
 	const [guild, setGuild] = useState<ElimsGuildSummary | null>(null);
 	const [adminRoleIds, setAdminRoleIds] = useState<string[]>([]);
+	const [workersStopped, setWorkersStopped] = useState(false);
 	const [loading, setLoading] = useState(true);
 
 	const refreshStatus = useCallback(async () => {
@@ -57,6 +60,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 			setReason("unauthenticated");
 			setGuild(null);
 			setAdminRoleIds([]);
+			setWorkersStopped(false);
 			setLoading(false);
 			return;
 		}
@@ -73,6 +77,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 				reason: string;
 				guild: ElimsGuildSummary | null;
 				adminRoleIds?: string[];
+				workersStopped?: boolean;
 			};
 
 			setConfigured(data.configured);
@@ -81,6 +86,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 			setReason(data.reason);
 			setGuild(data.guild);
 			setAdminRoleIds(data.adminRoleIds ?? []);
+			setWorkersStopped(Boolean(data.workersStopped));
 		} catch (err) {
 			console.error("Failed to fetch elims status:", err);
 			setReason("network_error");
@@ -138,6 +144,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 				reason,
 				guild,
 				adminRoleIds,
+				workersStopped,
 				loading: authLoading || loading,
 				refreshStatus,
 				recheckAccess,

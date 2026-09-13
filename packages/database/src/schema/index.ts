@@ -3,6 +3,7 @@ export * from "./auth";
 export * from "./discord";
 export * from "./elims-requests";
 export * from "./elims-tournament";
+export * from "./ffscouter";
 export * from "./giveaways";
 export * from "./ledger";
 export * from "./system";

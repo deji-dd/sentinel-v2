@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { apiKeys, db, elimsMemberStats, eq } from "@sentinel/database";
-import { fetchFFScouterStats } from "@sentinel/torn-api";
+import {
+	apiKeys,
+	db,
+	elimsMemberStats,
+	eq,
+	playerStatCache,
+} from "@sentinel/database";
+import * as ffscouterModule from "@sentinel/torn-api";
 import * as botIpc from "../src/lib/ipc/listener";
 import {
 	runElimsMemberStatsCycle,
@@ -12,6 +18,7 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 	let botSpy: ReturnType<typeof spyOn>;
 	const TEST_GUILD_ID = `test-guild-${crypto.randomUUID()}`;
 	const TEST_KEY_USER_ID = 8888888;
+	let cacheSpy: ReturnType<typeof spyOn>;
 	const ORIGINAL_FF_KEY = process.env.FF_SCOUTER_KEY;
 
 	beforeEach(async () => {
@@ -29,26 +36,36 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 		await db
 			.delete(elimsMemberStats)
 			.where(eq(elimsMemberStats.guildId, TEST_GUILD_ID));
+		await db
+			.delete(playerStatCache)
+			.where(eq(playerStatCache.playerId, 267456763));
 	});
 
 	afterEach(async () => {
 		fetchSpy?.mockRestore();
 		botSpy?.mockRestore();
+		cacheSpy?.mockRestore();
 		process.env.FF_SCOUTER_KEY = ORIGINAL_FF_KEY;
 		await db.delete(apiKeys).where(eq(apiKeys.userId, TEST_KEY_USER_ID));
 		await db
 			.delete(elimsMemberStats)
 			.where(eq(elimsMemberStats.guildId, TEST_GUILD_ID));
+		await db
+			.delete(playerStatCache)
+			.where(eq(playerStatCache.playerId, 267456763));
 	});
 
-	test("fetchFFScouterStats throws error when FF_SCOUTER_KEY is missing", async () => {
+	test("getPlayerStats throws error when FF_SCOUTER_KEY is missing", async () => {
 		process.env.FF_SCOUTER_KEY = "";
-		expect(fetchFFScouterStats([267456763])).rejects.toThrow(
+		await db
+			.delete(playerStatCache)
+			.where(eq(playerStatCache.playerId, 267456763));
+		expect(ffscouterModule.getPlayerStats([267456763])).rejects.toThrow(
 			"FF_SCOUTER_KEY is not configured",
 		);
 	});
 
-	test("fetchFFScouterStats parses multi-target response with estimates, distribution, and spies", async () => {
+	test("getPlayerStats parses multi-target response with estimates, distribution, and spies", async () => {
 		process.env.FF_SCOUTER_KEY = "test-ff-key";
 
 		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
@@ -115,7 +132,10 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 				)) as unknown as typeof fetch,
 		);
 
-		const stats = await fetchFFScouterStats([267456763], "test-ff-key");
+		const stats = await ffscouterModule.getPlayerStats(
+			[267456763],
+			"test-ff-key",
+		);
 		expect(stats.length).toBe(1);
 		expect(stats[0]?.player_id).toBe(267456763);
 		expect(stats[0]?.bs_estimate_human).toBe("2.99b");

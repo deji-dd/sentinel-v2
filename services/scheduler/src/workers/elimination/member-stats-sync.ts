@@ -1,8 +1,8 @@
 import { db, elimsMemberStats, eq, systemStates } from "@sentinel/database";
 import {
 	type FFScouterTargetResult,
-	fetchFFScouterStats,
 	getElimsKeyPool,
+	getPlayerStats,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { requestGuildMembersFromBot } from "../../lib/ipc/listener";
@@ -273,7 +273,7 @@ export async function syncTeamMemberStats(
 			logger.info(
 				`Querying FFScouter for ${resolvedTornIds.length} player(s)...`,
 			);
-			const ffResults = await fetchFFScouterStats(resolvedTornIds);
+			const ffResults = await getPlayerStats(resolvedTornIds);
 			for (const r of ffResults) {
 				ffMap.set(r.player_id, r);
 			}

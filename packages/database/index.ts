@@ -76,5 +76,6 @@ export {
 // Export schema for queries and types
 export * from "./src/lib/alerts";
 export * from "./src/lib/elims-stock";
+export * from "./src/lib/ffscouter-cache";
 export * from "./src/lib/guilds";
 export * from "./src/schema";

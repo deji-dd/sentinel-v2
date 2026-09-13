@@ -109,6 +109,7 @@ interface ElimsConfigData {
 	liveDataEmbedMessageId?: string | null;
 	teamRoleId?: string | null;
 	autoSyncTeamStats?: boolean;
+	workersStopped?: boolean;
 	configuredAt: string;
 	configuredBy: {
 		discordId: string;
@@ -580,6 +581,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 					},
 					adminRoleIds: configData.adminRoleIds,
 					configuredBy: configData.configuredBy,
+					workersStopped: Boolean(configData.workersStopped),
 				};
 			}
 
@@ -670,6 +672,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				},
 				adminRoleIds: hasAdminAccess ? configData.adminRoleIds : undefined,
 				configuredBy: configData.configuredBy,
+				workersStopped: Boolean(configData.workersStopped),
 			};
 		},
 		{
@@ -2858,6 +2861,145 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				summary: "Trigger Elimination Teams Sync",
 				description:
 					"Triggers the Scheduler worker to immediately run a collection cycle.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/worker/stop ────────────────────────────────────────
+	.post(
+		"/worker/stop",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			// 1. Update persistent state in DB
+			try {
+				const [existing] = await db
+					.select()
+					.from(systemStates)
+					.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+				if (existing?.data) {
+					const updated = {
+						...(existing.data as Record<string, unknown>),
+						workersStopped: true,
+						updatedAt: new Date().toISOString(),
+					};
+					await db
+						.update(systemStates)
+						.set({ data: updated, updatedAt: new Date() })
+						.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+				}
+			} catch (err) {
+				console.error("Failed to update workersStopped in DB:", err);
+			}
+
+			// 2. Notify scheduler via IPC to halt active runners immediately
+			const res = await requestSchedulerAction<{
+				stopped?: string[];
+				workersStopped?: boolean;
+				error?: string;
+			}>("elims_stop_workers", {}, 10000);
+
+			return {
+				success: true,
+				workersStopped: true,
+				message: `Elimination background workers powered off.${res?.stopped?.length ? ` Halted: ${res.stopped.join(", ")}` : ""}`,
+				stopped: res?.stopped ?? [],
+			};
+		},
+		{
+			detail: {
+				summary: "Power Off Elims Workers",
+				description:
+					"Gracefully stops the team tracker and member stats workers, pausing background polling. All tournament data is preserved.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/elims/worker/start ───────────────────────────────────────
+	.post(
+		"/worker/start",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			// 1. Update persistent state in DB
+			try {
+				const [existing] = await db
+					.select()
+					.from(systemStates)
+					.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+				if (existing?.data) {
+					const updated = {
+						...(existing.data as Record<string, unknown>),
+						workersStopped: false,
+						updatedAt: new Date().toISOString(),
+					};
+					await db
+						.update(systemStates)
+						.set({ data: updated, updatedAt: new Date() })
+						.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+				}
+			} catch (err) {
+				console.error("Failed to update workersStopped in DB:", err);
+			}
+
+			// 2. Notify scheduler via IPC to boot runners immediately
+			const res = await requestSchedulerAction<{
+				started?: string[];
+				workersStopped?: boolean;
+				error?: string;
+			}>("elims_start_workers", {}, 10000);
+
+			return {
+				success: true,
+				workersStopped: false,
+				message: `Elimination background workers resumed.${res?.started?.length ? ` Started: ${res.started.join(", ")}` : ""}`,
+				started: res?.started ?? [],
+			};
+		},
+		{
+			detail: {
+				summary: "Power On / Resume Elims Workers",
+				description:
+					"Resumes background execution of the team tracker and member stats workers.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/elims/worker/status ──────────────────────────────────────
+	.get(
+		"/worker/status",
+		async ({ user, set }) => {
+			const isAdmin = await verifyElimsAdmin(user);
+			if (!isAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Elims administrator access required." };
+			}
+
+			const [existing] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
+
+			const configData = existing?.data as unknown as
+				| ElimsConfigData
+				| undefined;
+			return {
+				workersStopped: Boolean(configData?.workersStopped),
+			};
+		},
+		{
+			detail: {
+				summary: "Get Elims Worker Power Status",
+				description:
+					"Returns whether elimination workers are currently powered off.",
 			},
 		},
 	)

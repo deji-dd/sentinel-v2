@@ -1,7 +1,7 @@
 import { db, eq, systemStates } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc/server";
-import { ScheduledRunner } from "../../lib/scheduler";
+import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import { syncTeamMemberStats } from "./member-stats-sync";
 
@@ -27,8 +27,16 @@ export async function runElimsMemberStatsCycle(): Promise<void> {
 					guildId?: string;
 					teamRoleId?: string | null;
 					autoSyncTeamStats?: boolean;
+					workersStopped?: boolean;
 			  }
 			| undefined;
+
+		if (configData?.workersStopped) {
+			logger.info(
+				"Elims workers are powered off in guild config. Skipping automated stats sync.",
+			);
+			return;
+		}
 
 		if (!configData?.guildId) {
 			logger.debug(
@@ -94,14 +102,10 @@ export async function runElimsMemberStatsCycle(): Promise<void> {
 export const startElimsMemberStatsWorker: WorkerStarter = (options?: {
 	initialDelayMs?: number;
 }) => {
-	const runner = new ScheduledRunner({
+	startEventDrivenRunner({
 		worker: "elims_member_stats_worker",
 		defaultCadenceSeconds: 900, // 15 minutes
 		initialDelayMs: options?.initialDelayMs ?? 5000,
 		handler: runElimsMemberStatsCycle,
-	});
-
-	runner.start().catch((err) => {
-		logger.error("Failed to start Elims Member Stats worker:", err);
 	});
 };

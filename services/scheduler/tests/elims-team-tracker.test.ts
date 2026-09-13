@@ -225,4 +225,27 @@ describe("Elimination Team Tracker Worker", () => {
 		expect(snapshot?.attacks).toBe(3);
 		expect(snapshot?.activeCount).toBe(1);
 	});
+
+	test("pauses execution when workersStopped is set to true in elims:guild_config", async () => {
+		await db
+			.insert(systemStates)
+			.values({
+				id: "elims:guild_config",
+				init: true,
+				data: { workersStopped: true },
+			})
+			.onConflictDoUpdate({
+				target: systemStates.id,
+				set: { data: { workersStopped: true } },
+			});
+
+		const nextCadence = await runElimsTrackingCycle();
+		expect(nextCadence).toBeGreaterThan(Date.now());
+
+		// Clean up
+		await db
+			.update(systemStates)
+			.set({ data: { workersStopped: false } })
+			.where(eq(systemStates.id, "elims:guild_config"));
+	});
 });

@@ -1,139 +1,146 @@
 {
-	"version": "7",
-	"dialect": "postgresql",
-	"entries": [
-		{
-			"idx": 0,
-			"version": "7",
-			"when": 1788247974216,
-			"tag": "0000_nappy_katie_power",
-			"breakpoints": true
-		},
-		{
-			"idx": 1,
-			"version": "7",
-			"when": 1788371396839,
-			"tag": "0001_ancient_bruce_banner",
-			"breakpoints": true
-		},
-		{
-			"idx": 2,
-			"version": "7",
-			"when": 1788372358161,
-			"tag": "0002_right_goliath",
-			"breakpoints": true
-		},
-		{
-			"idx": 3,
-			"version": "7",
-			"when": 1788374049747,
-			"tag": "0003_light_thor_girl",
-			"breakpoints": true
-		},
-		{
-			"idx": 4,
-			"version": "7",
-			"when": 1788688470190,
-			"tag": "0004_yielding_harrier",
-			"breakpoints": true
-		},
-		{
-			"idx": 5,
-			"version": "7",
-			"when": 1788694010404,
-			"tag": "0005_spooky_oracle",
-			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "7",
-			"when": 1788719753207,
-			"tag": "0006_aberrant_ozymandias",
-			"breakpoints": true
-		},
-		{
-			"idx": 7,
-			"version": "7",
-			"when": 1788730856956,
-			"tag": "0007_omniscient_annihilus",
-			"breakpoints": true
-		},
-		{
-			"idx": 8,
-			"version": "7",
-			"when": 1788731318336,
-			"tag": "0008_smart_martin_li",
-			"breakpoints": true
-		},
-		{
-			"idx": 9,
-			"version": "7",
-			"when": 1788731477214,
-			"tag": "0009_funny_longshot",
-			"breakpoints": true
-		},
-		{
-			"idx": 10,
-			"version": "7",
-			"when": 1788771378871,
-			"tag": "0010_abnormal_iceman",
-			"breakpoints": true
-		},
-		{
-			"idx": 11,
-			"version": "7",
-			"when": 1788775000000,
-			"tag": "0011_elims_armory_log_fields",
-			"breakpoints": true
-		},
-		{
-			"idx": 12,
-			"version": "7",
-			"when": 1788785640216,
-			"tag": "0012_ordinary_blue_blade",
-			"breakpoints": true
-		},
-		{
-			"idx": 13,
-			"version": "7",
-			"when": 1788787721990,
-			"tag": "0013_curvy_starfox",
-			"breakpoints": true
-		},
-		{
-			"idx": 14,
-			"version": "7",
-			"when": 1788792975710,
-			"tag": "0014_bored_surge",
-			"breakpoints": true
-		},
-		{
-			"idx": 15,
-			"version": "7",
-			"when": 1788795000000,
-			"tag": "0015_drop_recreate_elims_sim_tables",
-			"breakpoints": true
-		},
-		{
-			"idx": 16,
-			"version": "7",
-			"when": 1788800000000,
-			"tag": "0016_elims_armory_deposits_bigint",
-			"breakpoints": true
-		},
-		{
-			"idx": 17,
-			"version": "7",
-			"when": 1788850407901,
-			"tag": "0017_nifty_lockheed",
-			"breakpoints": true
-		},
-		{
-			"idx": 18,
-			"version": "7",
-			"when": 1789027557023,
-			"tag": "0018_conscious_vulture",
-			"breakpoints": true
-		}
-	]
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1788247974216,
+      "tag": "0000_nappy_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788371396839,
+      "tag": "0001_ancient_bruce_banner",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788372358161,
+      "tag": "0002_right_goliath",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788374049747,
+      "tag": "0003_light_thor_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788688470190,
+      "tag": "0004_yielding_harrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788694010404,
+      "tag": "0005_spooky_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788719753207,
+      "tag": "0006_aberrant_ozymandias",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788730856956,
+      "tag": "0007_omniscient_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788731318336,
+      "tag": "0008_smart_martin_li",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788731477214,
+      "tag": "0009_funny_longshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788771378871,
+      "tag": "0010_abnormal_iceman",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788775000000,
+      "tag": "0011_elims_armory_log_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788785640216,
+      "tag": "0012_ordinary_blue_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788787721990,
+      "tag": "0013_curvy_starfox",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788792975710,
+      "tag": "0014_bored_surge",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1788795000000,
+      "tag": "0015_drop_recreate_elims_sim_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788800000000,
+      "tag": "0016_elims_armory_deposits_bigint",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788850407901,
+      "tag": "0017_nifty_lockheed",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789027557023,
+      "tag": "0018_conscious_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789329891027,
+      "tag": "0019_public_jazinda",
+      "breakpoints": true
+    }
+  ]
 }
