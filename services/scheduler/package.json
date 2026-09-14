@@ -12,10 +12,11 @@
 		"trigger": "bun run src/scripts/trigger.ts"
 	},
 	"dependencies": {
-		"@sentinel/utils": "workspace:*",
 		"@sentinel/database": "workspace:*",
+		"@sentinel/schemas": "workspace:*",
 		"@sentinel/torn-api": "workspace:*",
-		"@sentinel/schemas": "workspace:*"
+		"@sentinel/utils": "workspace:*",
+		"croner": "latest"
 	},
 	"devDependencies": {},
 	"peerDependencies": {}

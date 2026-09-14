@@ -1,8 +1,10 @@
 import { db, eq, workerSchedules } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+import { Cron } from "croner";
 
 /**
  * Calculates the next upcoming UTC target epoch timestamp for a given hour and minute (e.g. 3, 0 for 03:00 UTC).
+ * @deprecated Use `{ type: 'cron', pattern: 'M H * * *', timezone: 'Etc/UTC' }` schedule instead.
  */
 export function getNextUtcTargetTimestamp(hour: number, minute = 0): number {
 	const now = new Date();
@@ -25,15 +27,59 @@ export function getNextUtcTargetTimestamp(hour: number, minute = 0): number {
 	return target.getTime();
 }
 
+export type RunnerSchedule =
+	| { type: "interval"; seconds: number }
+	| { type: "cron"; pattern: string; timezone?: string };
+
+export type RetryPolicy = {
+	/** Maximum consecutive retry attempts on failure. Defaults to 5 for cron, 3 for interval. */
+	maxRetries?: number;
+	/** Initial retry backoff in ms. Defaults to 60,000ms (1m) for cron, 10,000ms (10s) for interval. */
+	initialBackoffMs?: number;
+	/** Maximum backoff ceiling in ms. Defaults to 3,600,000ms (1 hour) for cron, 300,000ms (5m) for interval. */
+	maxBackoffMs?: number;
+};
+
+export type RunnerStatus = {
+	worker: string;
+	schedule:
+		| { type: "interval"; seconds: number }
+		| { type: "cron"; pattern: string; timezone: string };
+	isExecuting: boolean;
+	isStopped: boolean;
+	consecutiveFailures: number;
+	lastError: string | null;
+	lastRunAt: number | null;
+	lastSuccessAt: number | null;
+	nextRunAt: number | null;
+};
+
 export type EventRunnerConfig = {
 	/** Unique string ID / name of the worker job (e.g. 'torn_territory_blueprints_sync') */
 	worker: string;
-	/** Default execution cadence in seconds */
-	defaultCadenceSeconds: number;
+	/**
+	 * Execution schedule: interval (in seconds) or cron expression (e.g. '0 3 * * *').
+	 * Defaults to timezone 'Etc/UTC' for cron schedules if unspecified.
+	 */
+	schedule?: RunnerSchedule;
+	/**
+	 * Default execution cadence in seconds.
+	 * Backward-compatible shorthand for `{ type: 'interval', seconds }`.
+	 */
+	defaultCadenceSeconds?: number;
 	/** Optional initial delay in milliseconds to stagger boot executions */
 	initialDelayMs?: number;
+	/**
+	 * Maximum execution time in milliseconds before the cycle is aborted.
+	 * If omitted for interval workers with cadence <= 60s, defaults to 85% of interval.
+	 * If omitted for cron / long workers, defaults to 5 minutes (300,000ms).
+	 * Set to 0 to disable timeout.
+	 */
+	timeoutMs?: number;
+	/** Optional custom retry and failure backoff policy */
+	retryPolicy?: RetryPolicy;
 	// biome-ignore lint/suspicious/noConfusingVoidType: void is required to support async handlers returning void
-	handler: () => Promise<number | boolean | void>;
+	handler: (signal?: AbortSignal) => Promise<number | boolean | void>;
 };
 
 export class ScheduledRunner {
@@ -44,14 +90,92 @@ export class ScheduledRunner {
 	private isStopped = false;
 	/** Set when triggerNow() fires while a cycle is already executing. */
 	private forceRunQueued = false;
-	private cadenceMs: number;
+	private schedule:
+		| { type: "interval"; seconds: number }
+		| { type: "cron"; pattern: string; timezone: string };
+	private cronInstance: Cron | null = null;
 
 	private lastPersistedAt = 0;
+	private consecutiveFailures = 0;
+	private lastError: string | null = null;
+	private lastSuccessAt: number | null = null;
+	private lastRunAt: number | null = null;
+	private nextRunAt: number | null = null;
+	private retryPolicy: Required<RetryPolicy>;
 
 	constructor(config: EventRunnerConfig) {
 		this.config = config;
 		this.logger = new Logger(config.worker);
-		this.cadenceMs = config.defaultCadenceSeconds * 1000;
+
+		if (config.schedule) {
+			if (config.schedule.type === "cron") {
+				const timezone = config.schedule.timezone ?? "Etc/UTC";
+				this.schedule = {
+					type: "cron",
+					pattern: config.schedule.pattern,
+					timezone,
+				};
+				this.cronInstance = new Cron(config.schedule.pattern, { timezone });
+			} else {
+				this.schedule = {
+					type: "interval",
+					seconds: Math.max(1, config.schedule.seconds),
+				};
+			}
+		} else if (config.defaultCadenceSeconds !== undefined) {
+			this.schedule = {
+				type: "interval",
+				seconds: Math.max(1, config.defaultCadenceSeconds),
+			};
+		} else {
+			this.schedule = {
+				type: "interval",
+				seconds: 86400,
+			};
+		}
+
+		const isCron = this.schedule.type === "cron";
+		this.retryPolicy = {
+			maxRetries: config.retryPolicy?.maxRetries ?? (isCron ? 5 : 3),
+			initialBackoffMs:
+				config.retryPolicy?.initialBackoffMs ?? (isCron ? 60_000 : 10_000),
+			maxBackoffMs:
+				config.retryPolicy?.maxBackoffMs ?? (isCron ? 3_600_000 : 300_000),
+		};
+	}
+
+	/**
+	 * Effective execution timeout in milliseconds.
+	 */
+	private get effectiveTimeoutMs(): number {
+		if (this.config.timeoutMs !== undefined) {
+			return this.config.timeoutMs;
+		}
+		if (this.schedule.type === "interval" && this.schedule.seconds <= 60) {
+			return Math.max(5_000, Math.floor(this.schedule.seconds * 1000 * 0.85));
+		}
+		return 300_000;
+	}
+
+	/**
+	 * Returns the calculated next run epoch in milliseconds.
+	 */
+	private getNextScheduledTimeMs(): number {
+		if (this.schedule.type === "cron") {
+			const nextDate = this.cronInstance?.nextRun();
+			return nextDate ? nextDate.getTime() : Date.now() + 86400000;
+		}
+		return Date.now() + this.schedule.seconds * 1000;
+	}
+
+	/**
+	 * Effective cadence in seconds for DB recording.
+	 */
+	private get effectiveCadenceSeconds(): number {
+		if (this.schedule.type === "interval") {
+			return this.schedule.seconds;
+		}
+		return this.config.defaultCadenceSeconds ?? 86400;
 	}
 
 	/**
@@ -61,7 +185,7 @@ export class ScheduledRunner {
 		if (this.isStopped) this.isStopped = false;
 
 		try {
-			// 1. Query persistent schedule state from SQLite/Drizzle
+			// 1. Query persistent schedule state from database
 			let schedule = await db.query.workerSchedules.findFirst({
 				where: eq(workerSchedules.id, this.config.worker),
 			});
@@ -69,12 +193,17 @@ export class ScheduledRunner {
 			const now = Date.now();
 
 			if (!schedule) {
+				const initialNextRunAt =
+					this.schedule.type === "cron" && this.cronInstance
+						? (this.cronInstance.nextRun() ?? new Date(now))
+						: new Date(now);
+
 				const [createdSchedule] = await db
 					.insert(workerSchedules)
 					.values({
 						id: this.config.worker,
-						cadenceSeconds: this.config.defaultCadenceSeconds,
-						nextRunAt: new Date(now),
+						cadenceSeconds: this.effectiveCadenceSeconds,
+						nextRunAt: initialNextRunAt,
 					})
 					.returning();
 				schedule = createdSchedule;
@@ -125,20 +254,89 @@ export class ScheduledRunner {
 		this.isExecuting = true;
 
 		let customNextRunMs: number | undefined;
+		let executionFailed = false;
 		const startTime = Date.now();
 
+		const timeoutMs = this.effectiveTimeoutMs;
+		const controller = new AbortController();
+		let timeoutTimer: NodeJS.Timeout | null = null;
+
+		const timeoutPromise =
+			timeoutMs > 0
+				? new Promise<never>((_, reject) => {
+						timeoutTimer = setTimeout(() => {
+							const timeoutErr = new Error(
+								`Worker '${this.config.worker}' execution timed out after ${timeoutMs}ms`,
+							);
+							controller.abort(timeoutErr);
+							reject(timeoutErr);
+						}, timeoutMs);
+					})
+				: null;
+
 		try {
-			const result = await this.config.handler();
+			const handlerPromise = this.config.handler(controller.signal);
+			const result = timeoutPromise
+				? await Promise.race([handlerPromise, timeoutPromise])
+				: await handlerPromise;
+
 			if (typeof result === "number") {
 				customNextRunMs = result;
 			}
+			this.consecutiveFailures = 0;
+			this.lastError = null;
+			this.lastSuccessAt = Date.now();
 		} catch (err) {
-			this.logger.error("Worker execution failed:", err);
+			executionFailed = true;
+			this.consecutiveFailures++;
+			this.lastError = err instanceof Error ? err.message : String(err);
+			this.logger.error(
+				`Worker execution failed (failure #${this.consecutiveFailures}):`,
+				err,
+			);
 		} finally {
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+			}
 			this.isExecuting = false;
+			this.lastRunAt = startTime;
 
 			if (!this.isStopped) {
-				let nextRunTimeMs = customNextRunMs ?? Date.now() + this.cadenceMs;
+				let nextRunTimeMs: number;
+
+				if (customNextRunMs !== undefined) {
+					nextRunTimeMs = customNextRunMs;
+				} else if (executionFailed) {
+					// Exponential backoff calculation
+					const attempt = Math.min(
+						this.consecutiveFailures,
+						this.retryPolicy.maxRetries,
+					);
+					const backoffMs = Math.min(
+						this.retryPolicy.initialBackoffMs * 2 ** (attempt - 1),
+						this.retryPolicy.maxBackoffMs,
+					);
+
+					if (this.schedule.type === "cron") {
+						const standardNext = this.getNextScheduledTimeMs();
+						// Run at backoff time or next scheduled cron tick, whichever is sooner
+						nextRunTimeMs = Math.min(Date.now() + backoffMs, standardNext);
+						this.logger.warn(
+							`Scheduling retry #${this.consecutiveFailures} in ${Math.round(backoffMs / 1000)}s (target: ${new Date(nextRunTimeMs).toISOString()})`,
+						);
+					} else {
+						const standardCadenceMs = this.schedule.seconds * 1000;
+						const effectiveBackoff = Math.max(standardCadenceMs, backoffMs);
+						nextRunTimeMs = Date.now() + effectiveBackoff;
+						if (this.consecutiveFailures >= 2) {
+							this.logger.warn(
+								`Backing off interval worker (failure #${this.consecutiveFailures}): next run in ${Math.round(effectiveBackoff / 1000)}s`,
+							);
+						}
+					}
+				} else {
+					nextRunTimeMs = this.getNextScheduledTimeMs();
+				}
 
 				// A force-run arrived while this cycle was executing: re-run
 				// immediately instead of waiting out the full cadence.
@@ -150,8 +348,14 @@ export class ScheduledRunner {
 					);
 				}
 
+				this.nextRunAt = nextRunTimeMs;
+
+				const isCron = this.schedule.type === "cron";
 				const shouldPersist =
-					!this.lastPersistedAt || startTime - this.lastPersistedAt >= 60000;
+					isCron ||
+					executionFailed ||
+					!this.lastPersistedAt ||
+					startTime - this.lastPersistedAt >= 60000;
 
 				if (shouldPersist) {
 					this.lastPersistedAt = startTime;
@@ -160,7 +364,7 @@ export class ScheduledRunner {
 							.insert(workerSchedules)
 							.values({
 								id: this.config.worker,
-								cadenceSeconds: this.config.defaultCadenceSeconds,
+								cadenceSeconds: this.effectiveCadenceSeconds,
 								lastRunAt: new Date(startTime),
 								nextRunAt: new Date(nextRunTimeMs),
 								forceRun: false,
@@ -170,6 +374,7 @@ export class ScheduledRunner {
 							.onConflictDoUpdate({
 								target: workerSchedules.id,
 								set: {
+									cadenceSeconds: this.effectiveCadenceSeconds,
 									lastRunAt: new Date(startTime),
 									nextRunAt: new Date(nextRunTimeMs),
 									forceRun: false,
@@ -199,6 +404,55 @@ export class ScheduledRunner {
 			return;
 		}
 		this.scheduleNext(0);
+	}
+
+	/**
+	 * Flushes current in-memory schedule and execution timestamps to PostgreSQL.
+	 */
+	async flushPersistence(): Promise<void> {
+		if (!this.lastRunAt && !this.nextRunAt) return;
+		try {
+			await db
+				.insert(workerSchedules)
+				.values({
+					id: this.config.worker,
+					cadenceSeconds: this.effectiveCadenceSeconds,
+					lastRunAt: this.lastRunAt ? new Date(this.lastRunAt) : new Date(),
+					nextRunAt: this.nextRunAt ? new Date(this.nextRunAt) : new Date(),
+					forceRun: false,
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.onConflictDoUpdate({
+					target: workerSchedules.id,
+					set: {
+						cadenceSeconds: this.effectiveCadenceSeconds,
+						lastRunAt: this.lastRunAt ? new Date(this.lastRunAt) : undefined,
+						nextRunAt: this.nextRunAt ? new Date(this.nextRunAt) : undefined,
+						forceRun: false,
+						updatedAt: new Date(),
+					},
+				});
+		} catch (dbErr) {
+			this.logger.error("Failed to flush worker schedule to database:", dbErr);
+		}
+	}
+
+	/**
+	 * Returns current execution telemetry and health status of this runner.
+	 */
+	getStatus(): RunnerStatus {
+		return {
+			worker: this.config.worker,
+			schedule: this.schedule,
+			isExecuting: this.isExecuting,
+			isStopped: this.isStopped,
+			consecutiveFailures: this.consecutiveFailures,
+			lastError: this.lastError,
+			lastRunAt: this.lastRunAt,
+			lastSuccessAt: this.lastSuccessAt,
+			nextRunAt: this.nextRunAt,
+		};
 	}
 
 	/**
@@ -250,4 +504,25 @@ export function stopWorkerByName(workerName: string): boolean {
 		return true;
 	}
 	return false;
+}
+
+/**
+ * Stops all active runners and flushes their persistent schedule states.
+ */
+export async function stopAllRunners(): Promise<void> {
+	const runners = Array.from(activeRunners.values());
+	const promises: Promise<void>[] = [];
+	for (const runner of runners) {
+		runner.stop();
+		promises.push(runner.flushPersistence());
+	}
+	await Promise.allSettled(promises);
+	activeRunners.clear();
+}
+
+/**
+ * Returns telemetry and status for all active in-memory runners.
+ */
+export function getAllRunnerStatuses(): RunnerStatus[] {
+	return Array.from(activeRunners.values()).map((runner) => runner.getStatus());
 }

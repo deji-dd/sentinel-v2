@@ -10,11 +10,13 @@ export const env = {
 		"https://tt-selector.blasted-labs.tech",
 		"https://elims.blasted-labs.tech",
 		"https://api.elims.blasted-labs.tech",
+		"https://subversive.blasted-labs.tech",
 		"https://sentinel.ayodejib.dev",
 		"https://aquasense.ayodejib.dev",
 		"https://api.ayodejib.dev",
 		"http://localhost:3000",
 		"http://localhost:5175",
+		"http://localhost:5177",
 		"http://127.0.0.1:3000",
 	],
 	SESSION_SECRET:

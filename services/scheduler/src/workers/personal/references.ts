@@ -9,10 +9,7 @@ import {
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
-import {
-	getNextUtcTargetTimestamp,
-	startEventDrivenRunner,
-} from "../../lib/scheduler";
+import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "personal:reference_sync";
@@ -447,7 +444,7 @@ type UserPerksResponse = {
 /**
  * Runs daily sync at 00:15 UTC to fetch raw user perks & gym unlocks.
  */
-export async function runPersonalReferenceSync(): Promise<number> {
+export async function runPersonalReferenceSync(): Promise<void> {
 	const finishSync = logger.time();
 
 	try {
@@ -456,7 +453,7 @@ export async function runPersonalReferenceSync(): Promise<number> {
 			logger.warn(
 				"No personal API key found for personal reference sync. Skipping.",
 			);
-			return getNextUtcTargetTimestamp(0, 15);
+			return;
 		}
 
 		// 1. Fetch raw perks from Torn API
@@ -514,10 +511,8 @@ export async function runPersonalReferenceSync(): Promise<number> {
 		await syncGymUnlocks();
 
 		finishSync();
-		return getNextUtcTargetTimestamp(0, 15);
 	} catch (error) {
 		logger.error("Failed to execute personal reference sync:", error);
-		return getNextUtcTargetTimestamp(0, 15);
 	}
 }
 
@@ -535,8 +530,10 @@ export function startPersonalReferenceSync(options?: WorkerStartOptions): void {
 
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: 86400, // 24 hours
+		schedule: { type: "cron", pattern: "15 0 * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
-		handler: runPersonalReferenceSync,
+		handler: async () => {
+			await runPersonalReferenceSync();
+		},
 	});
 }

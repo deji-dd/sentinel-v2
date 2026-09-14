@@ -11,6 +11,9 @@ import {
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { startEventDrivenRunner } from "../../lib/scheduler";
+import { reconcileHistoricalBattlestatsLogs } from "../personal/battlestats";
+import { reconcileHistoricalCrimeLogs } from "../personal/crimes";
+import { reconcileHistoricalStockLogs } from "../personal/stocks";
 import type { WorkerStartOptions } from "../registry";
 import type { TravelStockItem } from "../torn/abroad-stocks";
 
@@ -19,7 +22,8 @@ const logger = new Logger("Scheduler", "Maintenance");
 
 /**
  * Daily system cleanup and retention manager.
- * Retains 90 days of completed WarLedger data, 30 days of VerificationLogs, and prunes 24-hour stock history windows.
+ * Retains 90 days of completed WarLedger data, 30 days of VerificationLogs, prunes 24-hour stock history windows,
+ * and executes off-peak historical ledger reconciliations for stocks, crimes, and battlestats.
  */
 export async function executeMaintenance(): Promise<void> {
 	const finishSync = logger.time();
@@ -117,6 +121,49 @@ export async function executeMaintenance(): Promise<void> {
 			);
 		}
 
+		// 5. Personal ledger historical reconciliation sweeps
+		try {
+			const stockResult = await reconcileHistoricalStockLogs();
+			if (stockResult.replayed > 0) {
+				logger.info(
+					`Reconciled ${stockResult.replayed} historical stock ledger records during maintenance.`,
+				);
+			}
+		} catch (err) {
+			logger.error(
+				"Error reconciling historical stock logs during maintenance:",
+				err,
+			);
+		}
+
+		try {
+			const crimeResult = await reconcileHistoricalCrimeLogs();
+			if (crimeResult.replayed > 0) {
+				logger.info(
+					`Reconciled ${crimeResult.replayed} historical crime ledger records during maintenance.`,
+				);
+			}
+		} catch (err) {
+			logger.error(
+				"Error reconciling historical crime logs during maintenance:",
+				err,
+			);
+		}
+
+		try {
+			const bsResult = await reconcileHistoricalBattlestatsLogs();
+			if (bsResult.replayed > 0) {
+				logger.info(
+					`Reconciled ${bsResult.replayed} historical battlestats ledger records during maintenance.`,
+				);
+			}
+		} catch (err) {
+			logger.error(
+				"Error reconciling historical battlestats logs during maintenance:",
+				err,
+			);
+		}
+
 		finishSync();
 	} catch (error) {
 		logger.error("Error executing system maintenance:", error);
@@ -124,14 +171,12 @@ export async function executeMaintenance(): Promise<void> {
 }
 
 /**
- * Initializes the automated daily system maintenance worker.
+ * Starts the automated daily system maintenance worker scheduled to run at 04:00 UTC.
  */
 export function startSystemMaintenance(options?: WorkerStartOptions): void {
-	const ONE_DAY_SECONDS = 86400;
-
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: ONE_DAY_SECONDS,
+		schedule: { type: "cron", pattern: "0 4 * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
 		handler: async () => {
 			await executeMaintenance();

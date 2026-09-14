@@ -70,6 +70,12 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		) {
 			appDir = "web/elims-dashboard/dist";
 		} else if (
+			host.includes("subversive.") ||
+			host.includes("subversive-dashboard") ||
+			origin.includes("subversive")
+		) {
+			appDir = "web/subversive-dashboard/dist";
+		} else if (
 			host.includes("user-dashboard") ||
 			host.includes("ayodejib.dev") ||
 			host.startsWith("user.") ||

@@ -1,6 +1,4 @@
 import {
-	Activity,
-	AlertTriangle,
 	Check,
 	ChevronLeft,
 	ChevronRight,
@@ -11,12 +9,10 @@ import {
 	Plus,
 	Power,
 	PowerOff,
-	Radio,
 	RefreshCw,
 	Save,
 	Send,
 	Server,
-	ShieldCheck,
 	Trash2,
 	User,
 } from "lucide-react";
@@ -121,7 +117,6 @@ export function GuildConfigPage() {
 		string | null
 	>(null);
 	const [savingChannel, setSavingChannel] = useState(false);
-	const [syncingEmbed, setSyncingEmbed] = useState(false);
 
 	// Live Standings Channel state
 	const [liveDataChannelId, setLiveDataChannelId] = useState<string | null>(
@@ -277,26 +272,6 @@ export function GuildConfigPage() {
 			return false;
 		} finally {
 			setSavingChannel(false);
-		}
-	};
-
-	const handleSyncEmbed = async () => {
-		setSyncingEmbed(true);
-		try {
-			const res = await fetch("/api/v1/elims/api-keys/channel/sync", {
-				method: "POST",
-			});
-			if (!res.ok) {
-				const data = (await res.json()) as { error?: string };
-				throw new Error(data.error ?? "Failed to sync key donation embed.");
-			}
-			toast.success("Key donation embed synchronization triggered!");
-		} catch (err) {
-			const msg =
-				err instanceof Error ? err.message : "Error syncing donation embed";
-			toast.error(msg);
-		} finally {
-			setSyncingEmbed(false);
 		}
 	};
 
@@ -680,25 +655,9 @@ export function GuildConfigPage() {
 					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
 						<div>
 							<CardTitle className="text-base flex items-center gap-2">
-								<Radio className="size-4 text-primary" />
 								<span>Live Standings Channel</span>
 							</CardTitle>
-							<CardDescription className="text-xs mt-1">
-								Designate a Discord text channel where Sentinel automatically
-								posts and maintains the real-time Elimination Standings embed,
-								synced every 10 seconds.
-							</CardDescription>
 						</div>
-						<Badge
-							variant="outline"
-							className={`text-[10px] font-mono w-fit px-2 py-0.5 ${
-								liveDataChannelId
-									? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
-									: "text-muted-foreground"
-							}`}
-						>
-							{liveDataChannelId ? "SYNC ACTIVE (10s)" : "DISABLED"}
-						</Badge>
 					</div>
 				</CardHeader>
 
@@ -708,10 +667,6 @@ export function GuildConfigPage() {
 							<div className="flex flex-col gap-0.5">
 								<span className="text-xs font-semibold">
 									Discord Broadcast Channel
-								</span>
-								<span className="text-[11px] text-muted-foreground">
-									The bot will maintain a persistent standings message sorted by
-									wins with live W/L ratio, tickets, and lives.
 								</span>
 							</div>
 
@@ -779,10 +734,6 @@ export function GuildConfigPage() {
 								API Keys
 							</CardTitle>
 						</div>
-						<Badge variant="outline" className="font-mono text-xs w-fit">
-							{apiKeys.length} {apiKeys.length === 1 ? "key" : "keys"}{" "}
-							configured
-						</Badge>
 					</div>
 				</CardHeader>
 
@@ -837,32 +788,6 @@ export function GuildConfigPage() {
 									</span>
 								</div>
 							</div>
-
-							{donationChannelId && (
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={handleSyncEmbed}
-									disabled={syncingEmbed || loadingChannels}
-									className="text-xs h-7 px-2.5 shrink-0 cursor-pointer"
-									title="Force the bot to refresh or repost the persistent embed in this channel"
-								>
-									{syncingEmbed ? (
-										<>
-											<RefreshCw
-												className="size-3 animate-spin"
-												data-icon="inline-start"
-											/>
-											Syncing Embed...
-										</>
-									) : (
-										<>
-											<Send className="size-3" data-icon="inline-start" />
-											Refresh Embed
-										</>
-									)}
-								</Button>
-							)}
 						</div>
 
 						<Select
@@ -1058,103 +983,13 @@ export function GuildConfigPage() {
 						<div>
 							<CardTitle className="text-base flex items-center gap-2">
 								<Cpu className="size-4 text-primary" />
-								<span>Elimination Engine & Background Workers</span>
+								<span>Background Workers</span>
 							</CardTitle>
-							<CardDescription className="text-xs mt-1">
-								Manage the automated background workers that poll tournament
-								scores, compute live attack flow, and synchronize member battle
-								stats.
-							</CardDescription>
 						</div>
-						<Badge
-							variant="outline"
-							className={`text-[10px] font-mono w-fit px-2 py-0.5 flex items-center gap-1.5 ${
-								workersStopped
-									? "bg-rose-500/10 text-rose-500 border-rose-500/30"
-									: "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
-							}`}
-						>
-							<span
-								className={`size-1.5 rounded-full ${
-									workersStopped
-										? "bg-rose-500"
-										: "bg-emerald-500 animate-pulse"
-								}`}
-							/>
-							{workersStopped
-								? "POWERED OFF (WORKERS HALTED)"
-								: "WORKERS ACTIVE"}
-						</Badge>
 					</div>
 				</CardHeader>
 
 				<CardContent className="flex flex-col gap-4">
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-						<div className="rounded-lg border border-border/60 bg-muted/20 p-3 flex flex-col gap-1.5">
-							<div className="flex items-center justify-between">
-								<span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-									<Activity className="size-3.5 text-primary" />
-									Team Live Tracker
-								</span>
-								<Badge
-									variant="secondary"
-									className="font-mono text-[9px] px-1.5 py-0 h-4"
-								>
-									elims_team_tracker
-								</Badge>
-							</div>
-							<p className="text-[11px] text-muted-foreground leading-relaxed">
-								Polls all 12 tournament teams every ~30s, computing score
-								progression, lives remaining, and real-time attack matrices.
-							</p>
-							<div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-								<span className="size-1.5 rounded-full bg-muted-foreground/60" />
-								Status: {workersStopped ? "Halted" : "Running cadence (30s)"}
-							</div>
-						</div>
-
-						<div className="rounded-lg border border-border/60 bg-muted/20 p-3 flex flex-col gap-1.5">
-							<div className="flex items-center justify-between">
-								<span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-									<ShieldCheck className="size-3.5 text-primary" />
-									Member Stats & Auto-Assign
-								</span>
-								<Badge
-									variant="secondary"
-									className="font-mono text-[9px] px-1.5 py-0 h-4"
-								>
-									elims_member_stats_worker
-								</Badge>
-							</div>
-							<p className="text-[11px] text-muted-foreground leading-relaxed">
-								Polls Torn member battle stats every 15m and automatically
-								updates Discord bracket roles according to configured
-								thresholds.
-							</p>
-							<div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-								<span className="size-1.5 rounded-full bg-muted-foreground/60" />
-								Status: {workersStopped ? "Halted" : "Running cadence (15m)"}
-							</div>
-						</div>
-					</div>
-
-					{/* Informational Data Preservation Guarantee */}
-					<div className="rounded-lg border border-primary/20 bg-primary/5 p-3 flex items-start gap-2.5 text-xs text-muted-foreground">
-						<AlertTriangle className="size-4 text-primary shrink-0 mt-0.5" />
-						<div className="flex flex-col gap-0.5">
-							<span className="font-semibold text-foreground text-xs">
-								Data Preservation Guarantee
-							</span>
-							<span className="text-[11px] leading-relaxed">
-								Powering off workers halts all background API queries and
-								automated Discord actions immediately.
-								<strong> No data is deleted</strong> — all tournament scores,
-								member stats, attack feeds, and configuration are permanently
-								preserved for historical reference and review.
-							</span>
-						</div>
-					</div>
-
 					{/* Action Controls */}
 					<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1 border-t border-border/50">
 						<div className="flex flex-col">
@@ -1162,11 +997,6 @@ export function GuildConfigPage() {
 								{workersStopped
 									? "Resume Background Processing"
 									: "Halt Background Processing"}
-							</span>
-							<span className="text-[11px] text-muted-foreground">
-								{workersStopped
-									? "Turn the elimination workers back on to resume real-time tracking."
-									: "Power off workers if your tournament campaign is concluded."}
 							</span>
 						</div>
 
@@ -1187,7 +1017,7 @@ export function GuildConfigPage() {
 								) : (
 									<>
 										<Power className="size-3.5" />
-										Power On / Resume Workers
+										Resume Workers
 									</>
 								)}
 							</Button>
@@ -1204,14 +1034,14 @@ export function GuildConfigPage() {
 								{stoppingWorkers ? (
 									<>
 										<RefreshCw className="size-3.5 animate-spin" />
-										Stopping Workers...
+										Haling Workers...
 									</>
 								) : (
 									<>
 										<PowerOff className="size-3.5" />
 										{stopConfirm
-											? "Click again to confirm Power Off"
-											: "Power Off Workers"}
+											? "Click again to confirm halt"
+											: "Halt Workers"}
 									</>
 								)}
 							</Button>

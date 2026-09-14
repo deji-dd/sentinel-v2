@@ -4,6 +4,7 @@ import { clientContextPlugin } from "./middleware/client-context";
 import { corsPlugin } from "./middleware/cors";
 import { requestLoggerPlugin } from "./middleware/request-logger";
 import { staticSpaPlugin } from "./middleware/static-spa";
+import { swaggerDomainFilterPlugin } from "./middleware/swagger-domain-filter";
 import { healthRoutes } from "./routes/health";
 import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
@@ -19,6 +20,7 @@ export const app = new Elysia()
 	.use(corsPlugin)
 	.use(clientContextPlugin)
 	.use(requestLoggerPlugin)
+	.use(swaggerDomainFilterPlugin)
 	.use(
 		swagger({
 			documentation: {

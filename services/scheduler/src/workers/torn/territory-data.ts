@@ -2,10 +2,7 @@ import { db, territoryBlueprints } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
-import {
-	getNextUtcTargetTimestamp,
-	startEventDrivenRunner,
-} from "../../lib/scheduler";
+import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "torn:territory_data";
@@ -17,7 +14,7 @@ type SingleTerritory = TornSchema<"TornTerritory">;
  * Core extraction and bulk dump engine for territory blueprints.
  * Executes multi-key parallel batch requests across offsets via centralized tornApi.
  */
-async function fetchAndDumpData(): Promise<number> {
+async function fetchAndDumpData(): Promise<void> {
 	const finishLog = logger.time();
 
 	try {
@@ -39,7 +36,7 @@ async function fetchAndDumpData(): Promise<number> {
 
 		if (territories.length === 0) {
 			logger.warn("Received empty territories response from Torn API.");
-			return getNextUtcTargetTimestamp(3, 0);
+			return;
 		}
 
 		logger.info(
@@ -83,14 +80,11 @@ async function fetchAndDumpData(): Promise<number> {
 		}
 
 		logger.info(
-			`Successfully upserted ${territories.length} territory blueprints to SQLite.`,
+			`Successfully upserted ${territories.length} territory blueprints to database.`,
 		);
 		finishLog();
-
-		return getNextUtcTargetTimestamp(3, 0);
 	} catch (error) {
 		logger.error("Failed to execute territory blueprint extraction:", error);
-		return getNextUtcTargetTimestamp(3, 0);
 	}
 }
 
@@ -100,7 +94,7 @@ async function fetchAndDumpData(): Promise<number> {
 export function startTornTerritoryData(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: 86400,
+		schedule: { type: "cron", pattern: "0 3 * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
 		handler: fetchAndDumpData,
 	});

@@ -10,10 +10,7 @@ import {
 import type { TornSchema } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
-import {
-	getNextUtcTargetTimestamp,
-	startEventDrivenRunner,
-} from "../../lib/scheduler";
+import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "torn:reference_sync";
@@ -56,7 +53,7 @@ type PointsMarketResponse = {
 /**
  * Syncs static public reference data from Torn (Items, Crimes, Stocks, Properties, Gyms, Points Market Price).
  */
-export async function runTornReferenceSync(): Promise<number> {
+export async function runTornReferenceSync(): Promise<void> {
 	const finishSync = logger.time();
 
 	try {
@@ -373,10 +370,8 @@ export async function runTornReferenceSync(): Promise<number> {
 		}
 
 		finishSync();
-		return getNextUtcTargetTimestamp(0, 15);
 	} catch (err) {
 		logger.error("Failed to sync public Torn reference data:", err);
-		return getNextUtcTargetTimestamp(0, 15);
 	}
 }
 
@@ -386,8 +381,10 @@ export async function runTornReferenceSync(): Promise<number> {
 export function startTornReferences(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: 86400,
+		schedule: { type: "cron", pattern: "15 0 * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
-		handler: runTornReferenceSync,
+		handler: async () => {
+			await runTornReferenceSync();
+		},
 	});
 }

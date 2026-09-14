@@ -6,9 +6,6 @@ import type { WorkerStartOptions } from "../registry";
 const WORKER_NAME = "torn:abroad_stocks";
 const logger = new Logger("Scheduler", "AbroadStocks");
 
-// Cadence: Run every 5 minutes (300 seconds) to track YATA item depletion
-const CADENCE_SEC = 300;
-
 type YataStockItem = {
 	id: number;
 	name: string;
@@ -43,11 +40,17 @@ export type TravelStockItem = {
  * Polls YATA travel export every 5 minutes and updates SQLite `travel_destinations` records.
  * Uses a single SQLite transaction to batch all destination upserts atomically.
  */
-export async function runTravelSync(): Promise<void> {
+export async function runTravelSync(signal?: AbortSignal): Promise<void> {
 	const finishLog = logger.time();
 
 	try {
-		const res = await fetch("https://yata.yt/api/v1/travel/export/");
+		const fetchSignal = signal
+			? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+			: AbortSignal.timeout(15_000);
+
+		const res = await fetch("https://yata.yt/api/v1/travel/export/", {
+			signal: fetchSignal,
+		});
 		if (!res.ok) {
 			throw new Error(`YATA API HTTP ${res.status}: ${res.statusText}`);
 		}
@@ -136,16 +139,17 @@ export async function runTravelSync(): Promise<void> {
 		finishLog();
 	} catch (error) {
 		logger.error("Failed to execute travel sync:", error);
+		throw error;
 	}
 }
 
 /**
- * Initializes and starts the travel sync background worker.
+ * Initializes and starts the travel sync background worker scheduled every 5 minutes.
  */
 export function startTornAbroadStocks(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: CADENCE_SEC,
+		schedule: { type: "cron", pattern: "*/5 * * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
 		handler: runTravelSync,
 	});

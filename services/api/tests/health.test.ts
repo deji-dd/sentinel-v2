@@ -175,4 +175,30 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		const html = await response.text();
 		expect(html).toContain('<div id="root"></div>');
 	});
+
+	it("identifies subversive-dashboard client context from origin and host", async () => {
+		const response = await app.handle(
+			new Request("https://subversive.blasted-labs.tech/api/health", {
+				headers: {
+					origin: "https://subversive.blasted-labs.tech",
+				},
+			}),
+		);
+
+		expect(response.status).toBe(200);
+	});
+
+	it("GET / serves subversive-dashboard static SPA when Host contains subversive", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/", {
+				headers: {
+					host: "subversive.blasted-labs.tech",
+				},
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const html = await response.text();
+		expect(html).toContain('<div id="root"></div>');
+	});
 });

@@ -5,6 +5,7 @@ export type ClientAppType =
 	| "bot-dashboard"
 	| "user-dashboard"
 	| "elims-dashboard"
+	| "subversive-dashboard"
 	| "unknown";
 
 /**
@@ -39,6 +40,12 @@ export const clientContextPlugin = new Elysia({
 		origin.startsWith("https://api.elims.blasted-labs.tech")
 	) {
 		clientApp = "elims-dashboard";
+	} else if (
+		clientHeader === "subversive-dashboard" ||
+		host.startsWith("subversive.blasted-labs.tech") ||
+		origin.startsWith("https://subversive.blasted-labs.tech")
+	) {
+		clientApp = "subversive-dashboard";
 	} else if (
 		clientHeader === "user-dashboard" ||
 		host.startsWith("sentinel.ayodejib.dev") ||

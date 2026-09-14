@@ -364,9 +364,7 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 				updatedAt: new Date(),
 			});
 
-			const nextRun = await runPersonalReferenceSync();
-			expect(typeof nextRun).toBe("number");
-			expect(nextRun).toBeGreaterThan(Date.now());
+			await runPersonalReferenceSync();
 
 			const perksRecord = await db.query.systemStates.findFirst({
 				where: eq(systemStates.id, PERKS_STATE_ID),

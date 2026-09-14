@@ -25,12 +25,9 @@ import {
 } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
-import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
-const WORKER_NAME = "personal:crimes_ledger";
 const STATE_ID = "personal:crimes_ledger";
-const CADENCE_SEC = 86400; // 24 hours daily reconciliation check
 
 const logger = new Logger("Scheduler", "CrimesLedger");
 
@@ -551,22 +548,15 @@ export async function runCrimesLedgerSync(): Promise<void> {
 
 /**
  * Starts the Crimes Ledger worker:
- * 1. Listens for real-time `logs_inserted` stream events for zero-delay live indexing.
- * 2. Runs daily reconciliation maintenance runner.
+ * Listens for real-time `logs_inserted` stream events for zero-delay live indexing.
+ * Daily reconciliation is handled by system maintenance.
  */
-export function startCrimesLedger(options?: WorkerStartOptions): void {
-	// 1. Live stream processing
+export function startCrimesLedger(_options?: WorkerStartOptions): void {
+	// Live stream processing
 	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
 		processCrimeLogsBatch(logs).catch((err) => {
 			logger.error("Error processing real-time crime logs batch:", err);
 		});
 	});
-
-	// 2. Register daily runner with initial staggered delay
-	startEventDrivenRunner({
-		worker: WORKER_NAME,
-		defaultCadenceSeconds: CADENCE_SEC,
-		initialDelayMs: options?.initialDelayMs,
-		handler: runCrimesLedgerSync,
-	});
+	logger.info("Crimes Ledger live event listener registered.");
 }

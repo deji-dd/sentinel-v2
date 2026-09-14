@@ -19,12 +19,9 @@ import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { extractItemMarketPrice, Logger } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
-import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
-const WORKER_NAME = "personal:stocks_ledger";
 const STATE_ID = "personal:stocks_ledger";
-const CADENCE_SEC = 86400; // 24 hours daily reconciliation check
 
 const logger = new Logger("Scheduler", "StocksLedger");
 
@@ -615,22 +612,15 @@ export async function runStocksLedgerSync(): Promise<void> {
 
 /**
  * Starts the Stocks Ledger worker:
- * 1. Listens for real-time `logs_inserted` stream events.
- * 2. Runs daily reconciliation maintenance runner.
+ * Listens for real-time `logs_inserted` stream events for zero-delay live indexing.
+ * Daily reconciliation is handled by system maintenance.
  */
-export function startStocksLedger(options?: WorkerStartOptions): void {
-	// 1. Live stream processing
+export function startStocksLedger(_options?: WorkerStartOptions): void {
+	// Live stream processing
 	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
 		processStockLogsBatch(logs).catch((err) => {
 			logger.error("Error processing real-time stock logs batch:", err);
 		});
 	});
-
-	// 2. Register daily runner with initial staggered delay
-	startEventDrivenRunner({
-		worker: WORKER_NAME,
-		defaultCadenceSeconds: CADENCE_SEC,
-		initialDelayMs: options?.initialDelayMs,
-		handler: runStocksLedgerSync,
-	});
+	logger.info("Stocks Ledger live event listener registered.");
 }

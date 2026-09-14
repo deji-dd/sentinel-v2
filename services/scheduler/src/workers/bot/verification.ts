@@ -141,12 +141,12 @@ export async function runVerificationWorker(): Promise<void> {
 }
 
 /**
- * Starts the periodic verification worker.
+ * Starts the periodic verification worker scheduled to run at the top of every hour.
  */
 export function startVerification(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		defaultCadenceSeconds: 3600, // Runs hourly check
+		schedule: { type: "cron", pattern: "0 * * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
 		handler: runVerificationWorker,
 	});
