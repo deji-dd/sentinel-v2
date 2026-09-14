@@ -1,4 +1,4 @@
-import { LogOut, UserPlus } from "lucide-react";
+import { LogOut, Sliders, UserPlus } from "lucide-react";
 import type * as React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useSubversive } from "../contexts/SubversiveContext";
 import { useRouter } from "../router";
 
-export type DashboardView = "recruitment";
+export type DashboardView = "recruitment" | "guild-config";
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 	activeView: DashboardView;
@@ -62,6 +62,32 @@ export function AppSidebar({
 
 			{/* Navigation Groups */}
 			<SidebarContent className="p-2 gap-4 group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:py-2 group-data-[collapsible=icon]:gap-1">
+				{/* Administration */}
+				<SidebarGroup>
+					<SidebarGroupLabel className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground px-2">
+						Admin
+					</SidebarGroupLabel>
+					<SidebarGroupContent>
+						<SidebarMenu>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									isActive={activeView === "guild-config"}
+									onClick={() => {
+										onSelectView("guild-config");
+										navigate("/guild-config");
+									}}
+									tooltip="Guild Configuration"
+									className="cursor-pointer"
+								>
+									<Sliders data-icon="inline-start" />
+									<span>Guild Configuration</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+						</SidebarMenu>
+					</SidebarGroupContent>
+				</SidebarGroup>
+
+				{/* Operations */}
 				<SidebarGroup>
 					<SidebarGroupLabel className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground px-2">
 						Operations

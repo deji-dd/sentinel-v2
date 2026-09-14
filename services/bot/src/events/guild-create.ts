@@ -10,14 +10,14 @@ export const guildCreateEvent = {
 
 		if (!isAuthorized) {
 			logger.warn(
-				`Bot was added to server ${guild.name} (${guild.id}) without prior authorization. Retaining in server pending dashboard configuration.`,
+				`Bot was added to server "${guild.name}" without prior authorization. Retaining in server pending dashboard configuration.`,
 			);
 			return;
 		}
 
 		logger.info(
-			`Bot joined authorized target guild: ${guild.name} (${guild.id}). Deploying slash commands...`,
+			`Bot joined authorized target guild "${guild.name}". Deploying slash commands...`,
 		);
-		await deployGuildCommands(guild.id);
+		await deployGuildCommands(guild.id, guild.name);
 	},
 } as const;

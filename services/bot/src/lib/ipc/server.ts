@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	BulkVerificationProgressData,
+	FactionMember,
 	GuildMemberVerificationInput,
 	ResolvedElimsUser,
 	VerificationRequest,
@@ -12,6 +13,7 @@ import {
 	pendingBulkRequests,
 	pendingElimsResolveUserRequests,
 	pendingElimsVerifyKeyRequests,
+	pendingFetchFactionMembersRequests,
 	pendingRequests,
 	workerIpcClient,
 } from "./listener";
@@ -120,9 +122,7 @@ export async function sendElimsUserResolutionRequest(
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			pendingElimsResolveUserRequests.delete(requestId);
-			logger.warn(
-				`Elims user resolution timed out for ${discordId} in guild ${guildId}.`,
-			);
+			logger.warn(`Elims user resolution timed out for user ${discordId}.`);
 			resolve(null);
 		}, timeoutMs);
 
@@ -165,6 +165,42 @@ export async function sendElimsKeyVerificationRequest(
 			requestId,
 			data: {
 				apiKey,
+			},
+		});
+	});
+}
+
+/**
+ * Sends an IPC request to the scheduler worker to fetch live faction members from Torn.
+ * This delegates all Torn API interaction, key handling, and rate-limiting to the scheduler.
+ */
+export async function sendFetchFactionMembersRequest(
+	factionId: number,
+	timeoutMs = 15000,
+): Promise<FactionMember[]> {
+	const requestId = randomUUID();
+
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			pendingFetchFactionMembersRequests.delete(requestId);
+			reject(
+				new Error(
+					`Faction members fetch timed out for faction ${factionId}. Scheduler did not respond in time.`,
+				),
+			);
+		}, timeoutMs);
+
+		pendingFetchFactionMembersRequests.set(requestId, {
+			resolve,
+			reject,
+			timer,
+		});
+
+		workerIpcClient.send({
+			action: "fetch_faction_members_request",
+			requestId,
+			data: {
+				factionId,
 			},
 		});
 	});

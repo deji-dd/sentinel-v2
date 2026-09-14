@@ -6,8 +6,7 @@ import {
 	guildMonitoredFactions,
 	isNotNull,
 } from "@sentinel/database";
-import type { FactionMember, FactionMembersResponse } from "@sentinel/schemas";
-import { tornApi } from "@sentinel/torn-api";
+import type { FactionMember } from "@sentinel/schemas";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
@@ -17,6 +16,7 @@ import {
 	TextChannel,
 } from "discord.js";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
+import { sendFetchFactionMembersRequest } from "./ipc/server";
 import { logger } from "./logger";
 
 const ITEMS_PER_PAGE = 15;
@@ -76,7 +76,7 @@ async function purgeChannelHistoricalMessages(
 		}
 	} catch (err) {
 		logger.warn(
-			`Failed to purge historical messages in channel ${channel.id}:`,
+			`Failed to purge historical messages in #${channel.name}:`,
 			err,
 		);
 	}
@@ -268,11 +268,8 @@ export async function handleFactionMonitoringButton(
 			return;
 		}
 
-		const res = (await tornApi.get("/faction/{id}/members", {
-			pathParams: { id: monitor.factionId },
-		})) as FactionMembersResponse;
-
-		const members = filterAndSortReviveMembers(res.members ?? []);
+		const rawMembers = await sendFetchFactionMembersRequest(monitor.factionId);
+		const members = filterAndSortReviveMembers(rawMembers);
 		const factionName = monitor.factionName || `Faction ${monitor.factionId}`;
 
 		rosterCache.set(monitorId, {
@@ -306,6 +303,11 @@ export async function updateFactionRevivesChannel(
 	client: Client,
 	guildId?: string,
 	monitorId?: string,
+	preloadedData?: {
+		factionId: number;
+		factionName?: string;
+		members: FactionMember[];
+	},
 ): Promise<void> {
 	try {
 		const monitors = monitorId
@@ -345,20 +347,32 @@ export async function updateFactionRevivesChannel(
 					.catch(() => null)) as TextChannel | null;
 
 				if (!channel || !(channel instanceof TextChannel)) {
+					const guildName = client.guilds.cache.get(monitor.guildId)?.name;
+					const guildLabel = guildName ? `server "${guildName}"` : "guild";
 					logger.warn(
-						`Revives monitoring channel ${monitor.revivesChannelId} for guild ${monitor.guildId} not found or invalid.`,
+						`Revives monitoring channel for ${guildLabel} not found or invalid. Removing from config.`,
 					);
+					await db
+						.update(guildMonitoredFactions)
+						.set({
+							revivesChannelId: null,
+							revivesMessageIds: [],
+							updatedAt: new Date(),
+						})
+						.where(eq(guildMonitoredFactions.id, monitor.id));
 					continue;
 				}
 
-				// Fetch live members from Torn API
-				const res = (await tornApi.get("/faction/{id}/members", {
-					pathParams: { id: monitor.factionId },
-				})) as FactionMembersResponse;
-
-				const members = filterAndSortReviveMembers(res.members ?? []);
+				// Use pushed members from scheduler or query on-demand via IPC
+				const rawMembers =
+					preloadedData && preloadedData.factionId === monitor.factionId
+						? preloadedData.members
+						: await sendFetchFactionMembersRequest(monitor.factionId);
+				const members = filterAndSortReviveMembers(rawMembers);
 				const factionName =
-					monitor.factionName || `Faction ${monitor.factionId}`;
+					preloadedData?.factionName ||
+					monitor.factionName ||
+					`Faction ${monitor.factionId}`;
 
 				rosterCache.set(monitor.id, {
 					members,
@@ -418,8 +432,11 @@ export async function updateFactionRevivesChannel(
 					await purgeChannelHistoricalMessages(channel, activeMsgId);
 				}
 			} catch (err) {
+				const guildName = client.guilds.cache.get(monitor.guildId)?.name;
+				const factionLabel =
+					monitor.factionName || `Faction ${monitor.factionId}`;
 				logger.error(
-					`Failed to update revives channel for faction ${monitor.factionId} (guild ${monitor.guildId}):`,
+					`Failed to update revives channel for ${factionLabel}${guildName ? ` (${guildName})` : ""}:`,
 					err,
 				);
 			}

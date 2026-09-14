@@ -6,12 +6,13 @@ import {
 import { Logger } from "@sentinel/utils";
 import { setupSchedulerIpc } from "./src/lib/ipc";
 import { getAllRunnerStatuses, stopAllRunners } from "./src/lib/scheduler";
+import { registerPersonalLogSubscribers } from "./src/workers/personal/subscribers";
 import { startRegisteredWorkers } from "./src/workers/registry";
 
 const logger = new Logger("Scheduler");
 
 async function main() {
-	logger.info("Initializing Sentinel Scheduler...");
+	logger.info("Initializing...");
 
 	// 1. Auto-provision target guild configs
 	await ensureTargetGuildConfigs();
@@ -23,7 +24,10 @@ async function main() {
 	// 3. Record boot alert in database
 	await recordBootAlert("scheduler");
 
-	// 4. Start registered background workers with staggered boot
+	// 4. Attach reactive personal log stream subscribers (crimes, battlestats, stocks)
+	registerPersonalLogSubscribers();
+
+	// 5. Start registered background workers with staggered boot
 	const workerCount = await startRegisteredWorkers();
 	logger.info(`${workerCount} registered workers.`);
 
@@ -59,7 +63,7 @@ async function main() {
 			return new Response("Not Found", { status: 404 });
 		},
 	});
-	logger.info(`Lightweight healthcheck server listening on port ${healthPort}`);
+	logger.info(`Healthcheck server listening on port ${healthPort}`);
 
 	// Graceful shutdown handling
 	const shutdown = async (signal: string) => {

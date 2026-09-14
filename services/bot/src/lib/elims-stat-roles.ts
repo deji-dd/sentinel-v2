@@ -25,18 +25,20 @@ export async function autoAssignElimsStatRoles(
 	guildId: string,
 	roleMappings: Record<string, string>,
 ): Promise<{ processed: number; assigned: number; errors: number }> {
-	logger.info(
-		`Starting auto-assignment of stat distribution roles in guild ${guildId}...`,
-	);
-
 	const guild =
 		client.guilds.cache.get(guildId) ??
 		(await client.guilds.fetch(guildId).catch(() => null));
 
 	if (!guild) {
-		logger.warn(`Guild ${guildId} not found on Discord client.`);
+		logger.warn(
+			"Target guild not found on Discord client for stat distribution.",
+		);
 		return { processed: 0, assigned: 0, errors: 1 };
 	}
+
+	logger.info(
+		`Starting auto-assignment of stat distribution roles in server "${guild.name}"...`,
+	);
 
 	const allTierRoleIds = new Set(
 		Object.values(roleMappings).filter((r): r is string =>
@@ -110,7 +112,7 @@ export async function autoAssignElimsStatRoles(
 	}
 
 	logger.info(
-		`Finished stat role assignment in guild ${guildId}: ${assigned} role(s) assigned, ${processed} member(s) processed, ${errors} error(s).`,
+		`Finished stat role assignment in server "${guild.name}": ${assigned} role(s) assigned, ${processed} member(s) processed, ${errors} error(s).`,
 	);
 
 	return { processed, assigned, errors };

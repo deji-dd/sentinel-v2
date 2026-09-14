@@ -23,7 +23,7 @@ export const guildMemberAddEvent = {
 			}
 
 			logger.info(
-				`Auto-verifying joining member ${member.user.tag} [${member.id}] in guild ${guildId}...`,
+				`Auto-verifying joining member ${member.user.tag} [${member.id}] in "${member.guild.name}"...`,
 			);
 
 			const jobData = {

@@ -5,13 +5,10 @@ import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
 } from "./elimination";
-import { startBattlestatsLedger } from "./personal/battlestats";
-import { startCompanySync } from "./personal/company";
-import { startCrimesLedger } from "./personal/crimes";
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
-import { startStocksLedger } from "./personal/stocks";
+import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
 import { startSystemMaintenance } from "./system/maintenance";
 import { startTornAbroadStocks } from "./torn/abroad-stocks";
 import { startTornReferences } from "./torn/references";
@@ -92,26 +89,6 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		start: startPersonalReferenceSync,
 	},
 	{
-		id: "personal:crimes_ledger",
-		description: "Real-time crime log listener and historical indexer",
-		start: startCrimesLedger,
-	},
-	{
-		id: "personal:battlestats_ledger",
-		description: "Real-time gym log listener and historical indexer",
-		start: startBattlestatsLedger,
-	},
-	{
-		id: "personal:stocks_ledger",
-		description: "Real-time stock gain log listener and user holding tracker",
-		start: startStocksLedger,
-	},
-	{
-		id: "personal:company_sync",
-		description: "Company daily profit sync and pay event listener",
-		start: startCompanySync,
-	},
-	{
 		id: "elims:team_tracker",
 		description: "30-second live elimination team score and attack poller",
 		start: startElimsTeamTracker,
@@ -120,6 +97,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		id: "elims:member_stats_worker",
 		description: "15-minute elimination team member attack stat calculator",
 		start: startElimsMemberStatsWorker,
+	},
+	{
+		id: "subversive:recruitment_worker",
+		description:
+			"5-minute ranked war recruitment scanner and termed war filtering engine",
+		start: startSubversiveRecruitmentWorker,
 	},
 ];
 

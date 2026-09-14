@@ -227,3 +227,23 @@ export async function requestWealthInit(timestamp?: number): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * Dispatches an IPC request to the Scheduler to clear the in-memory evaluated ranked wars cache.
+ */
+export async function notifySchedulerResetRecruitment(): Promise<boolean> {
+	try {
+		const delivered = await notifySchedulerAction(
+			"reset_subversive_recruitment",
+		);
+		if (!delivered) {
+			logger.warn(
+				"Could not reach scheduler via IPC to clear recruitment war cache.",
+			);
+		}
+		return delivered;
+	} catch (err) {
+		logger.error("Failed to send recruitment cache reset IPC:", err);
+		return false;
+	}
+}

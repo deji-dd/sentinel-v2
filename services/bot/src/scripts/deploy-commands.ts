@@ -17,7 +17,10 @@ import { logger } from "../lib/logger";
  * Enforces strict separation: Elims tournament guild receives ONLY Elims commands,
  * while normal guilds receive ONLY normal bot commands (filtered by active modules).
  */
-export async function deployGuildCommands(guildId: string): Promise<void> {
+export async function deployGuildCommands(
+	guildId: string,
+	guildName?: string,
+): Promise<void> {
 	const token = process.env.DISCORD_TOKEN;
 	const clientId = process.env.DISCORD_CLIENT_ID;
 
@@ -27,12 +30,13 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 
 	const isElims = await isElimsGuildAsync(guildId);
 	let enabledCommands: BotCommand[] = [];
+	const serverLabel = guildName ? `server "${guildName}"` : "guild";
 
 	if (isElims) {
 		// 1. Elims Tournament Server — Strictly Elims Commands
 		enabledCommands = elimsCommandsList;
 		logger.info(
-			`Deploying ${enabledCommands.length} Elims slash command(s) to Tournament Guild ${guildId}...`,
+			`Deploying ${enabledCommands.length} Elims slash command(s) to Tournament ${serverLabel}...`,
 		);
 	} else {
 		// 2. Standard Sentinel Guild — Normal Commands filtered by modules
@@ -45,7 +49,7 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 			return false;
 		});
 		logger.info(
-			`Deploying ${enabledCommands.length} normal slash command(s) to Guild ${guildId}...`,
+			`Deploying ${enabledCommands.length} normal slash command(s) to ${serverLabel}...`,
 		);
 	}
 
@@ -57,10 +61,10 @@ export async function deployGuildCommands(guildId: string): Promise<void> {
 			body: commandBodies,
 		});
 		logger.info(
-			`Successfully deployed ${enabledCommands.length} command(s) to Guild ${guildId} (${isElims ? "Elims Server" : "Standard Guild"}).`,
+			`Successfully deployed ${enabledCommands.length} command(s) to ${serverLabel} (${isElims ? "Elims Server" : "Standard Guild"}).`,
 		);
 	} catch (error) {
-		logger.error(`Failed to deploy commands to guild ${guildId}:`, error);
+		logger.error(`Failed to deploy commands to ${serverLabel}:`, error);
 	}
 }
 
@@ -101,7 +105,14 @@ export async function deployCommands(): Promise<void> {
 
 		// 3. Deploy all commands to each target guild
 		for (const guildId of targetGuildIds) {
-			await deployGuildCommands(guildId);
+			let guildName: string | undefined;
+			try {
+				const g = (await rest.get(Routes.guild(guildId))) as { name?: string };
+				guildName = g?.name;
+			} catch {
+				// Fallback to undefined if REST call fails
+			}
+			await deployGuildCommands(guildId, guildName);
 		}
 		logger.info("Command deployment completed across all target guilds.");
 	} catch (error) {

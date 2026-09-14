@@ -7,6 +7,8 @@ import {
 	isNotNull,
 	isTargetGuild,
 } from "@sentinel/database";
+import type { FactionMembersResponse } from "@sentinel/schemas";
+import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
@@ -58,14 +60,36 @@ export async function runFactionMonitoringWorker(): Promise<void> {
 		);
 
 		const ipcServer = getActiveIpcServer();
-		if (ipcServer) {
-			ipcServer.broadcast({
-				action: "sync_faction_monitoring",
-			});
-		} else {
+		if (!ipcServer) {
 			logger.warn(
 				"Scheduler IPC server not initialized; could not dispatch sync_faction_monitoring.",
 			);
+			finishLog();
+			return;
+		}
+
+		for (const monitor of targetMonitors) {
+			try {
+				const res = (await tornApi.get("/faction/{id}/members", {
+					pathParams: { id: monitor.factionId },
+				})) as FactionMembersResponse;
+
+				ipcServer.broadcast({
+					action: "sync_faction_monitoring",
+					data: {
+						guildId: monitor.guildId,
+						monitorId: monitor.id,
+						factionId: monitor.factionId,
+						factionName: monitor.factionName || `Faction ${monitor.factionId}`,
+						members: res.members ?? [],
+					},
+				});
+			} catch (err) {
+				logger.error(
+					`Failed to fetch live members for monitored faction ${monitor.factionId} (guild ${monitor.guildId}):`,
+					err,
+				);
+			}
 		}
 
 		finishLog();

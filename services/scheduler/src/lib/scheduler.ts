@@ -205,6 +205,13 @@ export class ScheduledRunner {
 						cadenceSeconds: this.effectiveCadenceSeconds,
 						nextRunAt: initialNextRunAt,
 					})
+					.onConflictDoUpdate({
+						target: workerSchedules.id,
+						set: {
+							cadenceSeconds: this.effectiveCadenceSeconds,
+							updatedAt: new Date(),
+						},
+					})
 					.returning();
 				schedule = createdSchedule;
 			}

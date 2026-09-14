@@ -419,8 +419,14 @@ export async function handleKeyDonationModalSubmit(
 				await db.delete(elimsApiKeys).where(eq(elimsApiKeys.id, redundant.id));
 			}
 
+			const targetGuild = targetGuildId
+				? interaction.client?.guilds?.cache?.get(targetGuildId)
+				: null;
+			const guildName = interaction.guild?.name ?? targetGuild?.name;
+			const guildLabel = guildName ? ` in server "${guildName}"` : "";
+
 			logger.info(
-				`Torn API key for ${playerName} [${tornUserId}] updated by Discord user ${interaction.user.tag} (${interaction.user.id}) in guild ${targetGuildId}`,
+				`Torn API key for ${playerName} [${tornUserId}] updated by Discord user ${interaction.user.tag} (${interaction.user.id})${guildLabel}`,
 			);
 		} else {
 			// Save new key to database
@@ -436,8 +442,14 @@ export async function handleKeyDonationModalSubmit(
 				donatedByDiscordTag: interaction.user.tag || interaction.user.username,
 			});
 
+			const targetGuild = targetGuildId
+				? interaction.client?.guilds?.cache?.get(targetGuildId)
+				: null;
+			const guildName = interaction.guild?.name ?? targetGuild?.name;
+			const guildLabel = guildName ? ` in server "${guildName}"` : "";
+
 			logger.info(
-				`Torn API key for ${playerName} [${tornUserId}] donated by Discord user ${interaction.user.tag} (${interaction.user.id}) in guild ${targetGuildId}`,
+				`Torn API key for ${playerName} [${tornUserId}] donated by Discord user ${interaction.user.tag} (${interaction.user.id})${guildLabel}`,
 			);
 		}
 

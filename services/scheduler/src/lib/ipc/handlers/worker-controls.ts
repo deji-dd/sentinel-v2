@@ -5,10 +5,18 @@ import { reinitializeCrimeLedger } from "../../../workers/personal/crimes";
 import { requestResetLogManager } from "../../../workers/personal/log-manager";
 import { reinitializeStocksLedger } from "../../../workers/personal/stocks";
 import { initWealthTracking } from "../../../workers/personal/wealth";
+import { resetRecruitmentCache } from "../../../workers/subversive/recruitment-worker";
 import { triggerWorkerByName } from "../../scheduler";
 import type { IpcActionHandler, IpcHandlerContext } from "../types";
 
 const logger = new Logger("SchedulerIPC", "WorkerControls");
+
+export const handleResetSubversiveRecruitment: IpcActionHandler = () => {
+	logger.info(
+		"Received reset_subversive_recruitment IPC command. Clearing evaluated wars cache...",
+	);
+	resetRecruitmentCache();
+};
 
 export const handleResetLogManager: IpcActionHandler = () => {
 	requestResetLogManager();

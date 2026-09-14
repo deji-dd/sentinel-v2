@@ -1188,8 +1188,11 @@ export async function endGiveaway(
  */
 export function startGiveawayScheduler(client: Client): void {
 	const pollIntervalMs = 15_000;
+	let isPolling = false;
 
 	setInterval(async () => {
+		if (isPolling) return;
+		isPolling = true;
 		try {
 			const now = new Date();
 			const dueGiveaways = await db
@@ -1202,6 +1205,8 @@ export function startGiveawayScheduler(client: Client): void {
 			}
 		} catch (err) {
 			logger.error("Error in giveaway scheduler loop:", err);
+		} finally {
+			isPolling = false;
 		}
 	}, pollIntervalMs);
 

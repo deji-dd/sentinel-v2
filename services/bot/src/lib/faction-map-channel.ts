@@ -59,7 +59,7 @@ async function purgeChannelHistoricalMessages(
 		}
 	} catch (err) {
 		logger.warn(
-			`Failed to purge historical messages in channel ${channel.id}:`,
+			`Failed to purge historical messages in #${channel.name}:`,
 			err,
 		);
 	}
@@ -223,9 +223,19 @@ export async function updateFactionMapChannel(
 					.catch(() => null)) as TextChannel | null;
 
 				if (!channel || !(channel instanceof TextChannel)) {
+					const guildName = client.guilds.cache.get(config.guildId)?.name;
+					const guildLabel = guildName ? `server "${guildName}"` : "guild";
 					logger.warn(
-						`Faction list channel ${config.factionListChannelId} for guild ${config.guildId} not found or invalid.`,
+						`Faction list channel for ${guildLabel} not found or invalid. Removing from config.`,
 					);
+					await db
+						.update(guildConfigs)
+						.set({
+							factionListChannelId: null,
+							factionListMessageIds: [],
+							updatedAt: new Date(),
+						})
+						.where(eq(guildConfigs.guildId, config.guildId));
 					continue;
 				}
 
@@ -278,8 +288,10 @@ export async function updateFactionMapChannel(
 					await purgeChannelHistoricalMessages(channel, activeMsgId);
 				}
 			} catch (err) {
+				const guildName = client.guilds.cache.get(config.guildId)?.name;
+				const guildLabel = guildName ? `server "${guildName}"` : "guild";
 				logger.error(
-					`Failed to update Faction Map channel for guild ${config.guildId}:`,
+					`Failed to update Faction Map channel for ${guildLabel}:`,
 					err,
 				);
 			}

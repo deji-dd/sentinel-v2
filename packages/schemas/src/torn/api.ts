@@ -9,6 +9,12 @@ export type TornSchema<T extends keyof components["schemas"]> =
 export type FactionMember = components["schemas"]["FactionMember"];
 export type FactionMembersResponse =
 	components["schemas"]["FactionMembersResponse"];
+export type FactionWarfareRankedResponse =
+	components["schemas"]["FactionWarfareRankedResponse"];
+export type FactionRankedWarDetails =
+	components["schemas"]["FactionRankedWarDetails"];
+export type FactionRankedWarReportResponse =
+	components["schemas"]["FactionRankedWarReportResponse"];
 
 /**
  * Utility type to extract operation from path

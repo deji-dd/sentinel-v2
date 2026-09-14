@@ -240,4 +240,40 @@ describe("Personal Company Sync Worker", () => {
 
 		expect(getPersonalSpy).toHaveBeenCalled();
 	});
+
+	test("triggers company sync on logs_inserted with log 6222 (Company director pay)", async () => {
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
+			(async () => {
+				return {
+					profile: { daily_income: 500000, advertisement_budget: 50000 },
+					employees: [],
+				};
+			}) as unknown as typeof tornApi.getPersonal,
+		);
+
+		startCompanySync();
+
+		// Emit live logs stream with log 6222
+		schedulerEvents.emit("logs_inserted", [
+			{
+				id: "test_company_log_1",
+				timestamp: Math.floor(Date.now() / 1000),
+				details: {
+					id: 6222,
+					title: "Company director pay",
+					category: "Company",
+				},
+				data: {},
+				params: {},
+			},
+		]);
+
+		const start = Date.now();
+		while (Date.now() - start < 3000) {
+			if (getPersonalSpy.mock.calls.length > 0) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+
+		expect(getPersonalSpy).toHaveBeenCalled();
+	});
 });

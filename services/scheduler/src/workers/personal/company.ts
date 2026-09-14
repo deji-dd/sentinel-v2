@@ -5,16 +5,19 @@ import {
 	ledgerEvents,
 	systemStates,
 } from "@sentinel/database";
+import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
-import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
-const WORKER_NAME = "personal:company_sync";
+export const COMPANY_LOG_IDS = [6222, 6221];
+const COMPANY_LOG_ID_SET = new Set<number>(COMPANY_LOG_IDS);
+
+type UserLog = TornSchema<"UserLog">;
+
 const STATE_ID = "personal:company_sync";
-const CADENCE_SEC = 86400; // 24 hours daily sync check
 
 const logger = new Logger("Scheduler", "CompanySync");
 
@@ -295,25 +298,35 @@ export async function syncCompanyDailyProfit(): Promise<{
 }
 
 /**
- * Starts the Company Sync worker:
- * 1. Listens for real-time `company_pay_received` event.
- * 2. Runs daily periodic runner.
+ * Starts the Company Sync event subscriber:
+ * Listens for real-time `logs_inserted` stream events for log 6222 ("Company director pay")
+ * and log 6221 ("Company employee pay") to immediately snapshot company profits at the exact
+ * moment Torn executes the daily company tick (~18:00–18:25 TCT).
  */
-export function startCompanySync(options?: WorkerStartOptions): void {
+export function startCompanySync(_options?: WorkerStartOptions): void {
 	schedulerEvents.on("company_pay_received", () => {
 		syncCompanyDailyProfit().catch((err) => {
 			logger.error("Error running company daily profit sync:", err);
 		});
 	});
 
-	startEventDrivenRunner({
-		worker: WORKER_NAME,
-		defaultCadenceSeconds: CADENCE_SEC,
-		initialDelayMs: options?.initialDelayMs,
-		handler: async () => {
-			await syncCompanyDailyProfit();
-		},
+	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
+		const hasCompanyPayLog = logs.some((l) => {
+			const logDetails = (l.details ?? {}) as { id?: number };
+			const rawLogCode = (l as unknown as { log?: number }).log;
+			const logTypeCode = logDetails.id ?? rawLogCode ?? 0;
+			return COMPANY_LOG_ID_SET.has(logTypeCode);
+		});
+
+		if (hasCompanyPayLog) {
+			logger.info(
+				"Detected company pay/director log in live stream. Triggering immediate company daily profit sync...",
+			);
+			schedulerEvents.emit("company_pay_received");
+		}
 	});
+
+	logger.info("Company Sync live event listener registered.");
 }
 
 /**

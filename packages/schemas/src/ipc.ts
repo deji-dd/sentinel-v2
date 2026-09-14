@@ -3,6 +3,8 @@
  * Worker/Scheduler V2, Bot, and API applications.
  */
 
+import type { FactionMember } from "./torn/api";
+
 export type IpcWarAction =
 	| "assault_start"
 	| "assault_succeed"
@@ -74,6 +76,10 @@ export type IpcForceWorkerMessage = {
 
 export type IpcResetLogManagerMessage = {
 	action: "reset_log_manager";
+};
+
+export type IpcResetSubversiveRecruitmentMessage = {
+	action: "reset_subversive_recruitment";
 };
 
 export type VerificationTrigger = "user" | "admin" | "join" | "cron";
@@ -209,6 +215,9 @@ export type IpcSyncFactionMonitoringMessage = {
 	data?: {
 		guildId?: string;
 		monitorId?: string;
+		factionId?: number;
+		factionName?: string;
+		members?: FactionMember[];
 		category?: "revives";
 	};
 };
@@ -511,6 +520,47 @@ export type IpcElimsStartWorkersResponseMessage = {
 	};
 };
 
+export type IpcSubversiveRecruitmentAlertPayload = {
+	candidateId: string;
+	playerId: number;
+	playerName: string;
+	playerLevel: number;
+	factionId: number;
+	factionName: string;
+	warId: number;
+	attacks: number;
+	factionTotalAttacks: number;
+	attackPercentage: number;
+	score: number;
+	bsEstimate: number | null;
+	fairFight: number | null;
+	daysInFaction?: number | null;
+	notificationChannelId: string;
+};
+
+export type IpcSubversiveRecruitmentAlertMessage = {
+	action: "subversive_recruitment_alert";
+	data: IpcSubversiveRecruitmentAlertPayload;
+};
+
+export type IpcFetchFactionMembersRequestMessage = {
+	action: "fetch_faction_members_request";
+	requestId: string;
+	data: {
+		factionId: number;
+	};
+};
+
+export type IpcFetchFactionMembersResponseMessage = {
+	action: "fetch_faction_members_response";
+	requestId: string;
+	data: {
+		factionId: number;
+		members: FactionMember[];
+		error?: string;
+	};
+};
+
 /**
  * Discriminated union of ALL strongly-typed IPC messages in Sentinel V2.
  */
@@ -519,6 +569,8 @@ export type IpcMessage =
 	| IpcLogEventMessage
 	| IpcForceWorkerMessage
 	| IpcResetLogManagerMessage
+	| IpcFetchFactionMembersRequestMessage
+	| IpcFetchFactionMembersResponseMessage
 	| IpcVerifyRequestMessage
 	| IpcVerifyResponseMessage
 	| IpcBulkVerifyRequestMessage
@@ -561,4 +613,6 @@ export type IpcMessage =
 	| IpcStocksLedgerStateUpdatedMessage
 	| IpcCompanySyncStateUpdatedMessage
 	| IpcReinitializeWealthMessage
-	| IpcWealthStateUpdatedMessage;
+	| IpcWealthStateUpdatedMessage
+	| IpcSubversiveRecruitmentAlertMessage
+	| IpcResetSubversiveRecruitmentMessage;

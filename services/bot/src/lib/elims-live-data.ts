@@ -311,7 +311,17 @@ export function startLiveDataSyncLoop(
 	client: Client,
 	intervalMs = 10000,
 ): ReturnType<typeof setInterval> {
+	let isSyncing = false;
+
 	return setInterval(() => {
-		void updateElimsLiveDataMessage(client);
+		if (isSyncing) return;
+		isSyncing = true;
+		void (async () => {
+			try {
+				await updateElimsLiveDataMessage(client);
+			} finally {
+				isSyncing = false;
+			}
+		})();
 	}, intervalMs);
 }

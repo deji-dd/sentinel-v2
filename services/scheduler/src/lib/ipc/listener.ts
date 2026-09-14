@@ -2,6 +2,7 @@ import type { IpcMessage } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
 import {
+	handleFetchFactionMembersRequest,
 	handleGuildMembersResponse,
 	requestGuildMembersFromBot,
 } from "./handlers/bot";
@@ -24,6 +25,7 @@ import {
 	handleReinitializeStocksLedger,
 	handleReinitializeWealth,
 	handleResetLogManager,
+	handleResetSubversiveRecruitment,
 } from "./handlers/worker-controls";
 import { setActiveIpcServer } from "./server";
 import type { IpcActionHandler } from "./types";
@@ -42,6 +44,7 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 
 	// Bot RPC callbacks
 	guild_members_response: handleGuildMembersResponse,
+	fetch_faction_members_request: handleFetchFactionMembersRequest,
 
 	// Elimination RPCs & Worker Lifecycle
 	elims_resolve_user_request: handleElimsResolveUser,
@@ -59,6 +62,7 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 	reinitialize_stocks_ledger: handleReinitializeStocksLedger,
 	reinitialize_wealth: handleReinitializeWealth,
 	force_run_worker: handleForceRunWorker,
+	reset_subversive_recruitment: handleResetSubversiveRecruitment,
 };
 
 /**

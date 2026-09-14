@@ -95,7 +95,7 @@ async function main(): Promise<void> {
 			return new Response("Not Found", { status: 404 });
 		},
 	});
-	logger.info(`Lightweight healthcheck server listening on port ${healthPort}`);
+	logger.info(`Healthcheck server listening on port ${healthPort}`);
 
 	const shutdown = (signal: string) => {
 		logger.info(`Received ${signal}. Shutting down Discord bot client...`);

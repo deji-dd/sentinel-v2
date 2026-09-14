@@ -25,6 +25,8 @@ export async function sendGuildAuditLog(
 			await channel.send({ embeds: [embed] }).catch(() => {});
 		}
 	} catch (error) {
-		logger.warn(`Failed to send audit log for guild ${guildId}:`, error);
+		const guildName = client.guilds.cache.get(guildId)?.name;
+		const guildLabel = guildName ? `server "${guildName}"` : "guild";
+		logger.warn(`Failed to send audit log for ${guildLabel}:`, error);
 	}
 }

@@ -1,7 +1,9 @@
 import type {
+	FactionMembersResponse,
 	GuildMemberVerificationInput,
 	IpcMessage,
 } from "@sentinel/schemas";
+import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import type { IpcServer } from "@sentinel/utils/ipc";
 import type { IpcActionHandler, IpcHandlerContext } from "../types";
@@ -96,5 +98,54 @@ export const handleGuildMembersResponse: IpcActionHandler = (
 		} else {
 			pending.resolve(message.data?.members ?? null);
 		}
+	}
+};
+
+/**
+ * Handles incoming `fetch_faction_members_request` from the Discord bot.
+ * Uses the Scheduler's TornApiManager instance (with key health management, rate limiting, and failover).
+ */
+export const handleFetchFactionMembersRequest: IpcActionHandler = async (
+	ctx: IpcHandlerContext,
+) => {
+	const { message, server } = ctx;
+	if (
+		message.action !== "fetch_faction_members_request" ||
+		!message.requestId ||
+		!message.data
+	) {
+		return;
+	}
+
+	try {
+		const res = (await tornApi.get("/faction/{id}/members", {
+			pathParams: { id: message.data.factionId },
+		})) as FactionMembersResponse;
+
+		server.broadcast({
+			action: "fetch_faction_members_response",
+			requestId: message.requestId,
+			data: {
+				factionId: message.data.factionId,
+				members: res.members ?? [],
+			},
+		});
+	} catch (err) {
+		logger.error(
+			`Failed to fetch faction members for faction ${message.data.factionId}:`,
+			err,
+		);
+		server.broadcast({
+			action: "fetch_faction_members_response",
+			requestId: message.requestId,
+			data: {
+				factionId: message.data.factionId,
+				members: [],
+				error:
+					err instanceof Error
+						? err.message
+						: "Failed to fetch faction members",
+			},
+		});
 	}
 };

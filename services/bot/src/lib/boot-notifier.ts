@@ -136,7 +136,16 @@ export function startBootAlertNotifier(
 
 	void processPendingBootAlerts(client);
 
+	let isProcessing = false;
 	return setInterval(() => {
-		void processPendingBootAlerts(client);
+		if (isProcessing) return;
+		isProcessing = true;
+		void (async () => {
+			try {
+				await processPendingBootAlerts(client);
+			} finally {
+				isProcessing = false;
+			}
+		})();
 	}, intervalMs);
 }

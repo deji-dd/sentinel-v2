@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { startRegisteredWorkers } from "../src/workers/registry";
+import {
+	REGISTERED_WORKERS,
+	startRegisteredWorkers,
+} from "../src/workers/registry";
 
 describe("Worker Registry", () => {
 	test("starts all registered background workers with staggered boot delays", async () => {
@@ -12,7 +15,7 @@ describe("Worker Registry", () => {
 		try {
 			process.env.DISABLED_WORKERS = "system:maintenance,torn:territory_data";
 			const count = await startRegisteredWorkers({ staggerMs: 1 });
-			expect(count).toBe(14); // 16 total - 2 disabled = 14
+			expect(count).toBe(REGISTERED_WORKERS.length - 2);
 		} finally {
 			process.env.DISABLED_WORKERS = orig;
 		}

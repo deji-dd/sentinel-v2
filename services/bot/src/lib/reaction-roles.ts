@@ -296,7 +296,7 @@ async function cleanupDuplicateReactionRoleEmbeds(
 		}
 	} catch (err) {
 		logger.warn(
-			`Failed to cleanup duplicate reaction role embeds for title "${title}" in channel ${channel.id}:`,
+			`Failed to cleanup duplicate reaction role embeds for title "${title}" in #${channel.name}:`,
 			err,
 		);
 	}
@@ -413,9 +413,20 @@ export function startReactionRoleSyncLoop(
 	client: Client,
 	intervalMs = 15000,
 ): NodeJS.Timeout {
-	void syncReactionRoleMessages(client);
+	let isSyncing = false;
+	const runSync = async () => {
+		if (isSyncing) return;
+		isSyncing = true;
+		try {
+			await syncReactionRoleMessages(client);
+		} finally {
+			isSyncing = false;
+		}
+	};
+
+	void runSync();
 
 	return setInterval(() => {
-		void syncReactionRoleMessages(client);
+		void runSync();
 	}, intervalMs);
 }

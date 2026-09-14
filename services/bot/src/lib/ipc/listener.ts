@@ -1,6 +1,7 @@
 import { getTargetGuildIds } from "@sentinel/database";
 import type {
 	BulkVerificationProgressData,
+	FactionMember,
 	GuildMemberVerificationInput,
 	IpcMessage,
 	ResolvedElimsUser,
@@ -21,6 +22,7 @@ import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
 import { logger } from "../logger";
 import { syncReactionRoleMessages } from "../reaction-roles";
+import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
 
 type PendingRequest = {
@@ -69,6 +71,17 @@ export const pendingElimsResolveUserRequests = new Map<
 export const pendingElimsVerifyKeyRequests = new Map<
 	string,
 	PendingElimsVerifyKeyRequest
+>();
+
+type PendingFetchFactionMembersRequest = {
+	resolve: (members: FactionMember[]) => void;
+	reject: (reason: Error) => void;
+	timer: NodeJS.Timeout;
+};
+
+export const pendingFetchFactionMembersRequests = new Map<
+	string,
+	PendingFetchFactionMembersRequest
 >();
 
 export function addIpcMessageListener(listener: IpcMessageListener): void {
@@ -182,6 +195,25 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 			}
 		}
 
+		if (
+			message.action === "fetch_faction_members_response" &&
+			message.requestId
+		) {
+			const pending = pendingFetchFactionMembersRequests.get(message.requestId);
+			if (pending) {
+				clearTimeout(pending.timer);
+				pendingFetchFactionMembersRequests.delete(message.requestId);
+				if (
+					message.data.error &&
+					(!message.data.members || message.data.members.length === 0)
+				) {
+					pending.reject(new Error(message.data.error));
+				} else {
+					pending.resolve(message.data.members ?? []);
+				}
+			}
+		}
+
 		for (const listener of messageListeners) {
 			try {
 				listener(message);
@@ -243,6 +275,13 @@ export function setupBotIpcListeners(client: Client): void {
 				client,
 				message.data?.guildId,
 				message.data?.monitorId,
+				message.data?.members && message.data?.factionId
+					? {
+							factionId: message.data.factionId,
+							factionName: message.data.factionName,
+							members: message.data.members,
+						}
+					: undefined,
 			);
 		} else if (message.action === "sync_elims_item_requests") {
 			void updateElimsItemRequestsChannel(
@@ -272,11 +311,12 @@ export function setupBotIpcListeners(client: Client): void {
 		} else if (message.action === "sync_elims_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {
+				const guildName = client.guilds.cache.get(guildId)?.name;
 				logger.info(
-					`Elims guild configuration updated via IPC for guild: ${guildId}`,
+					`Elims guild configuration updated via IPC for ${guildName ? `server "${guildName}"` : "guild"}.`,
 				);
 				void getTargetGuildIds();
-				void deployGuildCommands(guildId);
+				void deployGuildCommands(guildId, guildName);
 				void updateElimsItemRequestsChannel(client, guildId);
 				void updateGiveawayChannel(client, guildId);
 				void updateElimsKeyDonationChannel(client, guildId);
@@ -288,24 +328,33 @@ export function setupBotIpcListeners(client: Client): void {
 		} else if (message.action === "sync_authorized_guilds") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {
+				const guildName = client.guilds.cache.get(guildId)?.name;
 				logger.info(
-					`Authorized target guilds updated via IPC for guild: ${guildId}`,
+					`Authorized target guilds updated via IPC for ${guildName ? `server "${guildName}"` : "guild"}.`,
 				);
 				void getTargetGuildIds();
-				void deployGuildCommands(guildId);
+				void deployGuildCommands(guildId, guildName);
 			}
 		} else if (message.action === "deauthorize_guild") {
 			const guildId = message.data?.guildId;
 			if (typeof guildId === "string") {
-				logger.info(`Guild ${guildId} was deauthorized via IPC.`);
-				void getTargetGuildIds();
 				const guild = client.guilds.cache.get(guildId);
+				const guildName = guild?.name;
+				logger.info(
+					`Server "${guildName ?? "guild"}" was deauthorized via IPC.`,
+				);
+				void getTargetGuildIds();
 				if (guild) {
 					void guild.leave().catch((err) => {
-						logger.error(`Failed to leave deauthorized guild ${guildId}:`, err);
+						logger.error(
+							`Failed to leave deauthorized server "${guild.name}":`,
+							err,
+						);
 					});
 				}
 			}
+		} else if (message.action === "subversive_recruitment_alert") {
+			void handleSubversiveRecruitmentAlert(client, message.data);
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")
@@ -359,8 +408,9 @@ export function setupBotIpcListeners(client: Client): void {
 						},
 					});
 				} catch (err) {
+					const guildName = client.guilds.cache.get(guildId)?.name;
 					logger.error(
-						`Failed to fetch guild members for guild ${guildId}:`,
+						`Failed to fetch guild members for ${guildName ? `server "${guildName}"` : "guild"}:`,
 						err,
 					);
 					workerIpcClient.send({

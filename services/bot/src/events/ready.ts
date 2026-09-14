@@ -40,10 +40,16 @@ export const readyEvent = {
 
 		// Ensure authorized target guilds cache is fully loaded on startup
 		const targetIds = await getTargetGuildIds();
+		const targetGuildNames = targetIds
+			.map((tId) => {
+				const g = client.guilds.cache.get(tId);
+				return g ? `"${g.name}"` : "Configured Guild";
+			})
+			.join(", ");
 		for (const [id, guild] of client.guilds.cache) {
 			if (!isTargetGuild(id)) {
 				logger.info(
-					`Bot connected to unconfigured guild ${guild.name} (${id}). Available for dashboard setup. Target guilds: ${targetIds.join(", ")}`,
+					`Bot connected to unconfigured guild "${guild.name}". Available for dashboard setup. Target guilds: ${targetGuildNames}`,
 				);
 			}
 		}
@@ -61,7 +67,9 @@ export const readyEvent = {
 		await updateFactionMapChannel(client);
 
 		// Synchronize Faction Monitoring Channels across target guilds
-		await updateFactionRevivesChannel(client);
+		await updateFactionRevivesChannel(client).catch((err) => {
+			logger.warn("Failed to sync Faction Revives embeds on boot:", err);
+		});
 
 		// Synchronize Elims Item Requests Channel if configured
 		await updateElimsItemRequestsChannel(client).catch((err) => {

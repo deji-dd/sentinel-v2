@@ -135,6 +135,7 @@ export async function checkPendingVerificationReminders(
 }
 
 let reminderTimer: ReturnType<typeof setInterval> | null = null;
+let isCheckingReminders = false;
 
 /**
  * Starts the 1-minute verification reminder background interval.
@@ -145,8 +146,14 @@ export function startVerificationReminderScheduler(client: Client): void {
 	}
 
 	// Run every 60 seconds
-	reminderTimer = setInterval(() => {
-		void checkPendingVerificationReminders(client);
+	reminderTimer = setInterval(async () => {
+		if (isCheckingReminders) return;
+		isCheckingReminders = true;
+		try {
+			await checkPendingVerificationReminders(client);
+		} finally {
+			isCheckingReminders = false;
+		}
 	}, 60 * 1000);
 
 	logger.info(

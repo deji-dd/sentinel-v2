@@ -329,8 +329,15 @@ export async function handleTerritoryAlert(
 						await (channel as TextChannel).send({ embeds: [embed] });
 					}
 				} catch (sendErr) {
+					const targetGuild = client.guilds.cache.get(target.guildId);
+					const targetChannel = client.channels.cache.get(channelId);
+					const channelName =
+						targetChannel && "name" in targetChannel
+							? `#${targetChannel.name}`
+							: "channel";
+					const guildName = targetGuild ? ` in "${targetGuild.name}"` : "";
 					logger.warn(
-						`Failed to send territory alert to channel ${channelId} in guild ${target.guildId}:`,
+						`Failed to send territory alert to ${channelName}${guildName}:`,
 						sendErr,
 					);
 				}

@@ -5,7 +5,14 @@ import type {
 	PathOperation,
 	paths,
 } from "@sentinel/schemas";
-import { and, apiKeys, db, elimsApiKeys, eq } from "../../database";
+import {
+	and,
+	apiKeys,
+	db,
+	elimsApiKeys,
+	eq,
+	subversiveApiKeys,
+} from "../../database";
 import { Logger } from "../../utils";
 import { TornApiClient } from "./client";
 import { decryptApiKey } from "./crypto";
@@ -129,6 +136,84 @@ export async function getNextGuildKey(
 	excludeKeys?: Set<string>,
 ): Promise<ManagedApiKey | null> {
 	return tornApi.getNextGuildKey(guildId, excludeKeys);
+}
+
+const subversiveKeyIndexMap = new Map<string, number>();
+
+/**
+ * Fetches all active Subversive guild API keys in the database for a specific guild (`subversiveApiKeys` table).
+ */
+export async function getSubversiveKeyPool(
+	guildId: string,
+): Promise<ManagedApiKey[]> {
+	const masterKey = process.env.ENCRYPTION_KEY ?? "";
+	const keysInDb = await db
+		.select()
+		.from(subversiveApiKeys)
+		.where(
+			and(
+				eq(subversiveApiKeys.guildId, guildId),
+				eq(subversiveApiKeys.isValid, true),
+			),
+		)
+		.orderBy(subversiveApiKeys.lastUsedAt);
+
+	if (keysInDb.length > 0) {
+		const result: ManagedApiKey[] = [];
+		const seenKeys = new Set<string>();
+
+		for (const k of keysInDb) {
+			const rawKey =
+				k.apiKeyEncrypted.length > 16 && masterKey
+					? decryptApiKey(k.apiKeyEncrypted, masterKey)
+					: k.apiKeyEncrypted;
+
+			if (!seenKeys.has(rawKey)) {
+				seenKeys.add(rawKey);
+				result.push({
+					apiKey: rawKey,
+					userId: k.tornId,
+					keyType: "guild",
+				});
+			}
+		}
+
+		return result;
+	}
+
+	return [];
+}
+
+/**
+ * Gets the next available Subversive guild key using round-robin and key health filtering.
+ */
+export async function getNextSubversiveKey(
+	guildId: string,
+	excludeKeys?: Set<string>,
+): Promise<ManagedApiKey | null> {
+	const pool = await getSubversiveKeyPool(guildId);
+	if (pool.length === 0) return null;
+
+	let candidates = pool.filter(
+		(k) =>
+			!tornApi.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey) &&
+			!excludeKeys?.has(k.apiKey),
+	);
+
+	if (candidates.length === 0 && excludeKeys && excludeKeys.size > 0) {
+		candidates = pool.filter((k) => !excludeKeys.has(k.apiKey));
+	}
+
+	if (candidates.length === 0) {
+		candidates = pool;
+	}
+
+	const currentIndex = subversiveKeyIndexMap.get(guildId) ?? 0;
+	const key = candidates[currentIndex % candidates.length];
+	if (!key) return null;
+
+	subversiveKeyIndexMap.set(guildId, (currentIndex + 1) % candidates.length);
+	return key;
 }
 
 /**
