@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.2.8
+// @version      2.2.9
 // @description  Userscript for Subversive Alliance Ranked War & Target Engine
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -39,6 +39,8 @@
 	const DEFAULTS = {
 		apiUrl: "https://subversive.blasted-labs.tech",
 		maxFFThreshold: 3.0,
+		directAttack: true,
+		persistOpen: false,
 	};
 
 	const state = {
@@ -51,12 +53,14 @@
 			GM_getValue(STORAGE.panelOpen, false) === true ||
 			GM_getValue(STORAGE.panelOpen, false) === "true",
 		persistOpen:
-			GM_getValue(STORAGE.persistOpen, true) !== false &&
-			GM_getValue(STORAGE.persistOpen, true) !== "false",
+			GM_getValue(STORAGE.persistOpen, DEFAULTS.persistOpen) === true ||
+			GM_getValue(STORAGE.persistOpen, DEFAULTS.persistOpen) === "true",
 		maxFFThreshold:
 			Number(GM_getValue(STORAGE.maxFFThreshold, DEFAULTS.maxFFThreshold)) ||
 			3.0,
-		directAttack: Boolean(GM_getValue(STORAGE.directAttack, false)),
+		directAttack:
+			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== false &&
+			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== "false",
 		hideHighFF: Boolean(GM_getValue(STORAGE.hideHighFF, false)),
 		ignoredTargets: GM_getValue(STORAGE.ignoredTargets, []) || [],
 		war: null,
@@ -713,17 +717,6 @@
 				color: #10b981;
 			}
 
-			.satf-hosp-footer {
-				display: flex;
-				justify-content: space-between;
-				align-items: center;
-				margin-top: 10px;
-				padding-top: 8px;
-				border-top: 1px solid var(--border);
-				font-size: 11px;
-				color: var(--muted);
-			}
-
 			.satf-status {
 				margin-top: 12px;
 				font-size: 11px;
@@ -867,9 +860,6 @@
 						Loading hospital queue...
 					</div>
 				</div>
-				<div class="satf-hosp-footer">
-					<span id="satf-hosp-synced">Last synced: Just now</span>
-				</div>
 			</div>
 
 			<!-- SETTINGS VIEW -->
@@ -931,7 +921,6 @@
 		const scoreOpp = root.getElementById("satf-score-opp");
 		const warTitle = root.getElementById("satf-war-title");
 		const hospContainer = root.getElementById("satf-hosp-container");
-		const hospSynced = root.getElementById("satf-hosp-synced");
 		const chkDirect = root.getElementById("satf-chk-direct");
 		const btnModalNext = root.getElementById("satf-btn-modal-next");
 		const chkHideHighFf = root.getElementById("satf-chk-hide-high-ff");
@@ -1335,8 +1324,6 @@
 						nowSec + Math.max(0, item.secondsRemaining || 0),
 				};
 			});
-			state.hospLastSynced = new Date();
-			hospSynced.textContent = `Last synced: ${state.hospLastSynced.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
 
 			if (state.hospitalQueue.length === 0) {
 				hospContainer.innerHTML = `
@@ -1390,7 +1377,6 @@
 
 		async function fetchHospitalQueue() {
 			if (!state.token) return;
-			hospSynced.textContent = "Syncing...";
 
 			try {
 				const res = await apiRequest(
@@ -1403,7 +1389,6 @@
 						Failed to load queue: ${err.message}
 					</div>
 				`;
-				hospSynced.textContent = "Sync failed";
 				stopHospTimer();
 			}
 		}
@@ -1491,7 +1476,7 @@
 				switchTab("target");
 				connectWebSocket();
 				fetchWarStatus();
-				fetchNextTarget();
+				fetchAvailableTargets();
 			} catch (err) {
 				setStatus(err.message, "error");
 			}
@@ -1593,7 +1578,11 @@
 		function openPanel() {
 			state.panelOpen = true;
 			panel.classList.add("open");
-			GM_setValue(STORAGE.panelOpen, true);
+			if (state.persistOpen) {
+				GM_setValue(STORAGE.panelOpen, true);
+			} else {
+				GM_setValue(STORAGE.panelOpen, false);
+			}
 			positionPanel();
 			updateTravelLock();
 			connectWebSocket();
@@ -1707,6 +1696,11 @@
 		chkPersistOpen.addEventListener("change", (e) => {
 			state.persistOpen = e.target.checked;
 			GM_setValue(STORAGE.persistOpen, state.persistOpen);
+			if (state.persistOpen) {
+				GM_setValue(STORAGE.panelOpen, state.panelOpen);
+			} else {
+				GM_setValue(STORAGE.panelOpen, false);
+			}
 		});
 
 		root
@@ -1768,8 +1762,8 @@
 		// Immediately populate cached targets
 		renderAvailableTargets();
 
-		// Auto-open if modal was open on last page
-		if (state.panelOpen) {
+		// Auto-open if remember open window is enabled AND panel was open on last page
+		if (state.persistOpen && state.panelOpen) {
 			openPanel();
 			requestAnimationFrame(positionPanel);
 			setTimeout(positionPanel, 50);
