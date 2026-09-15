@@ -1,4 +1,8 @@
-import type { IpcSubversiveRecruitmentAlertPayload } from "@sentinel/schemas";
+import type {
+	FactionMembersResponse,
+	IpcSubversiveRecruitmentAlertPayload,
+} from "@sentinel/schemas";
+import { tornApi } from "@sentinel/torn-api";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
@@ -24,20 +28,75 @@ function formatNumberHuman(num: number | null | undefined): string {
 }
 
 /**
+ * Checks if a faction position/role corresponds to a leader or co-leader.
+ */
+export function isLeaderRole(role?: string | null): boolean {
+	if (!role) return false;
+	const normalized = role.trim().toLowerCase();
+	return (
+		normalized === "leader" ||
+		normalized === "co-leader" ||
+		normalized === "coleader"
+	);
+}
+
+/**
+ * Attempts to fetch a player's faction role from Torn API using the configured environment key.
+ */
+export async function fetchFactionMemberRole(
+	factionId: number,
+	playerId: number,
+): Promise<string | null> {
+	const apiKey = process.env.TORN_API_KEY;
+	if (!apiKey) return null;
+
+	try {
+		const res = (await tornApi.get("/faction/{id}/members", {
+			apiKey,
+			pathParams: { id: factionId },
+		})) as FactionMembersResponse;
+
+		const member = res.members?.find((m) => m.id === playerId);
+		return member?.position ?? null;
+	} catch (err) {
+		logger.warn(
+			`Failed to fetch faction member role for player ${playerId} in faction ${factionId}:`,
+			err,
+		);
+		return null;
+	}
+}
+
+/**
  * Handles incoming recruitment candidate alerts and dispatches rich Discord embeds
  * to the designated notification channel.
  */
 export async function handleSubversiveRecruitmentAlert(
 	client: Client,
 	payload: IpcSubversiveRecruitmentAlertPayload,
-): Promise<void> {
-	if (!payload.notificationChannelId) return;
+): Promise<boolean> {
+	if (!payload.notificationChannelId) return false;
+
+	let factionRole = payload.factionRole;
+	if (factionRole === undefined && payload.factionId && payload.playerId) {
+		factionRole = await fetchFactionMemberRole(
+			payload.factionId,
+			payload.playerId,
+		);
+	}
+
+	if (isLeaderRole(factionRole)) {
+		logger.info(
+			`Excluding recruitment alert for ${payload.playerName} [${payload.playerId}] (${factionRole}) — leader/co-leader roles are excluded.`,
+		);
+		return false;
+	}
 
 	try {
 		const channel = await client.channels.fetch(payload.notificationChannelId);
 		if (!channel?.isTextBased()) {
 			logger.warn("Target recruitment channel not found or not text-based.");
-			return;
+			return false;
 		}
 
 		const textChannel = channel as TextChannel;
@@ -50,6 +109,8 @@ export async function handleSubversiveRecruitmentAlert(
 			payload.daysInFaction !== undefined && payload.daysInFaction !== null
 				? `${payload.daysInFaction.toLocaleString()} ${payload.daysInFaction === 1 ? "day" : "days"}`
 				: "Unknown";
+
+		const roleText = factionRole || "Unknown";
 
 		const embed = createBaseEmbed(
 			`Recruitment Alert`,
@@ -65,6 +126,11 @@ export async function handleSubversiveRecruitmentAlert(
 				{
 					name: "Faction",
 					value: `[${payload.factionName} [${payload.factionId}]](${factionUrl})`,
+					inline: true,
+				},
+				{
+					name: "Faction Role",
+					value: roleText,
 					inline: true,
 				},
 				{
@@ -114,10 +180,12 @@ export async function handleSubversiveRecruitmentAlert(
 		logger.info(
 			`Dispatched recruitment lead embed for ${payload.playerName} [${payload.playerId}] to ${channelLabel}.`,
 		);
+		return true;
 	} catch (err) {
 		logger.error(
 			"Failed to send subversive recruitment alert to Discord:",
 			err,
 		);
+		return false;
 	}
 }

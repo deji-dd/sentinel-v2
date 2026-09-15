@@ -435,8 +435,9 @@ export async function runRecruitmentCycle(options?: {
 
 			const statsMap = new Map(statsResults.map((s) => [s.player_id, s]));
 
-			// Batch fetch faction rosters to determine days_in_faction
+			// Batch fetch faction rosters to determine days_in_faction and faction roles
 			const daysInFactionMap = new Map<number, number>();
+			const factionRoleMap = new Map<number, string>();
 			const candidateFactionIds = [
 				...new Set(prospectiveCandidates.map((c) => c.factionId)),
 			];
@@ -451,6 +452,9 @@ export async function runRecruitmentCycle(options?: {
 						})) as FactionMembersResponse;
 						for (const member of factionRes.members ?? []) {
 							daysInFactionMap.set(member.id, member.days_in_faction);
+							if (member.position) {
+								factionRoleMap.set(member.id, member.position);
+							}
 						}
 					} catch (err) {
 						logger.warn(
@@ -466,6 +470,7 @@ export async function runRecruitmentCycle(options?: {
 				const bsEstimate = statData?.bs_estimate ?? null;
 				const fairFight = statData?.fair_fight ?? null;
 				const daysInFaction = daysInFactionMap.get(candidate.playerId) ?? null;
+				const factionRole = factionRoleMap.get(candidate.playerId) ?? null;
 
 				// Filter by minimum stats if threshold is set (> 0)
 				if (config.minStats > 0 && bsEstimate !== null) {
@@ -474,10 +479,21 @@ export async function runRecruitmentCycle(options?: {
 					}
 				}
 
+				const normalizedRole = factionRole?.trim().toLowerCase();
+				const isLeader =
+					normalizedRole === "leader" ||
+					normalizedRole === "co-leader" ||
+					normalizedRole === "coleader";
+
 				qualifiedCandidatesCount++;
 				totalCandidatesFound++;
 
 				const candidateUuid = crypto.randomUUID();
+
+				const shouldAlert =
+					Boolean(
+						config.notificationsEnabled && config.notificationChannelId,
+					) && !isLeader;
 
 				await db
 					.insert(subversiveRecruitmentCandidates)
@@ -509,20 +525,15 @@ export async function runRecruitmentCycle(options?: {
 								}
 							: null,
 						status: "new",
-						notified: Boolean(
-							config.notificationsEnabled && config.notificationChannelId,
-						),
-						notifiedAt:
-							config.notificationsEnabled && config.notificationChannelId
-								? new Date()
-								: null,
+						notified: shouldAlert,
+						notifiedAt: shouldAlert ? new Date() : null,
 						createdAt: new Date(),
 						updatedAt: new Date(),
 					})
 					.onConflictDoNothing();
 
-				// Dispatch Discord alert via IPC if enabled
-				if (config.notificationsEnabled && config.notificationChannelId) {
+				// Dispatch Discord alert via IPC if enabled and candidate is not a leader/co-leader
+				if (shouldAlert && config.notificationChannelId) {
 					const ipcServer = getActiveIpcServer();
 					if (ipcServer) {
 						ipcServer.broadcast({
@@ -542,6 +553,7 @@ export async function runRecruitmentCycle(options?: {
 								bsEstimate,
 								fairFight,
 								daysInFaction,
+								factionRole,
 								notificationChannelId: config.notificationChannelId,
 							},
 						});

@@ -535,6 +535,7 @@ export type IpcSubversiveRecruitmentAlertPayload = {
 	bsEstimate: number | null;
 	fairFight: number | null;
 	daysInFaction?: number | null;
+	factionRole?: string | null;
 	notificationChannelId: string;
 };
 
