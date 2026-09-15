@@ -616,4 +616,13 @@ export type IpcMessage =
 	| IpcReinitializeWealthMessage
 	| IpcWealthStateUpdatedMessage
 	| IpcSubversiveRecruitmentAlertMessage
-	| IpcResetSubversiveRecruitmentMessage;
+	| IpcResetSubversiveRecruitmentMessage
+	| IpcSubversiveWarUpdatedMessage;
+
+export type IpcSubversiveWarUpdatedMessage = {
+	action: "subversive_war_updated";
+	data: {
+		war: unknown;
+		opponents: unknown[];
+	};
+};

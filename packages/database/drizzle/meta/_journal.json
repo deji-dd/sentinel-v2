@@ -155,6 +155,13 @@
 			"when": 1789421803823,
 			"tag": "0021_good_dreaming_celestial",
 			"breakpoints": true
+		},
+		{
+			"idx": 22,
+			"version": "7",
+			"when": 1789490723088,
+			"tag": "0022_early_mastermind",
+			"breakpoints": true
 		}
 	]
 }

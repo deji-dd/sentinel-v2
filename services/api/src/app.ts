@@ -15,6 +15,7 @@ import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
 import { wsGymLedgerRoutes } from "./routes/ws-gym-ledger";
 import { wsLogManagerRoutes } from "./routes/ws-log-manager";
 import { wsStockLedgerRoutes } from "./routes/ws-stocks-ledger";
+import { wsSubversiveWarRoutes } from "./routes/ws-subversive-war";
 
 export const app = new Elysia()
 	.use(corsPlugin)
@@ -40,6 +41,7 @@ export const app = new Elysia()
 	.use(wsGymLedgerRoutes)
 	.use(wsStockLedgerRoutes)
 	.use(wsElimsTournamentRoutes)
+	.use(wsSubversiveWarRoutes)
 	.use(pondRoutes)
 	.use(v1Routes)
 	.get("/users", async ({ query, set }) => {

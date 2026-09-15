@@ -75,19 +75,25 @@ export class FFScouterRateLimiter {
 		this.windowMs = windowMs;
 	}
 
-	async waitIfNeeded(): Promise<void> {
+	async waitIfNeeded(priority: "high" | "low" = "high"): Promise<void> {
 		const nextPromise = this.queueChain.then(async () => {
 			const now = Date.now();
 			const cutoff = now - this.windowMs;
 			this.timestamps = this.timestamps.filter((ts) => ts > cutoff);
 
-			if (this.timestamps.length >= this.maxRequests) {
+			// Low-priority background tasks reserve at least 6 slots for real-time user requests
+			const effectiveMax =
+				priority === "low"
+					? Math.max(1, this.maxRequests - 6)
+					: this.maxRequests;
+
+			if (this.timestamps.length >= effectiveMax) {
 				const oldest = this.timestamps[0];
 				if (oldest !== undefined) {
 					const delayNeeded = oldest + this.windowMs - now + 150; // 150ms buffer
 					if (delayNeeded > 0) {
 						logger.warn(
-							`FFScouter IP rate limit reached (${this.timestamps.length}/${this.maxRequests} in 60s). Pausing for ${(delayNeeded / 1000).toFixed(2)}s...`,
+							`FFScouter ${priority}-priority rate limit reached (${this.timestamps.length}/${effectiveMax} in 60s). Pausing for ${(delayNeeded / 1000).toFixed(2)}s...`,
 						);
 						await new Promise<void>((resolve) =>
 							setTimeout(resolve, delayNeeded),
@@ -573,4 +579,120 @@ export async function getPlayerStats(
 
 	// 3. Return merged results (cached + fresh)
 	return [...cachedResults, ...freshResults];
+}
+
+export interface FFScouterGetTargetsOptions {
+	preset?: "respect" | "level";
+	minlevel?: number;
+	maxlevel?: number;
+	inactiveonly?: 0 | 1 | boolean;
+	minff?: number;
+	maxff?: number;
+	limit?: number;
+	factionless?: 0 | 1 | boolean;
+	priority?: "high" | "low";
+}
+
+export interface FFScouterTargetItem {
+	player_id: number;
+	name?: string;
+	level?: number;
+	fair_fight?: number | null;
+	bs_estimate?: number | null;
+	bs_estimate_human?: string | null;
+	last_action?: number | string | null;
+	faction_id?: number | null;
+	faction_name?: string | null;
+	distribution?: FFScouterDistribution | null;
+}
+
+/**
+ * Queries the FFScouter /api/v1/get-targets endpoint to retrieve targeted candidates.
+ */
+export async function getFFScouterTargets(
+	options?: FFScouterGetTargetsOptions,
+	apiKey?: string,
+): Promise<FFScouterTargetItem[]> {
+	const key = (apiKey ?? process.env.FF_SCOUTER_KEY ?? "").trim();
+	if (!key) {
+		throw new Error(
+			"FF_SCOUTER_KEY is not configured in the environment. Please set FF_SCOUTER_KEY in your environment variables.",
+		);
+	}
+
+	const params = new URLSearchParams();
+	params.set("key", key);
+
+	if (options?.preset) {
+		params.set("preset", options.preset);
+	}
+	if (options?.minlevel !== undefined) {
+		params.set("minlevel", String(options.minlevel));
+	}
+	if (options?.maxlevel !== undefined) {
+		params.set("maxlevel", String(options.maxlevel));
+	}
+	if (options?.inactiveonly !== undefined) {
+		params.set("inactiveonly", options.inactiveonly ? "1" : "0");
+	}
+	if (options?.minff !== undefined) {
+		params.set("minff", options.minff.toFixed(2));
+	}
+	if (options?.maxff !== undefined) {
+		params.set("maxff", options.maxff.toFixed(2));
+	}
+	if (options?.limit !== undefined) {
+		params.set("limit", String(Math.min(50, Math.max(1, options.limit))));
+	}
+	if (options?.factionless !== undefined) {
+		params.set("factionless", options.factionless ? "1" : "0");
+	}
+
+	const url = `https://ffscouter.com/api/v1/get-targets?${params.toString()}`;
+
+	await ffScouterRateLimiter.waitIfNeeded(options?.priority ?? "high");
+
+	const res = await fetch(url, {
+		headers: {
+			Accept: "application/json",
+			"User-Agent": "Sentinel/2.0 (FFScouter Client)",
+		},
+	});
+
+	if (!res.ok) {
+		const errorText = await res.text().catch(() => "Unknown HTTP error");
+		logger.error(
+			`FFScouter get-targets failed with HTTP ${res.status}: ${errorText}`,
+		);
+		throw new FFScouterApiError(
+			`FFScouter get-targets returned HTTP ${res.status}: ${errorText}`,
+			{ httpStatus: res.status },
+		);
+	}
+
+	const data = (await res.json()) as unknown;
+
+	if (Array.isArray(data)) {
+		return data as FFScouterTargetItem[];
+	}
+
+	if (
+		typeof data === "object" &&
+		data !== null &&
+		"targets" in data &&
+		Array.isArray((data as { targets: unknown }).targets)
+	) {
+		return (data as { targets: FFScouterTargetItem[] }).targets;
+	}
+
+	if (
+		typeof data === "object" &&
+		data !== null &&
+		"data" in data &&
+		Array.isArray((data as { data: unknown }).data)
+	) {
+		return (data as { data: FFScouterTargetItem[] }).data;
+	}
+
+	return [];
 }

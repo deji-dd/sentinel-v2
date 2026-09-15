@@ -4,6 +4,7 @@ import { elimsRoutes } from "./elims";
 import { giveawayRoutes } from "./giveaways";
 import { guildRoutes } from "./guilds";
 import { subversiveRoutes } from "./subversive";
+import { subversiveTargetFinderRoutes } from "./subversive-target-finder";
 import { systemRoutes } from "./system";
 import { ttRoutes } from "./tt";
 
@@ -13,5 +14,7 @@ export const v1Routes = new Elysia({ prefix: "/api/v1" })
 	.use(giveawayRoutes)
 	.use(guildRoutes)
 	.use(subversiveRoutes)
+	.use(subversiveTargetFinderRoutes)
+	.group("/subversive", (app) => app.use(subversiveTargetFinderRoutes))
 	.use(systemRoutes)
 	.use(ttRoutes);

@@ -45,6 +45,46 @@ export async function isElimsGuildAsync(
 	return current === guildId;
 }
 
+let subversiveGuildIdCache: string | null = null;
+
+/**
+ * Retrieves the currently configured Subversive Alliance Discord guild ID.
+ */
+export async function getSubversiveGuildId(): Promise<string | null> {
+	try {
+		const [row] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, "subversive:guild_config"));
+
+		const data = row?.data as { guildId?: string } | undefined;
+		subversiveGuildIdCache = data?.guildId ?? null;
+		return subversiveGuildIdCache;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Synchronous check whether a guild is the active Subversive Alliance server.
+ */
+export function isSubversiveGuild(guildId: string | null | undefined): boolean {
+	if (!guildId) return false;
+	return subversiveGuildIdCache === guildId;
+}
+
+/**
+ * Asynchronous check whether a guild is the active Subversive Alliance server.
+ */
+export async function isSubversiveGuildAsync(
+	guildId: string | null | undefined,
+): Promise<boolean> {
+	if (!guildId) return false;
+	if (subversiveGuildIdCache === guildId) return true;
+	const current = await getSubversiveGuildId();
+	return current === guildId;
+}
+
 /**
  * Fallback helper to retrieve target Discord guild IDs configured in environment variables (for legacy migration).
  */

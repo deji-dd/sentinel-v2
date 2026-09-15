@@ -15,12 +15,13 @@ import { donationSummaryCommand } from "./donation-summary";
 import { itemRequestHelpCommand } from "./item-request-help";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
+import { targetFinderCommand } from "./target-finder";
 import { teamBreakdownCommand } from "./team-breakdown";
 import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
-export { assignedStockCommand, teamBreakdownCommand };
+export { assignedStockCommand, targetFinderCommand, teamBreakdownCommand };
 
 export type BotModule =
 	| "verification"
@@ -56,6 +57,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...assaultCheckCommand, scope: "normal" },
 	{ ...allianceMapCommand, scope: "normal" },
 	{ ...burnMapCommand, scope: "normal" },
+	{ ...targetFinderCommand, scope: "normal" },
 ];
 
 // 2. Elims Commands (scoped strictly to the active tournament operations guild)

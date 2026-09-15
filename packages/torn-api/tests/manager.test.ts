@@ -147,6 +147,45 @@ describe("KeyHealthManager - Temporary Invalidation", () => {
 		await manager.recordSuccessfulUse("temp_key_1");
 		expect(manager.isKeyTemporarilyDisabled("temp_key_1")).toBe(false);
 	});
+
+	test("multiplies cooldown progressively on repeated temporary disable errors and resets on success", async () => {
+		const baseMs = 1000;
+		const manager = new KeyHealthManager("pepper", baseMs);
+
+		// Multipliers: [1, 2, 5, 15, 30, 60]
+		const cd1 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd1).toBe(1000);
+		expect(manager.getTemporaryDisableCount("temp_key_prog")).toBe(1);
+
+		const cd2 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd2).toBe(2000);
+		expect(manager.getTemporaryDisableCount("temp_key_prog")).toBe(2);
+
+		const cd3 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd3).toBe(5000);
+		expect(manager.getTemporaryDisableCount("temp_key_prog")).toBe(3);
+
+		const cd4 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd4).toBe(15000);
+
+		const cd5 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd5).toBe(30000);
+
+		const cd6 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd6).toBe(60000);
+
+		const cd7 = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cd7).toBe(60000); // capped at max multiplier
+
+		// Successful use clears the progression
+		await manager.recordSuccessfulUse("temp_key_prog");
+		expect(manager.getTemporaryDisableCount("temp_key_prog")).toBe(0);
+		expect(manager.isKeyTemporarilyDisabled("temp_key_prog")).toBe(false);
+
+		// Next failure starts at 1x again
+		const cdAfterReset = manager.markTemporarilyDisabled("temp_key_prog");
+		expect(cdAfterReset).toBe(1000);
+	});
 });
 
 describe("ManagedTornApiClient - System Key Failover", () => {

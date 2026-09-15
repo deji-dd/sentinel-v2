@@ -5,6 +5,13 @@ import { broadcastBattlestatsLedgerState } from "../routes/ws-battlestats-ledger
 import { broadcastCrimeLedgerState } from "../routes/ws-crime-ledger";
 import { broadcastStockLedgerState } from "../routes/ws-stocks-ledger";
 
+import { broadcastWarUpdate } from "../routes/ws-subversive-war";
+import {
+	type CurrentWarInfo,
+	type RankedWarOpponent,
+	subversiveTargetCache,
+} from "./subversive-target-cache";
+
 const logger = new Logger("API", "SchedulerIPC");
 
 /** Worker registry name of the personal log manager worker in the scheduler. */
@@ -37,6 +44,19 @@ export function initSchedulerIpcListener(): void {
 			}
 			if (message.action === "stocks_ledger_state_updated" && message.data) {
 				broadcastStockLedgerState(message.data);
+			}
+			if (message.action === "subversive_war_updated" && message.data) {
+				const payload = message.data as {
+					war?: CurrentWarInfo;
+					opponents?: RankedWarOpponent[];
+				};
+				if (payload.war) {
+					subversiveTargetCache.setWarState(payload.war);
+				}
+				if (Array.isArray(payload.opponents)) {
+					subversiveTargetCache.setWarOpponents(payload.opponents);
+				}
+				broadcastWarUpdate();
 			}
 		});
 	} catch (err) {

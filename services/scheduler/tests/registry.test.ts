@@ -15,7 +15,9 @@ describe("Worker Registry", () => {
 		try {
 			process.env.DISABLED_WORKERS = "system:maintenance,torn:territory_data";
 			const count = await startRegisteredWorkers({ staggerMs: 1 });
-			expect(count).toBe(REGISTERED_WORKERS.length - 2);
+			const expectedCount =
+				REGISTERED_WORKERS.filter((w) => w.enabled !== false).length - 2;
+			expect(count).toBe(expectedCount);
 		} finally {
 			process.env.DISABLED_WORKERS = orig;
 		}

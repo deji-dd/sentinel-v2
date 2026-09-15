@@ -8,7 +8,11 @@ import {
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
+import { startSubversiveFFScouterCrawlerWorker } from "./subversive/ffscouter-target-crawler";
+import { startSubversiveRankedWarWorker } from "./subversive/ranked-war-worker";
 import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
+import { startSubversiveSnapshotIngestionWorker } from "./subversive/snapshot-ingestion-worker";
+import { startSubversiveTargetFinderWorker } from "./subversive/target-finder-worker";
 import { startSystemMaintenance } from "./system/maintenance";
 import { startTornAbroadStocks } from "./torn/abroad-stocks";
 import { startTornReferences } from "./torn/references";
@@ -103,6 +107,32 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"5-minute ranked war recruitment scanner and termed war filtering engine",
 		start: startSubversiveRecruitmentWorker,
+	},
+	{
+		id: "subversive:target_finder_worker",
+		description:
+			"20-second Subversive Alliance membership auditor, target stat enrichment and hospital monitor (PAUSED FOR RANKED WAR)",
+		start: startSubversiveTargetFinderWorker,
+		enabled: false,
+	},
+	{
+		id: "subversive:ffscouter_crawler_worker",
+		description:
+			"Adaptive (15s active / 60s idle) continuous target discovery crawler via FFScouter get-targets API (PAUSED FOR RANKED WAR)",
+		start: startSubversiveFFScouterCrawlerWorker,
+		enabled: false,
+	},
+	{
+		id: "subversive:ranked_war_worker",
+		description:
+			"30-second Subversive Alliance ranked war state auditor and monitoring engine",
+		start: startSubversiveRankedWarWorker,
+	},
+	{
+		id: "subversive:snapshot_ingestion_worker",
+		description:
+			"Daily Torn active players snapshot CSV ingestion and filtering engine",
+		start: startSubversiveSnapshotIngestionWorker,
 	},
 ];
 

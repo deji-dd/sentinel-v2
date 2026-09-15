@@ -15,6 +15,7 @@ export type FactionRankedWarDetails =
 	components["schemas"]["FactionRankedWarDetails"];
 export type FactionRankedWarReportResponse =
 	components["schemas"]["FactionRankedWarReportResponse"];
+export type UserProfileResponse = components["schemas"]["UserProfileResponse"];
 
 /**
  * Utility type to extract operation from path

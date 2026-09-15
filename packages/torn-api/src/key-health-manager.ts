@@ -15,6 +15,7 @@ export const TEMPORARY_DISABLE_ERROR_CODES = new Set([10, 13, 18]);
 export class KeyHealthManager {
 	private invalidCounts = new Map<string, number>();
 	private tempDisabledKeys = new Map<string, number>();
+	private tempDisableCounts = new Map<string, number>();
 	private pepper: string;
 	private tempCooldownMs: number;
 
@@ -36,13 +37,27 @@ export class KeyHealthManager {
 	}
 
 	/**
-	 * Marks an API key as temporarily disabled in-memory for the specified duration.
+	 * Returns the consecutive temporary disable count for an API key.
 	 */
-	markTemporarilyDisabled(
-		apiKey: string,
-		durationMs = this.tempCooldownMs,
-	): void {
-		this.tempDisabledKeys.set(apiKey, Date.now() + durationMs);
+	getTemporaryDisableCount(apiKey: string): number {
+		return this.tempDisableCounts.get(apiKey) ?? 0;
+	}
+
+	/**
+	 * Marks an API key as temporarily disabled in-memory with increasing backoff.
+	 * Cooldown progression: 1x, 2x, 5x, 15x, 30x, 60x base cooldown.
+	 */
+	markTemporarilyDisabled(apiKey: string, durationMs?: number): number {
+		const count = (this.tempDisableCounts.get(apiKey) ?? 0) + 1;
+		this.tempDisableCounts.set(apiKey, count);
+
+		const multipliers = [1, 2, 5, 15, 30, 60];
+		const mult = multipliers[Math.min(count - 1, multipliers.length - 1)] ?? 60;
+		const baseMs = durationMs ?? this.tempCooldownMs;
+		const computedMs = baseMs * mult;
+
+		this.tempDisabledKeys.set(apiKey, Date.now() + computedMs);
+		return computedMs;
 	}
 
 	/**
@@ -50,9 +65,14 @@ export class KeyHealthManager {
 	 */
 	async handleInvalidKey(apiKey: string, errorCode: number): Promise<void> {
 		if (TEMPORARY_DISABLE_ERROR_CODES.has(errorCode)) {
-			this.markTemporarilyDisabled(apiKey);
+			const cooldownMs = this.markTemporarilyDisabled(apiKey);
+			const count = this.getTemporaryDisableCount(apiKey);
+			const durationStr =
+				cooldownMs >= 60_000
+					? `${Math.round(cooldownMs / 60_000)}m`
+					: `${cooldownMs}ms`;
 			logger.warn(
-				`API Key ending in '...${apiKey.slice(-4)}' is temporarily disabled by Torn (Error Code ${errorCode}). Skipping in-memory for ${Math.round(this.tempCooldownMs / 60000)}m.`,
+				`API Key ending in '...${apiKey.slice(-4)}' is temporarily disabled by Torn (Error Code ${errorCode}). Increasing cooldown to ${durationStr} (failure #${count}).`,
 			);
 			return;
 		}
@@ -80,6 +100,9 @@ export class KeyHealthManager {
 		}
 		if (this.tempDisabledKeys.has(apiKey)) {
 			this.tempDisabledKeys.delete(apiKey);
+		}
+		if (this.tempDisableCounts.has(apiKey)) {
+			this.tempDisableCounts.delete(apiKey);
 		}
 	}
 
