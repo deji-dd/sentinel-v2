@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.2.9
+// @version      2.3.1
 // @description  Userscript for Subversive Alliance Ranked War & Target Engine
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -34,6 +34,8 @@
 		targetSortOrder: "satf_target_sort_order",
 		ignoredTargets: "satf_ignored_targets",
 		currentTarget: "satf_current_target",
+		warOpponentIds: "satf_war_opponent_ids",
+		warState: "satf_war_state",
 	};
 
 	const DEFAULTS = {
@@ -64,10 +66,15 @@
 		hideHighFF: Boolean(GM_getValue(STORAGE.hideHighFF, false)),
 		ignoredTargets: GM_getValue(STORAGE.ignoredTargets, []) || [],
 		war: null,
+		warState: GM_getValue(STORAGE.warState, "no_war"),
+		warOpponentIds: GM_getValue(STORAGE.warOpponentIds, []) || [],
 		currentTarget: null,
 		allTargets: GM_getValue(STORAGE.cachedTargets, []) || [],
 		availableTargets: [],
-		targetSortBy: GM_getValue(STORAGE.targetSortBy, "ff"), // 'ff' | 'level' | 'online' | 'bs'
+		targetSortBy:
+			GM_getValue(STORAGE.targetSortBy, "ff") === "level"
+				? "ff"
+				: GM_getValue(STORAGE.targetSortBy, "ff"), // 'ff' | 'online' | 'bs'
 		targetSortOrder: GM_getValue(STORAGE.targetSortOrder, "desc"), // 'asc' | 'desc'
 		hospitalQueue: [],
 		hospLastSynced: null,
@@ -138,8 +145,6 @@
 		const sorted = [...pool];
 		if (state.targetSortBy === "ff") {
 			sorted.sort((a, b) => (a.fairFight - b.fairFight) * multiplier);
-		} else if (state.targetSortBy === "level") {
-			sorted.sort((a, b) => (a.level - b.level) * multiplier);
 		} else if (state.targetSortBy === "online") {
 			sorted.sort(
 				(a, b) => ((a.isOnline ? 1 : 0) - (b.isOnline ? 1 : 0)) * multiplier,
@@ -840,7 +845,6 @@
 						<span>Available Opponents (<span id="satf-avail-count">0</span>)</span>
 						<div class="satf-sort-pills">
 							<span class="satf-sort-pill" data-sort="ff">FF</span>
-							<span class="satf-sort-pill" data-sort="level">Level</span>
 							<span class="satf-sort-pill" data-sort="online">Online</span>
 							<span class="satf-sort-pill" data-sort="bs">BS</span>
 						</div>
@@ -1029,13 +1033,7 @@
 				const isActive = sortField === state.targetSortBy;
 				p.classList.toggle("active", isActive);
 				const baseLabel =
-					sortField === "ff"
-						? "FF"
-						: sortField === "level"
-							? "Level"
-							: sortField === "online"
-								? "Online"
-								: "BS";
+					sortField === "ff" ? "FF" : sortField === "online" ? "Online" : "BS";
 				if (isActive) {
 					const arrow = state.targetSortOrder === "asc" ? " ↑" : " ↓";
 					p.textContent = `${baseLabel}${arrow}`;
@@ -1074,8 +1072,6 @@
 			const multiplier = state.targetSortOrder === "asc" ? 1 : -1;
 			if (state.targetSortBy === "ff") {
 				sorted.sort((a, b) => (a.fairFight - b.fairFight) * multiplier);
-			} else if (state.targetSortBy === "level") {
-				sorted.sort((a, b) => (a.level - b.level) * multiplier);
 			} else if (state.targetSortBy === "online") {
 				sorted.sort(
 					(a, b) => ((a.isOnline ? 1 : 0) - (b.isOnline ? 1 : 0)) * multiplier,
@@ -1166,7 +1162,17 @@
 				const res = await apiRequest("/api/v1/target-finder/war/status");
 				if (res?.war) {
 					state.war = res.war;
+					state.warState = res.war.state;
+					try {
+						GM_setValue(STORAGE.warState, res.war.state);
+					} catch {}
 					renderWarBanner(res.war);
+				}
+				if (Array.isArray(res?.opponentIds)) {
+					state.warOpponentIds = res.opponentIds;
+					try {
+						GM_setValue(STORAGE.warOpponentIds, res.opponentIds);
+					} catch {}
 				}
 			} catch (err) {
 				console.debug(
@@ -1414,7 +1420,17 @@
 						const data = JSON.parse(event.data);
 						if (data.war) {
 							state.war = data.war;
+							state.warState = data.war.state;
+							try {
+								GM_setValue(STORAGE.warState, data.war.state);
+							} catch {}
 							renderWarBanner(data.war);
+						}
+						if (Array.isArray(data.opponentIds)) {
+							state.warOpponentIds = data.opponentIds;
+							try {
+								GM_setValue(STORAGE.warOpponentIds, data.opponentIds);
+							} catch {}
 						}
 						if (Array.isArray(data.targets)) {
 							renderAvailableTargets(data.targets);
@@ -1788,7 +1804,7 @@
 		}
 	}
 
-	// ─── IN-PAGE ATTACK HUD (Shown on Torn Attack Page) ──────────────────────────
+	// ─── IN-PAGE ATTACK HUD (Shown on Torn Attack Page for Ranked War Targets Only)
 	function initAttackPageHud() {
 		const href = window.location.href;
 		const isAttackPage =
@@ -1797,168 +1813,291 @@
 			href.includes("loader.php?sid=attack") ||
 			href.includes("loader2.php?sid=attack") ||
 			href.includes("page.php?sid=attack");
-		if (!isAttackPage) return;
+
+		const existingHost = document.getElementById("satf-attack-hud-host");
+
+		if (!isAttackPage) {
+			if (existingHost) existingHost.remove();
+			return;
+		}
 
 		const match = href.match(/[?&#]user2id=(\d+)/i);
 		const user2Id = match ? Number.parseInt(match[1], 10) : 0;
 		const token = state.token || GM_getValue(STORAGE.token, "");
-		if (!user2Id || !token) return;
 
-		let hudHost = document.getElementById("satf-attack-hud-host");
-		if (hudHost) {
-			if (hudHost.dataset.targetId === String(user2Id)) return;
-			hudHost.remove();
+		if (!user2Id || !token) {
+			if (existingHost) existingHost.remove();
+			return;
 		}
 
-		hudHost = document.createElement("div");
-		hudHost.id = "satf-attack-hud-host";
-		hudHost.dataset.targetId = String(user2Id);
-		(document.body || document.documentElement).appendChild(hudHost);
-		const hudRoot = hudHost.attachShadow({ mode: "open" });
-
-		hudRoot.innerHTML = `
-		<style>
-			:host {
-				all: initial;
-				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-			}
-			#satf-attack-bar {
-				position: fixed;
-				top: 10px;
-				left: 50%;
-				transform: translateX(-50%);
-				z-index: 2147483647 !important;
-				background: rgba(15, 15, 18, 0.96);
-				backdrop-filter: blur(14px);
-				border: 1px solid #27272a;
-				border-radius: 12px;
-				padding: 6px 14px;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				flex-wrap: wrap;
-				gap: 8px 12px;
-				max-width: calc(100vw - 20px);
-				color: #f4f4f5;
-				box-shadow: 0 8px 30px rgba(0,0,0,0.8);
-				font-size: 12px;
-				pointer-events: auto;
-			}
-			.satf-hud-badge {
-				font-weight: 800;
-				color: #10b981;
-				font-size: 11px;
-				letter-spacing: 0.5px;
-			}
-			.satf-hud-stat {
-				display: flex;
-				align-items: center;
-				gap: 6px;
-			}
-			.satf-hud-val {
-				font-weight: 800;
-				color: #fff;
-			}
-			.satf-hud-ff {
-				font-weight: 800;
-				color: #f4f4f5;
-			}
-			.ff-white { color: #f4f4f5 !important; }
-			.ff-green { color: #10b981 !important; }
-			.ff-blue { color: #3b82f6 !important; }
-			.ff-yellow { color: #eab308 !important; }
-			.ff-red { color: #ef4444 !important; }
-			.satf-hud-btn {
-				background: #27272a;
-				border: 1px solid #3f3f46;
-				color: #fff;
-				border-radius: 6px;
-				padding: 4px 8px;
-				font-size: 11px;
-				font-weight: 700;
-				cursor: pointer;
-				transition: all 0.15s;
-			}
-			.satf-hud-btn:hover {
-				background: #3f3f46;
-				border-color: #10b981;
-			}
-			.satf-hud-btn-danger:hover {
-				border-color: #ef4444;
-				color: #f87171;
-			}
-		</style>
-		<div id="satf-attack-bar">
-			<span class="satf-hud-badge">[SA]</span>
-			<div class="satf-hud-stat">
-				<span id="satf-hud-name" class="satf-hud-val">${user2Id}</span>
-			</div>
-			<div class="satf-hud-stat">
-				<span style="color:#a1a1aa;">BS:</span>
-				<span id="satf-hud-bs" class="satf-hud-val">Loading...</span>
-			</div>
-			<div class="satf-hud-stat">
-				<span style="color:#a1a1aa;">FF:</span>
-				<span id="satf-hud-ff" class="satf-hud-ff">--</span>
-			</div>
-			<button id="satf-hud-ignore" class="satf-hud-btn satf-hud-btn-danger" title="Ignore target and get next">Ignore</button>
-			<button id="satf-hud-next" class="satf-hud-btn">Next Target</button>
-		</div>
-		`;
-
-		const hudName = hudRoot.getElementById("satf-hud-name");
-		const hudBs = hudRoot.getElementById("satf-hud-bs");
-		const hudFf = hudRoot.getElementById("satf-hud-ff");
-		const btnHudIgnore = hudRoot.getElementById("satf-hud-ignore");
-		const btnHudNext = hudRoot.getElementById("satf-hud-next");
-
-		function applyHudDetails(t) {
-			if (!t) return;
-			hudName.textContent = t.name ? `${t.name} [${user2Id}]` : `[${user2Id}]`;
-			hudBs.textContent = formatStats(t.estimatedBs);
-			hudFf.textContent = t.fairFight.toFixed(2);
-			hudFf.style.color = getFFColor(t.fairFight);
+		// Clean up host if attached to a different target
+		if (existingHost && existingHost.dataset.targetId !== String(user2Id)) {
+			existingHost.remove();
 		}
 
-		// 1. Instant check in memory or GM storage
-		const currentTarget =
-			(state.currentTarget && state.currentTarget.id === user2Id
-				? state.currentTarget
-				: null) || GM_getValue(STORAGE.currentTarget, null);
-		if (currentTarget && currentTarget.id === user2Id) {
-			applyHudDetails(currentTarget);
+		function isKnownWarTarget(id) {
+			const isWarActive =
+				(state.war && state.war.state === "active") ||
+				state.warState === "active";
+
+			if (!isWarActive) {
+				return false;
+			}
+
+			// 1. Check cached opponent IDs from backend
+			if (
+				Array.isArray(state.warOpponentIds) &&
+				state.warOpponentIds.includes(id)
+			) {
+				return true;
+			}
+
+			// 2. Check currentTarget in memory or GM storage
+			const curTarget =
+				(state.currentTarget && state.currentTarget.id === id
+					? state.currentTarget
+					: null) || GM_getValue(STORAGE.currentTarget, null);
+			if (curTarget && curTarget.id === id && curTarget.isWarTarget !== false) {
+				return true;
+			}
+
+			// 3. Check client war target list or hospital queue
+			const inAvailable = (state.allTargets || []).some(
+				(t) => t.id === id && t.isWarTarget !== false,
+			);
+			const inHosp = (state.hospitalQueue || []).some((t) => t.id === id);
+			if (inAvailable || inHosp) {
+				return true;
+			}
+
+			// 4. Check Torn DOM: If defender faction link matches opponent faction ID
+			if (state.war?.opponent?.id) {
+				const oppFacId = String(state.war.opponent.id);
+				const factionLink = document.querySelector(
+					`a[href*="factions.php?step=profile&ID=${oppFacId}"], a[href*="factions.php?step=profile&id=${oppFacId}"]`,
+				);
+				if (factionLink) return true;
+			}
+
+			return false;
 		}
 
-		// 2. Fresh fetch from backend API
+		function applyHudDetails(hudRoot, t) {
+			if (!t || !hudRoot) return;
+			const hudName = hudRoot.getElementById("satf-hud-name");
+			const hudBs = hudRoot.getElementById("satf-hud-bs");
+			const hudFf = hudRoot.getElementById("satf-hud-ff");
+			if (hudName) {
+				hudName.textContent = t.name
+					? `${t.name} [${user2Id}]`
+					: `[${user2Id}]`;
+			}
+			if (hudBs) {
+				hudBs.textContent = formatStats(t.estimatedBs);
+			}
+			if (hudFf && typeof t.fairFight === "number") {
+				hudFf.textContent = t.fairFight.toFixed(2);
+				hudFf.style.color = getFFColor(t.fairFight);
+			}
+		}
+
+		function mountHud(initialData) {
+			let host = document.getElementById("satf-attack-hud-host");
+			if (host) {
+				if (host.dataset.targetId === String(user2Id)) {
+					if (initialData && host.shadowRoot) {
+						applyHudDetails(host.shadowRoot, initialData);
+					}
+					return host;
+				}
+				host.remove();
+			}
+
+			host = document.createElement("div");
+			host.id = "satf-attack-hud-host";
+			host.dataset.targetId = String(user2Id);
+			(document.body || document.documentElement).appendChild(host);
+			const hudRoot = host.attachShadow({ mode: "open" });
+
+			hudRoot.innerHTML = `
+			<style>
+				:host {
+					all: initial;
+					font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+				}
+				#satf-attack-bar {
+					position: fixed;
+					top: 10px;
+					left: 50%;
+					transform: translateX(-50%);
+					z-index: 2147483647 !important;
+					background: rgba(15, 15, 18, 0.96);
+					backdrop-filter: blur(14px);
+					border: 1px solid #27272a;
+					border-radius: 12px;
+					padding: 6px 14px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					flex-wrap: wrap;
+					gap: 8px 12px;
+					max-width: calc(100vw - 20px);
+					color: #f4f4f5;
+					box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+					font-size: 12px;
+					pointer-events: auto;
+				}
+				.satf-hud-badge {
+					font-weight: 800;
+					color: #10b981;
+					font-size: 11px;
+					letter-spacing: 0.5px;
+				}
+				.satf-hud-stat {
+					display: flex;
+					align-items: center;
+					gap: 6px;
+				}
+				.satf-hud-val {
+					font-weight: 800;
+					color: #fff;
+				}
+				.satf-hud-ff {
+					font-weight: 800;
+					color: #f4f4f5;
+				}
+				.ff-white { color: #f4f4f5 !important; }
+				.ff-green { color: #10b981 !important; }
+				.ff-blue { color: #3b82f6 !important; }
+				.ff-yellow { color: #eab308 !important; }
+				.ff-red { color: #ef4444 !important; }
+				.satf-hud-btn {
+					background: #27272a;
+					border: 1px solid #3f3f46;
+					color: #fff;
+					border-radius: 6px;
+					padding: 4px 8px;
+					font-size: 11px;
+					font-weight: 700;
+					cursor: pointer;
+					transition: all 0.15s;
+				}
+				.satf-hud-btn:hover {
+					background: #3f3f46;
+					border-color: #10b981;
+				}
+				.satf-hud-btn-danger:hover {
+					border-color: #ef4444;
+					color: #f87171;
+				}
+			</style>
+			<div id="satf-attack-bar">
+				<span class="satf-hud-badge">[SA]</span>
+				<div class="satf-hud-stat">
+					<span id="satf-hud-name" class="satf-hud-val">${user2Id}</span>
+				</div>
+				<div class="satf-hud-stat">
+					<span style="color:#a1a1aa;">BS:</span>
+					<span id="satf-hud-bs" class="satf-hud-val">Loading...</span>
+				</div>
+				<div class="satf-hud-stat">
+					<span style="color:#a1a1aa;">FF:</span>
+					<span id="satf-hud-ff" class="satf-hud-ff">--</span>
+				</div>
+				<button id="satf-hud-ignore" class="satf-hud-btn satf-hud-btn-danger" title="Ignore target and get next">Ignore</button>
+				<button id="satf-hud-next" class="satf-hud-btn">Next Target</button>
+			</div>
+			`;
+
+			const btnHudIgnore = hudRoot.getElementById("satf-hud-ignore");
+			const btnHudNext = hudRoot.getElementById("satf-hud-next");
+
+			btnHudIgnore?.addEventListener("click", () => {
+				if (!state.ignoredTargets.includes(user2Id)) {
+					state.ignoredTargets.push(user2Id);
+					GM_setValue(STORAGE.ignoredTargets, state.ignoredTargets);
+				}
+				loadNextTargetDirectly(hudRoot);
+			});
+
+			btnHudNext?.addEventListener("click", () => {
+				loadNextTargetDirectly(hudRoot);
+			});
+
+			if (initialData) {
+				applyHudDetails(hudRoot, initialData);
+			}
+			return host;
+		}
+
+		// 1. Instant check: Only mount immediately if target is known to be in active RW
+		const isKnown = isKnownWarTarget(user2Id);
+		if (isKnown) {
+			const currentTarget =
+				(state.currentTarget && state.currentTarget.id === user2Id
+					? state.currentTarget
+					: null) ||
+				GM_getValue(STORAGE.currentTarget, null) ||
+				(state.allTargets || []).find((t) => t.id === user2Id) ||
+				(state.hospitalQueue || []).find((t) => t.id === user2Id);
+			mountHud(
+				currentTarget && currentTarget.id === user2Id ? currentTarget : null,
+			);
+		}
+
+		// 2. Query backend for target intel & ranked war verification
 		apiRequest(`/api/v1/target-finder/war/targets/${user2Id}`)
 			.then((res) => {
-				if (res?.target) {
-					applyHudDetails(res.target);
-					state.currentTarget = res.target;
-					GM_setValue(STORAGE.currentTarget, res.target);
+				const isWarTarget =
+					res?.isWarTarget === true || res?.target?.isWarTarget === true;
+
+				if (isWarTarget) {
+					// Add to known war opponent cache
+					if (!state.warOpponentIds.includes(user2Id)) {
+						state.warOpponentIds.push(user2Id);
+						try {
+							GM_setValue(STORAGE.warOpponentIds, state.warOpponentIds);
+						} catch {}
+					}
+
+					const host = mountHud(res.target);
+					if (res.target) {
+						state.currentTarget = res.target;
+						GM_setValue(STORAGE.currentTarget, res.target);
+						if (host?.shadowRoot) {
+							applyHudDetails(host.shadowRoot, res.target);
+						}
+					}
+				} else {
+					// Not in RW: Remove overhead display if present
+					const host = document.getElementById("satf-attack-hud-host");
+					if (host && host.dataset.targetId === String(user2Id)) {
+						host.remove();
+					}
 				}
 			})
 			.catch(() => {
-				if (hudBs.textContent === "Loading...") {
-					hudBs.textContent = "Unscouted";
+				const host = document.getElementById("satf-attack-hud-host");
+				if (isKnown && host?.shadowRoot) {
+					const hudBs = host.shadowRoot.getElementById("satf-hud-bs");
+					if (hudBs && hudBs.textContent === "Loading...") {
+						hudBs.textContent = "Unscouted";
+					}
+				} else if (
+					!isKnown &&
+					host &&
+					host.dataset.targetId === String(user2Id)
+				) {
+					host.remove();
 				}
 			});
 
-		btnHudIgnore.addEventListener("click", () => {
-			if (!state.ignoredTargets.includes(user2Id)) {
-				state.ignoredTargets.push(user2Id);
-				GM_setValue(STORAGE.ignoredTargets, state.ignoredTargets);
+		async function loadNextTargetDirectly(hudRoot) {
+			const btnHudNext = hudRoot?.getElementById("satf-hud-next");
+			if (btnHudNext) {
+				btnHudNext.textContent = "Loading...";
+				btnHudNext.disabled = true;
 			}
-			loadNextTargetDirectly();
-		});
-
-		btnHudNext.addEventListener("click", () => {
-			loadNextTargetDirectly();
-		});
-
-		async function loadNextTargetDirectly() {
-			btnHudNext.textContent = "Loading...";
-			btnHudNext.disabled = true;
 			try {
 				// 1. First pick candidate from client target list respecting active sort & hideHighFF filter
 				const candidate = getNextTargetCandidate(user2Id);
@@ -1990,8 +2129,10 @@
 						alert(
 							`No opponents available within FF <= ${state.maxFFThreshold.toFixed(1)}`,
 						);
-						btnHudNext.textContent = "Next Target";
-						btnHudNext.disabled = false;
+						if (btnHudNext) {
+							btnHudNext.textContent = "Next Target";
+							btnHudNext.disabled = false;
+						}
 						return;
 					}
 					state.currentTarget = res.target;
@@ -2000,13 +2141,17 @@
 					window.location.href = res.target.attackUrl;
 				} else {
 					alert(res.message || "No alternative war targets available.");
-					btnHudNext.textContent = "Next Target";
-					btnHudNext.disabled = false;
+					if (btnHudNext) {
+						btnHudNext.textContent = "Next Target";
+						btnHudNext.disabled = false;
+					}
 				}
 			} catch (err) {
 				alert(`Failed to acquire next target: ${err.message}`);
-				btnHudNext.textContent = "Next Target";
-				btnHudNext.disabled = false;
+				if (btnHudNext) {
+					btnHudNext.textContent = "Next Target";
+					btnHudNext.disabled = false;
+				}
 			}
 		}
 	}

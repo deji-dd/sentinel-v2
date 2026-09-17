@@ -491,7 +491,7 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(availData.total).toBeGreaterThanOrEqual(1);
 		expect(availData.targets[0]?.id).toBe(503); // 503 has early discharge, 502 is in hosp
 
-		// Test GET /war/targets/:id
+		// Test GET /war/targets/:id (War Opponent)
 		const detailRes = await app.handle(
 			new Request("http://localhost/api/v1/target-finder/war/targets/503", {
 				headers: { Authorization: `Bearer ${testToken}` },
@@ -499,11 +499,34 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		);
 		const detailData = (await detailRes.json()) as {
 			success: boolean;
-			target: { id: number; name: string; fairFight: number };
+			isWarTarget?: boolean;
+			target: {
+				id: number;
+				name: string;
+				fairFight: number;
+				isWarTarget?: boolean;
+			};
 		};
 		expect(detailData.success).toBe(true);
+		expect(detailData.isWarTarget).toBe(true);
 		expect(detailData.target.id).toBe(503);
+		expect(detailData.target.isWarTarget).toBe(true);
 		expect(detailData.target.name).toBe("EnemyEarlyDischarge");
 		expect(detailData.target.fairFight).toBeGreaterThanOrEqual(1.0);
+
+		// Test GET /war/targets/:id (Non-War Target)
+		const nonWarRes = await app.handle(
+			new Request("http://localhost/api/v1/target-finder/war/targets/999999", {
+				headers: { Authorization: `Bearer ${testToken}` },
+			}),
+		);
+		const nonWarData = (await nonWarRes.json()) as {
+			success: boolean;
+			isWarTarget?: boolean;
+			target: { id: number; isWarTarget?: boolean };
+		};
+		expect(nonWarData.success).toBe(true);
+		expect(nonWarData.isWarTarget).toBe(false);
+		expect(nonWarData.target.isWarTarget).toBe(false);
 	});
 });

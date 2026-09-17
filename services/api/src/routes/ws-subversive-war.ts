@@ -27,11 +27,14 @@ export function broadcastWarUpdate(): void {
 				attackerBsScore,
 			});
 
+			const opponentIds = subversiveTargetCache.getWarOpponentIds();
+
 			client.send({
 				type: "war_update",
 				war,
 				targets,
 				hospitalQueue,
+				opponentIds,
 				timestamp: Date.now(),
 			});
 		} catch {
@@ -68,12 +71,14 @@ export const wsSubversiveWarRoutes = new Elysia().ws("/api/ws/subversive-war", {
 			limit: 25,
 			attackerBsScore,
 		});
+		const opponentIds = subversiveTargetCache.getWarOpponentIds();
 
 		ws.send({
 			type: "war_snapshot",
 			war,
 			targets,
 			hospitalQueue,
+			opponentIds,
 			timestamp: Date.now(),
 		});
 	},

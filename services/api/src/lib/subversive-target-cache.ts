@@ -434,6 +434,18 @@ class SubversiveTargetCache {
 		return Array.from(this.warOpponents.values());
 	}
 
+	isWarOpponent(targetId: number): boolean {
+		return (
+			this.currentWar.state === "active" && this.warOpponents.has(targetId)
+		);
+	}
+
+	getWarOpponentIds(): number[] {
+		return this.currentWar.state === "active"
+			? Array.from(this.warOpponents.keys())
+			: [];
+	}
+
 	getNextWarTarget(options: {
 		attackerBsScore: number;
 		excludeIds?: Set<number>;
@@ -780,8 +792,10 @@ class SubversiveTargetCache {
 			until: number | null;
 		};
 		attackUrl: string;
+		isWarTarget: boolean;
 	}> {
-		const opp = this.warOpponents.get(targetId);
+		const isWarActive = this.currentWar.state === "active";
+		const opp = isWarActive ? this.warOpponents.get(targetId) : undefined;
 		if (opp) {
 			const rawFF =
 				attackerBsScore > 0 && opp.estimatedScore > 0
@@ -798,6 +812,7 @@ class SubversiveTargetCache {
 				isOnline: opp.lastAction.status?.toLowerCase() === "online",
 				status: opp.status,
 				attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${opp.id}`,
+				isWarTarget: true,
 			};
 		}
 
@@ -824,6 +839,7 @@ class SubversiveTargetCache {
 					until: null,
 				},
 				attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${cached.targetId}`,
+				isWarTarget: false,
 			};
 		}
 
@@ -855,6 +871,7 @@ class SubversiveTargetCache {
 						until: null,
 					},
 					attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${dbRow.targetId}`,
+					isWarTarget: false,
 				};
 			}
 		} catch {}
@@ -882,6 +899,7 @@ class SubversiveTargetCache {
 						until: null,
 					},
 					attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${targetId}`,
+					isWarTarget: false,
 				};
 			}
 		} catch {}
@@ -906,6 +924,7 @@ class SubversiveTargetCache {
 				until: null,
 			},
 			attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${targetId}`,
+			isWarTarget: false,
 		};
 	}
 }

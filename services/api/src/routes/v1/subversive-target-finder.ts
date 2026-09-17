@@ -710,6 +710,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				lead,
 			},
 			totalOpponents: opponents.length,
+			opponentIds: war.state === "active" ? opponents.map((o) => o.id) : [],
 		};
 	})
 
@@ -861,6 +862,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		return {
 			success: true,
+			isWarTarget: target.isWarTarget,
 			target,
 		};
 	})
