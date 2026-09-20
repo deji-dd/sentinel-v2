@@ -417,6 +417,9 @@ class SubversiveTargetCache {
 
 	setWarState(info: CurrentWarInfo): void {
 		this.currentWar = info;
+		if (info.state !== "active") {
+			this.warOpponents.clear();
+		}
 	}
 
 	getWarState(): CurrentWarInfo {
@@ -469,6 +472,11 @@ class SubversiveTargetCache {
 			maxFF = 3.0,
 			maxOnlineFF = Math.max(3.5, (options.maxFF ?? 3.0) + 0.5),
 		} = options;
+
+		if (this.currentWar.state !== "active") {
+			return null;
+		}
+
 		const nowSec = Math.floor(Date.now() / 1000);
 		const opponents = Array.from(this.warOpponents.values());
 
@@ -577,13 +585,7 @@ class SubversiveTargetCache {
 			return state === "okay";
 		});
 
-		// 2. In hospital but has early discharge
-		const earlyDischargeList = scored.filter((opp) => {
-			const state = opp.status.state?.toLowerCase() ?? "";
-			return state === "hospital" && opp.hasEarlyDischarge;
-		});
-
-		// 3. Hospital exiting in <= 30 seconds
+		// 2. Hospital exiting in <= 30 seconds
 		const hospExitSoonList = scored
 			.filter((opp) => {
 				const state = opp.status.state?.toLowerCase() ?? "";
@@ -601,9 +603,6 @@ class SubversiveTargetCache {
 		if (readyList.length > 0) {
 			selectedResult = pickCandidate(readyList);
 			statusCategory = "ready";
-		} else if (earlyDischargeList.length > 0) {
-			selectedResult = pickCandidate(earlyDischargeList);
-			statusCategory = "early_discharge";
 		} else if (hospExitSoonList.length > 0) {
 			selectedResult = pickCandidate(hospExitSoonList);
 			statusCategory = "hosp_exit";
@@ -626,6 +625,10 @@ class SubversiveTargetCache {
 	getHospitalQueue(
 		options: number | { limit?: number; attackerBsScore?: number } = 15,
 	): (RankedWarOpponent & { secondsRemaining: number; fairFight: number })[] {
+		if (this.currentWar.state !== "active") {
+			return [];
+		}
+
 		const limit = typeof options === "number" ? options : (options.limit ?? 15);
 		const attackerBsScore =
 			typeof options === "object" ? (options.attackerBsScore ?? 0) : 0;
@@ -635,8 +638,8 @@ class SubversiveTargetCache {
 				const state = opp.status.state?.toLowerCase() ?? "";
 				return (
 					state === "hospital" &&
-					opp.status.until !== null &&
-					opp.status.until > nowSec
+					((opp.status.until !== null && opp.status.until > nowSec) ||
+						opp.hasEarlyDischarge)
 				);
 			})
 			.map((opp) => {
@@ -647,7 +650,7 @@ class SubversiveTargetCache {
 				const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
 				return {
 					...opp,
-					secondsRemaining: (opp.status.until ?? nowSec) - nowSec,
+					secondsRemaining: Math.max(0, (opp.status.until ?? nowSec) - nowSec),
 					fairFight,
 				};
 			})
@@ -667,6 +670,10 @@ class SubversiveTargetCache {
 			attackUrl: string;
 		}
 	> {
+		if (this.currentWar.state !== "active") {
+			return [];
+		}
+
 		const { attackerBsScore, excludeIds = new Set() } = options;
 		const opponents = Array.from(this.warOpponents.values());
 
@@ -682,18 +689,8 @@ class SubversiveTargetCache {
 			) {
 				return false;
 			}
-			return (
-				state === "okay" || (state === "hospital" && opp.hasEarlyDischarge)
-			);
+			return state === "okay";
 		});
-
-		if (attackable.length === 0) {
-			return this.getReadyTargets({
-				attackerBsScore,
-				excludeIds,
-				limit: 30,
-			});
-		}
 
 		return attackable.map((opp) => {
 			const rawFF =
@@ -702,10 +699,7 @@ class SubversiveTargetCache {
 					: 1.0;
 			const calculatedFF = Math.max(1.0, Number(rawFF.toFixed(2)));
 			const isOnline = opp.lastAction.status?.toLowerCase() === "online";
-			const statusCategory: "ready" | "early_discharge" =
-				(opp.status.state?.toLowerCase() ?? "") === "okay"
-					? "ready"
-					: "early_discharge";
+			const statusCategory: "ready" | "early_discharge" = "ready";
 
 			return {
 				...opp,

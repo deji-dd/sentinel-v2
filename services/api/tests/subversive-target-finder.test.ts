@@ -456,6 +456,30 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 				estimatedBs: 800000,
 				estimatedScore: 1800,
 			},
+			{
+				id: 504,
+				name: "EnemyReady",
+				level: 40,
+				daysInFaction: 30,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: {
+					status: "Online",
+					timestamp: nowSec,
+					relative: "Just now",
+				},
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+				estimatedBs: 600000,
+				estimatedScore: 1550,
+			},
 		]);
 
 		const hospRes = await app.handle(
@@ -469,10 +493,11 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 			queue: Array<{ id: number; secondsRemaining: number }>;
 		};
 		expect(hospData.success).toBe(true);
-		expect(hospData.queue.length).toBeGreaterThanOrEqual(2);
-		expect(hospData.queue[0]?.id).toBe(503); // 600s vs 1200s
+		expect(hospData.queue.length).toBe(2);
+		expect(hospData.queue[0]?.id).toBe(503); // 600s vs 1200s (early discharge in hospital)
+		expect(hospData.queue.some((q) => q.id === 504)).toBe(false);
 
-		// 9. Test Available War Targets list
+		// 9. Test Available War Targets list: early discharge (503) is in hosp so must NOT be in available targets
 		const availRes = await app.handle(
 			new Request(
 				"http://localhost/api/v1/target-finder/war/targets/available",
@@ -488,8 +513,9 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 			total: number;
 		};
 		expect(availData.success).toBe(true);
-		expect(availData.total).toBeGreaterThanOrEqual(1);
-		expect(availData.targets[0]?.id).toBe(503); // 503 has early discharge, 502 is in hosp
+		expect(availData.total).toBe(1);
+		expect(availData.targets[0]?.id).toBe(504); // Only EnemyReady (504) is available
+		expect(availData.targets.some((t) => t.id === 503)).toBe(false); // 503 is in hospital queue/upcoming, NOT available
 
 		// Test GET /war/targets/:id (War Opponent)
 		const detailRes = await app.handle(
@@ -528,5 +554,60 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(nonWarData.success).toBe(true);
 		expect(nonWarData.isWarTarget).toBe(false);
 		expect(nonWarData.target.isWarTarget).toBe(false);
+
+		// 10. When war finishes (no active war), available targets, hospital queue, and next target are empty/null
+		subversiveTargetCache.setWarState({
+			state: "no_war",
+			warId: null,
+			start: null,
+			target: null,
+			winner: null,
+			opponent: null,
+			subversive: null,
+			lastUpdated: Date.now(),
+		});
+
+		const postWarAvailRes = await app.handle(
+			new Request(
+				"http://localhost/api/v1/target-finder/war/targets/available",
+				{
+					headers: { Authorization: `Bearer ${testToken}` },
+				},
+			),
+		);
+		const postWarAvailData = (await postWarAvailRes.json()) as {
+			success: boolean;
+			targets: unknown[];
+			total: number;
+		};
+		expect(postWarAvailData.success).toBe(true);
+		expect(postWarAvailData.targets.length).toBe(0);
+		expect(postWarAvailData.total).toBe(0);
+
+		const postWarHospRes = await app.handle(
+			new Request("http://localhost/api/v1/target-finder/war/hospital-queue", {
+				headers: { Authorization: `Bearer ${testToken}` },
+			}),
+		);
+		const postWarHospData = (await postWarHospRes.json()) as {
+			success: boolean;
+			queue: unknown[];
+		};
+		expect(postWarHospData.success).toBe(true);
+		expect(postWarHospData.queue.length).toBe(0);
+
+		const postWarNextRes = await app.handle(
+			new Request("http://localhost/api/v1/target-finder/war/targets/next", {
+				headers: { Authorization: `Bearer ${testToken}` },
+			}),
+		);
+		const postWarNextData = (await postWarNextRes.json()) as {
+			success: boolean;
+			message: string;
+			target: unknown;
+		};
+		expect(postWarNextData.success).toBe(false);
+		expect(postWarNextData.message).toContain("No active ranked war");
+		expect(postWarNextData.target).toBeNull();
 	});
 });

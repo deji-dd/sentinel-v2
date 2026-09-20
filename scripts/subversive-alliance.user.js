@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.3.1
+// @version      2.3.3
 // @description  Userscript for Subversive Alliance Ranked War & Target Engine
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -127,6 +127,11 @@
 	}
 
 	function getNextTargetCandidate(excludeId) {
+		const isWarActive = state.war
+			? state.war.state === "active"
+			: state.warState === "active";
+		if (!isWarActive) return null;
+
 		const excludes = new Set([
 			...state.excludeIds.slice(-20),
 			...state.ignoredTargets,
@@ -136,6 +141,10 @@
 		const pool = (state.allTargets || []).filter((t) => {
 			if (excludes.has(t.id)) return false;
 			if (state.hideHighFF && t.fairFight > state.maxFFThreshold) return false;
+			if (t.statusCategory === "early_discharge" || t.hasEarlyDischarge)
+				return false;
+			const st = (t.status?.state || "").toLowerCase();
+			if (st === "hospital") return false;
 			return true;
 		});
 
@@ -983,6 +992,18 @@
 				scoreTarget.style.color = "var(--muted)";
 				oppName.textContent = "Opponent";
 				scoreOpp.textContent = "--";
+
+				// Clear local targets and storage when war ends
+				state.allTargets = [];
+				state.availableTargets = [];
+				state.hospitalQueue = [];
+				state.warOpponentIds = [];
+				try {
+					GM_setValue(STORAGE.cachedTargets, []);
+					GM_setValue(STORAGE.warOpponentIds, []);
+				} catch {}
+				renderAvailableTargets([]);
+				renderHospitalQueue([]);
 				return;
 			}
 
@@ -998,6 +1019,18 @@
 				scoreTarget.style.color = war.target ? "var(--text)" : "var(--muted)";
 				oppName.textContent = war.opponent ? war.opponent.name : "Opponent";
 				scoreOpp.textContent = "0";
+
+				// Standby until war actually starts
+				state.allTargets = [];
+				state.availableTargets = [];
+				state.hospitalQueue = [];
+				state.warOpponentIds = [];
+				try {
+					GM_setValue(STORAGE.cachedTargets, []);
+					GM_setValue(STORAGE.warOpponentIds, []);
+				} catch {}
+				renderAvailableTargets([]);
+				renderHospitalQueue([]);
 				return;
 			}
 
@@ -1050,11 +1083,31 @@
 					GM_setValue(STORAGE.cachedTargets, targets);
 				} catch {}
 			}
+
+			const isWarActive = state.war
+				? state.war.state === "active"
+				: state.warState === "active";
+
+			if (!isWarActive) {
+				state.availableTargets = [];
+				availCount.textContent = "0";
+				availList.innerHTML = `
+					<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
+						No active ranked war. Opponent tracking on standby.
+					</div>
+				`;
+				return;
+			}
+
 			const source = state.allTargets || [];
 			state.availableTargets = source.filter((t) => {
 				if (state.ignoredTargets.includes(t.id)) return false;
 				if (state.hideHighFF && t.fairFight > state.maxFFThreshold)
 					return false;
+				if (t.statusCategory === "early_discharge" || t.hasEarlyDischarge)
+					return false;
+				const st = (t.status?.state || "").toLowerCase();
+				if (st === "hospital") return false;
 				return true;
 			});
 			availCount.textContent = String(state.availableTargets.length);
@@ -1085,10 +1138,6 @@
 					const onlineDot = t.isOnline
 						? `<span class="satf-dot-online"></span>`
 						: "";
-					const dischargeBadge =
-						t.statusCategory === "early_discharge"
-							? `<span class="satf-badge-pill status-discharge">[DISCHARGE]</span>`
-							: "";
 
 					return `
 						<div class="satf-roster-row" data-id="${t.id}" data-url="${t.attackUrl}">
@@ -1099,7 +1148,7 @@
 									<span style="color:var(--muted); font-size:11px;">[${t.id}]</span>
 								</div>
 								<div class="satf-roster-sub">
-									Lvl ${t.level} · BS ${formatStats(t.estimatedBs)} ${dischargeBadge}
+									Lvl ${t.level} · BS ${formatStats(t.estimatedBs)}
 								</div>
 							</div>
 							<div class="satf-roster-right">
@@ -1141,12 +1190,16 @@
 				const res = await apiRequest(
 					`/api/v1/target-finder/war/targets/available?${params.toString()}`,
 				);
-				if (Array.isArray(res?.targets)) {
-					renderAvailableTargets(res.targets);
-				}
 				if (res?.war) {
 					state.war = res.war;
+					state.warState = res.war.state;
+					try {
+						GM_setValue(STORAGE.warState, res.war.state);
+					} catch {}
 					renderWarBanner(res.war);
+				}
+				if (Array.isArray(res?.targets)) {
+					renderAvailableTargets(res.targets);
 				}
 			} catch (err) {
 				console.debug(
@@ -1193,6 +1246,14 @@
 			if (flightState !== "okay") {
 				updateTravelLock();
 				setStatus("Target dispatch locked while traveling or abroad.", "error");
+				return;
+			}
+
+			const isWarActive = state.war
+				? state.war.state === "active"
+				: state.warState === "active";
+			if (!isWarActive) {
+				setStatus("No active ranked war.", "error");
 				return;
 			}
 
@@ -1316,6 +1377,21 @@
 		}
 
 		function renderHospitalQueue(queue = []) {
+			const isWarActive = state.war
+				? state.war.state === "active"
+				: state.warState === "active";
+
+			if (!isWarActive) {
+				state.hospitalQueue = [];
+				hospContainer.innerHTML = `
+					<div style="text-align: center; padding: 20px 0; color: var(--muted); font-size: 12px;">
+						No active ranked war. Hospital queue on standby.
+					</div>
+				`;
+				stopHospTimer();
+				return;
+			}
+
 			const nowSec = Math.floor(Date.now() / 1000);
 			state.hospitalQueue = queue.map((item) => {
 				const ff =
@@ -1383,6 +1459,14 @@
 
 		async function fetchHospitalQueue() {
 			if (!state.token) return;
+
+			const isWarActive = state.war
+				? state.war.state === "active"
+				: state.warState === "active";
+			if (!isWarActive) {
+				renderHospitalQueue([]);
+				return;
+			}
 
 			try {
 				const res = await apiRequest(

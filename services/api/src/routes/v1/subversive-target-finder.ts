@@ -762,63 +762,30 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			? Number.parseFloat(query.maxFF as string)
 			: undefined;
 
-		let target =
-			war.state !== "no_war"
-				? subversiveTargetCache.getNextWarTarget({
-						attackerBsScore: session.bsScore,
-						excludeIds,
-						minFF,
-						maxFF,
-					})
-				: null;
-
-		if (!target) {
-			const general = subversiveTargetCache.findNextTarget({
-				attackerScore: session.bsScore,
-				minFF: minFF ?? 1.5,
-				maxFF: maxFF ?? 3.0,
-				excludeIds,
-			});
-			if (general) {
-				target = {
-					id: general.id,
-					name: general.name,
-					level: general.level,
-					daysInFaction: 0,
-					position: "Member",
-					isOnWall: false,
-					isInOc: false,
-					hasEarlyDischarge: false,
-					lastAction: {
-						status: general.isInactive ? "Offline" : "Online",
-						timestamp: 0,
-						relative: "",
-					},
-					status: {
-						description: "Okay",
-						details: null,
-						state: "okay",
-						color: "green",
-						until: null,
-					},
-					estimatedBs: general.estimatedBs,
-					estimatedScore: 2 * Math.sqrt(general.estimatedBs),
-					fairFight: general.fairFight,
-					isOnline: !general.isInactive,
-					isHighFF: general.fairFight > 3.0,
-					statusCategory: "ready" as const,
-					attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${general.id}`,
-				};
-			}
-		}
-
-		if (!target) {
+		if (war.state !== "active") {
 			return {
 				success: false,
 				message:
 					war.state === "scheduled"
 						? "Ranked war has not started yet. Targets will be available once the war begins."
-						: "No targets currently available matching criteria. Check hospital queue or settings.",
+						: "No active ranked war.",
+				target: null,
+				war,
+			};
+		}
+
+		const target = subversiveTargetCache.getNextWarTarget({
+			attackerBsScore: session.bsScore,
+			excludeIds,
+			minFF,
+			maxFF,
+		});
+
+		if (!target) {
+			return {
+				success: false,
+				message:
+					"No targets currently available matching criteria. Check hospital queue or settings.",
 				target: null,
 				war,
 			};
