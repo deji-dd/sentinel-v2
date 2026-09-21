@@ -34,12 +34,18 @@ export interface PersonalBountyState {
 const recheckRateLimiter = new UserRateLimiter(50, 60_000);
 
 let inMemoryBountyStateCache: PersonalBountyState | null = null;
+let isMockOverride = false;
 
-export function setBountyStateObject(state: PersonalBountyState): void {
+export function setBountyStateObject(state: PersonalBountyState | null): void {
 	inMemoryBountyStateCache = state;
+	isMockOverride = state !== null;
 }
 
 export async function getBountyStateObject(): Promise<PersonalBountyState> {
+	if (isMockOverride && inMemoryBountyStateCache) {
+		return inMemoryBountyStateCache;
+	}
+
 	try {
 		const [record] = await db
 			.select()

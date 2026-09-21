@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "bun:test";
+import { getPersonalKey } from "@sentinel/torn-api";
 import { app } from "../src/app";
 import {
 	type PersonalBountyState,
@@ -6,6 +7,20 @@ import {
 } from "../src/routes/v1/personal-bounties";
 
 describe("Personal Bounty Target Finder API", () => {
+	afterAll(() => {
+		setBountyStateObject(null);
+	});
+
+	async function getTestApiKey(): Promise<string> {
+		const personalKeyObj = await getPersonalKey();
+		const key =
+			personalKeyObj?.apiKey ||
+			process.env.TORN_API_KEY ||
+			"test_personal_api_key_123";
+		process.env.TORN_API_KEY = key;
+		return key;
+	}
+
 	it("GET /api/v1/personal/bounties/script.user.js serves userscript without emojis", async () => {
 		const response = await app.handle(
 			new Request("http://localhost/api/v1/personal/bounties/script.user.js"),
@@ -47,9 +62,7 @@ describe("Personal Bounty Target Finder API", () => {
 	});
 
 	it("GET /api/v1/personal/bounties returns filtered targets with valid personal key", async () => {
-		// Mock personal key in environment if not present
-		const testApiKey = process.env.TORN_API_KEY || "test_personal_api_key_123";
-		process.env.TORN_API_KEY = testApiKey;
+		const testApiKey = await getTestApiKey();
 
 		// Seed mock state in systemStates
 		const mockState = {
@@ -146,7 +159,7 @@ describe("Personal Bounty Target Finder API", () => {
 	});
 
 	it("POST /api/v1/personal/bounties/recheck validates targetId", async () => {
-		const testApiKey = process.env.TORN_API_KEY || "test_personal_api_key_123";
+		const testApiKey = await getTestApiKey();
 		const response = await app.handle(
 			new Request("http://localhost/api/v1/personal/bounties/recheck", {
 				method: "POST",
@@ -164,7 +177,7 @@ describe("Personal Bounty Target Finder API", () => {
 	});
 
 	it("POST /api/v1/personal/bounties/defeat marks target as defeated and moves to hospitalQueue", async () => {
-		const testApiKey = process.env.TORN_API_KEY || "test_personal_api_key_123";
+		const testApiKey = await getTestApiKey();
 		const mockState: PersonalBountyState = {
 			readyTargets: [
 				{
