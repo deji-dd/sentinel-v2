@@ -267,3 +267,22 @@ export async function notifySchedulerResetRecruitment(): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * Dispatches a defeat event to the Scheduler so a defeated/hospitalized target
+ * is instantly moved out of readyTargets in worker memory.
+ */
+export async function notifyBountyDefeated(
+	targetId: number,
+	outcome?: string,
+): Promise<boolean> {
+	try {
+		return await notifySchedulerAction("personal_bounty_defeated", {
+			targetId,
+			outcome,
+		});
+	} catch (err) {
+		logger.warn("Failed to notify scheduler of bounty defeat:", err);
+		return false;
+	}
+}

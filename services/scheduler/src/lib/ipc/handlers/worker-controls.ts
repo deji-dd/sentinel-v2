@@ -1,6 +1,7 @@
 import { db, workerSchedules } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { reinitializeBattlestatsLedger } from "../../../workers/personal/battlestats";
+import { recordTargetDefeated } from "../../../workers/personal/bounty-finder";
 import { reinitializeCrimeLedger } from "../../../workers/personal/crimes";
 import { requestResetLogManager } from "../../../workers/personal/log-manager";
 import { reinitializeStocksLedger } from "../../../workers/personal/stocks";
@@ -104,5 +105,17 @@ export const handleForceRunWorker: IpcActionHandler = async (
 		}
 	} catch (err) {
 		logger.error(`Failed to force trigger worker '${workerName}':`, err);
+	}
+};
+
+export const handlePersonalBountyDefeated: IpcActionHandler = (
+	ctx: IpcHandlerContext,
+) => {
+	const message = ctx.message;
+	if (!("data" in message) || !message.data) return;
+	const data = message.data as { targetId?: number; outcome?: string };
+	const targetId = Number(data.targetId);
+	if (Number.isInteger(targetId) && targetId > 0) {
+		recordTargetDefeated(targetId, data.outcome);
 	}
 };

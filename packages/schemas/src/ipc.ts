@@ -617,7 +617,8 @@ export type IpcMessage =
 	| IpcWealthStateUpdatedMessage
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcResetSubversiveRecruitmentMessage
-	| IpcSubversiveWarUpdatedMessage;
+	| IpcSubversiveWarUpdatedMessage
+	| IpcPersonalBountiesUpdatedMessage;
 
 export type IpcSubversiveWarUpdatedMessage = {
 	action: "subversive_war_updated";
@@ -625,4 +626,9 @@ export type IpcSubversiveWarUpdatedMessage = {
 		war: unknown;
 		opponents: unknown[];
 	};
+};
+
+export type IpcPersonalBountiesUpdatedMessage = {
+	action: "personal_bounties_updated";
+	data: unknown;
 };

@@ -5,6 +5,7 @@ import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
 } from "./elimination";
+import { startPersonalBountyFinder } from "./personal/bounty-finder";
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
@@ -91,6 +92,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		id: "personal:reference_sync",
 		description: "Daily personal perks and gym unlock calculation",
 		start: startPersonalReferenceSync,
+	},
+	{
+		id: "personal:bounty_finder",
+		description:
+			"30-second personal bounty target finder with FF filtering and hospital monitor",
+		start: startPersonalBountyFinder,
 	},
 	{
 		id: "elims:team_tracker",

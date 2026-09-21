@@ -333,9 +333,17 @@ export class ScheduledRunner {
 						);
 					} else {
 						const standardCadenceMs = this.schedule.seconds * 1000;
-						const effectiveBackoff = Math.max(standardCadenceMs, backoffMs);
-						nextRunTimeMs = Date.now() + effectiveBackoff;
-						if (this.consecutiveFailures >= 2) {
+						if (this.consecutiveFailures <= this.retryPolicy.maxRetries) {
+							// Active retry attempt: retry after backoffMs (or standard interval if shorter)
+							const retryDelayMs = Math.min(standardCadenceMs, backoffMs);
+							nextRunTimeMs = Date.now() + retryDelayMs;
+							this.logger.warn(
+								`Scheduling retry #${this.consecutiveFailures} in ${Math.round(retryDelayMs / 1000)}s (target: ${new Date(nextRunTimeMs).toISOString()})`,
+							);
+						} else {
+							// Retries exhausted: back off worker beyond standard cadence
+							const effectiveBackoff = Math.max(standardCadenceMs, backoffMs);
+							nextRunTimeMs = Date.now() + effectiveBackoff;
 							this.logger.warn(
 								`Backing off interval worker (failure #${this.consecutiveFailures}): next run in ${Math.round(effectiveBackoff / 1000)}s`,
 							);

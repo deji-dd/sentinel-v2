@@ -16,6 +16,9 @@ export type FactionRankedWarDetails =
 export type FactionRankedWarReportResponse =
 	components["schemas"]["FactionRankedWarReportResponse"];
 export type UserProfileResponse = components["schemas"]["UserProfileResponse"];
+export type TornBountiesResponse =
+	components["schemas"]["TornBountiesResponse"];
+export type Bounty = components["schemas"]["Bounty"];
 
 /**
  * Utility type to extract operation from path

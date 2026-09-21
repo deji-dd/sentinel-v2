@@ -293,19 +293,23 @@ export async function getPersonalKey(): Promise<ManagedApiKey | null> {
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 
 	// 1. Check database for registered personal key
-	const personalKey = await db.query.apiKeys.findFirst({
-		where: and(eq(apiKeys.keyType, "personal"), eq(apiKeys.isValid, true)),
-	});
+	try {
+		const personalKey = await db.query.apiKeys.findFirst({
+			where: and(eq(apiKeys.keyType, "personal"), eq(apiKeys.isValid, true)),
+		});
 
-	if (personalKey) {
-		return {
-			apiKey:
-				personalKey.apiKeyEncrypted.length > 16 && masterKey
-					? decryptApiKey(personalKey.apiKeyEncrypted, masterKey)
-					: personalKey.apiKeyEncrypted,
-			userId: personalKey.userId,
-			keyType: personalKey.keyType,
-		};
+		if (personalKey) {
+			return {
+				apiKey:
+					personalKey.apiKeyEncrypted.length > 16 && masterKey
+						? decryptApiKey(personalKey.apiKeyEncrypted, masterKey)
+						: personalKey.apiKeyEncrypted,
+				userId: personalKey.userId,
+				keyType: personalKey.keyType,
+			};
+		}
+	} catch {
+		// Fall through to environment variable fallback if database is offline/unreachable
 	}
 
 	// 2. Fall back to environment variable

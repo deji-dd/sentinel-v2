@@ -20,6 +20,7 @@ import {
 } from "./handlers/verification";
 import {
 	handleForceRunWorker,
+	handlePersonalBountyDefeated,
 	handleReinitializeBattlestatsLedger,
 	handleReinitializeCrimeLedger,
 	handleReinitializeStocksLedger,
@@ -63,6 +64,7 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 	reinitialize_wealth: handleReinitializeWealth,
 	force_run_worker: handleForceRunWorker,
 	reset_subversive_recruitment: handleResetSubversiveRecruitment,
+	personal_bounty_defeated: handlePersonalBountyDefeated,
 };
 
 /**
