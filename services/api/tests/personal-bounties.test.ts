@@ -153,9 +153,19 @@ describe("Personal Bounty Target Finder API", () => {
 		expect(data.readyTargets.length).toBe(1);
 		expect(data.readyTargets[0]?.id).toBe(1001);
 
+		// Assert internal fields (estimatedBs, age, lastCheckedAt) are stripped for client privacy
+		const readyFirst = data.readyTargets[0] as Record<string, unknown>;
+		expect(readyFirst.estimatedBs).toBeUndefined();
+		expect(readyFirst.age).toBeUndefined();
+		expect(readyFirst.lastCheckedAt).toBeUndefined();
+
 		// Target 2001 has reward 500k and FF 1.8 -> included in hospitalQueue
 		expect(data.hospitalQueue.length).toBe(1);
 		expect(data.hospitalQueue[0]?.id).toBe(2001);
+		const hospFirst = data.hospitalQueue[0] as Record<string, unknown>;
+		expect(hospFirst.estimatedBs).toBeUndefined();
+		expect(hospFirst.age).toBeUndefined();
+		expect(hospFirst.lastCheckedAt).toBeUndefined();
 	});
 
 	it("POST /api/v1/personal/bounties/recheck validates targetId", async () => {

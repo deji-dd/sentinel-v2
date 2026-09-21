@@ -23,6 +23,34 @@ export interface PersonalBountyTarget {
 	lastCheckedAt: number;
 }
 
+export interface ClientBountyTarget {
+	id: number;
+	name: string;
+	level: number;
+	reward: number;
+	fairFight: number | null;
+	status: {
+		state: string;
+		description?: string;
+		until?: number | null;
+	};
+	attackUrl: string;
+}
+
+export function toClientTarget(
+	target: PersonalBountyTarget,
+): ClientBountyTarget {
+	return {
+		id: target.id,
+		name: target.name,
+		level: target.level,
+		reward: target.reward,
+		fairFight: target.fairFight,
+		status: target.status,
+		attackUrl: target.attackUrl,
+	};
+}
+
 export interface PersonalBountyState {
 	readyTargets: PersonalBountyTarget[];
 	hospitalQueue: Array<PersonalBountyTarget & { secondsRemaining: number }>;
@@ -36,10 +64,14 @@ const recheckRateLimiter = new UserRateLimiter(50, 60_000);
 let inMemoryBountyStateCache: PersonalBountyState | null = null;
 let isMockOverride = false;
 
-export function setBountyStateObject(state: PersonalBountyState | null): void {
+export function setMockBountyStateObject(
+	state: PersonalBountyState | null,
+): void {
 	inMemoryBountyStateCache = state;
 	isMockOverride = state !== null;
 }
+
+export const setBountyStateObject = setMockBountyStateObject;
 
 export async function getBountyStateObject(): Promise<PersonalBountyState> {
 	if (isMockOverride && inMemoryBountyStateCache) {
@@ -130,11 +162,13 @@ export const personalBountiesRoutes = new Elysia({
 			const nowSec = Math.floor(Date.now() / 1000);
 
 			// Filter ready targets
-			const readyTargets = state.readyTargets.filter((t) => {
-				if (t.reward < minBounty) return false;
-				if (t.fairFight !== null && t.fairFight > maxFF) return false;
-				return true;
-			});
+			const readyTargets = state.readyTargets
+				.filter((t) => {
+					if (t.reward < minBounty) return false;
+					if (t.fairFight !== null && t.fairFight > maxFF) return false;
+					return true;
+				})
+				.map(toClientTarget);
 
 			// Filter and update remaining seconds for hospital queue
 			const hospitalQueue = state.hospitalQueue
@@ -146,7 +180,7 @@ export const personalBountiesRoutes = new Elysia({
 				.map((t) => {
 					const until = t.status.until ?? nowSec;
 					return {
-						...t,
+						...toClientTarget(t),
 						secondsRemaining: Math.max(0, until - nowSec),
 					};
 				})
@@ -287,7 +321,7 @@ export const personalBountiesRoutes = new Elysia({
 
 				return {
 					success: true,
-					target: updatedTarget,
+					target: toClientTarget(updatedTarget),
 				};
 			} catch (err) {
 				set.status = 500;
@@ -375,7 +409,7 @@ export const personalBountiesRoutes = new Elysia({
 				pendingCount: state.pendingCount ?? 0,
 			};
 
-			setBountyStateObject(nextState);
+			inMemoryBountyStateCache = nextState;
 
 			try {
 				await db

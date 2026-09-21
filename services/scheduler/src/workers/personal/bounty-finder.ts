@@ -26,7 +26,7 @@ const MIN_BOUNTY_PREFILTER = 100_000;
 const MAX_FF_THRESHOLD = 4.0;
 const MIN_ACCOUNT_AGE_DAYS = 14;
 const MAX_PROFILES_PER_CYCLE = 20; // Budgeted within 50/min rate limit (20 req / 30s)
-const MAX_BOUNTY_PAGES = 2; // Fetches up to 200 bounties per cycle (2 pages * 100)
+const MAX_BOUNTY_PAGES = 3; // Fetches up to 300 bounties per cycle (3 pages * 100)
 
 export interface PersonalBountyTarget {
 	id: number;
@@ -109,7 +109,7 @@ export async function runBountyFinderCycle(
 	}
 
 	try {
-		// 1. Fetch live bounties from Torn API with pagination (up to MAX_BOUNTY_PAGES = 200 bounties)
+		// 1. Fetch live bounties from Torn API with pagination (up to MAX_BOUNTY_PAGES = 300 bounties)
 		const rawBounties: Bounty[] = [];
 		let offset = 0;
 

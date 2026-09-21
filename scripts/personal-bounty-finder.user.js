@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bounty Target Finder
 // @namespace    sentinel.torn
-// @version      1.1.1
-// @description  Personal bounty target finder with FF calculation and hospital queue
+// @version      1.2.0
+// @description  Personal bounty target finder and hospital queue
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
@@ -46,6 +46,9 @@
 	const state = {
 		apiUrl: DEFAULTS.apiUrl.replace(/\/+$/, ""),
 		apiKey: GM_getValue(STORAGE.apiKey, "") || "",
+		panelOpen:
+			GM_getValue(STORAGE.panelOpen, false) === true ||
+			GM_getValue(STORAGE.panelOpen, false) === "true",
 		minBounty:
 			Number(GM_getValue(STORAGE.minBounty, DEFAULTS.minBounty)) || 100000,
 		activeTab: GM_getValue(STORAGE.activeTab, "ready"),
@@ -1354,58 +1357,131 @@
 			});
 		}
 
-		function setupAttackPageObserver() {
+		let lastHandledDefeatId = 0;
+		let lastObservedUrl = window.location.href;
+
+		function checkAttackPage() {
 			const urlParams = new URLSearchParams(window.location.search);
 			if (urlParams.get("sid") !== "attack") return;
 
-			const currentTargetId = Number(urlParams.get("user2ID"));
+			const currentTargetId =
+				Number(urlParams.get("user2ID")) || Number(urlParams.get("ID"));
 			if (!currentTargetId || !Number.isInteger(currentTargetId)) return;
+			if (lastHandledDefeatId === currentTargetId) return;
 
-			let handled = false;
+			// Check all possible dialog, modal, popup, and status containers on Torn attack page
+			const dialogEls = document.querySelectorAll(
+				'[class*="dialogWrapper"], [class*="dialog"], [class*="custom-dialog"], [class*="popup"], [class*="modal"], [class*="confirmDialog"], [class*="alert"], .dialogWrapper___rzZgc, [class*="title___"], [class*="message___"]',
+			);
 
-			const checkDialog = () => {
-				if (handled) return;
+			for (const el of dialogEls) {
+				const text = el.textContent?.trim() || "";
+				if (!text) continue;
 
-				// Match Torn dialogs on attack page:
-				// 1. Victory: <div class="title___SxiQQ">You hospitalized Cloak</div>
-				// 2. Already in hospital: <div class="title___SxiQQ">This person is currently in hospital and cannot be attacked</div>
-				const titleEl = document.querySelector(
-					'[class*="dialogWrapper"] [class*="title"], [class*="dialog"] [class*="title"], .dialogWrapper___rzZgc .title___SxiQQ',
-				);
+				const isVictory =
+					/\b(?:hospitalized|mugged|left|defeated)\b/i.test(text) &&
+					/^You\s+(?:hospitalized|mugged|left|defeated)\b/i.test(text);
 
-				if (titleEl?.textContent) {
-					const text = titleEl.textContent.trim();
+				const isAlreadyHospitalized =
+					/\b(?:in hospital|cannot be attacked|is currently in hospital|currently in the hospital|someone else is attacking)\b/i.test(
+						text,
+					);
 
-					const isVictory =
-						/\b(?:hospitalized|mugged|left|defeated)\b/i.test(text) &&
-						/^You\s+(?:hospitalized|mugged|left|defeated)\b/i.test(text);
-
-					const isAlreadyHospitalized =
-						/\b(?:in hospital|cannot be attacked|is currently in hospital)\b/i.test(
-							text,
-						);
-
-					if (isVictory) {
-						handled = true;
-						handleTargetDefeated(currentTargetId, text, true);
-					} else if (isAlreadyHospitalized) {
-						handled = true;
-						handleTargetDefeated(currentTargetId, text, false);
-					}
+				if (isVictory) {
+					lastHandledDefeatId = currentTargetId;
+					handleTargetDefeated(currentTargetId, text, true);
+					return;
 				}
-			};
-
-			checkDialog();
-
-			const observer = new MutationObserver(() => {
-				checkDialog();
-			});
-
-			observer.observe(document.body, { childList: true, subtree: true });
+				if (isAlreadyHospitalized) {
+					lastHandledDefeatId = currentTargetId;
+					handleTargetDefeated(currentTargetId, text, false);
+					return;
+				}
+			}
 		}
 
-		setupAttackPageObserver();
-		updateOverheadBar();
+		function checkProfilePage() {
+			const url = window.location.href;
+			if (!url.includes("profiles.php") && !url.includes("profile.php")) return;
+
+			const urlParams = new URLSearchParams(window.location.search);
+			const profileUserId =
+				Number(urlParams.get("XID")) ||
+				Number(urlParams.get("userId")) ||
+				Number(urlParams.get("ID"));
+			if (!profileUserId || !Number.isInteger(profileUserId)) return;
+			if (lastHandledDefeatId === profileUserId) return;
+
+			// Check if this profile is one of our ready targets
+			const isReadyTarget = state.readyTargets.some(
+				(t) => t.id === profileUserId,
+			);
+			if (!isReadyTarget) return;
+
+			// Inspect profile container status elements
+			const statusEls = document.querySelectorAll(
+				'.profile-container [class*="status"], [class*="profile-header"] [class*="status"], .user-information [class*="status"], [class*="user-status"], [class*="status-desc"], [class*="profile-status"]',
+			);
+
+			for (const el of statusEls) {
+				const text = el.textContent?.trim() || "";
+				if (!text) continue;
+
+				if (
+					/\b(?:in hospital|hospitalized|federal jail|traveling|abroad)\b/i.test(
+						text,
+					)
+				) {
+					lastHandledDefeatId = profileUserId;
+					handleTargetDefeated(profileUserId, text, false);
+					return;
+				}
+			}
+		}
+
+		function handlePageOrUrlChange() {
+			if (window.location.href !== lastObservedUrl) {
+				lastObservedUrl = window.location.href;
+				lastHandledDefeatId = 0; // reset defeat debounce for new page/target
+			}
+			updateOverheadBar();
+			checkAttackPage();
+			checkProfilePage();
+		}
+
+		// Intercept Torn SPA routing (pushState / replaceState / popstate)
+		const originalPushState = history.pushState;
+		history.pushState = function (...args) {
+			originalPushState.apply(this, args);
+			setTimeout(handlePageOrUrlChange, 50);
+		};
+
+		const originalReplaceState = history.replaceState;
+		history.replaceState = function (...args) {
+			originalReplaceState.apply(this, args);
+			setTimeout(handlePageOrUrlChange, 50);
+		};
+
+		window.addEventListener("popstate", () =>
+			setTimeout(handlePageOrUrlChange, 50),
+		);
+		window.addEventListener("hashchange", () =>
+			setTimeout(handlePageOrUrlChange, 50),
+		);
+
+		// Continuous DOM MutationObserver to catch in-page dialogs and profile status changes
+		const pageObserver = new MutationObserver(() => {
+			if (window.location.href !== lastObservedUrl) {
+				handlePageOrUrlChange();
+			} else {
+				checkAttackPage();
+				checkProfilePage();
+			}
+		});
+
+		pageObserver.observe(document.body, { childList: true, subtree: true });
+
+		handlePageOrUrlChange();
 		switchTab(state.activeTab);
 
 		// Initial load
