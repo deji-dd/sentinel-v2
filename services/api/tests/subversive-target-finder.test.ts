@@ -199,6 +199,58 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 			lastUpdated: Date.now(),
 		});
 
+		// Populate opponents during scheduled war (as scheduler does)
+		subversiveTargetCache.setWarOpponents([
+			{
+				id: 401,
+				name: "ScheduledEnemyReady",
+				level: 45,
+				daysInFaction: 50,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: {
+					status: "Online",
+					timestamp: Math.floor(Date.now() / 1000),
+					relative: "1m ago",
+				},
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+				estimatedBs: 100_000,
+				estimatedScore: 316,
+			},
+			{
+				id: 402,
+				name: "ScheduledEnemyHosp",
+				level: 60,
+				daysInFaction: 200,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: {
+					status: "Offline",
+					timestamp: Math.floor(Date.now() / 1000) - 3600,
+					relative: "1h ago",
+				},
+				status: {
+					description: "In hospital",
+					details: null,
+					state: "Hospital",
+					color: "red",
+					until: Math.floor(Date.now() / 1000) + 600,
+				},
+				estimatedBs: 500_000,
+				estimatedScore: 707,
+			},
+		]);
+
 		// 3. Test GET /war/status
 		const statusRes = await app.handle(
 			new Request("http://localhost/api/v1/target-finder/war/status", {
@@ -209,10 +261,45 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		const statusData = (await statusRes.json()) as {
 			success: boolean;
 			war: { state: string; target: number; opponent: { name: string } };
+			opponentIds: number[];
 		};
 		expect(statusData.success).toBe(true);
 		expect(statusData.war.state).toBe("scheduled");
 		expect(statusData.war.opponent.name).toBe("Enemy Faction");
+		expect(statusData.opponentIds).toContain(401);
+		expect(statusData.opponentIds).toContain(402);
+
+		// Verify available targets and hospital queue work during scheduled war
+		const schedAvailRes = await app.handle(
+			new Request(
+				"http://localhost/api/v1/target-finder/war/targets/available",
+				{
+					headers: { Authorization: `Bearer ${testToken}` },
+				},
+			),
+		);
+		expect(schedAvailRes.status).toBe(200);
+		const schedAvailData = (await schedAvailRes.json()) as {
+			success: boolean;
+			targets: Array<{ id: number; name: string }>;
+		};
+		expect(schedAvailData.success).toBe(true);
+		expect(schedAvailData.targets.length).toBe(1);
+		expect(schedAvailData.targets[0]?.id).toBe(401);
+
+		const schedHospRes = await app.handle(
+			new Request("http://localhost/api/v1/target-finder/war/hospital-queue", {
+				headers: { Authorization: `Bearer ${testToken}` },
+			}),
+		);
+		expect(schedHospRes.status).toBe(200);
+		const schedHospData = (await schedHospRes.json()) as {
+			success: boolean;
+			queue: Array<{ id: number; name: string }>;
+		};
+		expect(schedHospData.success).toBe(true);
+		expect(schedHospData.queue.length).toBe(1);
+		expect(schedHospData.queue[0]?.id).toBe(402);
 
 		// 4. Test Flight / Travel Lock: when traveling, returns locked reason
 		const travelLockRes = await app.handle(

@@ -415,9 +415,16 @@ class SubversiveTargetCache {
 
 	// ─── Ranked War Methods ──────────────────────────────────────────────────
 
+	private isWarEngaged(): boolean {
+		return (
+			this.currentWar.state === "active" ||
+			this.currentWar.state === "scheduled"
+		);
+	}
+
 	setWarState(info: CurrentWarInfo): void {
 		this.currentWar = info;
-		if (info.state !== "active") {
+		if (info.state === "no_war") {
 			this.warOpponents.clear();
 		}
 	}
@@ -438,15 +445,11 @@ class SubversiveTargetCache {
 	}
 
 	isWarOpponent(targetId: number): boolean {
-		return (
-			this.currentWar.state === "active" && this.warOpponents.has(targetId)
-		);
+		return this.isWarEngaged() && this.warOpponents.has(targetId);
 	}
 
 	getWarOpponentIds(): number[] {
-		return this.currentWar.state === "active"
-			? Array.from(this.warOpponents.keys())
-			: [];
+		return this.isWarEngaged() ? Array.from(this.warOpponents.keys()) : [];
 	}
 
 	getNextWarTarget(options: {
@@ -473,7 +476,7 @@ class SubversiveTargetCache {
 			maxOnlineFF = Math.max(3.5, (options.maxFF ?? 3.0) + 0.5),
 		} = options;
 
-		if (this.currentWar.state !== "active") {
+		if (!this.isWarEngaged()) {
 			return null;
 		}
 
@@ -625,7 +628,7 @@ class SubversiveTargetCache {
 	getHospitalQueue(
 		options: number | { limit?: number; attackerBsScore?: number } = 15,
 	): (RankedWarOpponent & { secondsRemaining: number; fairFight: number })[] {
-		if (this.currentWar.state !== "active") {
+		if (!this.isWarEngaged()) {
 			return [];
 		}
 
@@ -670,7 +673,7 @@ class SubversiveTargetCache {
 			attackUrl: string;
 		}
 	> {
-		if (this.currentWar.state !== "active") {
+		if (!this.isWarEngaged()) {
 			return [];
 		}
 
@@ -788,7 +791,7 @@ class SubversiveTargetCache {
 		attackUrl: string;
 		isWarTarget: boolean;
 	}> {
-		const isWarActive = this.currentWar.state === "active";
+		const isWarActive = this.isWarEngaged();
 		const opp = isWarActive ? this.warOpponents.get(targetId) : undefined;
 		if (opp) {
 			const rawFF =

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.3.3
+// @version      2.3.4
 // @description  Userscript for Subversive Alliance Ranked War & Target Engine
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -87,6 +87,11 @@
 		excludeIds: [],
 	};
 
+	function isWarEngaged() {
+		const s = state.war ? state.war.state : state.warState;
+		return s === "active" || s === "scheduled";
+	}
+
 	function formatStats(num) {
 		if (!num || !Number.isFinite(num)) return "Unknown";
 		if (num >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
@@ -127,10 +132,7 @@
 	}
 
 	function getNextTargetCandidate(excludeId) {
-		const isWarActive = state.war
-			? state.war.state === "active"
-			: state.warState === "active";
-		if (!isWarActive) return null;
+		if (!isWarEngaged()) return null;
 
 		const excludes = new Set([
 			...state.excludeIds.slice(-20),
@@ -805,12 +807,12 @@
 			<div id="satf-war-banner" class="satf-war-banner">
 				<div class="satf-war-header-row">
 					<span id="satf-war-title">RANKED WAR</span>
-					<span id="satf-war-lead" class="satf-lead-badge lead-pos">LEAD +0</span>
+					<span id="satf-war-lead" class="satf-lead-badge lead-pos" style="display: none;">LEAD +0</span>
 				</div>
 				<div class="satf-score-row">
 					<div class="satf-score-box">
 						<span class="satf-score-lbl">Subversive Alliance</span>
-						<span id="satf-score-sa" class="satf-score-val">0</span>
+						<span id="satf-score-sa" class="satf-score-val">--</span>
 					</div>
 					<div class="satf-score-box" style="text-align:center;">
 						<span class="satf-score-lbl">Target</span>
@@ -818,7 +820,7 @@
 					</div>
 					<div class="satf-score-box" style="text-align:right;">
 						<span id="satf-opp-name" class="satf-score-lbl">Opponent</span>
-						<span id="satf-score-opp" class="satf-score-val">0</span>
+						<span id="satf-score-opp" class="satf-score-val">--</span>
 					</div>
 				</div>
 			</div>
@@ -1019,18 +1021,6 @@
 				scoreTarget.style.color = war.target ? "var(--text)" : "var(--muted)";
 				oppName.textContent = war.opponent ? war.opponent.name : "Opponent";
 				scoreOpp.textContent = "0";
-
-				// Standby until war actually starts
-				state.allTargets = [];
-				state.availableTargets = [];
-				state.hospitalQueue = [];
-				state.warOpponentIds = [];
-				try {
-					GM_setValue(STORAGE.cachedTargets, []);
-					GM_setValue(STORAGE.warOpponentIds, []);
-				} catch {}
-				renderAvailableTargets([]);
-				renderHospitalQueue([]);
 				return;
 			}
 
@@ -1084,16 +1074,12 @@
 				} catch {}
 			}
 
-			const isWarActive = state.war
-				? state.war.state === "active"
-				: state.warState === "active";
-
-			if (!isWarActive) {
+			if (!isWarEngaged()) {
 				state.availableTargets = [];
 				availCount.textContent = "0";
 				availList.innerHTML = `
 					<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
-						No active ranked war. Opponent tracking on standby.
+						No active or scheduled ranked war. Opponent tracking on standby.
 					</div>
 				`;
 				return;
@@ -1249,11 +1235,8 @@
 				return;
 			}
 
-			const isWarActive = state.war
-				? state.war.state === "active"
-				: state.warState === "active";
-			if (!isWarActive) {
-				setStatus("No active ranked war.", "error");
+			if (!isWarEngaged()) {
+				setStatus("No active or scheduled ranked war.", "error");
 				return;
 			}
 
@@ -1377,15 +1360,11 @@
 		}
 
 		function renderHospitalQueue(queue = []) {
-			const isWarActive = state.war
-				? state.war.state === "active"
-				: state.warState === "active";
-
-			if (!isWarActive) {
+			if (!isWarEngaged()) {
 				state.hospitalQueue = [];
 				hospContainer.innerHTML = `
 					<div style="text-align: center; padding: 20px 0; color: var(--muted); font-size: 12px;">
-						No active ranked war. Hospital queue on standby.
+						No active or scheduled ranked war. Hospital queue on standby.
 					</div>
 				`;
 				stopHospTimer();
@@ -1460,10 +1439,7 @@
 		async function fetchHospitalQueue() {
 			if (!state.token) return;
 
-			const isWarActive = state.war
-				? state.war.state === "active"
-				: state.warState === "active";
-			if (!isWarActive) {
+			if (!isWarEngaged()) {
 				renderHospitalQueue([]);
 				return;
 			}
@@ -1655,6 +1631,26 @@
 			panel.style.top = `${top}px`;
 		}
 
+		function updateWarCountdown() {
+			if (state.war && state.war.state === "scheduled") {
+				const nowSec = Math.floor(Date.now() / 1000);
+				const remaining = Math.max(0, (state.war.start || nowSec) - nowSec);
+				if (remaining > 0) {
+					warTitle.textContent = `STARTS IN ${formatSeconds(remaining)}`;
+				} else {
+					warTitle.textContent = "STARTING...";
+					fetchWarStatus();
+				}
+			}
+		}
+
+		function stopCountdownTimer() {
+			if (state.countdownTimer) {
+				clearInterval(state.countdownTimer);
+				state.countdownTimer = null;
+			}
+		}
+
 		function startAutoSync() {
 			stopAutoSync();
 			state.syncTimer = setInterval(() => {
@@ -1666,6 +1662,12 @@
 					fetchHospitalQueue();
 				}
 			}, 3000);
+
+			stopCountdownTimer();
+			state.countdownTimer = setInterval(() => {
+				if (!state.panelOpen) return;
+				updateWarCountdown();
+			}, 1000);
 		}
 
 		function stopAutoSync() {
@@ -1673,6 +1675,7 @@
 				clearInterval(state.syncTimer);
 				state.syncTimer = null;
 			}
+			stopCountdownTimer();
 		}
 
 		function openPanel() {
@@ -1920,11 +1923,7 @@
 		}
 
 		function isKnownWarTarget(id) {
-			const isWarActive =
-				(state.war && state.war.state === "active") ||
-				state.warState === "active";
-
-			if (!isWarActive) {
+			if (!isWarEngaged()) {
 				return false;
 			}
 

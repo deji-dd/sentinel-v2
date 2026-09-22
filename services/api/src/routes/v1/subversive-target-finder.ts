@@ -710,7 +710,10 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				lead,
 			},
 			totalOpponents: opponents.length,
-			opponentIds: war.state === "active" ? opponents.map((o) => o.id) : [],
+			opponentIds:
+				war.state === "active" || war.state === "scheduled"
+					? opponents.map((o) => o.id)
+					: [],
 		};
 	})
 
@@ -762,13 +765,10 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			? Number.parseFloat(query.maxFF as string)
 			: undefined;
 
-		if (war.state !== "active") {
+		if (war.state !== "active" && war.state !== "scheduled") {
 			return {
 				success: false,
-				message:
-					war.state === "scheduled"
-						? "Ranked war has not started yet. Targets will be available once the war begins."
-						: "No active ranked war.",
+				message: "No active ranked war.",
 				target: null,
 				war,
 			};
