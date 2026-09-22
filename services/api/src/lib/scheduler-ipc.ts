@@ -3,8 +3,8 @@ import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcClient } from "@sentinel/utils/ipc";
 import { broadcastBattlestatsLedgerState } from "../routes/ws-battlestats-ledger";
 import { broadcastCrimeLedgerState } from "../routes/ws-crime-ledger";
+import { broadcastPersonalBountiesState } from "../routes/ws-personal-bounties";
 import { broadcastStockLedgerState } from "../routes/ws-stocks-ledger";
-
 import { broadcastWarUpdate } from "../routes/ws-subversive-war";
 import {
 	type CurrentWarInfo,
@@ -32,6 +32,9 @@ export function initSchedulerIpcListener(): void {
 				action?: string;
 				data?: Record<string, unknown>;
 			};
+			if (message.action === "personal_bounties_updated" && message.data) {
+				broadcastPersonalBountiesState(message.data);
+			}
 			if (message.action === "crime_ledger_state_updated" && message.data) {
 				broadcastCrimeLedgerState(message.data);
 			}

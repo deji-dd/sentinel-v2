@@ -14,6 +14,7 @@ import { wsCrimeLedgerRoutes } from "./routes/ws-crime-ledger";
 import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
 import { wsGymLedgerRoutes } from "./routes/ws-gym-ledger";
 import { wsLogManagerRoutes } from "./routes/ws-log-manager";
+import { wsPersonalBountiesRoutes } from "./routes/ws-personal-bounties";
 import { wsStockLedgerRoutes } from "./routes/ws-stocks-ledger";
 import { wsSubversiveWarRoutes } from "./routes/ws-subversive-war";
 
@@ -42,6 +43,7 @@ export const app = new Elysia()
 	.use(wsStockLedgerRoutes)
 	.use(wsElimsTournamentRoutes)
 	.use(wsSubversiveWarRoutes)
+	.use(wsPersonalBountiesRoutes)
 	.use(pondRoutes)
 	.use(v1Routes)
 	.get("/users", async ({ query, set }) => {

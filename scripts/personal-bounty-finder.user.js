@@ -22,7 +22,6 @@
 	const STORAGE = {
 		apiKey: "pbtf_api_key",
 		panelOpen: "pbtf_panel_open",
-		minBounty: "pbtf_min_bounty",
 		activeTab: "pbtf_active_tab",
 		launcherPos: "pbtf_launcher_pos",
 		panelPos: "pbtf_panel_pos",
@@ -32,7 +31,6 @@
 
 	const DEFAULTS = {
 		apiUrl: "https://sentinel.blasted-labs.tech",
-		minBounty: 100000,
 	};
 
 	function safeJsonParse(val, fallback) {
@@ -49,12 +47,14 @@
 		panelOpen:
 			GM_getValue(STORAGE.panelOpen, false) === true ||
 			GM_getValue(STORAGE.panelOpen, false) === "true",
-		minBounty:
-			Number(GM_getValue(STORAGE.minBounty, DEFAULTS.minBounty)) || 100000,
 		activeTab: GM_getValue(STORAGE.activeTab, "ready"),
 		readyTargets: safeJsonParse(GM_getValue(STORAGE.cachedTargets, "[]"), []),
 		hospitalQueue: safeJsonParse(GM_getValue(STORAGE.cachedHospital, "[]"), []),
 		pollInterval: null,
+		ws: null,
+		wsConnected: false,
+		lastWsMessageAt: 0,
+		reconnectTimer: null,
 	};
 
 	function formatMoney(num) {
@@ -269,36 +269,21 @@
 				background: var(--card);
 			}
 
-			.pbtf-quick-filters {
-				display: flex;
-				align-items: center;
-				gap: 6px;
-				flex-wrap: wrap;
-			}
-			.pbtf-filter-label {
-				font-size: 11px;
-				color: var(--muted);
-				font-weight: 600;
-				margin-right: 2px;
-			}
-			.pbtf-quick-btn {
+			.pbtf-btn-refresh {
 				padding: 3px 8px;
 				font-size: 11px;
 				font-weight: 700;
 				border-radius: 6px;
 				border: 1px solid var(--border);
 				background: var(--card);
+				color: var(--muted);
 				cursor: pointer;
 				transition: all 0.15s;
 			}
-			.pbtf-quick-btn:hover {
+			.pbtf-btn-refresh:hover {
+				color: var(--text);
 				background: var(--card-hover);
 				border-color: var(--accent);
-			}
-			.pbtf-quick-btn.active {
-				background: var(--accent);
-				border-color: var(--accent);
-				color: #000;
 			}
 
 			.pbtf-tabs {
@@ -583,17 +568,9 @@
 					<div class="pbtf-title">Bounty Target Finder</div>
 					<div class="pbtf-header-right">
 						<div class="pbtf-status ok" id="pbtf-status-text">Ready</div>
+						<button type="button" class="pbtf-btn-refresh" id="pbtf-refresh-btn" title="Refresh">Refresh</button>
 						<button type="button" class="pbtf-close-btn" id="pbtf-close-btn" title="Close Panel">&times;</button>
 					</div>
-				</div>
-
-				<div class="pbtf-quick-filters">
-					<span class="pbtf-filter-label">Min:</span>
-					<button type="button" class="pbtf-quick-btn" data-val="100000">100k</button>
-					<button type="button" class="pbtf-quick-btn" data-val="250000">250k</button>
-					<button type="button" class="pbtf-quick-btn" data-val="500000">500k</button>
-					<button type="button" class="pbtf-quick-btn" data-val="1000000">1M</button>
-					<button type="button" class="pbtf-quick-btn" id="pbtf-refresh-btn">Refresh</button>
 				</div>
 			</div>
 
@@ -648,32 +625,6 @@
 
 		const inputKey = root.getElementById("pbtf-input-key");
 		const btnSaveSettings = root.getElementById("pbtf-btn-save-settings");
-
-		// Quick filter buttons
-		const quickBtns = root.querySelectorAll(".pbtf-quick-btn[data-val]");
-		function updateFilterButtons() {
-			quickBtns.forEach((btn) => {
-				const val = Number(btn.getAttribute("data-val"));
-				if (val === state.minBounty) {
-					btn.classList.add("active");
-				} else {
-					btn.classList.remove("active");
-				}
-			});
-		}
-		updateFilterButtons();
-
-		quickBtns.forEach((btn) => {
-			btn.addEventListener("click", () => {
-				const val = Number(btn.getAttribute("data-val"));
-				if (val && !Number.isNaN(val)) {
-					state.minBounty = val;
-					GM_setValue(STORAGE.minBounty, val);
-					updateFilterButtons();
-					fetchBounties();
-				}
-			});
-		});
 
 		// Status helper
 		function setStatus(text, type = "ok") {
@@ -820,7 +771,7 @@
 			if (!targets || targets.length === 0) {
 				paneReady.innerHTML = `
 					<div class="pbtf-empty">
-						No targets currently available (Reward >= ${formatMoney(state.minBounty)}).
+						No targets currently available.
 					</div>
 				`;
 				return;
@@ -949,7 +900,38 @@
 			});
 		}, 1000);
 
-		// Fetch Bounties
+		function applyBountyData(res) {
+			if (!res) return;
+			state.readyTargets = res.readyTargets || [];
+			state.hospitalQueue = res.hospitalQueue || [];
+			GM_setValue(STORAGE.cachedTargets, JSON.stringify(state.readyTargets));
+			GM_setValue(STORAGE.cachedHospital, JSON.stringify(state.hospitalQueue));
+
+			if (launcherCount) {
+				launcherCount.textContent = String(state.readyTargets.length);
+			}
+			if (countReady) {
+				countReady.textContent = String(state.readyTargets.length);
+			}
+			if (countHosp) {
+				countHosp.textContent = String(state.hospitalQueue.length);
+			}
+
+			renderReadyTargets(state.readyTargets);
+			renderHospitalQueue(state.hospitalQueue);
+			updateOverheadBar();
+
+			const queueTag =
+				res.pendingCount && res.pendingCount > 0
+					? ` (${res.pendingCount} queued)`
+					: "";
+			const statusLabel = state.wsConnected
+				? `Live${queueTag}`
+				: `Ready${queueTag}`;
+			setStatus(statusLabel, "ok");
+		}
+
+		// Fetch Bounties via HTTP
 		async function fetchBounties() {
 			if (!state.apiKey) {
 				setStatus("API key required", "error");
@@ -957,45 +939,91 @@
 				return;
 			}
 
-			setStatus("Syncing...", "ok");
+			if (!state.wsConnected) {
+				setStatus("Syncing...", "ok");
+			}
 			try {
-				const res = await apiRequest(
-					`/api/v1/personal/bounties?minBounty=${state.minBounty}&maxFF=4.0`,
-				);
-
-				state.readyTargets = res.readyTargets || [];
-				state.hospitalQueue = res.hospitalQueue || [];
-				GM_setValue(STORAGE.cachedTargets, JSON.stringify(state.readyTargets));
-				GM_setValue(
-					STORAGE.cachedHospital,
-					JSON.stringify(state.hospitalQueue),
-				);
-
-				if (launcherCount) {
-					launcherCount.textContent = String(state.readyTargets.length);
-				}
-				if (countReady) {
-					countReady.textContent = String(state.readyTargets.length);
-				}
-				if (countHosp) {
-					countHosp.textContent = String(state.hospitalQueue.length);
-				}
-
-				renderReadyTargets(state.readyTargets);
-				renderHospitalQueue(state.hospitalQueue);
-				updateOverheadBar();
-
-				const statusMsg =
-					res.pendingCount && res.pendingCount > 0
-						? `Ready (${res.pendingCount} queued)`
-						: "Ready";
-				setStatus(statusMsg, "ok");
+				const res = await apiRequest("/api/v1/personal/bounties");
+				applyBountyData(res);
 			} catch (err) {
-				setStatus(err.message, "error");
+				if (!state.wsConnected) {
+					setStatus(err.message, "error");
+				}
 			}
 		}
 
-		refreshBtn?.addEventListener("click", () => fetchBounties());
+		function getWsUrl() {
+			const base = state.apiUrl.replace(/\/+$/, "");
+			if (base.startsWith("https://")) {
+				return base.replace(/^https:\/\//, "wss://");
+			}
+			if (base.startsWith("http://")) {
+				return base.replace(/^http:\/\//, "ws://");
+			}
+			return `wss://${base}`;
+		}
+
+		function connectWebSocket() {
+			if (!state.apiKey) return;
+			if (
+				state.ws &&
+				(state.ws.readyState === WebSocket.OPEN ||
+					state.ws.readyState === WebSocket.CONNECTING)
+			) {
+				return;
+			}
+
+			try {
+				const wsEndpoint = `${getWsUrl()}/api/ws/personal-bounties?apiKey=${encodeURIComponent(state.apiKey)}`;
+				const ws = new WebSocket(wsEndpoint);
+				state.ws = ws;
+
+				ws.onopen = () => {
+					state.wsConnected = true;
+					setStatus("Live", "ok");
+					ws.send(JSON.stringify({ type: "ping" }));
+				};
+
+				ws.onmessage = (event) => {
+					try {
+						const msg = JSON.parse(event.data);
+						state.lastWsMessageAt = Date.now();
+						if (msg.type === "state_snapshot" || msg.type === "state_update") {
+							applyBountyData(msg);
+						}
+					} catch (e) {
+						console.warn("[Bounty Target Finder] Invalid WS message:", e);
+					}
+				};
+
+				ws.onerror = () => {
+					state.wsConnected = false;
+				};
+
+				ws.onclose = () => {
+					state.wsConnected = false;
+					state.ws = null;
+					if (state.apiKey) {
+						setStatus("Reconnecting...", "ok");
+						if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+						state.reconnectTimer = setTimeout(connectWebSocket, 5000);
+					}
+				};
+			} catch (err) {
+				console.warn(
+					"[Bounty Target Finder] WebSocket connection failed:",
+					err,
+				);
+				state.wsConnected = false;
+			}
+		}
+
+		refreshBtn?.addEventListener("click", () => {
+			if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+				state.ws.send(JSON.stringify({ type: "refresh" }));
+			}
+			fetchBounties();
+		});
 
 		// Save Settings
 		btnSaveSettings?.addEventListener("click", () => {
@@ -1012,6 +1040,13 @@
 			setStatus("API key saved", "ok");
 			switchTab("ready");
 			fetchBounties();
+			if (state.ws) {
+				try {
+					state.ws.close();
+				} catch {}
+				state.ws = null;
+			}
+			connectWebSocket();
 		});
 
 		// Setup draggable launcher
@@ -1484,17 +1519,26 @@
 		handlePageOrUrlChange();
 		switchTab(state.activeTab);
 
-		// Initial load
+		// Initial load: connect WebSocket and run initial HTTP fetch
 		if (state.apiKey) {
 			fetchBounties();
+			connectWebSocket();
 		} else {
 			switchTab("settings");
 		}
 
-		// Auto-poll every 30s
+		// Fallback polling: polls every 30s only if WebSocket is disconnected or has not received an update in > 60s
 		setInterval(() => {
-			if (state.apiKey) {
+			if (!state.apiKey) return;
+			const isWsHealthy =
+				state.wsConnected &&
+				state.ws?.readyState === WebSocket.OPEN &&
+				Date.now() - state.lastWsMessageAt < 60000;
+			if (!isWsHealthy) {
 				fetchBounties();
+				if (!state.wsConnected) {
+					connectWebSocket();
+				}
 			}
 		}, 30000);
 	}

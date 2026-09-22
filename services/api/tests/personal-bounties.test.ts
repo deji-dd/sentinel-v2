@@ -232,4 +232,41 @@ describe("Personal Bounty Target Finder API", () => {
 		expect(body.success).toBe(true);
 		expect(body.targetId).toBe(5001);
 	});
+
+	it("getPersonalBountiesSnapshot formats snapshot for WebSocket clients", async () => {
+		const { getPersonalBountiesSnapshot, broadcastPersonalBountiesState } =
+			await import("../src/routes/ws-personal-bounties");
+
+		const mockState: PersonalBountyState = {
+			readyTargets: [
+				{
+					id: 6001,
+					name: "WsTarget",
+					level: 30,
+					reward: 1_200_000,
+					fairFight: 1.9,
+					estimatedBs: 80_000,
+					age: 400,
+					status: { state: "Okay" },
+					attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=6001",
+					lastCheckedAt: Math.floor(Date.now() / 1000),
+				},
+			],
+			hospitalQueue: [],
+			lastSyncTimestamp: Math.floor(Date.now() / 1000),
+			targetCount: 1,
+			pendingCount: 12,
+		};
+
+		setBountyStateObject(mockState);
+
+		const snapshot = await getPersonalBountiesSnapshot();
+		expect(snapshot.type).toBe("state_snapshot");
+		expect(snapshot.readyTargets.length).toBe(1);
+		expect(snapshot.readyTargets[0]?.id).toBe(6001);
+		expect(snapshot.pendingCount).toBe(12);
+
+		// Verify broadcast does not throw
+		expect(() => broadcastPersonalBountiesState(mockState)).not.toThrow();
+	});
 });

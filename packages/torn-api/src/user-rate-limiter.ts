@@ -98,4 +98,20 @@ export class UserRateLimiter {
 		);
 		return timestamps.length;
 	}
+
+	/**
+	 * Resets rate limit counters and queues for a specific user or all users.
+	 */
+	reset(userId?: string | number): void {
+		if (userId !== undefined) {
+			const key = String(userId);
+			this.userTimestamps.delete(key);
+			this.userPausePromises.delete(key);
+			this.userQueueChains.delete(key);
+		} else {
+			this.userTimestamps.clear();
+			this.userPausePromises.clear();
+			this.userQueueChains.clear();
+		}
+	}
 }

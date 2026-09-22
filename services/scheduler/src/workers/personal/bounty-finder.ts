@@ -1,6 +1,5 @@
 import { db, systemStates } from "@sentinel/database";
 import type {
-	Bounty,
 	TornBountiesResponse,
 	UserProfileResponse,
 } from "@sentinel/schemas";
@@ -26,7 +25,8 @@ const MIN_BOUNTY_PREFILTER = 100_000;
 const MAX_FF_THRESHOLD = 4.0;
 const MIN_ACCOUNT_AGE_DAYS = 14;
 const MAX_PROFILES_PER_CYCLE = 20; // Budgeted within 50/min rate limit (20 req / 30s)
-const MAX_BOUNTY_PAGES = 3; // Fetches up to 300 bounties per cycle (3 pages * 100)
+const MAX_BOUNTY_PAGES_PER_ROUND = 3; // Fetches up to 300 bounties per cycle (3 pages * 100)
+const BOUNTY_PAGE_SIZE = 100;
 
 export interface PersonalBountyTarget {
 	id: number;
@@ -52,6 +52,20 @@ export interface PersonalBountyState {
 	targetCount: number;
 	pendingCount?: number;
 }
+
+export interface TargetCandidate {
+	id: number;
+	name: string;
+	level: number;
+	maxReward: number;
+	lastSeenSweepId: number;
+	lastSeenAt: number;
+}
+
+// In-memory candidate pool persisting across paginated cycles
+const activeCandidateMap = new Map<number, TargetCandidate>();
+let currentBountyOffset = 0;
+let currentSweepId = 1;
 
 // In-memory permanent age cache (once verified >= 14d, never checked again)
 const verifiedAgeCache = new Map<number, number>();
@@ -81,8 +95,36 @@ let inMemoryBountyState: PersonalBountyState = {
 let lastCycleCompletedAt = 0;
 export const MIN_CYCLE_COOLDOWN_SEC = 15;
 
+export function resetBountyFinderState(): void {
+	lastCycleCompletedAt = 0;
+	currentBountyOffset = 0;
+	currentSweepId = 1;
+	personalRateLimiter.reset();
+	activeCandidateMap.clear();
+	verifiedAgeCache.clear();
+	targetProfileCache.clear();
+	inMemoryBountyState = {
+		readyTargets: [],
+		hospitalQueue: [],
+		lastSyncTimestamp: 0,
+		targetCount: 0,
+	};
+}
+
 export function resetBountyFinderCooldown(): void {
 	lastCycleCompletedAt = 0;
+}
+
+export function getCurrentBountyOffset(): number {
+	return currentBountyOffset;
+}
+
+export function getCurrentSweepId(): number {
+	return currentSweepId;
+}
+
+export function getActiveCandidateCount(): number {
+	return activeCandidateMap.size;
 }
 
 /**
@@ -109,71 +151,107 @@ export async function runBountyFinderCycle(
 	}
 
 	try {
-		// 1. Fetch live bounties from Torn API with pagination (up to MAX_BOUNTY_PAGES = 300 bounties)
-		const rawBounties: Bounty[] = [];
-		let offset = 0;
+		// 1. Fetch live bounties from Torn API with persistent cross-round pagination.
+		// Bounties in Torn are sorted by reward descending. We page down (3 pages per round)
+		// until we reach bounties under 100k, then reset to offset 0 on the next round to restart the sweep.
+		let sweepCompleted = false;
+		let totalBountiesReceivedThisCycle = 0;
 
-		for (let page = 0; page < MAX_BOUNTY_PAGES; page++) {
+		for (let page = 0; page < MAX_BOUNTY_PAGES_PER_ROUND; page++) {
 			await personalRateLimiter.waitIfNeeded(personalKey.userId);
 			const bountiesRes = (await tornApi.getPersonal("/torn/bounties", {
-				queryParams: { limit: 100, offset },
+				queryParams: {
+					limit: BOUNTY_PAGE_SIZE,
+					offset: currentBountyOffset,
+				},
 			})) as TornBountiesResponse;
 
 			const pageBounties = bountiesRes.bounties ?? [];
-			rawBounties.push(...pageBounties);
+			totalBountiesReceivedThisCycle += pageBounties.length;
+
+			if (pageBounties.length === 0) {
+				sweepCompleted = true;
+				break;
+			}
+
+			let hitSub100k = false;
+			for (const bounty of pageBounties) {
+				if (bounty.reward < MIN_BOUNTY_PREFILTER) {
+					hitSub100k = true;
+					continue;
+				}
+
+				const existing = activeCandidateMap.get(bounty.target_id);
+				if (!existing) {
+					activeCandidateMap.set(bounty.target_id, {
+						id: bounty.target_id,
+						name: bounty.target_name,
+						level: bounty.target_level,
+						maxReward: bounty.reward,
+						lastSeenSweepId: currentSweepId,
+						lastSeenAt: nowSec,
+					});
+				} else {
+					existing.name = bounty.target_name;
+					existing.level = bounty.target_level;
+					if (existing.lastSeenSweepId !== currentSweepId) {
+						existing.maxReward = bounty.reward;
+					} else if (bounty.reward > existing.maxReward) {
+						existing.maxReward = bounty.reward;
+					}
+					existing.lastSeenSweepId = currentSweepId;
+					existing.lastSeenAt = nowSec;
+				}
+			}
 
 			const total = bountiesRes._metadata?.total ?? 0;
 			const hasNext = Boolean(bountiesRes._metadata?.links?.next);
-			offset += pageBounties.length;
+			currentBountyOffset += pageBounties.length;
 
-			// Stop if page is partial, no next link, or all bounties fetched
-			if (pageBounties.length < 100 || !hasNext || offset >= total) {
+			// If sub-100k bounties encountered, or last page reached: sweep has finished
+			if (
+				hitSub100k ||
+				pageBounties.length < BOUNTY_PAGE_SIZE ||
+				!hasNext ||
+				(total > 0 && currentBountyOffset >= total)
+			) {
+				sweepCompleted = true;
 				break;
 			}
 		}
 
-		if (rawBounties.length === 0) {
+		if (totalBountiesReceivedThisCycle === 0 && activeCandidateMap.size === 0) {
 			logger.info("No active bounties returned from Torn API.");
 			return;
 		}
 
-		// 2. Pre-filter & aggregate by target ID: keep highest single bounty >= MIN_BOUNTY_PREFILTER
-		const targetAggregates = new Map<
-			number,
-			{
-				id: number;
-				name: string;
-				level: number;
-				maxReward: number;
+		if (sweepCompleted) {
+			// Sweep finished: prune candidates that were not seen anywhere in this completed sweep
+			for (const [id, cand] of activeCandidateMap.entries()) {
+				if (cand.lastSeenSweepId < currentSweepId) {
+					activeCandidateMap.delete(id);
+				}
 			}
-		>();
+			// Reset offset to 0 for next round, increment sweep ID
+			currentBountyOffset = 0;
+			currentSweepId++;
+		}
 
-		for (const bounty of rawBounties) {
-			if (bounty.reward < MIN_BOUNTY_PREFILTER) {
-				continue;
-			}
-
-			const existing = targetAggregates.get(bounty.target_id);
-			if (!existing) {
-				targetAggregates.set(bounty.target_id, {
-					id: bounty.target_id,
-					name: bounty.target_name,
-					level: bounty.target_level,
-					maxReward: bounty.reward,
-				});
-			} else if (bounty.reward > existing.maxReward) {
-				existing.maxReward = bounty.reward;
+		// Prune any candidates that haven't been seen in > 15 minutes as safety TTL
+		for (const [id, cand] of activeCandidateMap.entries()) {
+			if (nowSec - cand.lastSeenAt > 900) {
+				activeCandidateMap.delete(id);
 			}
 		}
 
-		if (targetAggregates.size === 0) {
+		if (activeCandidateMap.size === 0) {
 			logger.info("No bounties met the minimum reward pre-filter ($100k).");
 			return;
 		}
 
 		// 3. Batch FFScouter lookup (0 Torn API requests)
 		// Uses the fixed FFScouter API key from environment
-		const candidateIds = Array.from(targetAggregates.keys());
+		const candidateIds = Array.from(activeCandidateMap.keys());
 		let scouts: Awaited<ReturnType<typeof getPlayerStats>> = [];
 		try {
 			scouts = await getPlayerStats(candidateIds);
@@ -190,8 +268,8 @@ export async function runBountyFinderCycle(
 		}
 
 		// 4. Filter by Fair Fight and Unscouted Policy (0 Torn API calls)
-		// - Scouted with FF <= 3.0: Keep
-		// - Scouted with FF > 3.0: Discard
+		// - Scouted with FF <= 4.0: Keep
+		// - Scouted with FF > 4.0: Discard
 		// - Unscouted with Level <= 15: Keep (FF = null)
 		// - Unscouted with Level > 15: Discard
 		interface QualifiedCandidate {
@@ -205,7 +283,7 @@ export async function runBountyFinderCycle(
 
 		const qualifiedCandidates: QualifiedCandidate[] = [];
 
-		for (const candidate of targetAggregates.values()) {
+		for (const candidate of activeCandidateMap.values()) {
 			const scout = scoutMap.get(candidate.id);
 
 			if (scout) {

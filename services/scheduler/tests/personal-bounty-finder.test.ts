@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as ffscouterModule from "@sentinel/torn-api";
 import * as managerModule from "@sentinel/torn-api";
 import {
+	getCurrentBountyOffset,
+	getCurrentSweepId,
 	getInMemoryBountyState,
 	resetBountyFinderCooldown,
+	resetBountyFinderState,
 	runBountyFinderCycle,
 } from "../src/workers/personal/bounty-finder";
 
@@ -13,7 +16,7 @@ describe("Personal Bounty Target Finder Worker", () => {
 	let getPlayerStatsSpy: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
-		resetBountyFinderCooldown();
+		resetBountyFinderState();
 		getPersonalKeySpy = spyOn(
 			managerModule,
 			"getPersonalKey",
@@ -336,5 +339,185 @@ describe("Personal Bounty Target Finder Worker", () => {
 		// Second cycle with force=true should run
 		await runBountyFinderCycle(true);
 		expect(tornApiGetSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("persists pagination offset across rounds and continues down pages until hitting < 100k bounties, then resets offset to 0", async () => {
+		getPlayerStatsSpy.mockResolvedValue([]); // Unscouted
+
+		// Setup mock bounties across offsets:
+		// Round 1:
+		// Offset 0: 100 bounties (rewards 500k)
+		// Offset 100: 100 bounties (rewards 400k)
+		// Offset 200: 100 bounties (rewards 300k)
+		// Round 2:
+		// Offset 300: 100 bounties (rewards 200k)
+		// Offset 400: 100 bounties (first 50 are 150k, next 50 are 50k < 100k!)
+		tornApiGetSpy.mockImplementation((async (
+			path: string,
+			options: unknown,
+		) => {
+			if (path === "/torn/bounties") {
+				const opt = options as {
+					queryParams: { limit: number; offset: number };
+				};
+				const offset = opt.queryParams.offset;
+
+				if (offset === 0) {
+					return {
+						bounties: Array.from({ length: 100 }, (_, i) => ({
+							target_id: 3000 + i,
+							target_name: `Target_${3000 + i}`,
+							target_level: 10,
+							reward: 500_000,
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 500,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				if (offset === 100) {
+					return {
+						bounties: Array.from({ length: 100 }, (_, i) => ({
+							target_id: 3100 + i,
+							target_name: `Target_${3100 + i}`,
+							target_level: 10,
+							reward: 400_000,
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 500,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				if (offset === 200) {
+					return {
+						bounties: Array.from({ length: 100 }, (_, i) => ({
+							target_id: 3200 + i,
+							target_name: `Target_${3200 + i}`,
+							target_level: 10,
+							reward: 300_000,
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 500,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				if (offset === 300) {
+					return {
+						bounties: Array.from({ length: 100 }, (_, i) => ({
+							target_id: 3300 + i,
+							target_name: `Target_${3300 + i}`,
+							target_level: 10,
+							reward: 200_000,
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 500,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				if (offset === 400) {
+					// 50 bounties at 150k, 50 bounties at 50k (< 100k)
+					const bounties = [
+						...Array.from({ length: 50 }, (_, i) => ({
+							target_id: 3400 + i,
+							target_name: `Target_${3400 + i}`,
+							target_level: 10,
+							reward: 150_000,
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						...Array.from({ length: 50 }, (_, i) => ({
+							target_id: 3450 + i,
+							target_name: `TargetSub100k_${3450 + i}`,
+							target_level: 10,
+							reward: 50_000, // < 100k
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+					];
+					return {
+						bounties,
+						_metadata: { links: { next: null }, total: 500 },
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+			}
+
+			if (path === "/user/{id}/profile") {
+				const opt = options as { pathParams: { id: number } };
+				return {
+					profile: {
+						id: opt.pathParams.id,
+						name: `Target_${opt.pathParams.id}`,
+						level: 10,
+						age: 100,
+						status: { state: "Okay" },
+					},
+				} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+			}
+
+			return {} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+		}) as unknown as typeof managerModule.tornApi.get);
+
+		// Execute Round 1: should fetch 3 pages (offsets 0, 100, 200 = 300 bounties)
+		await runBountyFinderCycle();
+
+		expect(getCurrentBountyOffset()).toBe(300);
+		expect(getCurrentSweepId()).toBe(1);
+
+		// Reset cooldown and execute Round 2: should continue from offset 300,
+		// fetch offset 300 (100 bounties) and offset 400 (hits < 100k),
+		// complete the sweep, and reset offset to 0 while incrementing sweepId to 2!
+		resetBountyFinderCooldown();
+		await runBountyFinderCycle();
+
+		expect(getCurrentBountyOffset()).toBe(0);
+		expect(getCurrentSweepId()).toBe(2);
+
+		// Verify state contains candidates from both Round 1 and Round 2
+		const state = getInMemoryBountyState();
+		expect(state.readyTargets.length).toBe(40); // 20 from round 1 + 20 from round 2
+		expect(state.pendingCount).toBe(410); // 450 qualifying candidates - 40 profiled = 410 pending
+		// 450 qualifying candidates in total (300 from round 1, 150 from round 2)
+		// Sub-100k targets (IDs 3450..3499) were discarded
+		expect(state.targetCount).toBe(40);
 	});
 });
