@@ -25,7 +25,6 @@ const MIN_BOUNTY_PREFILTER = 100_000;
 const MAX_FF_THRESHOLD = 4.0;
 const MIN_ACCOUNT_AGE_DAYS = 14;
 const MAX_PROFILES_PER_CYCLE = 20; // Budgeted within 50/min rate limit (20 req / 30s)
-const MAX_BOUNTY_PAGES_PER_ROUND = 3; // Fetches up to 300 bounties per cycle (3 pages * 100)
 const BOUNTY_PAGE_SIZE = 100;
 
 export interface PersonalBountyTarget {
@@ -128,6 +127,29 @@ export function getActiveCandidateCount(): number {
 }
 
 /**
+ * Computes how many bounty pages to fetch in the current round based on
+ * the uninspected candidate backlog for the 20-profile inspection budget:
+ * - Backlog high (>= 40): ramp down to 1 page (conserve quota, clear backlog)
+ * - Balanced (15 - 39): normal 3 pages
+ * - Backlog low / empty (< 15): ramp up to 5 pages (discover targets fast)
+ */
+export function computeAdaptivePageBudget(pendingCount: number): number {
+	if (pendingCount >= 40) return 1;
+	if (pendingCount >= 15) return 3;
+	return 5;
+}
+
+export function getPendingCandidateCount(): number {
+	let pending = 0;
+	for (const id of activeCandidateMap.keys()) {
+		if (!targetProfileCache.has(id)) {
+			pending++;
+		}
+	}
+	return pending;
+}
+
+/**
  * Core execution cycle for Personal Bounty Target Finder.
  */
 export async function runBountyFinderCycle(
@@ -152,12 +174,16 @@ export async function runBountyFinderCycle(
 
 	try {
 		// 1. Fetch live bounties from Torn API with persistent cross-round pagination.
-		// Bounties in Torn are sorted by reward descending. We page down (3 pages per round)
+		// Bounties in Torn are sorted by reward descending. We page down with an adaptive budget:
+		// ramp down (1 page) when the 20-user profile inspection queue is backlogged,
+		// ramp up (up to 5 pages) when the inspection queue is dry,
 		// until we reach bounties under 100k, then reset to offset 0 on the next round to restart the sweep.
 		let sweepCompleted = false;
 		let totalBountiesReceivedThisCycle = 0;
+		const pendingBacklog = getPendingCandidateCount();
+		const maxPagesThisCycle = computeAdaptivePageBudget(pendingBacklog);
 
-		for (let page = 0; page < MAX_BOUNTY_PAGES_PER_ROUND; page++) {
+		for (let page = 0; page < maxPagesThisCycle; page++) {
 			await personalRateLimiter.waitIfNeeded(personalKey.userId);
 			const bountiesRes = (await tornApi.getPersonal("/torn/bounties", {
 				queryParams: {
