@@ -458,6 +458,7 @@ class SubversiveTargetCache {
 		minFF?: number;
 		maxFF?: number;
 		maxOnlineFF?: number;
+		maxBS?: number;
 	}):
 		| (RankedWarOpponent & {
 				fairFight: number;
@@ -474,6 +475,7 @@ class SubversiveTargetCache {
 			minFF = 2.5,
 			maxFF = 3.0,
 			maxOnlineFF = Math.max(3.5, (options.maxFF ?? 3.0) + 0.5),
+			maxBS,
 		} = options;
 
 		if (!this.isWarEngaged()) {
@@ -486,6 +488,7 @@ class SubversiveTargetCache {
 		// Unattackable states: Traveling, Abroad, Federal, Fallen, Jail
 		const attackable = opponents.filter((opp) => {
 			if (excludeIds.has(opp.id)) return false;
+			if (maxBS !== undefined && opp.estimatedBs > maxBS) return false;
 			const state = opp.status.state?.toLowerCase() ?? "";
 			if (
 				state === "traveling" ||

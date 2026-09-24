@@ -764,6 +764,9 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		const maxFF = query.maxFF
 			? Number.parseFloat(query.maxFF as string)
 			: undefined;
+		const maxBS = query.maxBS
+			? Number.parseFloat(query.maxBS as string)
+			: undefined;
 
 		if (war.state !== "active" && war.state !== "scheduled") {
 			return {
@@ -779,6 +782,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			excludeIds,
 			minFF,
 			maxFF,
+			maxBS,
 		});
 
 		if (!target) {

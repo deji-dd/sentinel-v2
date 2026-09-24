@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.3.4
+// @version      2.3.5
 // @description  Userscript for Subversive Alliance Ranked War & Target Engine
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -27,9 +27,11 @@
 		persistOpen: "satf_persist_open",
 		activeTab: "satf_active_tab",
 		maxFFThreshold: "satf_max_ff_threshold",
+		maxBSThreshold: "satf_max_bs_threshold",
 		cachedTargets: "satf_cached_targets",
 		directAttack: "satf_direct_attack",
 		hideHighFF: "satf_hide_high_ff",
+		hideHighBS: "satf_hide_high_bs",
 		targetSortBy: "satf_target_sort_by",
 		targetSortOrder: "satf_target_sort_order",
 		ignoredTargets: "satf_ignored_targets",
@@ -41,6 +43,7 @@
 	const DEFAULTS = {
 		apiUrl: "https://subversive.blasted-labs.tech",
 		maxFFThreshold: 3.0,
+		maxBSThreshold: 5e9,
 		directAttack: true,
 		persistOpen: false,
 	};
@@ -60,10 +63,14 @@
 		maxFFThreshold:
 			Number(GM_getValue(STORAGE.maxFFThreshold, DEFAULTS.maxFFThreshold)) ||
 			3.0,
+		maxBSThreshold:
+			Number(GM_getValue(STORAGE.maxBSThreshold, DEFAULTS.maxBSThreshold)) ||
+			5e9,
 		directAttack:
 			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== false &&
 			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== "false",
 		hideHighFF: Boolean(GM_getValue(STORAGE.hideHighFF, false)),
+		hideHighBS: Boolean(GM_getValue(STORAGE.hideHighBS, false)),
 		ignoredTargets: GM_getValue(STORAGE.ignoredTargets, []) || [],
 		war: null,
 		warState: GM_getValue(STORAGE.warState, "no_war"),
@@ -94,10 +101,24 @@
 
 	function formatStats(num) {
 		if (!num || !Number.isFinite(num)) return "Unknown";
+		if (num >= 1e15) return `${(num / 1e15).toFixed(2)}Q`;
+		if (num >= 1e12) return `${(num / 1e12).toFixed(2)}T`;
 		if (num >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
 		if (num >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
 		if (num >= 1e3) return `${(num / 1e3).toFixed(1)}k`;
 		return Math.round(num).toLocaleString();
+	}
+
+	function parseStatsInput(str) {
+		if (!str) return null;
+		const clean = String(str).trim().toLowerCase();
+		const match = clean.match(/^([\d.]+)\s*([kmbtq])?$/);
+		if (!match) return null;
+		const val = Number.parseFloat(match[1]);
+		if (Number.isNaN(val) || val <= 0) return null;
+		const unit = match[2];
+		const mults = { k: 1e3, m: 1e6, b: 1e9, t: 1e12, q: 1e15 };
+		return Math.round(val * (mults[unit] || 1));
 	}
 
 	function formatSeconds(totalSeconds) {
@@ -143,6 +164,8 @@
 		const pool = (state.allTargets || []).filter((t) => {
 			if (excludes.has(t.id)) return false;
 			if (state.hideHighFF && t.fairFight > state.maxFFThreshold) return false;
+			if (state.hideHighBS && t.estimatedBs > state.maxBSThreshold)
+				return false;
 			if (t.statusCategory === "early_discharge" || t.hasEarlyDischarge)
 				return false;
 			const st = (t.status?.state || "").toLowerCase();
@@ -833,20 +856,27 @@
 
 			<!-- TARGET VIEW -->
 			<div id="satf-view-target">
-				<div class="satf-direct-toggle-row" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
-					<div style="display: flex; align-items: center; gap: 8px;">
-						<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-							<input type="checkbox" id="satf-chk-direct">
-							<span>Direct Attack</span>
-						</label>
-						<button id="satf-btn-modal-next" class="satf-btn satf-btn-primary satf-btn-sm" style="padding: 2px 8px; font-size: 11px;">Next Target →</button>
-					</div>
-					<div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted);">
-						<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+				<div class="satf-direct-toggle-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+					<label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--muted);">
+						<input type="checkbox" id="satf-chk-direct">
+						<span>Direct Attack</span>
+					</label>
+					<button id="satf-btn-modal-next" class="satf-btn satf-btn-primary satf-btn-sm" style="padding: 3px 10px; font-size: 11px;">Next Target →</button>
+				</div>
+				<div class="satf-filter-row" style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; padding: 6px 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted);">
+					<div style="display: flex; align-items: center; gap: 5px;">
+						<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
 							<input type="checkbox" id="satf-chk-hide-high-ff">
-							<span>Hide FF &gt;</span>
+							<span>Max FF</span>
 						</label>
-						<input type="number" id="satf-input-hide-ff" min="1.0" max="10.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 48px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
+						<input type="number" id="satf-input-hide-ff" min="1.0" max="10.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 44px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
+					</div>
+					<div style="display: flex; align-items: center; gap: 5px;">
+						<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+							<input type="checkbox" id="satf-chk-hide-high-bs">
+							<span>Max BS</span>
+						</label>
+						<input type="text" id="satf-input-hide-bs" placeholder="e.g. 5B" value="${formatStats(state.maxBSThreshold)}" title="${state.maxBSThreshold.toLocaleString()}" style="width: 60px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
 					</div>
 				</div>
 
@@ -940,6 +970,8 @@
 		const btnModalNext = root.getElementById("satf-btn-modal-next");
 		const chkHideHighFf = root.getElementById("satf-chk-hide-high-ff");
 		const inputHideFf = root.getElementById("satf-input-hide-ff");
+		const chkHideHighBs = root.getElementById("satf-chk-hide-high-bs");
+		const inputHideBs = root.getElementById("satf-input-hide-bs");
 		const chkPersistOpen = root.getElementById("satf-chk-persist-open");
 		const ignoredCount = root.getElementById("satf-ignored-count");
 		const availList = root.getElementById("satf-avail-list");
@@ -951,6 +983,7 @@
 
 		chkDirect.checked = state.directAttack;
 		chkHideHighFf.checked = state.hideHighFF;
+		chkHideHighBs.checked = state.hideHighBS;
 		chkPersistOpen.checked = state.persistOpen;
 
 		function setStatus(text, type = "ok") {
@@ -1090,6 +1123,8 @@
 				if (state.ignoredTargets.includes(t.id)) return false;
 				if (state.hideHighFF && t.fairFight > state.maxFFThreshold)
 					return false;
+				if (state.hideHighBS && t.estimatedBs > state.maxBSThreshold)
+					return false;
 				if (t.statusCategory === "early_discharge" || t.hasEarlyDischarge)
 					return false;
 				const st = (t.status?.state || "").toLowerCase();
@@ -1099,9 +1134,18 @@
 			availCount.textContent = String(state.availableTargets.length);
 
 			if (state.availableTargets.length === 0) {
+				const activeFilters = [];
+				if (state.hideHighFF)
+					activeFilters.push(`FF <= ${state.maxFFThreshold.toFixed(1)}`);
+				if (state.hideHighBS)
+					activeFilters.push(`BS <= ${formatStats(state.maxBSThreshold)}`);
+				const filterDesc =
+					activeFilters.length > 0
+						? ` (within ${activeFilters.join(" & ")})`
+						: "";
 				availList.innerHTML = `
 					<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
-						No opponents currently ready${state.hideHighFF ? ` (within FF <= ${state.maxFFThreshold.toFixed(1)})` : ""}. Check Hospital Queue.
+						No opponents currently ready${filterDesc}. Check Hospital Queue.
 					</div>
 				`;
 				return;
@@ -1173,6 +1217,9 @@
 				const params = new URLSearchParams({
 					maxFF: state.hideHighFF ? String(state.maxFFThreshold) : "10.0",
 				});
+				if (state.hideHighBS) {
+					params.set("maxBS", String(state.maxBSThreshold));
+				}
 				const res = await apiRequest(
 					`/api/v1/target-finder/war/targets/available?${params.toString()}`,
 				);
@@ -1264,7 +1311,7 @@
 				return;
 			}
 
-			// 2. Query backend war target dispatch with matching maxFF filter
+			// 2. Query backend war target dispatch with matching maxFF/maxBS filter
 			try {
 				const combinedExcludes = Array.from(
 					new Set([...state.excludeIds.slice(-20), ...state.ignoredTargets]),
@@ -1275,6 +1322,9 @@
 					attackerState: flightState,
 					maxFF: state.hideHighFF ? String(state.maxFFThreshold) : "10.0",
 				});
+				if (state.hideHighBS) {
+					params.set("maxBS", String(state.maxBSThreshold));
+				}
 
 				const res = await apiRequest(
 					`/api/v1/target-finder/war/targets/next?${params.toString()}`,
@@ -1289,6 +1339,16 @@
 					if (state.hideHighFF && res.target.fairFight > state.maxFFThreshold) {
 						setStatus(
 							`No opponents available within FF <= ${state.maxFFThreshold.toFixed(1)}`,
+							"error",
+						);
+						return;
+					}
+					if (
+						state.hideHighBS &&
+						res.target.estimatedBs > state.maxBSThreshold
+					) {
+						setStatus(
+							`No opponents available within BS <= ${formatStats(state.maxBSThreshold)}`,
 							"error",
 						);
 						return;
@@ -1796,6 +1856,37 @@
 			renderAvailableTargets();
 		});
 
+		chkHideHighBs.addEventListener("change", (e) => {
+			state.hideHighBS = e.target.checked;
+			GM_setValue(STORAGE.hideHighBS, state.hideHighBS);
+			renderAvailableTargets();
+		});
+
+		function commitBsInput(targetElem) {
+			const parsed = parseStatsInput(targetElem.value);
+			if (parsed !== null) {
+				state.maxBSThreshold = parsed;
+				GM_setValue(STORAGE.maxBSThreshold, state.maxBSThreshold);
+				targetElem.value = formatStats(parsed);
+				targetElem.title = parsed.toLocaleString();
+			} else {
+				targetElem.value = formatStats(state.maxBSThreshold);
+			}
+			renderAvailableTargets();
+		}
+
+		inputHideBs?.addEventListener("change", (e) => {
+			commitBsInput(e.target);
+		});
+
+		inputHideBs?.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commitBsInput(e.target);
+				e.target.blur();
+			}
+		});
+
 		chkPersistOpen.addEventListener("change", (e) => {
 			state.persistOpen = e.target.checked;
 			GM_setValue(STORAGE.persistOpen, state.persistOpen);
@@ -2192,7 +2283,7 @@
 					return;
 				}
 
-				// 2. Query backend war target dispatch with matching maxFF filter
+				// 2. Query backend war target dispatch with matching maxFF/maxBS filter
 				const combinedExcludes = Array.from(
 					new Set([
 						...state.excludeIds.slice(-20),
@@ -2204,6 +2295,9 @@
 					exclude: combinedExcludes.join(","),
 					maxFF: state.hideHighFF ? String(state.maxFFThreshold) : "10.0",
 				});
+				if (state.hideHighBS) {
+					params.set("maxBS", String(state.maxBSThreshold));
+				}
 				const res = await apiRequest(
 					`/api/v1/target-finder/war/targets/next?${params.toString()}`,
 				);
@@ -2211,6 +2305,19 @@
 					if (state.hideHighFF && res.target.fairFight > state.maxFFThreshold) {
 						alert(
 							`No opponents available within FF <= ${state.maxFFThreshold.toFixed(1)}`,
+						);
+						if (btnHudNext) {
+							btnHudNext.textContent = "Next Target";
+							btnHudNext.disabled = false;
+						}
+						return;
+					}
+					if (
+						state.hideHighBS &&
+						res.target.estimatedBs > state.maxBSThreshold
+					) {
+						alert(
+							`No opponents available within BS <= ${formatStats(state.maxBSThreshold)}`,
 						);
 						if (btnHudNext) {
 							btnHudNext.textContent = "Next Target";

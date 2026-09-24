@@ -501,6 +501,22 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(highFFData.target.isHighFF).toBe(true);
 		expect(highFFData.target.warning).toContain("High FF Warning");
 
+		// Test maxBS filter: opponent with 50m BS should be excluded if maxBS=10m
+		const bsFilteredRes = await app.handle(
+			new Request(
+				"http://localhost/api/v1/target-finder/war/targets/next?maxBS=10000000",
+				{
+					headers: { Authorization: `Bearer ${testToken}` },
+				},
+			),
+		);
+		const bsFilteredData = (await bsFilteredRes.json()) as {
+			success: boolean;
+			target: unknown;
+		};
+		expect(bsFilteredData.success).toBe(false);
+		expect(bsFilteredData.target).toBeNull();
+
 		// 8. Test Hospital Queue: should include opponents currently in hospital sorted by secondsRemaining
 		subversiveTargetCache.setWarOpponents([
 			{
