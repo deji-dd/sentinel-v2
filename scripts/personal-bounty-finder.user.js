@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bounty Target Finder
 // @namespace    sentinel.torn
-// @version      2.0.0
+// @version      3.0.0
 // @description  [RETIRED] Bounty target finder has been merged into the Subversive Alliance userscript
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*

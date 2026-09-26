@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      2.3.5
+// @version      3.0.0
 // @description  Userscript for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
