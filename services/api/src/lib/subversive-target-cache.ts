@@ -927,6 +927,7 @@ class SubversiveTargetCache {
 		level: number;
 		estimatedBs: number;
 		fairFight: number;
+		isHighFF: boolean;
 		isOnline: boolean;
 		status: {
 			state: string;
