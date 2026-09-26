@@ -3,18 +3,23 @@ import * as ffscouterModule from "@sentinel/torn-api";
 import * as managerModule from "@sentinel/torn-api";
 import {
 	computeAdaptivePageBudget,
-	getCurrentBountyOffset,
 	getCurrentSweepId,
+	getDynamicFloorPageCount,
 	getInMemoryBountyState,
 	resetBountyFinderCooldown,
 	resetBountyFinderState,
 	runBountyFinderCycle,
-} from "../src/workers/personal/bounty-finder";
+	setDynamicFloorPageCount,
+} from "../src/workers/subversive/bounty-finder";
+import * as keyPoolModule from "../src/workers/subversive/subversive-key-pool";
 
 describe("Personal Bounty Target Finder Worker", () => {
 	let getPersonalKeySpy: ReturnType<typeof spyOn>;
 	let tornApiGetSpy: ReturnType<typeof spyOn>;
 	let getPlayerStatsSpy: ReturnType<typeof spyOn>;
+	let getNextSubversiveUserKeySpy: ReturnType<typeof spyOn>;
+	let hasActiveSubversiveKeysSpy: ReturnType<typeof spyOn>;
+	let getSubversiveUserKeysSpy: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
 		resetBountyFinderState();
@@ -26,6 +31,31 @@ describe("Personal Bounty Target Finder Worker", () => {
 			userId: 999999,
 			keyType: "personal",
 		});
+
+		getNextSubversiveUserKeySpy = spyOn(
+			keyPoolModule,
+			"getNextSubversiveUserKey",
+		).mockImplementation(async () => ({
+			apiKey: "mock_subversive_key_16ch",
+			userId: 888888,
+			keyType: "custom",
+		}));
+
+		hasActiveSubversiveKeysSpy = spyOn(
+			keyPoolModule,
+			"hasActiveSubversiveKeys",
+		).mockImplementation(async () => true);
+
+		getSubversiveUserKeysSpy = spyOn(
+			keyPoolModule,
+			"getSubversiveUserKeys",
+		).mockImplementation(async () => [
+			{
+				apiKey: "mock_subversive_key_16ch",
+				userId: 888888,
+				keyType: "custom",
+			},
+		]);
 
 		getPlayerStatsSpy = spyOn(
 			ffscouterModule,
@@ -224,6 +254,9 @@ describe("Personal Bounty Target Finder Worker", () => {
 		getPersonalKeySpy.mockRestore();
 		tornApiGetSpy.mockRestore();
 		getPlayerStatsSpy.mockRestore();
+		getNextSubversiveUserKeySpy.mockRestore();
+		hasActiveSubversiveKeysSpy.mockRestore();
+		getSubversiveUserKeysSpy.mockRestore();
 	});
 
 	it("executes bounty finder cycle, filtering by FF, age, reward, and tracking hospital", async () => {
@@ -306,24 +339,23 @@ describe("Personal Bounty Target Finder Worker", () => {
 
 		const data = getInMemoryBountyState();
 
-		// Exactly 20 should have been profiled and placed in readyTargets
-		expect(data.readyTargets.length).toBe(20);
-		expect(data.pendingCount).toBe(5);
+		// Exactly 10 should have been profiled and placed in readyTargets (10 * 1 key)
+		expect(data.readyTargets.length).toBe(10);
+		expect(data.pendingCount).toBe(15);
 
-		// Highest reward candidates (IDs 2005 to 2024) must be in readyTargets
+		// Highest reward candidates (IDs 2015 to 2024) must be in readyTargets
 		const readyIds = data.readyTargets.map((t) => t.id);
 		expect(readyIds).toContain(2024); // Highest reward (340k)
-		expect(readyIds).toContain(2005);
+		expect(readyIds).toContain(2015);
 
-		// The 5 lowest reward candidates (IDs 2000, 2001, 2002, 2003, 2004) must NOT be in readyTargets
+		// Lower reward candidates (IDs 2000 to 2014) must NOT be in readyTargets
 		expect(readyIds).not.toContain(2000);
-		expect(readyIds).not.toContain(2001);
-		expect(readyIds).not.toContain(2002);
-		expect(readyIds).not.toContain(2003);
-		expect(readyIds).not.toContain(2004);
+		expect(readyIds).not.toContain(2005);
+		expect(readyIds).not.toContain(2014);
 	});
 
 	it("skips execution if invoked within the minimum cooldown period", async () => {
+		setDynamicFloorPageCount(1);
 		tornApiGetSpy.mockResolvedValue({
 			bounties: [],
 			_metadata: { total: 0 },
@@ -358,12 +390,15 @@ describe("Personal Bounty Target Finder Worker", () => {
 		expect(computeAdaptivePageBudget(80)).toBe(1);
 	});
 
-	it("persists pagination offset across rounds, ramping up when queue is empty and ramping down when queue is backlogged", async () => {
+	it("fetches bounty pages in parallel up to dynamic floor and dynamically adjusts floor in memory", async () => {
 		getPlayerStatsSpy.mockResolvedValue([]); // Unscouted
 
-		// Setup mock bounties across offsets:
-		// Round 1 (starts with 0 backlog -> ramps up to 5 pages: offsets 0, 100, 200, 300, 400)
-		// Round 2 (starts with 480 backlog -> ramps down to 1 page: offset 500 which hits < 100k)
+		// Setup mock bounties:
+		// Page 0 (offset 0): 100 bounties @ 500k
+		// Page 1 (offset 100): 100 bounties @ 400k
+		// Page 2 (offset 200): 50 bounties @ 200k, 50 bounties @ 50k (< 100k floor hit!)
+		// Page 3 (offset 300): 100 bounties @ 40k
+		// Page 4 (offset 400): 100 bounties @ 30k
 		tornApiGetSpy.mockImplementation((async (
 			path: string,
 			options: unknown,
@@ -390,7 +425,7 @@ describe("Personal Bounty Target Finder Worker", () => {
 						})),
 						_metadata: {
 							links: { next: "https://api.torn.com/next" },
-							total: 1000,
+							total: 500,
 						},
 					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 				}
@@ -411,107 +446,64 @@ describe("Personal Bounty Target Finder Worker", () => {
 						})),
 						_metadata: {
 							links: { next: "https://api.torn.com/next" },
-							total: 1000,
+							total: 500,
 						},
 					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 				}
 
 				if (offset === 200) {
 					return {
-						bounties: Array.from({ length: 100 }, (_, i) => ({
-							target_id: 3200 + i,
-							target_name: `Target_${3200 + i}`,
-							target_level: 10,
-							reward: 300_000,
-							quantity: 1,
-							is_anonymous: false,
-							valid_until: Math.floor(Date.now() / 1000) + 86400,
-							lister_id: 1,
-							lister_name: "Lister",
-							reason: null,
-						})),
+						bounties: [
+							...Array.from({ length: 50 }, (_, i) => ({
+								target_id: 3200 + i,
+								target_name: `Target_${3200 + i}`,
+								target_level: 10,
+								reward: 200_000,
+								quantity: 1,
+								is_anonymous: false,
+								valid_until: Math.floor(Date.now() / 1000) + 86400,
+								lister_id: 1,
+								lister_name: "Lister",
+								reason: null,
+							})),
+							...Array.from({ length: 50 }, (_, i) => ({
+								target_id: 3250 + i,
+								target_name: `TargetSub100k_${3250 + i}`,
+								target_level: 10,
+								reward: 50_000, // < 100k floor reached
+								quantity: 1,
+								is_anonymous: false,
+								valid_until: Math.floor(Date.now() / 1000) + 86400,
+								lister_id: 1,
+								lister_name: "Lister",
+								reason: null,
+							})),
+						],
 						_metadata: {
 							links: { next: "https://api.torn.com/next" },
-							total: 1000,
+							total: 500,
 						},
 					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 				}
 
-				if (offset === 300) {
-					return {
-						bounties: Array.from({ length: 100 }, (_, i) => ({
-							target_id: 3300 + i,
-							target_name: `Target_${3300 + i}`,
-							target_level: 10,
-							reward: 200_000,
-							quantity: 1,
-							is_anonymous: false,
-							valid_until: Math.floor(Date.now() / 1000) + 86400,
-							lister_id: 1,
-							lister_name: "Lister",
-							reason: null,
-						})),
-						_metadata: {
-							links: { next: "https://api.torn.com/next" },
-							total: 1000,
-						},
-					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
-				}
-
-				if (offset === 400) {
-					return {
-						bounties: Array.from({ length: 100 }, (_, i) => ({
-							target_id: 3400 + i,
-							target_name: `Target_${3400 + i}`,
-							target_level: 10,
-							reward: 150_000,
-							quantity: 1,
-							is_anonymous: false,
-							valid_until: Math.floor(Date.now() / 1000) + 86400,
-							lister_id: 1,
-							lister_name: "Lister",
-							reason: null,
-						})),
-						_metadata: {
-							links: { next: "https://api.torn.com/next" },
-							total: 1000,
-						},
-					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
-				}
-
-				if (offset === 500) {
-					// 50 bounties at 120k, 50 bounties at 50k (< 100k)
-					const bounties = [
-						...Array.from({ length: 50 }, (_, i) => ({
-							target_id: 3500 + i,
-							target_name: `Target_${3500 + i}`,
-							target_level: 10,
-							reward: 120_000,
-							quantity: 1,
-							is_anonymous: false,
-							valid_until: Math.floor(Date.now() / 1000) + 86400,
-							lister_id: 1,
-							lister_name: "Lister",
-							reason: null,
-						})),
-						...Array.from({ length: 50 }, (_, i) => ({
-							target_id: 3550 + i,
-							target_name: `TargetSub100k_${3550 + i}`,
-							target_level: 10,
-							reward: 50_000, // < 100k
-							quantity: 1,
-							is_anonymous: false,
-							valid_until: Math.floor(Date.now() / 1000) + 86400,
-							lister_id: 1,
-							lister_name: "Lister",
-							reason: null,
-						})),
-					];
-					return {
-						bounties,
-						_metadata: { links: { next: null }, total: 1000 },
-					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
-				}
+				return {
+					bounties: Array.from({ length: 100 }, (_, i) => ({
+						target_id: 3300 + i,
+						target_name: `Sub_${offset}_${i}`,
+						target_level: 10,
+						reward: 40_000,
+						quantity: 1,
+						is_anonymous: false,
+						valid_until: Math.floor(Date.now() / 1000) + 86400,
+						lister_id: 1,
+						lister_name: "Lister",
+						reason: null,
+					})),
+					_metadata: {
+						links: { next: null },
+						total: 500,
+					},
+				} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 			}
 
 			if (path === "/user/{id}/profile") {
@@ -530,25 +522,165 @@ describe("Personal Bounty Target Finder Worker", () => {
 			return {} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 		}) as unknown as typeof managerModule.tornApi.get);
 
-		// Execute Round 1: queue starts empty (0 pending) -> ramps up to 5 pages (offsets 0, 100, 200, 300, 400 = 500 bounties)
+		// Initial state: dynamicFloorPageCount defaults to 5
+		expect(getDynamicFloorPageCount()).toBe(5);
+
+		// Execute Cycle 1: Fetches 5 pages in parallel (offsets 0, 100, 200, 300, 400).
+		// Sub-100k floor is hit on offset 200 (page index 2).
+		// Dynamic floor count dynamically adjusts to 3 in memory!
 		await runBountyFinderCycle();
 
-		expect(getCurrentBountyOffset()).toBe(500);
-		expect(getCurrentSweepId()).toBe(1);
+		expect(getDynamicFloorPageCount()).toBe(3);
+		expect(getCurrentSweepId()).toBe(2);
 
-		// Reset cooldown and execute Round 2:
-		// Queue now has 480 pending uninspected candidates -> ramps down to 1 page (offset 500)!
-		// Offset 500 encounters sub-100k bounties, finishes the sweep, and resets offset to 0.
+		// Reset cooldown and execute Cycle 2:
+		// Now it only fetches 3 pages in parallel (offsets 0, 100, 200) instead of 5!
+		tornApiGetSpy.mockClear();
 		resetBountyFinderCooldown();
 		await runBountyFinderCycle();
 
-		expect(getCurrentBountyOffset()).toBe(0);
-		expect(getCurrentSweepId()).toBe(2);
+		// Check how many calls to /torn/bounties were made: exactly 3 pages!
+		const bountyCalls = tornApiGetSpy.mock.calls.filter(
+			(call: unknown[]) => call[0] === "/torn/bounties",
+		);
+		expect(bountyCalls.length).toBe(3);
+		expect(getDynamicFloorPageCount()).toBe(3);
+	});
 
-		// Verify state contains candidates from both rounds (550 qualifying candidates - 40 profiled = 510 pending)
-		const state = getInMemoryBountyState();
-		expect(state.readyTargets.length).toBe(40);
-		expect(state.pendingCount).toBe(510);
-		expect(state.targetCount).toBe(40);
+	it("continues parallel batches of default pages (5 + 5) if initial batch does not reach 100k floor", async () => {
+		getPlayerStatsSpy.mockResolvedValue([]); // Unscouted
+
+		// Setup mock bounties where first batch (pages 0..4 = offsets 0..400) is all >= 100k,
+		// and second batch (pages 5..9 = offsets 500..900) hits the 100k floor at page index 6 (offset 600).
+		tornApiGetSpy.mockImplementation((async (
+			path: string,
+			options: unknown,
+		) => {
+			if (path === "/torn/bounties") {
+				const opt = options as {
+					queryParams: { limit: number; offset: number };
+				};
+				const offset = opt.queryParams.offset;
+
+				// Pages 0 to 5: all >= 100k
+				if (offset < 600) {
+					return {
+						bounties: Array.from({ length: 100 }, (_, i) => ({
+							target_id: 4000 + offset + i,
+							target_name: `Target_${offset}_${i}`,
+							target_level: 10,
+							reward: 500_000 - offset * 500, // all well above 100k
+							quantity: 1,
+							is_anonymous: false,
+							valid_until: Math.floor(Date.now() / 1000) + 86400,
+							lister_id: 1,
+							lister_name: "Lister",
+							reason: null,
+						})),
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 1000,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				// Page 6 (offset 600): hits sub-100k floor
+				if (offset === 600) {
+					return {
+						bounties: [
+							...Array.from({ length: 50 }, (_, i) => ({
+								target_id: 5000 + i,
+								target_name: `Target_${offset}_${i}`,
+								target_level: 10,
+								reward: 120_000,
+								quantity: 1,
+								is_anonymous: false,
+								valid_until: Math.floor(Date.now() / 1000) + 86400,
+								lister_id: 1,
+								lister_name: "Lister",
+								reason: null,
+							})),
+							...Array.from({ length: 50 }, (_, i) => ({
+								target_id: 5050 + i,
+								target_name: `TargetSub_${i}`,
+								target_level: 10,
+								reward: 50_000, // < 100k floor reached
+								quantity: 1,
+								is_anonymous: false,
+								valid_until: Math.floor(Date.now() / 1000) + 86400,
+								lister_id: 1,
+								lister_name: "Lister",
+								reason: null,
+							})),
+						],
+						_metadata: {
+							links: { next: "https://api.torn.com/next" },
+							total: 1000,
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				// Pages 7+: sub-100k
+				return {
+					bounties: Array.from({ length: 100 }, (_, i) => ({
+						target_id: 6000 + offset + i,
+						target_name: `Sub_${offset}_${i}`,
+						target_level: 10,
+						reward: 40_000,
+						quantity: 1,
+						is_anonymous: false,
+						valid_until: Math.floor(Date.now() / 1000) + 86400,
+						lister_id: 1,
+						lister_name: "Lister",
+						reason: null,
+					})),
+					_metadata: { links: { next: null }, total: 1000 },
+				} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+			}
+
+			if (path === "/user/{id}/profile") {
+				const opt = options as { pathParams: { id: number } };
+				return {
+					profile: {
+						id: opt.pathParams.id,
+						name: `Target_${opt.pathParams.id}`,
+						level: 10,
+						age: 100,
+						status: { state: "Okay" },
+					},
+				} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+			}
+
+			return {} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+		}) as unknown as typeof managerModule.tornApi.get);
+
+		// Starts at default 5 pages
+		expect(getDynamicFloorPageCount()).toBe(5);
+
+		// Cycle 1:
+		// Batch 1 fetches pages 0..4 (offsets 0, 100, 200, 300, 400).
+		// Floor is not reached, so it immediately triggers Batch 2 with 5 pages (pages 5..9).
+		// Page 6 (offset 600) hits the sub-100k floor.
+		// Floor is detected at page index 6 -> dynamicFloorPageCount dynamically becomes 7!
+		await runBountyFinderCycle();
+
+		expect(getDynamicFloorPageCount()).toBe(7);
+
+		// Cycle 2:
+		// Now it starts with dynamicFloorPageCount = 7, fetching all 7 pages (offsets 0..600) in 1 parallel batch!
+		tornApiGetSpy.mockClear();
+		resetBountyFinderCooldown();
+		await runBountyFinderCycle();
+
+		const bountyCalls = tornApiGetSpy.mock.calls.filter(
+			(call: unknown[]) => call[0] === "/torn/bounties",
+		);
+		expect(bountyCalls.length).toBe(7);
+		expect(getDynamicFloorPageCount()).toBe(7);
+	});
+
+	it("uses the Subversive key pool for bounty requests instead of only personal key", async () => {
+		await runBountyFinderCycle();
+		expect(getNextSubversiveUserKeySpy).toHaveBeenCalled();
 	});
 });

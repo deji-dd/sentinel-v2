@@ -5,11 +5,12 @@ import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
 } from "./elimination";
-import { startPersonalBountyFinder } from "./personal/bounty-finder";
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
+import { startSubversiveBountyFinder } from "./subversive/bounty-finder";
 import { startSubversiveFFScouterCrawlerWorker } from "./subversive/ffscouter-target-crawler";
+import { startSubversiveMembershipAuditor } from "./subversive/membership-auditor";
 import { startSubversiveRankedWarWorker } from "./subversive/ranked-war-worker";
 import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
 import { startSubversiveSnapshotIngestionWorker } from "./subversive/snapshot-ingestion-worker";
@@ -94,12 +95,6 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		start: startPersonalReferenceSync,
 	},
 	{
-		id: "personal:bounty_finder",
-		description:
-			"30-second personal bounty target finder with FF filtering and hospital monitor",
-		start: startPersonalBountyFinder,
-	},
-	{
 		id: "elims:team_tracker",
 		description: "30-second live elimination team score and attack poller",
 		start: startElimsTeamTracker,
@@ -116,11 +111,22 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		start: startSubversiveRecruitmentWorker,
 	},
 	{
+		id: "subversive:bounty_finder",
+		description:
+			"30-second Subversive Alliance bounty target finder with FF filtering and hospital monitor",
+		start: startSubversiveBountyFinder,
+	},
+	{
+		id: "subversive:membership_auditor",
+		description:
+			"15-minute Subversive Alliance membership auditor against Faction 2013 roster",
+		start: startSubversiveMembershipAuditor,
+	},
+	{
 		id: "subversive:target_finder_worker",
 		description:
-			"20-second Subversive Alliance membership auditor, target stat enrichment and hospital monitor (PAUSED FOR RANKED WAR)",
+			"15-minute Subversive Alliance target maintenance, expired hospital status cleaner and stat enricher",
 		start: startSubversiveTargetFinderWorker,
-		enabled: false,
 	},
 	{
 		id: "subversive:ffscouter_crawler_worker",

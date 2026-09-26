@@ -6,6 +6,8 @@ import type {
 import {
 	getPersonalKey,
 	getPlayerStats,
+	type ManagedApiKey,
+	TornError,
 	tornApi,
 	UserRateLimiter,
 } from "@sentinel/torn-api";
@@ -13,10 +15,17 @@ import { Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
+import {
+	getNextSubversiveUserKey,
+	getSubversiveUserKeys,
+	hasActiveSubversiveKeys,
+	markSubversiveKeyDisabled,
+	recordSubversiveKeySuccess,
+} from "./subversive-key-pool";
 
-const logger = new Logger("Scheduler", "PersonalBountyFinder");
+const logger = new Logger("Scheduler", "SubversiveBountyFinder");
 
-export const WORKER_NAME = "personal:bounty_finder";
+export const WORKER_NAME = "subversive:bounty_finder";
 export const BOUNTY_STATE_ID = "personal:bounties";
 const CADENCE_SEC = 30;
 
@@ -24,8 +33,12 @@ const CADENCE_SEC = 30;
 const MIN_BOUNTY_PREFILTER = 100_000;
 const MAX_FF_THRESHOLD = 4.0;
 const MIN_ACCOUNT_AGE_DAYS = 14;
-const MAX_PROFILES_PER_CYCLE = 20; // Budgeted within 50/min rate limit (20 req / 30s)
+export const PROFILES_PER_KEY = 10;
 const BOUNTY_PAGE_SIZE = 100;
+
+export const DEFAULT_FLOOR_PAGE_COUNT = 5;
+export const MIN_FLOOR_PAGE_COUNT = 1;
+export const MAX_FLOOR_PAGE_COUNT = 20;
 
 export interface PersonalBountyTarget {
 	id: number;
@@ -65,6 +78,7 @@ export interface TargetCandidate {
 const activeCandidateMap = new Map<number, TargetCandidate>();
 let currentBountyOffset = 0;
 let currentSweepId = 1;
+let dynamicFloorPageCount = DEFAULT_FLOOR_PAGE_COUNT;
 
 // In-memory permanent age cache (once verified >= 14d, never checked again)
 const verifiedAgeCache = new Map<number, number>();
@@ -98,6 +112,7 @@ export function resetBountyFinderState(): void {
 	lastCycleCompletedAt = 0;
 	currentBountyOffset = 0;
 	currentSweepId = 1;
+	dynamicFloorPageCount = DEFAULT_FLOOR_PAGE_COUNT;
 	personalRateLimiter.reset();
 	activeCandidateMap.clear();
 	verifiedAgeCache.clear();
@@ -112,6 +127,17 @@ export function resetBountyFinderState(): void {
 
 export function resetBountyFinderCooldown(): void {
 	lastCycleCompletedAt = 0;
+}
+
+export function getDynamicFloorPageCount(): number {
+	return dynamicFloorPageCount;
+}
+
+export function setDynamicFloorPageCount(count: number): void {
+	dynamicFloorPageCount = Math.max(
+		MIN_FLOOR_PAGE_COUNT,
+		Math.min(MAX_FLOOR_PAGE_COUNT, count),
+	);
 }
 
 export function getCurrentBountyOffset(): number {
@@ -156,10 +182,33 @@ export async function runBountyFinderCycle(
 	signalOrForce?: AbortSignal | boolean,
 ): Promise<void> {
 	const force = typeof signalOrForce === "boolean" ? signalOrForce : false;
+	const hasSubversiveKeys = await hasActiveSubversiveKeys();
 	const personalKey = await getPersonalKey();
-	if (!personalKey?.apiKey) {
-		logger.warn("No personal API key configured. Skipping bounty cycle.");
+	if (!hasSubversiveKeys && !personalKey?.apiKey) {
+		logger.warn(
+			"No active Subversive script keys or personal key configured. Skipping bounty cycle.",
+		);
 		return;
+	}
+
+	async function acquireKey(): Promise<ManagedApiKey | null> {
+		const subversiveKey = await getNextSubversiveUserKey();
+		if (subversiveKey?.apiKey) return subversiveKey;
+		if (personalKey?.apiKey) return personalKey;
+		return null;
+	}
+
+	function handleKeyError(key: ManagedApiKey, err: unknown): void {
+		if (
+			(err instanceof TornError &&
+				(err.code === 2 ||
+					err.code === 10 ||
+					err.code === 13 ||
+					err.code === 18)) ||
+			String(err).includes("Key temporarily disabled")
+		) {
+			markSubversiveKeyDisabled(key.apiKey);
+		}
 	}
 
 	const now = new Date();
@@ -173,77 +222,139 @@ export async function runBountyFinderCycle(
 	}
 
 	try {
-		// 1. Fetch live bounties from Torn API with persistent cross-round pagination.
-		// Bounties in Torn are sorted by reward descending. We page down with an adaptive budget:
-		// ramp down (1 page) when the 20-user profile inspection queue is backlogged,
-		// ramp up (up to 5 pages) when the inspection queue is dry,
-		// until we reach bounties under 100k, then reset to offset 0 on the next round to restart the sweep.
-		let sweepCompleted = false;
+		// 1. Fetch live bounties from Torn API using parallel page fetching.
+		// Bounties in Torn are sorted by reward descending. We start by fetching dynamicFloorPageCount pages in parallel.
+		// If the sub-100k floor is NOT reached within that batch (i.e. more >= 100k bounties exist),
+		// we immediately run another parallel fetch of DEFAULT_FLOOR_PAGE_COUNT (5) pages (e.g. 5 + 5 + ...),
+		// repeating until the 100k floor is reached or MAX_FLOOR_PAGE_COUNT is hit.
 		let totalBountiesReceivedThisCycle = 0;
-		const pendingBacklog = getPendingCandidateCount();
-		const maxPagesThisCycle = computeAdaptivePageBudget(pendingBacklog);
+		let detectedFloorPageIndex = -1;
+		let startPageIndex = 0;
+		let batchSize = dynamicFloorPageCount;
 
-		for (let page = 0; page < maxPagesThisCycle; page++) {
-			await personalRateLimiter.waitIfNeeded(personalKey.userId);
-			const bountiesRes = (await tornApi.getPersonal("/torn/bounties", {
-				queryParams: {
-					limit: BOUNTY_PAGE_SIZE,
-					offset: currentBountyOffset,
-				},
-			})) as TornBountiesResponse;
+		while (
+			detectedFloorPageIndex === -1 &&
+			startPageIndex < MAX_FLOOR_PAGE_COUNT
+		) {
+			const currentBatchCount = Math.min(
+				batchSize,
+				MAX_FLOOR_PAGE_COUNT - startPageIndex,
+			);
+			if (currentBatchCount <= 0) break;
 
-			const pageBounties = bountiesRes.bounties ?? [];
-			totalBountiesReceivedThisCycle += pageBounties.length;
-
-			if (pageBounties.length === 0) {
-				sweepCompleted = true;
-				break;
-			}
-
-			let hitSub100k = false;
-			for (const bounty of pageBounties) {
-				if (bounty.reward < MIN_BOUNTY_PREFILTER) {
-					hitSub100k = true;
-					continue;
-				}
-
-				const existing = activeCandidateMap.get(bounty.target_id);
-				if (!existing) {
-					activeCandidateMap.set(bounty.target_id, {
-						id: bounty.target_id,
-						name: bounty.target_name,
-						level: bounty.target_level,
-						maxReward: bounty.reward,
-						lastSeenSweepId: currentSweepId,
-						lastSeenAt: nowSec,
-					});
-				} else {
-					existing.name = bounty.target_name;
-					existing.level = bounty.target_level;
-					if (existing.lastSeenSweepId !== currentSweepId) {
-						existing.maxReward = bounty.reward;
-					} else if (bounty.reward > existing.maxReward) {
-						existing.maxReward = bounty.reward;
+			const pagePromises = Array.from(
+				{ length: currentBatchCount },
+				async (_, offsetIdx) => {
+					const pageIndex = startPageIndex + offsetIdx;
+					const offset = pageIndex * BOUNTY_PAGE_SIZE;
+					const key = await acquireKey();
+					if (!key) {
+						logger.warn(
+							`No available API key for bounty page ${pageIndex} (offset ${offset}).`,
+						);
+						return {
+							pageIndex,
+							offset,
+							bounties: [],
+							res: null,
+							key: null,
+						};
 					}
-					existing.lastSeenSweepId = currentSweepId;
-					existing.lastSeenAt = nowSec;
+					await personalRateLimiter.waitIfNeeded(key.userId);
+					try {
+						const bountiesRes = (await tornApi.get("/torn/bounties", {
+							apiKey: key.apiKey,
+							userId: key.userId,
+							queryParams: {
+								limit: BOUNTY_PAGE_SIZE,
+								offset,
+							},
+						})) as TornBountiesResponse;
+						recordSubversiveKeySuccess(key.apiKey);
+						return {
+							pageIndex,
+							offset,
+							bounties: bountiesRes.bounties ?? [],
+							res: bountiesRes,
+							key,
+						};
+					} catch (err) {
+						handleKeyError(key, err);
+						logger.warn(
+							`Failed to fetch bounty page ${pageIndex} (offset ${offset}):`,
+							err,
+						);
+						return { pageIndex, offset, bounties: [], res: null, key };
+					}
+				},
+			);
+
+			const pageResults = await Promise.all(pagePromises);
+			pageResults.sort((a, b) => a.pageIndex - b.pageIndex);
+
+			let batchEnded = false;
+			for (const { pageIndex, bounties: pageBounties, res } of pageResults) {
+				totalBountiesReceivedThisCycle += pageBounties.length;
+				if (pageBounties.length === 0) {
+					detectedFloorPageIndex = pageIndex;
+					batchEnded = true;
+					break;
+				}
+
+				let hitSub100k = false;
+				for (const bounty of pageBounties) {
+					if (bounty.reward < MIN_BOUNTY_PREFILTER) {
+						hitSub100k = true;
+						continue;
+					}
+
+					const existing = activeCandidateMap.get(bounty.target_id);
+					if (!existing) {
+						activeCandidateMap.set(bounty.target_id, {
+							id: bounty.target_id,
+							name: bounty.target_name,
+							level: bounty.target_level,
+							maxReward: bounty.reward,
+							lastSeenSweepId: currentSweepId,
+							lastSeenAt: nowSec,
+						});
+					} else {
+						existing.name = bounty.target_name;
+						existing.level = bounty.target_level;
+						if (existing.lastSeenSweepId !== currentSweepId) {
+							existing.maxReward = bounty.reward;
+						} else if (bounty.reward > existing.maxReward) {
+							existing.maxReward = bounty.reward;
+						}
+						existing.lastSeenSweepId = currentSweepId;
+						existing.lastSeenAt = nowSec;
+					}
+				}
+
+				const hasNext = Boolean(res?._metadata?.links?.next);
+				if (hitSub100k || pageBounties.length < BOUNTY_PAGE_SIZE || !hasNext) {
+					detectedFloorPageIndex = pageIndex;
+					batchEnded = true;
+					break;
 				}
 			}
 
-			const total = bountiesRes._metadata?.total ?? 0;
-			const hasNext = Boolean(bountiesRes._metadata?.links?.next);
-			currentBountyOffset += pageBounties.length;
+			startPageIndex += currentBatchCount;
+			batchSize = DEFAULT_FLOOR_PAGE_COUNT;
 
-			// If sub-100k bounties encountered, or last page reached: sweep has finished
-			if (
-				hitSub100k ||
-				pageBounties.length < BOUNTY_PAGE_SIZE ||
-				!hasNext ||
-				(total > 0 && currentBountyOffset >= total)
-			) {
-				sweepCompleted = true;
+			if (batchEnded) {
 				break;
 			}
+		}
+
+		// Dynamically adjust floor page count in memory based on the final detected floor
+		if (detectedFloorPageIndex !== -1) {
+			dynamicFloorPageCount = Math.max(
+				MIN_FLOOR_PAGE_COUNT,
+				Math.min(MAX_FLOOR_PAGE_COUNT, detectedFloorPageIndex + 1),
+			);
+		} else {
+			dynamicFloorPageCount = MAX_FLOOR_PAGE_COUNT;
 		}
 
 		if (totalBountiesReceivedThisCycle === 0 && activeCandidateMap.size === 0) {
@@ -251,17 +362,14 @@ export async function runBountyFinderCycle(
 			return;
 		}
 
-		if (sweepCompleted) {
-			// Sweep finished: prune candidates that were not seen anywhere in this completed sweep
-			for (const [id, cand] of activeCandidateMap.entries()) {
-				if (cand.lastSeenSweepId < currentSweepId) {
-					activeCandidateMap.delete(id);
-				}
+		// Complete sweep finished: prune candidates that were not seen anywhere in this completed sweep
+		for (const [id, cand] of activeCandidateMap.entries()) {
+			if (cand.lastSeenSweepId < currentSweepId) {
+				activeCandidateMap.delete(id);
 			}
-			// Reset offset to 0 for next round, increment sweep ID
-			currentBountyOffset = 0;
-			currentSweepId++;
 		}
+		currentBountyOffset = 0;
+		currentSweepId++;
 
 		// Prune any candidates that haven't been seen in > 15 minutes as safety TTL
 		for (const [id, cand] of activeCandidateMap.entries()) {
@@ -442,19 +550,30 @@ export async function runBountyFinderCycle(
 			return b.candidate.maxReward - a.candidate.maxReward;
 		});
 
-		// 7. Profile queries throttled to safe budget (MAX_PROFILES_PER_CYCLE = 20)
+		// 7. Profile queries throttled to safe budget (budgeted dynamically by 10 * key pool size)
+		const userKeys = await getSubversiveUserKeys();
+		const effectiveKeyCount = Math.max(1, userKeys.length);
+		const maxProfilesThisCycle = Math.min(
+			100,
+			Math.max(10, effectiveKeyCount * PROFILES_PER_KEY),
+		);
 		let profilesChecked = 0;
 		for (const item of profilingQueue) {
-			if (profilesChecked >= MAX_PROFILES_PER_CYCLE) {
+			if (profilesChecked >= maxProfilesThisCycle) {
 				break;
 			}
 
 			const candidate = item.candidate;
+			const key = await acquireKey();
+			if (!key) break;
 			try {
-				await personalRateLimiter.waitIfNeeded(personalKey.userId);
-				const profileRes = (await tornApi.getPersonal("/user/{id}/profile", {
+				await personalRateLimiter.waitIfNeeded(key.userId);
+				const profileRes = (await tornApi.get("/user/{id}/profile", {
+					apiKey: key.apiKey,
+					userId: key.userId,
 					pathParams: { id: candidate.id },
 				})) as UserProfileResponse;
+				recordSubversiveKeySuccess(key.apiKey);
 
 				const profile = profileRes.profile;
 				if (profile) {
@@ -472,6 +591,7 @@ export async function runBountyFinderCycle(
 				}
 				profilesChecked++;
 			} catch (err) {
+				handleKeyError(key, err);
 				logger.warn(
 					`Failed to fetch profile for candidate ${candidate.id}:`,
 					err,
@@ -607,15 +727,18 @@ export async function runBountyFinderCycle(
 export async function recheckBountyTarget(
 	targetId: number,
 ): Promise<PersonalBountyTarget | null> {
-	const personalKey = await getPersonalKey();
-	if (!personalKey?.apiKey) return null;
+	const key = (await getNextSubversiveUserKey()) ?? (await getPersonalKey());
+	if (!key?.apiKey) return null;
 
 	const nowSec = Math.floor(Date.now() / 1000);
 	try {
-		await personalRateLimiter.waitIfNeeded(personalKey.userId);
-		const profileRes = (await tornApi.getPersonal("/user/{id}/profile", {
+		await personalRateLimiter.waitIfNeeded(key.userId);
+		const profileRes = (await tornApi.get("/user/{id}/profile", {
+			apiKey: key.apiKey,
+			userId: key.userId,
 			pathParams: { id: targetId },
 		})) as UserProfileResponse;
+		recordSubversiveKeySuccess(key.apiKey);
 
 		const profile = profileRes.profile;
 		if (!profile) return null;
@@ -726,9 +849,11 @@ export function recordTargetDefeated(targetId: number, outcome?: string): void {
 }
 
 /**
- * Initializes and registers the personal bounty target finder background worker.
+ * Initializes and registers the Subversive Alliance bounty target finder background worker.
  */
-export function startPersonalBountyFinder(options?: WorkerStartOptions): void {
+export function startSubversiveBountyFinder(
+	options?: WorkerStartOptions,
+): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
 		schedule: {
@@ -747,6 +872,8 @@ export function startPersonalBountyFinder(options?: WorkerStartOptions): void {
 		handler: runBountyFinderCycle,
 	});
 }
+
+export const startPersonalBountyFinder = startSubversiveBountyFinder;
 
 export function getInMemoryBountyState(): PersonalBountyState {
 	return inMemoryBountyState;

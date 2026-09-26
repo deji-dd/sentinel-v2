@@ -11,6 +11,11 @@ import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
+import {
+	deleteDibsAlert,
+	postDibsAlert,
+	updateDibsAlert,
+} from "../dibs-alert-distributor";
 import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../elims-item-requests";
 import { updateElimsKeyDonationChannel } from "../elims-key-donation";
@@ -355,6 +360,28 @@ export function setupBotIpcListeners(client: Client): void {
 			}
 		} else if (message.action === "subversive_recruitment_alert") {
 			void handleSubversiveRecruitmentAlert(client, message.data);
+		} else if (message.action === "post_dibs_alert" && message.data) {
+			const channelId = message.data.channelId as string;
+			const dibs = message.data
+				.dibs as unknown as import("@sentinel/schemas").DibsRecord;
+			if (channelId && dibs) {
+				void postDibsAlert(client, channelId, dibs);
+			}
+		} else if (message.action === "edit_dibs_alert" && message.data) {
+			const channelId = message.data.channelId as string;
+			const messageId = message.data.messageId as string;
+			const dibs = message.data
+				.dibs as unknown as import("@sentinel/schemas").DibsRecord;
+			const status = message.data.status as "open" | "claimed";
+			if (channelId && messageId && dibs && status) {
+				void updateDibsAlert(client, channelId, messageId, dibs, status);
+			}
+		} else if (message.action === "delete_dibs_alert" && message.data) {
+			const channelId = message.data.channelId as string;
+			const messageId = message.data.messageId as string;
+			if (channelId && messageId) {
+				void deleteDibsAlert(client, channelId, messageId);
+			}
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

@@ -3,6 +3,7 @@ import type { UserProfileResponse } from "@sentinel/schemas";
 import { getPersonalKey, tornApi, UserRateLimiter } from "@sentinel/torn-api";
 import { type Context, Elysia, t } from "elysia";
 import { notifyBountyDefeated } from "../../lib/scheduler-ipc";
+import { resolveUserSession } from "./subversive-target-finder";
 
 export const BOUNTY_STATE_ID = "personal:bounties";
 
@@ -39,13 +40,26 @@ export interface ClientBountyTarget {
 
 export function toClientTarget(
 	target: PersonalBountyTarget,
+	attackerBsScore?: number,
 ): ClientBountyTarget {
+	let ff = target.fairFight;
+	if (
+		attackerBsScore &&
+		attackerBsScore > 0 &&
+		target.estimatedBs &&
+		target.estimatedBs > 0
+	) {
+		const defenderScore = 2 * Math.sqrt(target.estimatedBs);
+		const rawFF = 1 + (8 / 3) * (defenderScore / attackerBsScore);
+		ff = Math.max(1.0, Number(rawFF.toFixed(2)));
+	}
+
 	return {
 		id: target.id,
 		name: target.name,
 		level: target.level,
 		reward: target.reward,
-		fairFight: target.fairFight,
+		fairFight: ff,
 		status: target.status,
 		attackUrl: target.attackUrl,
 	};
@@ -111,15 +125,12 @@ export async function getBountyStateObject(): Promise<PersonalBountyState> {
 }
 
 /**
- * Authenticates request against the registered personal key.
+ * Authenticates request against the registered personal key or an active Subversive session token.
  */
 async function authenticatePersonalRequest(
 	authHeader?: string | null,
 	apiKeyHeader?: string | null,
 ): Promise<boolean> {
-	const personalKey = await getPersonalKey();
-	if (!personalKey?.apiKey) return false;
-
 	let providedKey = "";
 	if (apiKeyHeader) {
 		providedKey = apiKeyHeader.trim();
@@ -132,7 +143,23 @@ async function authenticatePersonalRequest(
 		}
 	}
 
-	return providedKey === personalKey.apiKey;
+	if (!providedKey) return false;
+
+	// 1. Validate against personal API key
+	const personalKey = await getPersonalKey();
+	if (personalKey?.apiKey && providedKey === personalKey.apiKey) {
+		return true;
+	}
+
+	// 2. Validate against Subversive Target Finder session token
+	if (providedKey.startsWith("satf_")) {
+		const session = await resolveUserSession(providedKey);
+		if (session?.isActive) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 export const personalBountiesRoutes = new Elysia({
@@ -145,6 +172,18 @@ export const personalBountiesRoutes = new Elysia({
 			const authHeader = headers.authorization;
 			const apiKeyHeader = headers["x-api-key"];
 
+			let providedKey = "";
+			if (apiKeyHeader) {
+				providedKey = apiKeyHeader.trim();
+			} else if (authHeader) {
+				const parts = authHeader.split(" ");
+				if (parts.length === 2 && parts[0]?.toLowerCase() === "bearer") {
+					providedKey = parts[1]?.trim() ?? "";
+				} else {
+					providedKey = authHeader.trim();
+				}
+			}
+
 			const isAuthorized = await authenticatePersonalRequest(
 				authHeader,
 				apiKeyHeader,
@@ -156,6 +195,14 @@ export const personalBountiesRoutes = new Elysia({
 				};
 			}
 
+			let attackerBsScore = 0;
+			if (providedKey.startsWith("satf_")) {
+				const session = await resolveUserSession(providedKey);
+				if (session?.bsScore) {
+					attackerBsScore = session.bsScore;
+				}
+			}
+
 			const state = await getBountyStateObject();
 			const minBounty = Number(query.minBounty ?? 100_000);
 			const maxFF = Number(query.maxFF ?? 4.0);
@@ -163,26 +210,26 @@ export const personalBountiesRoutes = new Elysia({
 
 			// Filter ready targets
 			const readyTargets = state.readyTargets
+				.map((t) => toClientTarget(t, attackerBsScore))
 				.filter((t) => {
 					if (t.reward < minBounty) return false;
 					if (t.fairFight !== null && t.fairFight > maxFF) return false;
 					return true;
-				})
-				.map(toClientTarget);
+				});
 
 			// Filter and update remaining seconds for hospital queue
 			const hospitalQueue = state.hospitalQueue
+				.map((t) => {
+					const until = t.status.until ?? nowSec;
+					return {
+						...toClientTarget(t, attackerBsScore),
+						secondsRemaining: Math.max(0, until - nowSec),
+					};
+				})
 				.filter((t) => {
 					if (t.reward < minBounty) return false;
 					if (t.fairFight !== null && t.fairFight > maxFF) return false;
 					return true;
-				})
-				.map((t) => {
-					const until = t.status.until ?? nowSec;
-					return {
-						...toClientTarget(t),
-						secondsRemaining: Math.max(0, until - nowSec),
-					};
 				})
 				.sort((a, b) => a.secondsRemaining - b.secondsRemaining);
 

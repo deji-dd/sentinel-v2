@@ -14,6 +14,10 @@ import {
 	handleTeamBreakdownSelect,
 	TEAM_BREAKDOWN_SELECT_ID,
 } from "../commands/team-breakdown";
+import {
+	handleDibsClaimButton,
+	handleDibsReleaseButton,
+} from "../lib/dibs-alert-distributor";
 import { handleArmoryStockPageButton } from "../lib/elims-armory-storage";
 import {
 	handleItemGrantingButton,
@@ -103,6 +107,10 @@ export const interactionCreateEvent = {
 					await handleStockHolderAssignButton(interaction);
 				} else if (interaction.customId.startsWith("elims_holder_reclaim:")) {
 					await handleStockHolderReclaimButton(interaction);
+				} else if (interaction.customId.startsWith("dibs_claim:")) {
+					await handleDibsClaimButton(interaction);
+				} else if (interaction.customId.startsWith("dibs_release:")) {
+					await handleDibsReleaseButton(interaction);
 				}
 				return;
 			}

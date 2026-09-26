@@ -618,7 +618,37 @@ export type IpcMessage =
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage
-	| IpcPersonalBountiesUpdatedMessage;
+	| IpcPersonalBountiesUpdatedMessage
+	| IpcPostDibsAlertMessage
+	| IpcEditDibsAlertMessage
+	| IpcDeleteDibsAlertMessage;
+
+export type IpcPostDibsAlertMessage = {
+	action: "post_dibs_alert";
+	data: {
+		channelId: string;
+		dibs: import("./dibs").DibsRecord;
+	};
+};
+
+export type IpcEditDibsAlertMessage = {
+	action: "edit_dibs_alert";
+	data: {
+		channelId: string;
+		messageId: string;
+		dibs: import("./dibs").DibsRecord;
+		status: "open" | "claimed";
+	};
+};
+
+export type IpcDeleteDibsAlertMessage = {
+	action: "delete_dibs_alert";
+	data: {
+		channelId: string;
+		messageId: string;
+		targetId?: number;
+	};
+};
 
 export type IpcSubversiveWarUpdatedMessage = {
 	action: "subversive_war_updated";

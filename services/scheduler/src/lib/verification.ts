@@ -4,6 +4,7 @@ import {
 	eq,
 	factionRoleMappings,
 	guildConfigs,
+	tornUsers,
 	verificationLogs,
 	verifiedUsers,
 } from "@sentinel/database";
@@ -120,6 +121,12 @@ export async function runVerificationJob(
 				await db
 					.delete(verifiedUsers)
 					.where(eq(verifiedUsers.discordId, job.discordId));
+
+				await db
+					.update(tornUsers)
+					.set({ discordId: null, updatedAt: new Date() })
+					.where(eq(tornUsers.discordId, job.discordId))
+					.catch(() => {});
 
 				await db
 					.insert(verificationLogs)
@@ -259,6 +266,25 @@ export async function runVerificationJob(
 					updatedAt: now,
 				},
 			});
+
+		// Write-through to general tornUsers registry
+		await db
+			.insert(tornUsers)
+			.values({
+				tornId,
+				name: tornName,
+				discordId: job.discordId,
+				updatedAt: now,
+			})
+			.onConflictDoUpdate({
+				target: tornUsers.tornId,
+				set: {
+					name: tornName,
+					discordId: job.discordId,
+					updatedAt: now,
+				},
+			})
+			.catch(() => {});
 
 		// 6. Format Nickname
 		let template = config.nicknameTemplate || "[{tag}] {name} [{id}]";

@@ -713,4 +713,112 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(postWarNextData.message).toContain("No active ranked war");
 		expect(postWarNextData.target).toBeNull();
 	});
+
+	it("getCandidatesForVerification filters out hospital, ignored, and out-of-range targets", () => {
+		const attackerScore = 1000;
+		subversiveTargetCache.loadTargets([
+			{
+				targetId: 601,
+				name: "InRangeCandidate1",
+				level: 30,
+				factionId: null,
+				factionName: null,
+				daysOld: 100,
+				lastAction: Date.now() - 5 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: false,
+				hospitalUntil: null,
+				estimatedBs: 40000,
+				estimatedScore: 400, // FF: 1 + (8/3)*(400/1000) = 2.07x
+			},
+			{
+				targetId: 602,
+				name: "HospitalCandidate",
+				level: 30,
+				factionId: null,
+				factionName: null,
+				daysOld: 100,
+				lastAction: Date.now() - 5 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: true,
+				hospitalUntil: Date.now() + 600_000,
+				estimatedBs: 40000,
+				estimatedScore: 400,
+			},
+			{
+				targetId: 603,
+				name: "FutureHospCandidate",
+				level: 30,
+				factionId: null,
+				factionName: null,
+				daysOld: 100,
+				lastAction: Date.now() - 5 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: false,
+				hospitalUntil: Date.now() + 600_000,
+				estimatedBs: 40000,
+				estimatedScore: 400,
+			},
+			{
+				targetId: 604,
+				name: "IgnoredCandidate",
+				level: 30,
+				factionId: null,
+				factionName: null,
+				daysOld: 100,
+				lastAction: Date.now() - 5 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: false,
+				hospitalUntil: null,
+				estimatedBs: 40000,
+				estimatedScore: 400,
+			},
+			{
+				targetId: 605,
+				name: "InRangeCandidate2",
+				level: 35,
+				factionId: null,
+				factionName: null,
+				daysOld: 120,
+				lastAction: Date.now() - 10 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: false,
+				hospitalUntil: null,
+				estimatedBs: 60000,
+				estimatedScore: 500, // FF: 1 + (8/3)*(500/1000) = 2.33x
+			},
+		]);
+
+		const candidates = subversiveTargetCache.getCandidatesForVerification({
+			attackerScore,
+			minFF: 1.5,
+			maxFF: 2.5,
+			ignoreIds: new Set([604]),
+			limit: 10,
+		});
+
+		const candidateIds = candidates.map((c) => c.targetId);
+		expect(candidateIds).toContain(601);
+		expect(candidateIds).toContain(605);
+		expect(candidateIds).not.toContain(602); // in hospital
+		expect(candidateIds).not.toContain(603); // hospitalUntil > now
+		expect(candidateIds).not.toContain(604); // ignored
+
+		// Test markHospital evicts target
+		subversiveTargetCache.markHospital(601, Date.now() + 300_000);
+		const candidatesAfterHosp =
+			subversiveTargetCache.getCandidatesForVerification({
+				attackerScore,
+				minFF: 1.5,
+				maxFF: 2.5,
+				limit: 10,
+			});
+		const idsAfterHosp = candidatesAfterHosp.map((c) => c.targetId);
+		expect(idsAfterHosp).not.toContain(601);
+	});
 });

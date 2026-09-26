@@ -22,6 +22,7 @@ export interface CachedTarget {
 	isInactive: boolean;
 	isFactionless: boolean;
 	inHospital: boolean;
+	hospitalUntil?: number | null;
 	estimatedBs: number;
 	estimatedScore: number;
 }
@@ -185,6 +186,7 @@ class SubversiveTargetCache {
 			isInactive: r.isInactive,
 			isFactionless: r.isFactionless,
 			inHospital: false,
+			hospitalUntil: r.hospitalUntil ? r.hospitalUntil.getTime() : null,
 			estimatedBs: r.estimatedBs,
 			estimatedScore: r.estimatedScore,
 		}));
@@ -235,6 +237,18 @@ class SubversiveTargetCache {
 	}
 
 	/**
+	 * Marks a target as in hospital with an expiration timestamp and evicts from ready pool.
+	 */
+	markHospital(targetId: number, hospitalUntilMs: number): void {
+		const existing = this.targetMap.get(targetId);
+		if (existing) {
+			existing.inHospital = true;
+			existing.hospitalUntil = hospitalUntilMs;
+		}
+		this.evict(targetId);
+	}
+
+	/**
 	 * Legacy/compat hospital status updater.
 	 */
 	setHospitalStatus(targetId: number, inHospital: boolean): void {
@@ -244,9 +258,84 @@ class SubversiveTargetCache {
 			const existing = this.targetMap.get(targetId);
 			if (existing) {
 				existing.inHospital = false;
+				existing.hospitalUntil = null;
 				this.addOrUpdate(existing);
 			}
 		}
+	}
+
+	/**
+	 * Retrieves candidate targets matching the requested FF range for on-demand verification bursts.
+	 */
+	getCandidatesForVerification(options: {
+		attackerScore: number;
+		minFF: number;
+		maxFF: number;
+		ignoreIds?: Set<number>;
+		limit?: number;
+	}): CachedTarget[] {
+		const {
+			attackerScore,
+			minFF,
+			maxFF,
+			ignoreIds = new Set(),
+			limit = 30,
+		} = options;
+
+		if (attackerScore <= 0 || this.targets.length === 0) {
+			return [];
+		}
+
+		const clampedMinFF = Math.max(1.0, minFF);
+		const clampedMaxFF = Math.min(3.0, maxFF);
+
+		const minScore =
+			clampedMinFF <= 1.0
+				? 0
+				: (((clampedMinFF - 1.0) * 3) / 8) * attackerScore;
+
+		const maxScore =
+			clampedMaxFF >= 3.0
+				? Number.POSITIVE_INFINITY
+				: (((clampedMaxFF - 1.0) * 3) / 8) * attackerScore;
+
+		const startIndex = this.findLowerBound(minScore);
+		const candidates: CachedTarget[] = [];
+		const nowMs = Date.now();
+
+		for (let i = startIndex; i < this.targets.length; i++) {
+			const t = this.targets[i];
+			if (!t) break;
+			if (
+				maxScore !== Number.POSITIVE_INFINITY &&
+				t.estimatedScore > maxScore
+			) {
+				break;
+			}
+			if (t.inHospital || (t.hospitalUntil && t.hospitalUntil > nowMs)) {
+				continue;
+			}
+			if (ignoreIds.has(t.targetId)) {
+				continue;
+			}
+			candidates.push(t);
+			if (candidates.length >= limit * 2) {
+				break;
+			}
+		}
+
+		// Shuffle candidates slightly to distribute checks across different targets
+		for (let i = candidates.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1));
+			const temp = candidates[i];
+			const randItem = candidates[j];
+			if (temp && randItem) {
+				candidates[i] = randItem;
+				candidates[j] = temp;
+			}
+		}
+
+		return candidates.slice(0, limit);
 	}
 
 	/**

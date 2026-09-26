@@ -2,13 +2,14 @@
 // @name         Subversive Alliance
 // @namespace    subversive.torn
 // @version      2.3.5
-// @description  Userscript for Subversive Alliance Ranked War & Target Engine
+// @description  Userscript for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_openInTab
+// @grant        GM_registerMenuCommand
 // @connect      subversive.blasted-labs.tech
 // @connect      localhost
 // @connect      *
@@ -26,6 +27,7 @@
 		panelOpen: "satf_panel_open",
 		persistOpen: "satf_persist_open",
 		activeTab: "satf_active_tab",
+		minFFThreshold: "satf_min_ff_threshold",
 		maxFFThreshold: "satf_max_ff_threshold",
 		maxBSThreshold: "satf_max_bs_threshold",
 		cachedTargets: "satf_cached_targets",
@@ -38,15 +40,53 @@
 		currentTarget: "satf_current_target",
 		warOpponentIds: "satf_war_opponent_ids",
 		warState: "satf_war_state",
+		cachedBounties: "satf_cached_bounties",
+		bountiesSubTab: "satf_bounties_sub_tab",
+		disableHud: "satf_disable_hud",
 	};
 
 	const DEFAULTS = {
 		apiUrl: "https://subversive.blasted-labs.tech",
+		minFFThreshold: 1.2,
 		maxFFThreshold: 3.0,
 		maxBSThreshold: 5e9,
 		directAttack: true,
+		disableHud: false,
 		persistOpen: false,
 	};
+
+	function safeJsonParse(val, fallback) {
+		try {
+			return val ? JSON.parse(val) : fallback;
+		} catch {
+			return fallback;
+		}
+	}
+
+	function formatMoney(num) {
+		if (!num || !Number.isFinite(num)) return "$0";
+		return `$${Math.round(num).toLocaleString()}`;
+	}
+
+	function getBountyFF(t) {
+		if (!t) return null;
+		if (typeof t.fairFight === "number" && !Number.isNaN(t.fairFight)) {
+			return t.fairFight;
+		}
+		if (state.user?.bsScore && t.estimatedBs && t.estimatedBs > 0) {
+			const defenderScore = 2 * Math.sqrt(t.estimatedBs);
+			return Math.max(
+				1.0,
+				Number((1 + (8 / 3) * (defenderScore / state.user.bsScore)).toFixed(2)),
+			);
+		}
+		return null;
+	}
+
+	const rawCachedBounties = safeJsonParse(
+		GM_getValue("satf_cached_bounties", "{}"),
+		{},
+	);
 
 	const state = {
 		apiUrl: (
@@ -60,6 +100,9 @@
 		persistOpen:
 			GM_getValue(STORAGE.persistOpen, DEFAULTS.persistOpen) === true ||
 			GM_getValue(STORAGE.persistOpen, DEFAULTS.persistOpen) === "true",
+		minFFThreshold:
+			Number(GM_getValue(STORAGE.minFFThreshold, DEFAULTS.minFFThreshold)) ||
+			1.2,
 		maxFFThreshold:
 			Number(GM_getValue(STORAGE.maxFFThreshold, DEFAULTS.maxFFThreshold)) ||
 			3.0,
@@ -69,6 +112,9 @@
 		directAttack:
 			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== false &&
 			GM_getValue(STORAGE.directAttack, DEFAULTS.directAttack) !== "false",
+		disableHud:
+			GM_getValue(STORAGE.disableHud, DEFAULTS.disableHud) === true ||
+			GM_getValue(STORAGE.disableHud, DEFAULTS.disableHud) === "true",
 		hideHighFF: Boolean(GM_getValue(STORAGE.hideHighFF, false)),
 		hideHighBS: Boolean(GM_getValue(STORAGE.hideHighBS, false)),
 		ignoredTargets: GM_getValue(STORAGE.ignoredTargets, []) || [],
@@ -76,6 +122,8 @@
 		warState: GM_getValue(STORAGE.warState, "no_war"),
 		warOpponentIds: GM_getValue(STORAGE.warOpponentIds, []) || [],
 		currentTarget: null,
+		isTargetScouting: false,
+		scoutCooldownTimer: null,
 		allTargets: GM_getValue(STORAGE.cachedTargets, []) || [],
 		availableTargets: [],
 		targetSortBy:
@@ -86,12 +134,25 @@
 		hospitalQueue: [],
 		hospLastSynced: null,
 		hospTimer: null,
+		dibs: new Map(),
+		dibsLeadTimeSeconds: 300,
 		ws: null,
 		loading: false,
 		statusText: "Ready",
 		statusType: "ok",
-		activeTab: GM_getValue(STORAGE.activeTab, "target") || "target", // 'target' | 'hosp' | 'settings'
+		activeTab: GM_getValue(STORAGE.activeTab, "bounties") || "bounties", // 'bounties' | 'hosp' | 'settings'
 		excludeIds: [],
+		bountiesReady: Array.isArray(rawCachedBounties.readyTargets)
+			? rawCachedBounties.readyTargets
+			: [],
+		bountiesHosp: Array.isArray(rawCachedBounties.hospitalQueue)
+			? rawCachedBounties.hospitalQueue
+			: [],
+		bountiesSubTab: GM_getValue("satf_bounties_sub_tab", "ready") || "ready",
+		bountiesWs: null,
+		bountiesWsConnected: false,
+		bountiesLastWsMessageAt: 0,
+		bountiesReconnectTimer: null,
 	};
 
 	function isWarEngaged() {
@@ -388,12 +449,13 @@
 				background: transparent;
 				border: none;
 				border-radius: 6px;
-				padding: 5px 8px;
+				padding: 5px 6px;
 				font-size: 11px;
 				font-weight: 600;
 				color: var(--muted);
 				cursor: pointer;
 				text-align: center;
+				white-space: nowrap;
 				transition: all 0.15s;
 			}
 			.satf-tab-btn.active {
@@ -404,6 +466,148 @@
 			}
 			.satf-tab-btn:hover:not(.active) {
 				color: var(--text);
+			}
+
+			/* Bounty finder styles */
+			.satf-bounty-controls {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				margin-bottom: 10px;
+				gap: 8px;
+			}
+			.satf-bounty-subtabs {
+				display: flex;
+				background: #09090b;
+				padding: 2px;
+				border-radius: 6px;
+				border: 1px solid var(--border);
+				gap: 2px;
+			}
+			.satf-bounty-subtab-btn {
+				background: transparent;
+				border: none;
+				border-radius: 4px;
+				padding: 3px 8px;
+				font-size: 11px;
+				font-weight: 600;
+				color: var(--muted);
+				cursor: pointer;
+				transition: all 0.15s;
+			}
+			.satf-bounty-subtab-btn.active {
+				background: var(--card);
+				color: #fff;
+				border: 1px solid var(--border);
+			}
+			.satf-bounty-list {
+				display: flex;
+				flex-direction: column;
+				gap: 6px;
+				max-height: 400px;
+				overflow-y: auto;
+			}
+			.satf-bounty-row {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 9px 12px;
+				border-radius: 8px;
+				background: var(--card);
+				border: 1px solid var(--border);
+				cursor: pointer;
+				transition: background 0.15s, border-color 0.15s;
+			}
+			.satf-bounty-row:hover {
+				background: var(--card-hover);
+				border-color: #3f3f46;
+			}
+			.satf-bounty-left {
+				display: flex;
+				flex-direction: column;
+				gap: 3px;
+			}
+			.satf-bounty-name-row {
+				display: flex;
+				align-items: center;
+				gap: 6px;
+				font-size: 13px;
+				font-weight: 700;
+				color: var(--text);
+			}
+			.satf-bounty-id {
+				font-size: 11px;
+				color: var(--muted);
+				font-weight: 500;
+			}
+			.satf-bounty-sub {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				font-size: 11px;
+				color: var(--muted);
+			}
+			.satf-bounty-right {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+			}
+			.satf-bounty-reward {
+				font-size: 13px;
+				font-weight: 800;
+				color: #34d399;
+			}
+			.satf-bounty-hit-btn {
+				padding: 5px 12px;
+				font-size: 11px;
+				font-weight: 800;
+				border-radius: 6px;
+				border: none;
+				background: var(--accent);
+				color: #000;
+				cursor: pointer;
+				text-decoration: none;
+				transition: background 0.15s;
+			}
+			.satf-bounty-hit-btn:hover {
+				background: var(--accent-hover);
+			}
+			.satf-bounty-check-btn {
+				padding: 4px 8px;
+				font-size: 10px;
+				font-weight: 700;
+				border-radius: 5px;
+				border: 1px solid var(--border);
+				background: var(--card);
+				color: var(--muted);
+				cursor: pointer;
+				transition: all 0.15s;
+			}
+			.satf-bounty-check-btn:hover {
+				color: var(--text);
+				border-color: var(--accent);
+			}
+			.satf-bounty-empty {
+				text-align: center;
+				padding: 24px 0;
+				color: var(--muted);
+				font-size: 12px;
+				font-weight: 500;
+			}
+			.satf-bounty-refresh-btn {
+				padding: 3px 8px;
+				font-size: 10px;
+				font-weight: 700;
+				border-radius: 5px;
+				border: 1px solid var(--border);
+				background: var(--card);
+				color: var(--muted);
+				cursor: pointer;
+				transition: all 0.15s;
+			}
+			.satf-bounty-refresh-btn:hover {
+				color: var(--text);
+				border-color: var(--accent);
 			}
 
 			.satf-war-banner {
@@ -755,6 +959,73 @@
 			.satf-queue-time.ready {
 				color: #10b981;
 			}
+			.satf-queue-right {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+			}
+			.satf-dibs-btn {
+				padding: 3px 8px;
+				font-size: 11px;
+				font-weight: 600;
+				border-radius: 4px;
+				border: 1px solid var(--accent);
+				background: rgba(59, 130, 246, 0.15);
+				color: var(--accent);
+				cursor: pointer;
+				transition: background 0.15s, color 0.15s, border-color 0.15s;
+			}
+			.satf-dibs-btn:hover {
+				background: var(--accent);
+				color: #fff;
+			}
+			.satf-dibs-btn.satf-dibs-release {
+				border-color: var(--muted);
+				background: rgba(255, 255, 255, 0.05);
+				color: var(--muted);
+			}
+			.satf-dibs-btn.satf-dibs-release:hover {
+				border-color: var(--danger);
+				color: var(--danger);
+				background: rgba(239, 68, 68, 0.1);
+			}
+			.satf-dibs-btn.satf-dibs-attack {
+				border-color: #10b981;
+				background: rgba(16, 185, 129, 0.2);
+				color: #10b981;
+				font-weight: 700;
+			}
+			.satf-dibs-btn.satf-dibs-attack:hover {
+				background: #10b981;
+				color: #fff;
+			}
+			.satf-dibs-claimed-label {
+				font-size: 10px;
+				font-weight: 700;
+				text-transform: uppercase;
+				letter-spacing: 0.03em;
+				padding: 2px 6px;
+				border-radius: 4px;
+				background: rgba(245, 158, 11, 0.15);
+				color: #f59e0b;
+				border: 1px solid rgba(245, 158, 11, 0.3);
+			}
+			.satf-dibs-claimed-label.you {
+				background: rgba(16, 185, 129, 0.15);
+				color: #10b981;
+				border-color: rgba(16, 185, 129, 0.3);
+			}
+			.satf-dibs-countdown {
+				font-size: 11px;
+				font-family: var(--font-mono, monospace);
+				font-weight: 600;
+				color: var(--muted);
+				background: rgba(255, 255, 255, 0.05);
+				border: 1px solid rgba(255, 255, 255, 0.1);
+				padding: 2px 7px;
+				border-radius: 4px;
+				white-space: nowrap;
+			}
 
 			.satf-status {
 				margin-top: 12px;
@@ -805,6 +1076,36 @@
 				padding: 10px 12px;
 				margin-bottom: 12px;
 			}
+
+			.satf-action-bar {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				padding: 8px 12px;
+				background: #141417;
+				border-bottom: 1px solid var(--border);
+			}
+			.satf-btn-get-target {
+				width: 100%;
+				background: #10b981;
+				color: #000;
+				font-weight: 700;
+				font-size: 12px;
+				padding: 7px 16px;
+				border: none;
+				border-radius: 6px;
+				cursor: pointer;
+				transition: background 0.15s;
+				text-align: center;
+			}
+			.satf-btn-get-target:hover:not(:disabled) {
+				background: #059669;
+			}
+			.satf-btn-get-target:disabled {
+				background: #27272a;
+				color: #71717a;
+				cursor: not-allowed;
+			}
 		</style>
 
 		<div id="satf-launcher">
@@ -819,9 +1120,12 @@
 					</div>
 					<button id="satf-btn-close" class="satf-btn-close" title="Close Panel">X</button>
 				</div>
+				<div class="satf-action-bar">
+					<button id="satf-btn-get-target" class="satf-btn-get-target" type="button">Get Target</button>
+				</div>
 				<div class="satf-tabs">
-					<button class="satf-tab-btn active" data-tab="target">Target</button>
-					<button class="satf-tab-btn" data-tab="hosp">Hosp Queue</button>
+					<button class="satf-tab-btn active" data-tab="bounties">Bounties (<span id="satf-bounties-tab-count">0</span>)</button>
+					<button class="satf-tab-btn" data-tab="hosp">War Hosp</button>
 					<button class="satf-tab-btn" data-tab="settings">Settings</button>
 				</div>
 			</div>
@@ -853,51 +1157,6 @@
 				[TRAVEL LOCK] Attacker is traveling or abroad. Target dispatch locked.
 			</div>
 
-
-			<!-- TARGET VIEW -->
-			<div id="satf-view-target">
-				<div class="satf-direct-toggle-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-					<label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--muted);">
-						<input type="checkbox" id="satf-chk-direct">
-						<span>Direct Attack</span>
-					</label>
-					<button id="satf-btn-modal-next" class="satf-btn satf-btn-primary satf-btn-sm" style="padding: 3px 10px; font-size: 11px;">Next Target →</button>
-				</div>
-				<div class="satf-filter-row" style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; padding: 6px 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted);">
-					<div style="display: flex; align-items: center; gap: 5px;">
-						<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-							<input type="checkbox" id="satf-chk-hide-high-ff">
-							<span>Max FF</span>
-						</label>
-						<input type="number" id="satf-input-hide-ff" min="1.0" max="10.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 44px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
-					</div>
-					<div style="display: flex; align-items: center; gap: 5px;">
-						<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-							<input type="checkbox" id="satf-chk-hide-high-bs">
-							<span>Max BS</span>
-						</label>
-						<input type="text" id="satf-input-hide-bs" placeholder="e.g. 5B" value="${formatStats(state.maxBSThreshold)}" title="${state.maxBSThreshold.toLocaleString()}" style="width: 60px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
-					</div>
-				</div>
-
-				<!-- SCROLLABLE AVAILABLE TARGETS ROSTER -->
-				<div class="satf-roster-section">
-					<div class="satf-roster-header">
-						<span>Available Opponents (<span id="satf-avail-count">0</span>)</span>
-						<div class="satf-sort-pills">
-							<span class="satf-sort-pill" data-sort="ff">FF</span>
-							<span class="satf-sort-pill" data-sort="online">Online</span>
-							<span class="satf-sort-pill" data-sort="bs">BS</span>
-						</div>
-					</div>
-					<div id="satf-avail-list" class="satf-roster-list">
-						<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
-							No available targets currently in ready state.
-						</div>
-					</div>
-				</div>
-			</div>
-
 			<!-- HOSPITAL QUEUE VIEW -->
 			<div id="satf-view-hosp" style="display: none;">
 				<div id="satf-hosp-container" class="satf-queue-list">
@@ -905,6 +1164,30 @@
 						Loading hospital queue...
 					</div>
 				</div>
+			</div>
+
+			<!-- BOUNTIES VIEW -->
+			<div id="satf-view-bounties" style="display: none;">
+				<div class="satf-bounty-controls">
+					<div class="satf-bounty-subtabs">
+						<button type="button" class="satf-bounty-subtab-btn active" data-subtab="ready" id="satf-bounty-subtab-ready">
+							Ready (<span id="satf-bounty-ready-count">0</span>)
+						</button>
+						<button type="button" class="satf-bounty-subtab-btn" data-subtab="hosp" id="satf-bounty-subtab-hosp">
+							Hospital (<span id="satf-bounty-hosp-count">0</span>)
+						</button>
+					</div>
+					<div style="display: flex; align-items: center; gap: 8px;">
+						<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
+						<button type="button" id="satf-btn-bounties-refresh" class="satf-bounty-refresh-btn" title="Refresh Bounties">Refresh</button>
+					</div>
+				</div>
+
+				<!-- Ready pane -->
+				<div id="satf-bounties-pane-ready" class="satf-bounty-list"></div>
+
+				<!-- Hospital pane -->
+				<div id="satf-bounties-pane-hosp" class="satf-bounty-list" style="display: none;"></div>
 			</div>
 
 			<!-- SETTINGS VIEW -->
@@ -928,16 +1211,43 @@
 					<button id="satf-btn-auth" class="satf-btn satf-btn-primary" style="width: 100%; margin-bottom: 12px;">Connect Key</button>
 				</div>
 
+				<div style="margin-bottom: 12px; padding: 10px; background: #09090b; border: 1px solid var(--border); border-radius: 8px;">
+					<div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Fair Fight Range</div>
+					<div style="display: flex; gap: 12px;">
+						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
+							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Min FF</label>
+							<input type="number" id="satf-input-min-ff" min="1.0" max="3.0" step="0.1" value="${state.minFFThreshold.toFixed(1)}" style="width: 100%; padding: 6px 8px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px; text-align: center;">
+						</div>
+						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
+							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Max FF</label>
+							<input type="number" id="satf-input-max-ff" min="1.0" max="3.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 100%; padding: 6px 8px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px; text-align: center;">
+						</div>
+					</div>
+				</div>
+
 				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 11px; color: var(--muted);">
 					<span id="satf-ignored-count">${state.ignoredTargets.length} ignored targets</span>
 					<button id="satf-btn-clear-ignored" class="satf-btn satf-btn-secondary satf-btn-sm">Reset Ignored</button>
 				</div>
 
-				<div style="margin-bottom: 12px;">
+				<div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;">
+					<label style="font-size: 11px; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 6px;">
+						<input type="checkbox" id="satf-chk-attack-new-tab">
+						<span>Attack in new tab</span>
+					</label>
+					<label style="font-size: 11px; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 6px;">
+						<input type="checkbox" id="satf-chk-disable-hud">
+						<span>Disable attack HUD</span>
+					</label>
 					<label style="font-size: 11px; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 6px;">
 						<input type="checkbox" id="satf-chk-persist-open">
 						<span>Remember open window across page loads</span>
 					</label>
+				</div>
+
+				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 11px; color: var(--muted);">
+					<span>Launcher Position</span>
+					<button id="satf-btn-reset-pos" class="satf-btn satf-btn-secondary satf-btn-sm">Reset Position</button>
 				</div>
 
 				<div style="display: flex; gap: 8px; margin-top: 10px;">
@@ -966,7 +1276,11 @@
 		const scoreOpp = root.getElementById("satf-score-opp");
 		const warTitle = root.getElementById("satf-war-title");
 		const hospContainer = root.getElementById("satf-hosp-container");
-		const chkDirect = root.getElementById("satf-chk-direct");
+		const chkAttackNewTab = root.getElementById("satf-chk-attack-new-tab");
+		const chkDisableHud = root.getElementById("satf-chk-disable-hud");
+		const btnGetTarget = root.getElementById("satf-btn-get-target");
+		const inputMinFf = root.getElementById("satf-input-min-ff");
+		const inputMaxFf = root.getElementById("satf-input-max-ff");
 		const btnModalNext = root.getElementById("satf-btn-modal-next");
 		const chkHideHighFf = root.getElementById("satf-chk-hide-high-ff");
 		const inputHideFf = root.getElementById("satf-input-hide-ff");
@@ -981,10 +1295,11 @@
 		const keyInputContainer = root.getElementById("satf-key-input-container");
 		const btnToggleKeyInput = root.getElementById("satf-btn-toggle-key-input");
 
-		chkDirect.checked = state.directAttack;
-		chkHideHighFf.checked = state.hideHighFF;
-		chkHideHighBs.checked = state.hideHighBS;
-		chkPersistOpen.checked = state.persistOpen;
+		if (chkAttackNewTab) chkAttackNewTab.checked = !state.directAttack;
+		if (chkDisableHud) chkDisableHud.checked = state.disableHud;
+		if (chkHideHighFf) chkHideHighFf.checked = state.hideHighFF;
+		if (chkHideHighBs) chkHideHighBs.checked = state.hideHighBS;
+		if (chkPersistOpen) chkPersistOpen.checked = state.persistOpen;
 
 		function setStatus(text, type = "ok") {
 			statusText.textContent = text;
@@ -1100,6 +1415,7 @@
 		}
 
 		function renderAvailableTargets(targets) {
+			if (!availList || !availCount) return;
 			if (Array.isArray(targets)) {
 				state.allTargets = targets;
 				try {
@@ -1182,8 +1498,7 @@
 								</div>
 							</div>
 							<div class="satf-roster-right">
-								<span class="satf-ff-badge ff-${getFFTier(t.fairFight)}" style="font-size:12px; color:${getFFColor(t.fairFight)};">FF: ${t.fairFight.toFixed(2)}</span>
-								<a class="satf-btn satf-btn-primary satf-btn-sm" href="${t.attackUrl}" target="_blank" style="text-decoration:none;">Hit</a>
+								<a class="satf-btn satf-btn-primary satf-btn-sm" href="${t.attackUrl}" target="${state.directAttack ? "_self" : "_blank"}" style="text-decoration:none;">Hit</a>
 							</div>
 						</div>
 					`;
@@ -1192,20 +1507,15 @@
 
 			availList.querySelectorAll(".satf-roster-row").forEach((row) => {
 				row.addEventListener("click", (e) => {
+					if (e.target?.closest("a")) return;
 					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
 					const targetObj = state.availableTargets.find((t) => t.id === id);
 					if (!targetObj) return;
 
 					if (state.directAttack) {
 						window.location.href = targetObj.attackUrl;
-						return;
-					}
-
-					if (e.target && !e.target.closest("a")) {
-						window.open(
-							`https://www.torn.com/profiles.php?XID=${targetObj.id}`,
-							"_blank",
-						);
+					} else {
+						window.open(targetObj.attackUrl, "_blank");
 					}
 				});
 			});
@@ -1390,6 +1700,7 @@
 		// Client-side Live Hospital Queue Countdown
 		function updateHospCountdowns() {
 			const nowSec = Math.floor(Date.now() / 1000);
+			const leadTimeSec = state.dibsLeadTimeSeconds || 300;
 			const rows = hospContainer.querySelectorAll(".satf-queue-row");
 			rows.forEach((row) => {
 				const until = Number.parseInt(row.getAttribute("data-until"), 10);
@@ -1403,6 +1714,96 @@
 				} else {
 					timeElem.textContent = "READY";
 					timeElem.classList.add("ready");
+				}
+
+				const id = Number(row.getAttribute("data-id"));
+				const rightContainer = row.querySelector(".satf-queue-right");
+				if (!rightContainer) return;
+
+				const countdownElem = rightContainer.querySelector(
+					".satf-dibs-countdown",
+				);
+				const claimBtn = rightContainer.querySelector(".satf-dibs-claim");
+				const claimedLabel = rightContainer.querySelector(
+					".satf-dibs-claimed-label",
+				);
+				const attackBtn = rightContainer.querySelector(".satf-dibs-attack");
+
+				if (remaining > leadTimeSec) {
+					const dibsIn = remaining - leadTimeSec;
+					if (countdownElem) {
+						countdownElem.textContent = `Dibs in ${formatSeconds(dibsIn)}`;
+					} else if (!claimBtn && !claimedLabel) {
+						const span = document.createElement("span");
+						span.className = "satf-dibs-countdown";
+						span.textContent = `Dibs in ${formatSeconds(dibsIn)}`;
+						rightContainer.appendChild(span);
+					}
+				} else if (remaining <= leadTimeSec && remaining > 0) {
+					if (countdownElem) {
+						countdownElem.remove();
+					}
+					// Dynamically reveal Dibs button if remaining time drops under threshold and target is not claimed
+					if (!claimBtn && !claimedLabel && !attackBtn) {
+						const btn = document.createElement("button");
+						btn.className = "satf-dibs-btn satf-dibs-claim";
+						btn.setAttribute("data-id", String(id));
+						btn.textContent = "Dibs";
+						btn.addEventListener("click", async (e) => {
+							e.stopPropagation();
+							btn.disabled = true;
+							btn.textContent = "...";
+							if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+								state.ws.send(
+									JSON.stringify({ type: "claim_dibs", targetId: id }),
+								);
+							} else {
+								try {
+									const res = await apiRequest(
+										"/api/v1/subversive/dibs/claim",
+										{
+											method: "POST",
+											body: JSON.stringify({ targetId: id }),
+										},
+									);
+									if (res.dibs) {
+										state.dibs.set(id, res.dibs);
+										renderHospitalQueue(state.hospitalQueue);
+									}
+								} catch (err) {
+									setStatus(err.message, "error");
+									btn.disabled = false;
+									btn.textContent = "Dibs";
+								}
+							}
+						});
+						rightContainer.appendChild(btn);
+					}
+				} else if (remaining === 0) {
+					if (countdownElem) {
+						countdownElem.remove();
+					}
+					const currentTornId = state.user?.id || state.user?.tornId;
+					const dibsRecord = state.dibs.get(id);
+					const isYou =
+						currentTornId && dibsRecord?.claimedBy?.tornId === currentTornId;
+					if (isYou && !attackBtn) {
+						const releaseBtn =
+							rightContainer.querySelector(".satf-dibs-release");
+						if (releaseBtn) releaseBtn.remove();
+						const newAttackBtn = document.createElement("button");
+						newAttackBtn.className = "satf-dibs-btn satf-dibs-attack";
+						newAttackBtn.setAttribute("data-id", String(id));
+						newAttackBtn.textContent = "Attack";
+						newAttackBtn.addEventListener("click", (e) => {
+							e.stopPropagation();
+							window.open(
+								`https://www.torn.com/loader.php?sid=attack&user2ID=${id}`,
+								"_blank",
+							);
+						});
+						rightContainer.appendChild(newAttackBtn);
+					}
 				}
 			});
 		}
@@ -1456,12 +1857,51 @@
 				return;
 			}
 
+			const currentTornId = state.user?.id || state.user?.tornId;
+			const leadTimeSec = state.dibsLeadTimeSeconds || 300;
+
 			hospContainer.innerHTML = state.hospitalQueue
 				.map((item) => {
 					const dischargePill = item.hasEarlyDischarge
 						? `<span class="satf-badge-pill status-discharge">[DISCHARGE]</span>`
 						: "";
 					const remaining = Math.max(0, item.until - nowSec);
+					const dibsRecord = state.dibs.get(item.id);
+
+					let dibsHtml = "";
+					if (dibsRecord && dibsRecord.status === "claimed") {
+						const isYou =
+							currentTornId && dibsRecord.claimedBy?.tornId === currentTornId;
+						if (isYou) {
+							dibsHtml = `
+								<span class="satf-dibs-claimed-label you">Claimed (You)</span>
+								<button class="satf-dibs-btn satf-dibs-release" data-id="${item.id}" title="Release Dibs">Release</button>
+							`;
+						} else {
+							const hasTorn =
+								dibsRecord.claimedBy?.tornName && dibsRecord.claimedBy?.tornId;
+							const displayName = hasTorn
+								? `${dibsRecord.claimedBy.tornName} [${dibsRecord.claimedBy.tornId}]`
+								: dibsRecord.claimedBy?.tornName ||
+									dibsRecord.claimedBy?.discordTag ||
+									"Teammate";
+							const profileLink = dibsRecord.claimedBy?.tornId
+								? `<a href="/profiles.php?XID=${dibsRecord.claimedBy.tornId}" target="_blank" style="color:inherit; text-decoration:underline;">${displayName}</a>`
+								: displayName;
+							dibsHtml = `<span class="satf-dibs-claimed-label" title="Claimed by ${displayName}">Claimed: ${profileLink}</span>`;
+						}
+					} else if (remaining <= leadTimeSec && remaining > 0) {
+						dibsHtml = `<button class="satf-dibs-btn satf-dibs-claim" data-id="${item.id}">Dibs</button>`;
+					} else if (remaining > leadTimeSec) {
+						const dibsIn = remaining - leadTimeSec;
+						dibsHtml = `<span class="satf-dibs-countdown" data-id="${item.id}">Dibs in ${formatSeconds(dibsIn)}</span>`;
+					} else if (remaining === 0) {
+						const isYou =
+							currentTornId && dibsRecord?.claimedBy?.tornId === currentTornId;
+						if (isYou) {
+							dibsHtml = `<button class="satf-dibs-btn satf-dibs-attack" data-id="${item.id}">Attack</button>`;
+						}
+					}
 
 					return `
 						<div class="satf-queue-row" data-id="${item.id}" data-until="${item.until}">
@@ -1475,18 +1915,94 @@
 									BS ${formatStats(item.estimatedBs)} · <span class="ff-${getFFTier(item.fairFight)}" style="font-weight:700; color:${getFFColor(item.fairFight)};">FF: ${item.fairFight.toFixed(2)}</span>
 								</div>
 							</div>
-							<div class="satf-queue-time ${remaining === 0 ? "ready" : ""}">${remaining === 0 ? "READY" : formatSeconds(remaining)}</div>
+							<div class="satf-queue-right">
+								<div class="satf-queue-time ${remaining === 0 ? "ready" : ""}">${remaining === 0 ? "READY" : formatSeconds(remaining)}</div>
+								${dibsHtml}
+							</div>
 						</div>
 					`;
 				})
 				.join("");
 
+			// Attach row profile click listeners
 			hospContainer.querySelectorAll(".satf-queue-row").forEach((row) => {
 				row.addEventListener("click", () => {
 					const id = row.getAttribute("data-id");
 					if (id) {
 						window.open(
 							`https://www.torn.com/profiles.php?XID=${id}`,
+							"_blank",
+						);
+					}
+				});
+			});
+
+			// Attach dibs claim listeners
+			hospContainer.querySelectorAll(".satf-dibs-claim").forEach((btn) => {
+				btn.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					const id = Number(btn.getAttribute("data-id"));
+					if (!id) return;
+					btn.disabled = true;
+					btn.textContent = "...";
+					if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+						state.ws.send(JSON.stringify({ type: "claim_dibs", targetId: id }));
+					} else {
+						try {
+							const res = await apiRequest("/api/v1/subversive/dibs/claim", {
+								method: "POST",
+								body: JSON.stringify({ targetId: id }),
+							});
+							if (res.dibs) {
+								state.dibs.set(id, res.dibs);
+								renderHospitalQueue(state.hospitalQueue);
+							}
+						} catch (err) {
+							setStatus(err.message, "error");
+							btn.disabled = false;
+							btn.textContent = "Dibs";
+						}
+					}
+				});
+			});
+
+			// Attach dibs release listeners
+			hospContainer.querySelectorAll(".satf-dibs-release").forEach((btn) => {
+				btn.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					const id = Number(btn.getAttribute("data-id"));
+					if (!id) return;
+					btn.disabled = true;
+					btn.textContent = "...";
+					if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+						state.ws.send(
+							JSON.stringify({ type: "release_dibs", targetId: id }),
+						);
+					} else {
+						try {
+							await apiRequest("/api/v1/subversive/dibs/release", {
+								method: "POST",
+								body: JSON.stringify({ targetId: id }),
+							});
+							state.dibs.delete(id);
+							renderHospitalQueue(state.hospitalQueue);
+						} catch (err) {
+							setStatus(err.message, "error");
+							btn.disabled = false;
+							btn.textContent = "Release";
+						}
+					}
+				});
+			});
+
+			// Attach dibs attack listeners
+			hospContainer.querySelectorAll(".satf-dibs-attack").forEach((btn) => {
+				btn.addEventListener("click", (e) => {
+					e.stopPropagation();
+					const id = btn.getAttribute("data-id");
+					if (id) {
+						window.open(
+							`https://www.torn.com/loader.php?sid=attack&user2ID=${id}`,
 							"_blank",
 						);
 					}
@@ -1555,8 +2071,32 @@
 						if (Array.isArray(data.targets)) {
 							renderAvailableTargets(data.targets);
 						}
+						if (Array.isArray(data.dibs)) {
+							state.dibs.clear();
+							for (const d of data.dibs) {
+								state.dibs.set(d.targetId, d);
+							}
+						}
 						if (Array.isArray(data.hospitalQueue)) {
 							renderHospitalQueue(data.hospitalQueue);
+						} else if (data.type === "dibs_update") {
+							renderHospitalQueue(state.hospitalQueue);
+						}
+						if (data.type === "claim_dibs_success") {
+							setStatus(`Dibs confirmed for target ${data.targetId}`, "ok");
+							if (data.dibs) {
+								state.dibs.set(data.targetId, data.dibs);
+								renderHospitalQueue(state.hospitalQueue);
+							}
+						} else if (data.type === "claim_dibs_error") {
+							setStatus(data.reason || "Failed to claim dibs", "error");
+							renderHospitalQueue(state.hospitalQueue);
+						} else if (data.type === "release_dibs_success") {
+							setStatus(`Dibs released for target ${data.targetId}`, "ok");
+							state.dibs.delete(data.targetId);
+							renderHospitalQueue(state.hospitalQueue);
+						} else if (data.type === "release_dibs_error") {
+							setStatus(data.reason || "Failed to release dibs", "error");
 						}
 					} catch {
 						// Ignored parsing error
@@ -1611,34 +2151,456 @@
 				setStatus("Connected! Ready for Ranked War.", "ok");
 				switchTab("target");
 				connectWebSocket();
+				connectBountiesWebSocket();
 				fetchWarStatus();
 				fetchAvailableTargets();
+				fetchBounties();
 			} catch (err) {
 				setStatus(err.message, "error");
 			}
 		}
 
-		function switchTab(tab) {
-			state.activeTab = tab;
-			GM_setValue(STORAGE.activeTab, tab);
-			root.querySelectorAll(".satf-tab-btn").forEach((btn) => {
-				btn.classList.toggle("active", btn.dataset.tab === tab);
-			});
-			root.getElementById("satf-view-target").style.display =
-				tab === "target" ? "block" : "none";
-			root.getElementById("satf-view-hosp").style.display =
-				tab === "hosp" ? "block" : "none";
-			root.getElementById("satf-view-settings").style.display =
-				tab === "settings" ? "block" : "none";
+		function setBountiesStatus(text, type = "ok") {
+			const el = root.getElementById("satf-bounties-status");
+			if (el) {
+				el.textContent = text;
+				el.style.color =
+					type === "error"
+						? "var(--danger)"
+						: type === "ok"
+							? "var(--accent)"
+							: "var(--muted)";
+			}
+		}
 
-			if (tab === "target") {
-				renderAvailableTargets();
-				fetchAvailableTargets();
-				stopHospTimer();
-			} else if (tab === "hosp") {
+		function renderBountyReadyTargets(targets) {
+			const pane = root.getElementById("satf-bounties-pane-ready");
+			if (!pane) return;
+			const list = Array.isArray(targets) ? targets : state.bountiesReady;
+			if (!list || list.length === 0) {
+				pane.innerHTML = `
+					<div class="satf-bounty-empty">
+						No bounty targets currently available.
+					</div>
+				`;
+				return;
+			}
+
+			pane.innerHTML = list
+				.map((t) => {
+					const ffVal = getBountyFF(t);
+					const ffText =
+						ffVal !== null && ffVal !== undefined
+							? `FF: ${ffVal.toFixed(2)}`
+							: "FF: ?";
+					const ffColor = getFFColor(ffVal);
+
+					return `
+						<div class="satf-bounty-row" data-id="${t.id}">
+							<div class="satf-bounty-left">
+								<div class="satf-bounty-name-row">
+									<a href="https://www.torn.com/profiles.php?XID=${t.id}" target="_blank" style="color:inherit;text-decoration:none;font-weight:700;">${t.name}</a>
+									<span class="satf-bounty-id">[${t.id}]</span>
+								</div>
+								<div class="satf-bounty-sub">
+									<span style="font-weight: 700; font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid ${ffColor}50; background: ${ffColor}18; color: ${ffColor};">${ffText}</span>
+								</div>
+							</div>
+							<div class="satf-bounty-right">
+								<span class="satf-bounty-reward">${formatMoney(t.reward)}</span>
+								<a class="satf-bounty-hit-btn" href="${t.attackUrl}" target="${state.directAttack ? "_self" : "_blank"}" rel="noopener">Hit</a>
+							</div>
+						</div>
+					`;
+				})
+				.join("");
+
+			pane.querySelectorAll(".satf-bounty-row").forEach((row) => {
+				row.addEventListener("click", (e) => {
+					if (e.target?.closest("a, button")) return;
+					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
+					const targetObj = list.find((t) => t.id === id);
+					if (!targetObj) return;
+
+					if (state.directAttack) {
+						window.location.href = targetObj.attackUrl;
+					} else {
+						window.open(targetObj.attackUrl, "_blank");
+					}
+				});
+			});
+		}
+
+		function renderBountyHospitalQueue(queue) {
+			const pane = root.getElementById("satf-bounties-pane-hosp");
+			if (!pane) return;
+			const list = Array.isArray(queue) ? queue : state.bountiesHosp;
+			if (!list || list.length === 0) {
+				pane.innerHTML = `
+					<div class="satf-bounty-empty">
+						No hospitalized bounty targets matching criteria.
+					</div>
+				`;
+				return;
+			}
+
+			pane.innerHTML = list
+				.map((t) => {
+					const ffVal = getBountyFF(t);
+					const ffText =
+						ffVal !== null && ffVal !== undefined
+							? `FF: ${ffVal.toFixed(2)}`
+							: "FF: ?";
+					const ffColor = getFFColor(ffVal);
+					const timeText = formatSeconds(t.secondsRemaining ?? 0);
+
+					return `
+						<div class="satf-bounty-row" data-id="${t.id}">
+							<div class="satf-bounty-left">
+								<div class="satf-bounty-name-row">
+									<a href="https://www.torn.com/profiles.php?XID=${t.id}" target="_blank" style="color:inherit;text-decoration:none;font-weight:700;">${t.name}</a>
+									<span class="satf-bounty-id">[${t.id}]</span>
+								</div>
+								<div class="satf-bounty-sub">
+									<span style="font-weight: 700; font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid ${ffColor}50; background: ${ffColor}18; color: ${ffColor};">${ffText}</span>
+									<span>·</span>
+									<span class="satf-bounty-hosp-time" data-until="${t.status?.until || 0}">${timeText}</span>
+								</div>
+							</div>
+							<div class="satf-bounty-right">
+								<span class="satf-bounty-reward">${formatMoney(t.reward)}</span>
+								<button type="button" class="satf-bounty-check-btn" data-id="${t.id}">Check</button>
+								<a class="satf-bounty-hit-btn" href="${t.attackUrl}" target="${state.directAttack ? "_self" : "_blank"}" rel="noopener">Hit</a>
+							</div>
+						</div>
+					`;
+				})
+				.join("");
+
+			pane.querySelectorAll(".satf-bounty-row").forEach((row) => {
+				row.addEventListener("click", (e) => {
+					if (e.target?.closest("a, button")) return;
+					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
+					const targetObj = list.find((t) => t.id === id);
+					if (!targetObj) return;
+
+					if (state.directAttack) {
+						window.location.href = targetObj.attackUrl;
+					} else {
+						window.open(targetObj.attackUrl, "_blank");
+					}
+				});
+			});
+
+			pane.querySelectorAll(".satf-bounty-check-btn").forEach((btn) => {
+				btn.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					const targetId = Number(btn.getAttribute("data-id"));
+					if (!targetId) return;
+
+					btn.textContent = "Checking...";
+					btn.setAttribute("disabled", "true");
+
+					try {
+						const res = await apiRequest("/api/v1/personal/bounties/recheck", {
+							method: "POST",
+							body: { targetId },
+						});
+
+						if (res?.target) {
+							setBountiesStatus(
+								`Updated ${res.target.name}: ${res.target.status?.state || "Okay"}`,
+								"ok",
+							);
+							fetchBounties();
+						}
+					} catch (err) {
+						setBountiesStatus(err.message, "error");
+						btn.textContent = "Check";
+						btn.removeAttribute("disabled");
+					}
+				});
+			});
+		}
+
+		function applyBountyData(res) {
+			if (!res) return;
+			state.bountiesReady = Array.isArray(res.readyTargets)
+				? res.readyTargets
+				: [];
+			state.bountiesHosp = Array.isArray(res.hospitalQueue)
+				? res.hospitalQueue
+				: [];
+			try {
+				GM_setValue(
+					STORAGE.cachedBounties,
+					JSON.stringify({
+						readyTargets: state.bountiesReady,
+						hospitalQueue: state.bountiesHosp,
+					}),
+				);
+			} catch {}
+
+			const tabBadge = root.getElementById("satf-bounties-tab-count");
+			if (tabBadge) {
+				tabBadge.textContent = String(state.bountiesReady.length);
+			}
+			const countReady = root.getElementById("satf-bounty-ready-count");
+			if (countReady) {
+				countReady.textContent = String(state.bountiesReady.length);
+			}
+			const countHosp = root.getElementById("satf-bounty-hosp-count");
+			if (countHosp) {
+				countHosp.textContent = String(state.bountiesHosp.length);
+			}
+
+			renderBountyReadyTargets(state.bountiesReady);
+			renderBountyHospitalQueue(state.bountiesHosp);
+
+			const statusLabel = state.bountiesWsConnected ? "Live" : "Ready";
+			setBountiesStatus(statusLabel, "ok");
+		}
+
+		async function fetchBounties() {
+			if (!state.token) return;
+			try {
+				const res = await apiRequest("/api/v1/personal/bounties");
+				applyBountyData(res);
+			} catch (err) {
+				if (!state.bountiesWsConnected) {
+					setBountiesStatus(err.message, "error");
+				}
+			}
+		}
+
+		function connectBountiesWebSocket() {
+			if (!state.token) return;
+			if (
+				state.bountiesWs &&
+				(state.bountiesWs.readyState === WebSocket.OPEN ||
+					state.bountiesWs.readyState === WebSocket.CONNECTING)
+			) {
+				return;
+			}
+
+			try {
+				const wsProto = state.apiUrl.startsWith("https") ? "wss://" : "ws://";
+				const cleanHost = state.apiUrl.replace(/^https?:\/\//, "");
+				const wsUrl = `${wsProto}${cleanHost}/api/ws/personal-bounties?token=${encodeURIComponent(state.token)}`;
+
+				const socket = new WebSocket(wsUrl);
+				state.bountiesWs = socket;
+
+				socket.onopen = () => {
+					state.bountiesWsConnected = true;
+					setBountiesStatus("Live", "ok");
+					socket.send(JSON.stringify({ type: "ping" }));
+				};
+
+				socket.onmessage = (event) => {
+					try {
+						const msg = JSON.parse(event.data);
+						state.bountiesLastWsMessageAt = Date.now();
+						if (msg.type === "state_snapshot" || msg.type === "state_update") {
+							applyBountyData(msg);
+						}
+					} catch {
+						// Ignored parsing error
+					}
+				};
+
+				socket.onerror = () => {
+					state.bountiesWsConnected = false;
+				};
+
+				socket.onclose = () => {
+					state.bountiesWsConnected = false;
+					state.bountiesWs = null;
+					if (state.token) {
+						if (state.bountiesReconnectTimer) {
+							clearTimeout(state.bountiesReconnectTimer);
+						}
+						state.bountiesReconnectTimer = setTimeout(
+							connectBountiesWebSocket,
+							5000,
+						);
+					}
+				};
+			} catch {
+				state.bountiesWsConnected = false;
+			}
+		}
+
+		function disconnectBountiesWebSocket() {
+			if (state.bountiesReconnectTimer) {
+				clearTimeout(state.bountiesReconnectTimer);
+				state.bountiesReconnectTimer = null;
+			}
+			if (state.bountiesWs) {
+				try {
+					state.bountiesWs.close();
+				} catch {}
+				state.bountiesWs = null;
+				state.bountiesWsConnected = false;
+			}
+		}
+
+		function switchBountySubTab(subtab) {
+			state.bountiesSubTab = subtab;
+			try {
+				GM_setValue(STORAGE.bountiesSubTab, subtab);
+			} catch {}
+
+			const btnReady = root.getElementById("satf-bounty-subtab-ready");
+			const btnHosp = root.getElementById("satf-bounty-subtab-hosp");
+			const paneReady = root.getElementById("satf-bounties-pane-ready");
+			const paneHosp = root.getElementById("satf-bounties-pane-hosp");
+
+			btnReady?.classList.toggle("active", subtab === "ready");
+			btnHosp?.classList.toggle("active", subtab === "hosp");
+
+			if (paneReady) {
+				paneReady.style.display = subtab === "ready" ? "flex" : "none";
+			}
+			if (paneHosp) {
+				paneHosp.style.display = subtab === "hosp" ? "flex" : "none";
+			}
+		}
+
+		function switchTab(tab) {
+			const safeTab = tab === "target" ? "bounties" : tab;
+			state.activeTab = safeTab;
+			GM_setValue(STORAGE.activeTab, safeTab);
+			root.querySelectorAll(".satf-tab-btn").forEach((btn) => {
+				btn.classList.toggle("active", btn.dataset.tab === safeTab);
+			});
+			const viewHosp = root.getElementById("satf-view-hosp");
+			const viewBounties = root.getElementById("satf-view-bounties");
+			const viewSettings = root.getElementById("satf-view-settings");
+
+			if (viewHosp)
+				viewHosp.style.display = safeTab === "hosp" ? "block" : "none";
+			if (viewBounties)
+				viewBounties.style.display = safeTab === "bounties" ? "block" : "none";
+			if (viewSettings)
+				viewSettings.style.display = safeTab === "settings" ? "block" : "none";
+
+			if (safeTab === "hosp") {
 				fetchHospitalQueue();
+			} else if (safeTab === "bounties") {
+				renderBountyReadyTargets(state.bountiesReady);
+				renderBountyHospitalQueue(state.bountiesHosp);
+				fetchBounties();
+				stopHospTimer();
 			} else {
 				stopHospTimer();
+			}
+		}
+
+		async function executeGetTarget() {
+			if (state.isTargetScouting) return;
+
+			const flightState = detectAttackerFlightState();
+			if (flightState !== "okay") {
+				updateTravelLock();
+				setStatus("Target dispatch locked while traveling or abroad.", "error");
+				return;
+			}
+
+			if (!state.token) {
+				setStatus("Please connect API key first in Settings.", "error");
+				switchTab("settings");
+				return;
+			}
+
+			state.isTargetScouting = true;
+			if (btnGetTarget) {
+				btnGetTarget.textContent = "Scouting...";
+				btnGetTarget.disabled = true;
+			}
+			setStatus("Scouting target via on-demand profile verification...", "ok");
+
+			try {
+				const params = new URLSearchParams({
+					minFF: state.minFFThreshold.toFixed(1),
+					maxFF: state.maxFFThreshold.toFixed(1),
+					ignore: state.ignoredTargets.join(","),
+				});
+
+				const res = await apiRequest(
+					`/api/v1/target-finder/targets/next?${params.toString()}`,
+				);
+
+				if (res.target?.attackUrl) {
+					state.currentTarget = res.target;
+					GM_setValue(STORAGE.currentTarget, res.target);
+					setStatus(
+						`Target acquired · ${res.target.name} [${res.target.id}] · FF: ${res.target.fairFight.toFixed(2)}x`,
+						"ok",
+					);
+					if (btnGetTarget) {
+						btnGetTarget.textContent = "Get Target";
+						btnGetTarget.disabled = false;
+					}
+					state.isTargetScouting = false;
+
+					if (state.directAttack) {
+						window.location.href = res.target.attackUrl;
+					} else {
+						window.open(res.target.attackUrl, "_blank");
+					}
+					return;
+				}
+
+				if (res.retryAfter) {
+					let countdown = res.retryAfter || 5;
+					setStatus(
+						`No targets currently available out of hospital. Resting ${countdown}s...`,
+						"ok",
+					);
+					if (btnGetTarget) {
+						btnGetTarget.textContent = `Rest ${countdown}s`;
+						btnGetTarget.disabled = true;
+					}
+					if (state.scoutCooldownTimer) clearInterval(state.scoutCooldownTimer);
+					state.scoutCooldownTimer = setInterval(() => {
+						countdown--;
+						if (countdown > 0) {
+							if (btnGetTarget) btnGetTarget.textContent = `Rest ${countdown}s`;
+							setStatus(
+								`No targets currently available out of hospital. Resting ${countdown}s...`,
+								"ok",
+							);
+						} else {
+							clearInterval(state.scoutCooldownTimer);
+							state.scoutCooldownTimer = null;
+							state.isTargetScouting = false;
+							if (btnGetTarget) {
+								btnGetTarget.textContent = "Get Target";
+								btnGetTarget.disabled = false;
+							}
+							setStatus("Ready", "ok");
+						}
+					}, 1000);
+					return;
+				}
+
+				setStatus(
+					res.message || "No targets found matching criteria.",
+					"error",
+				);
+				if (btnGetTarget) {
+					btnGetTarget.textContent = "Get Target";
+					btnGetTarget.disabled = false;
+				}
+				state.isTargetScouting = false;
+			} catch (err) {
+				setStatus(`Failed to acquire target: ${err.message}`, "error");
+				if (btnGetTarget) {
+					btnGetTarget.textContent = "Get Target";
+					btnGetTarget.disabled = false;
+				}
+				state.isTargetScouting = false;
 			}
 		}
 
@@ -1649,10 +2611,51 @@
 		let initialLeft = 0;
 		let initialTop = 0;
 
+		function resetLauncherPosition() {
+			const defaultX = Math.max(10, window.innerWidth - 64);
+			const defaultY = Math.max(10, window.innerHeight - 84);
+			launcher.style.left = `${defaultX}px`;
+			launcher.style.top = `${defaultY}px`;
+			GM_setValue(STORAGE.position, { x: defaultX, y: defaultY });
+			if (state.panelOpen) {
+				positionPanel();
+			}
+			setStatus("UI position reset to default", "ok");
+		}
+
+		if (typeof GM_registerMenuCommand === "function") {
+			try {
+				GM_registerMenuCommand("Reset UI Position", resetLauncherPosition);
+			} catch {}
+		}
+
+		window.addEventListener("keydown", (e) => {
+			if (e.altKey && e.shiftKey && (e.key === "R" || e.key === "r")) {
+				resetLauncherPosition();
+			}
+		});
+
 		const savedPos = GM_getValue(STORAGE.position, null);
-		if (savedPos) {
-			launcher.style.left = `${savedPos.x}px`;
-			launcher.style.top = `${savedPos.y}px`;
+		if (
+			savedPos &&
+			typeof savedPos.x === "number" &&
+			typeof savedPos.y === "number"
+		) {
+			const lWidth = launcher.offsetWidth || 48;
+			const lHeight = launcher.offsetHeight || 48;
+			const clampedX = Math.max(
+				10,
+				Math.min(window.innerWidth - lWidth - 10, savedPos.x),
+			);
+			const clampedY = Math.max(
+				10,
+				Math.min(window.innerHeight - lHeight - 10, savedPos.y),
+			);
+			launcher.style.left = `${clampedX}px`;
+			launcher.style.top = `${clampedY}px`;
+			if (savedPos.x !== clampedX || savedPos.y !== clampedY) {
+				GM_setValue(STORAGE.position, { x: clampedX, y: clampedY });
+			}
 		}
 
 		function positionPanel() {
@@ -1716,10 +2719,10 @@
 			state.syncTimer = setInterval(() => {
 				if (!state.panelOpen) return;
 				fetchWarStatus();
-				if (state.activeTab === "target") {
-					fetchAvailableTargets();
-				} else if (state.activeTab === "hosp") {
+				if (state.activeTab === "hosp") {
 					fetchHospitalQueue();
+				} else if (state.activeTab === "bounties") {
+					fetchBounties();
 				}
 			}, 3000);
 
@@ -1750,8 +2753,7 @@
 			updateTravelLock();
 			connectWebSocket();
 			fetchWarStatus();
-			renderAvailableTargets();
-			switchTab(state.activeTab || "target");
+			switchTab(state.activeTab || "bounties");
 			startAutoSync();
 		}
 
@@ -1765,6 +2767,7 @@
 		}
 
 		launcher.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
 			isDragging = false;
 			dragStartX = e.clientX;
 			dragStartY = e.clientY;
@@ -1776,8 +2779,18 @@
 				const dx = moveEvt.clientX - dragStartX;
 				const dy = moveEvt.clientY - dragStartY;
 				if (Math.abs(dx) > 3 || Math.abs(dy) > 3) isDragging = true;
-				launcher.style.left = `${initialLeft + dx}px`;
-				launcher.style.top = `${initialTop + dy}px`;
+				const lWidth = launcher.offsetWidth || 48;
+				const lHeight = launcher.offsetHeight || 48;
+				const newLLeft = Math.max(
+					10,
+					Math.min(window.innerWidth - lWidth - 10, initialLeft + dx),
+				);
+				const newLTop = Math.max(
+					10,
+					Math.min(window.innerHeight - lHeight - 10, initialTop + dy),
+				);
+				launcher.style.left = `${newLLeft}px`;
+				launcher.style.top = `${newLTop}px`;
 				if (state.panelOpen) {
 					positionPanel();
 				}
@@ -1788,13 +2801,28 @@
 				window.removeEventListener("pointerup", onUp);
 				if (isDragging) {
 					const finalRect = launcher.getBoundingClientRect();
+					const lWidth = launcher.offsetWidth || 48;
+					const lHeight = launcher.offsetHeight || 48;
+					const clampedX = Math.max(
+						10,
+						Math.min(window.innerWidth - lWidth - 10, finalRect.left),
+					);
+					const clampedY = Math.max(
+						10,
+						Math.min(window.innerHeight - lHeight - 10, finalRect.top),
+					);
+					launcher.style.left = `${clampedX}px`;
+					launcher.style.top = `${clampedY}px`;
 					GM_setValue(STORAGE.position, {
-						x: finalRect.left,
-						y: finalRect.top,
+						x: clampedX,
+						y: clampedY,
 					});
 					if (state.panelOpen) {
 						positionPanel();
 					}
+					setTimeout(() => {
+						isDragging = false;
+					}, 50);
 				} else {
 					if (state.panelOpen) {
 						closePanel();
@@ -1806,6 +2834,28 @@
 
 			window.addEventListener("pointermove", onMove);
 			window.addEventListener("pointerup", onUp);
+		});
+
+		window.addEventListener("resize", () => {
+			const rect = launcher.getBoundingClientRect();
+			const lWidth = launcher.offsetWidth || 48;
+			const lHeight = launcher.offsetHeight || 48;
+			const clampedX = Math.max(
+				10,
+				Math.min(window.innerWidth - lWidth - 10, rect.left),
+			);
+			const clampedY = Math.max(
+				10,
+				Math.min(window.innerHeight - lHeight - 10, rect.top),
+			);
+			if (rect.left !== clampedX || rect.top !== clampedY) {
+				launcher.style.left = `${clampedX}px`;
+				launcher.style.top = `${clampedY}px`;
+				GM_setValue(STORAGE.position, { x: clampedX, y: clampedY });
+			}
+			if (state.panelOpen) {
+				positionPanel();
+			}
 		});
 
 		btnClose.addEventListener("click", closePanel);
@@ -1834,16 +2884,57 @@
 			});
 		});
 
-		chkDirect.addEventListener("change", (e) => {
-			state.directAttack = e.target.checked;
+		chkAttackNewTab?.addEventListener("change", (e) => {
+			state.directAttack = !e.target.checked;
 			GM_setValue(STORAGE.directAttack, state.directAttack);
+			renderAvailableTargets();
+			renderBountyReadyTargets();
+			renderBountyHospitalQueue();
+		});
+
+		chkDisableHud?.addEventListener("change", (e) => {
+			state.disableHud = e.target.checked;
+			GM_setValue(STORAGE.disableHud, state.disableHud);
+			if (state.disableHud) {
+				const host = document.getElementById("satf-attack-hud-host");
+				if (host) host.remove();
+			} else {
+				initAttackPageHud();
+			}
+		});
+
+		btnGetTarget?.addEventListener("click", () => {
+			executeGetTarget();
+		});
+
+		inputMinFf?.addEventListener("change", (e) => {
+			const val = Math.max(
+				1.0,
+				Math.min(
+					state.maxFFThreshold,
+					Number.parseFloat(e.target.value) || 1.2,
+				),
+			);
+			state.minFFThreshold = val;
+			inputMinFf.value = val.toFixed(1);
+			GM_setValue(STORAGE.minFFThreshold, val);
+		});
+
+		inputMaxFf?.addEventListener("change", (e) => {
+			const val = Math.max(
+				state.minFFThreshold,
+				Math.min(3.0, Number.parseFloat(e.target.value) || 3.0),
+			);
+			state.maxFFThreshold = val;
+			inputMaxFf.value = val.toFixed(1);
+			GM_setValue(STORAGE.maxFFThreshold, val);
 		});
 
 		btnModalNext?.addEventListener("click", () => {
 			fetchNextTarget({ directLaunch: state.directAttack });
 		});
 
-		chkHideHighFf.addEventListener("change", (e) => {
+		chkHideHighFf?.addEventListener("change", (e) => {
 			state.hideHighFF = e.target.checked;
 			GM_setValue(STORAGE.hideHighFF, state.hideHighFF);
 			renderAvailableTargets();
@@ -1856,7 +2947,7 @@
 			renderAvailableTargets();
 		});
 
-		chkHideHighBs.addEventListener("change", (e) => {
+		chkHideHighBs?.addEventListener("change", (e) => {
 			state.hideHighBS = e.target.checked;
 			GM_setValue(STORAGE.hideHighBS, state.hideHighBS);
 			renderAvailableTargets();
@@ -1907,6 +2998,10 @@
 				setStatus("Cleared ignored targets blacklist.", "ok");
 			});
 
+		root
+			.getElementById("satf-btn-reset-pos")
+			?.addEventListener("click", resetLauncherPosition);
+
 		btnToggleKeyInput.addEventListener("click", () => {
 			const isVisible = keyInputContainer.style.display !== "none";
 			keyInputContainer.style.display = isVisible ? "none" : "block";
@@ -1945,16 +3040,54 @@
 			GM_setValue(STORAGE.token, "");
 			GM_setValue(STORAGE.user, null);
 			disconnectWebSocket();
+			disconnectBountiesWebSocket();
 			updateUserBadge();
 			renderAvailableTargets([]);
+			state.bountiesReady = [];
+			state.bountiesHosp = [];
+			renderBountyReadyTargets([]);
+			renderBountyHospitalQueue([]);
 			setStatus("Logged out. Please connect your API key.", "ok");
 		});
 
 		updateUserBadge();
 		updateTravelLock();
 
-		// Immediately populate cached targets
+		// Immediately populate cached targets and bounties
 		renderAvailableTargets();
+		renderBountyReadyTargets(state.bountiesReady);
+		renderBountyHospitalQueue(state.bountiesHosp);
+		switchBountySubTab(state.bountiesSubTab || "ready");
+
+		root
+			.getElementById("satf-bounty-subtab-ready")
+			?.addEventListener("click", () => switchBountySubTab("ready"));
+		root
+			.getElementById("satf-bounty-subtab-hosp")
+			?.addEventListener("click", () => switchBountySubTab("hosp"));
+		root
+			.getElementById("satf-btn-bounties-refresh")
+			?.addEventListener("click", () => {
+				if (
+					state.bountiesWs &&
+					state.bountiesWs.readyState === WebSocket.OPEN
+				) {
+					state.bountiesWs.send(JSON.stringify({ type: "refresh" }));
+				}
+				fetchBounties();
+			});
+
+		// 1-second hospital queue countdown timer
+		setInterval(() => {
+			const nowSec = Math.floor(Date.now() / 1000);
+			root.querySelectorAll(".satf-bounty-hosp-time").forEach((el) => {
+				const until = Number(el.getAttribute("data-until"));
+				if (until > 0) {
+					const rem = Math.max(0, until - nowSec);
+					el.textContent = formatSeconds(rem);
+				}
+			});
+		}, 1000);
 
 		// Auto-open if remember open window is enabled AND panel was open on last page
 		if (state.persistOpen && state.panelOpen) {
@@ -1974,6 +3107,8 @@
 		if (state.token) {
 			setStatus("Connected", "ok");
 			fetchWarStatus();
+			fetchBounties();
+			connectBountiesWebSocket();
 			if (state.panelOpen) {
 				connectWebSocket();
 			}
@@ -1982,8 +3117,280 @@
 		}
 	}
 
+	let lastHandledBountyDefeatId = 0;
+
+	function mountBountyHud(bt, idx) {
+		let host = document.getElementById("satf-attack-hud-host");
+		if (!host) {
+			host = document.createElement("div");
+			host.id = "satf-attack-hud-host";
+			document.body.appendChild(host);
+		}
+		host.dataset.targetId = String(bt.id);
+		const hudRoot = host.shadowRoot || host.attachShadow({ mode: "open" });
+		const ffVal = getBountyFF(bt);
+		const ffColor = getFFColor(ffVal);
+		const ffText =
+			ffVal !== null && ffVal !== undefined ? ffVal.toFixed(2) : "Unknown";
+
+		const readyList = state.bountiesReady || [];
+		const totalReady = readyList.length;
+		const isReadyTarget = idx >= 0 && idx < totalReady;
+		const nextTarget =
+			totalReady > 0
+				? isReadyTarget
+					? readyList[(idx + 1) % totalReady]
+					: readyList[0]
+				: null;
+		const prevTarget =
+			totalReady > 0
+				? isReadyTarget
+					? readyList[(idx - 1 + totalReady) % totalReady]
+					: readyList[totalReady - 1]
+				: null;
+		const countText = isReadyTarget
+			? `${idx + 1} of ${totalReady}`
+			: totalReady > 0
+				? `0 of ${totalReady}`
+				: "None ready";
+		const canCycle = totalReady > (isReadyTarget ? 1 : 0);
+
+		hudRoot.innerHTML = `
+		<style>
+			#satf-attack-bar {
+				position: fixed;
+				top: 10px;
+				left: 50%;
+				transform: translateX(-50%);
+				z-index: 2147483647 !important;
+				background: rgba(15, 15, 18, 0.96);
+				backdrop-filter: blur(14px);
+				border: 1px solid #27272a;
+				border-radius: 12px;
+				padding: 6px 14px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				flex-wrap: wrap;
+				gap: 8px 12px;
+				max-width: calc(100vw - 20px);
+				color: #f4f4f5;
+				box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+				font-size: 12px;
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+				pointer-events: auto;
+			}
+			.satf-hud-badge {
+				font-weight: 800;
+				color: #10b981;
+				font-size: 11px;
+				letter-spacing: 0.5px;
+			}
+			.satf-hud-stat {
+				display: flex;
+				align-items: center;
+				gap: 6px;
+			}
+			.satf-hud-val {
+				font-weight: 800;
+				color: #fff;
+			}
+			.satf-hud-btn {
+				background: #27272a;
+				border: 1px solid #3f3f46;
+				color: #fff;
+				border-radius: 6px;
+				padding: 4px 8px;
+				font-size: 11px;
+				font-weight: 700;
+				cursor: pointer;
+				transition: all 0.15s;
+			}
+			.satf-hud-btn:hover:not(:disabled) {
+				background: #3f3f46;
+				border-color: #10b981;
+			}
+			.satf-hud-btn:disabled {
+				opacity: 0.4;
+				cursor: not-allowed;
+			}
+		</style>
+		<div id="satf-attack-bar">
+			<span class="satf-hud-badge">[BOUNTY]</span>
+			<div class="satf-hud-stat">
+				<span class="satf-hud-val">${bt.name}</span>
+			</div>
+			<div class="satf-hud-stat">
+				<span style="color:#a1a1aa;">Reward:</span>
+				<span class="satf-hud-val" style="color:#34d399;">${formatMoney(bt.reward)}</span>
+			</div>
+			<div class="satf-hud-stat">
+				<span style="color:#a1a1aa;">FF:</span>
+				<span class="satf-hud-val" style="color:${ffColor};">${ffText}</span>
+			</div>
+			<div style="display:flex;align-items:center;gap:6px;margin-left:6px;border-left:1px solid #27272a;padding-left:8px;">
+				<button id="satf-bounty-cycle-prev" class="satf-hud-btn" ${!canCycle ? "disabled" : ""}>&lt; Prev</button>
+				<span style="font-size:11px;color:#a1a1aa;">${countText}</span>
+				<button id="satf-bounty-cycle-next" class="satf-hud-btn" ${!canCycle ? "disabled" : ""}>Next &gt;</button>
+			</div>
+		</div>
+		`;
+
+		hudRoot
+			.getElementById("satf-bounty-cycle-prev")
+			?.addEventListener("click", () => {
+				if (prevTarget?.attackUrl) {
+					if (state.directAttack) {
+						window.location.href = prevTarget.attackUrl;
+					} else {
+						window.open(prevTarget.attackUrl, "_blank");
+					}
+				}
+			});
+		hudRoot
+			.getElementById("satf-bounty-cycle-next")
+			?.addEventListener("click", () => {
+				if (nextTarget?.attackUrl) {
+					if (state.directAttack) {
+						window.location.href = nextTarget.attackUrl;
+					} else {
+						window.open(nextTarget.attackUrl, "_blank");
+					}
+				}
+			});
+
+		return host;
+	}
+
+	function handleBountyTargetDefeated(targetId, outcomeText, isDefeat = true) {
+		const targetIdx = state.bountiesReady.findIndex((t) => t.id === targetId);
+		let defeated = null;
+		if (targetIdx !== -1) {
+			const [removed] = state.bountiesReady.splice(targetIdx, 1);
+			defeated = removed ?? null;
+		} else {
+			defeated = state.bountiesHosp.find((t) => t.id === targetId) ?? null;
+		}
+
+		if (defeated) {
+			const nowSec = Math.floor(Date.now() / 1000);
+			const hospIdx = state.bountiesHosp.findIndex((t) => t.id === targetId);
+			const hospEntry = {
+				...defeated,
+				status: {
+					state: "Hospital",
+					description: outcomeText,
+					until: nowSec + 1800,
+				},
+				secondsRemaining: 1800,
+			};
+			if (hospIdx !== -1) {
+				state.bountiesHosp[hospIdx] = hospEntry;
+			} else {
+				state.bountiesHosp.push(hospEntry);
+			}
+			state.bountiesHosp.sort(
+				(a, b) => (a.secondsRemaining ?? 0) - (b.secondsRemaining ?? 0),
+			);
+		}
+
+		try {
+			GM_setValue(
+				STORAGE.cachedBounties,
+				JSON.stringify({
+					readyTargets: state.bountiesReady,
+					hospitalQueue: state.bountiesHosp,
+				}),
+			);
+		} catch {}
+
+		const host = document.getElementById("satf-attack-hud-host");
+		if (host?.shadowRoot) {
+			const bar = host.shadowRoot.getElementById("satf-attack-bar");
+			const nextBounty = state.bountiesReady[0];
+			if (bar) {
+				bar.innerHTML = `
+					<span class="satf-hud-badge" style="color:${isDefeat ? "#10b981" : "#ef4444"};">[${isDefeat ? "DEFEATED" : "HOSPITAL"}]</span>
+					<span class="satf-hud-val">${outcomeText}</span>
+					${
+						state.bountiesReady.length > 0 && nextBounty
+							? '<button id="satf-bounty-hud-next" class="satf-hud-btn" style="margin-left:8px;">Next Bounty &gt;</button>'
+							: '<span style="font-size:11px;color:var(--muted);margin-left:8px;">No more ready bounties</span>'
+					}
+				`;
+				if (nextBounty) {
+					host.shadowRoot
+						.getElementById("satf-bounty-hud-next")
+						?.addEventListener("click", () => {
+							if (state.directAttack) {
+								window.location.href = nextBounty.attackUrl;
+							} else {
+								window.open(nextBounty.attackUrl, "_blank");
+							}
+						});
+				}
+			}
+		}
+
+		apiRequest("/api/v1/personal/bounties/defeat", {
+			method: "POST",
+			body: { targetId, outcome: outcomeText },
+		}).catch(() => {});
+	}
+
+	function checkBountyAttackPage() {
+		const urlParams = new URLSearchParams(window.location.search);
+		if (urlParams.get("sid") !== "attack") return;
+
+		const currentTargetId =
+			Number(urlParams.get("user2ID")) || Number(urlParams.get("ID"));
+		if (!currentTargetId || !Number.isInteger(currentTargetId)) return;
+		if (lastHandledBountyDefeatId === currentTargetId) return;
+
+		const isBountyTarget =
+			state.bountiesReady.some((t) => t.id === currentTargetId) ||
+			state.bountiesHosp.some((t) => t.id === currentTargetId);
+		if (!isBountyTarget) return;
+
+		const dialogEls = document.querySelectorAll(
+			'[class*="dialogWrapper"], [class*="dialog"], [class*="custom-dialog"], [class*="popup"], [class*="modal"], [class*="confirmDialog"], [class*="alert"], .dialogWrapper___rzZgc, [class*="title___"], [class*="message___"]',
+		);
+
+		for (const el of dialogEls) {
+			const text = el.textContent?.trim() || "";
+			if (!text) continue;
+
+			const isVictory =
+				/\b(?:hospitalized|mugged|left|defeated)\b/i.test(text) &&
+				/^You\s+(?:hospitalized|mugged|left|defeated)\b/i.test(text);
+
+			const isAlreadyHospitalized =
+				/\b(?:in hospital|cannot be attacked|is currently in hospital|currently in the hospital|someone else is attacking)\b/i.test(
+					text,
+				);
+
+			if (isVictory) {
+				lastHandledBountyDefeatId = currentTargetId;
+				handleBountyTargetDefeated(currentTargetId, text, true);
+				return;
+			}
+			if (isAlreadyHospitalized) {
+				lastHandledBountyDefeatId = currentTargetId;
+				handleBountyTargetDefeated(currentTargetId, text, false);
+				return;
+			}
+		}
+	}
+
 	// ─── IN-PAGE ATTACK HUD (Shown on Torn Attack Page for Ranked War Targets Only)
 	function initAttackPageHud() {
+		const existingHost = document.getElementById("satf-attack-hud-host");
+
+		if (state.disableHud) {
+			if (existingHost) existingHost.remove();
+			return;
+		}
+
 		const href = window.location.href;
 		const isAttackPage =
 			/sid=(attack|getInAttack)/i.test(href) ||
@@ -1991,8 +3398,6 @@
 			href.includes("loader.php?sid=attack") ||
 			href.includes("loader2.php?sid=attack") ||
 			href.includes("page.php?sid=attack");
-
-		const existingHost = document.getElementById("satf-attack-hud-host");
 
 		if (!isAttackPage) {
 			if (existingHost) existingHost.remove();
@@ -2011,6 +3416,27 @@
 		// Clean up host if attached to a different target
 		if (existingHost && existingHost.dataset.targetId !== String(user2Id)) {
 			existingHost.remove();
+		}
+
+		// 0. Check if target is a known bounty target (in ready or hospital queue)
+		const bountyReadyIdx = state.bountiesReady.findIndex(
+			(t) => t.id === user2Id,
+		);
+		const bountyTarget =
+			bountyReadyIdx !== -1
+				? state.bountiesReady[bountyReadyIdx]
+				: state.bountiesHosp.find((t) => t.id === user2Id);
+
+		if (bountyTarget) {
+			mountBountyHud(bountyTarget, bountyReadyIdx);
+			return;
+		}
+
+		// If not a bounty target and not in an active/scheduled war, do not display HUD (non-target)
+		if (!isWarEngaged()) {
+			const host = document.getElementById("satf-attack-hud-host");
+			if (host) host.remove();
+			return;
 		}
 
 		function isKnownWarTarget(id) {
@@ -2036,7 +3462,7 @@
 			}
 
 			// 3. Check client war target list or hospital queue
-			const inAvailable = (state.allTargets || []).some(
+			const inAvailable = (state.availableTargets || []).some(
 				(t) => t.id === id && t.isWarTarget !== false,
 			);
 			const inHosp = (state.hospitalQueue || []).some((t) => t.id === id);
@@ -2058,20 +3484,14 @@
 
 		function applyHudDetails(hudRoot, t) {
 			if (!t || !hudRoot) return;
-			const hudName = hudRoot.getElementById("satf-hud-name");
-			const hudBs = hudRoot.getElementById("satf-hud-bs");
 			const hudFf = hudRoot.getElementById("satf-hud-ff");
-			if (hudName) {
-				hudName.textContent = t.name
-					? `${t.name} [${user2Id}]`
-					: `[${user2Id}]`;
-			}
-			if (hudBs) {
-				hudBs.textContent = formatStats(t.estimatedBs);
-			}
 			if (hudFf && typeof t.fairFight === "number") {
-				hudFf.textContent = t.fairFight.toFixed(2);
-				hudFf.style.color = getFFColor(t.fairFight);
+				hudFf.textContent = `${t.fairFight.toFixed(2)}x`;
+				hudFf.className = "satf-hud-ff";
+				if (t.fairFight <= 1.5) hudFf.classList.add("ff-green");
+				else if (t.fairFight <= 2.2) hudFf.classList.add("ff-blue");
+				else if (t.fairFight <= 2.8) hudFf.classList.add("ff-yellow");
+				else hudFf.classList.add("ff-red");
 			}
 		}
 
@@ -2108,36 +3528,27 @@
 					background: rgba(15, 15, 18, 0.96);
 					backdrop-filter: blur(14px);
 					border: 1px solid #27272a;
-					border-radius: 12px;
-					padding: 6px 14px;
+					border-radius: 8px;
+					padding: 6px 12px;
 					display: flex;
 					align-items: center;
 					justify-content: center;
-					flex-wrap: wrap;
-					gap: 8px 12px;
+					gap: 10px;
 					max-width: calc(100vw - 20px);
 					color: #f4f4f5;
 					box-shadow: 0 8px 30px rgba(0,0,0,0.8);
 					font-size: 12px;
 					pointer-events: auto;
 				}
-				.satf-hud-badge {
-					font-weight: 800;
-					color: #10b981;
-					font-size: 11px;
-					letter-spacing: 0.5px;
-				}
 				.satf-hud-stat {
 					display: flex;
 					align-items: center;
-					gap: 6px;
-				}
-				.satf-hud-val {
-					font-weight: 800;
-					color: #fff;
+					gap: 4px;
 				}
 				.satf-hud-ff {
 					font-weight: 800;
+					font-family: monospace;
+					font-size: 13px;
 					color: #f4f4f5;
 				}
 				.ff-white { color: #f4f4f5 !important; }
@@ -2150,36 +3561,32 @@
 					border: 1px solid #3f3f46;
 					color: #fff;
 					border-radius: 6px;
-					padding: 4px 8px;
+					padding: 4px 10px;
 					font-size: 11px;
 					font-weight: 700;
 					cursor: pointer;
 					transition: all 0.15s;
 				}
-				.satf-hud-btn:hover {
+				.satf-hud-btn:hover:not(:disabled) {
 					background: #3f3f46;
 					border-color: #10b981;
 				}
-				.satf-hud-btn-danger:hover {
+				.satf-hud-btn:disabled {
+					opacity: 0.6;
+					cursor: not-allowed;
+				}
+				.satf-hud-btn-danger:hover:not(:disabled) {
 					border-color: #ef4444;
 					color: #f87171;
 				}
 			</style>
 			<div id="satf-attack-bar">
-				<span class="satf-hud-badge">[SA]</span>
 				<div class="satf-hud-stat">
-					<span id="satf-hud-name" class="satf-hud-val">${user2Id}</span>
-				</div>
-				<div class="satf-hud-stat">
-					<span style="color:#a1a1aa;">BS:</span>
-					<span id="satf-hud-bs" class="satf-hud-val">Loading...</span>
-				</div>
-				<div class="satf-hud-stat">
-					<span style="color:#a1a1aa;">FF:</span>
+					<span style="color:#a1a1aa; font-weight: 700; font-size: 11px;">FF:</span>
 					<span id="satf-hud-ff" class="satf-hud-ff">--</span>
 				</div>
-				<button id="satf-hud-ignore" class="satf-hud-btn satf-hud-btn-danger" title="Ignore target and get next">Ignore</button>
-				<button id="satf-hud-next" class="satf-hud-btn">Next Target</button>
+				<button id="satf-hud-next" class="satf-hud-btn" type="button">Next</button>
+				<button id="satf-hud-ignore" class="satf-hud-btn satf-hud-btn-danger" type="button" title="Ignore target and get next">Ignore</button>
 			</div>
 			`;
 
@@ -2204,19 +3611,20 @@
 			return host;
 		}
 
-		// 1. Instant check: Only mount immediately if target is known to be in active RW
+		// 1. Instant check: Mount immediately if user2Id matches currentTarget or is known
+		const currentTarget =
+			(state.currentTarget && state.currentTarget.id === user2Id
+				? state.currentTarget
+				: null) ||
+			GM_getValue(STORAGE.currentTarget, null) ||
+			(state.availableTargets || []).find((t) => t.id === user2Id) ||
+			(state.hospitalQueue || []).find((t) => t.id === user2Id);
+
 		const isKnown = isKnownWarTarget(user2Id);
-		if (isKnown) {
-			const currentTarget =
-				(state.currentTarget && state.currentTarget.id === user2Id
-					? state.currentTarget
-					: null) ||
-				GM_getValue(STORAGE.currentTarget, null) ||
-				(state.allTargets || []).find((t) => t.id === user2Id) ||
-				(state.hospitalQueue || []).find((t) => t.id === user2Id);
-			mountHud(
-				currentTarget && currentTarget.id === user2Id ? currentTarget : null,
-			);
+		if (currentTarget && currentTarget.id === user2Id) {
+			mountHud(currentTarget);
+		} else if (isKnown) {
+			mountHud(null);
 		}
 
 		// 2. Query backend for target intel & ranked war verification
@@ -2242,8 +3650,8 @@
 							applyHudDetails(host.shadowRoot, res.target);
 						}
 					}
-				} else {
-					// Not in RW: Remove overhead display if present
+				} else if (!currentTarget || currentTarget.id !== user2Id) {
+					// Not in RW and not an active on-demand target: remove HUD if present
 					const host = document.getElementById("satf-attack-hud-host");
 					if (host && host.dataset.targetId === String(user2Id)) {
 						host.remove();
@@ -2252,98 +3660,84 @@
 			})
 			.catch(() => {
 				const host = document.getElementById("satf-attack-hud-host");
-				if (isKnown && host?.shadowRoot) {
-					const hudBs = host.shadowRoot.getElementById("satf-hud-bs");
-					if (hudBs && hudBs.textContent === "Loading...") {
-						hudBs.textContent = "Unscouted";
+				if (!currentTarget || currentTarget.id !== user2Id) {
+					if (host && host.dataset.targetId === String(user2Id)) {
+						host.remove();
 					}
-				} else if (
-					!isKnown &&
-					host &&
-					host.dataset.targetId === String(user2Id)
-				) {
-					host.remove();
 				}
 			});
 
 		async function loadNextTargetDirectly(hudRoot) {
 			const btnHudNext = hudRoot?.getElementById("satf-hud-next");
 			if (btnHudNext) {
-				btnHudNext.textContent = "Loading...";
+				btnHudNext.textContent = "Scouting...";
 				btnHudNext.disabled = true;
 			}
 			try {
-				// 1. First pick candidate from client target list respecting active sort & hideHighFF filter
-				const candidate = getNextTargetCandidate(user2Id);
-				if (candidate?.attackUrl) {
-					state.currentTarget = candidate;
-					GM_setValue(STORAGE.currentTarget, candidate);
-					state.excludeIds.push(candidate.id);
-					window.location.href = candidate.attackUrl;
+				const params = new URLSearchParams({
+					minFF: state.minFFThreshold.toFixed(1),
+					maxFF: state.maxFFThreshold.toFixed(1),
+					ignore: state.ignoredTargets.join(","),
+				});
+				const res = await apiRequest(
+					`/api/v1/target-finder/targets/next?${params.toString()}`,
+				);
+				if (res.target?.attackUrl) {
+					state.currentTarget = res.target;
+					GM_setValue(STORAGE.currentTarget, res.target);
+					if (state.directAttack) {
+						window.location.href = res.target.attackUrl;
+					} else {
+						window.open(res.target.attackUrl, "_blank");
+						if (btnHudNext) {
+							btnHudNext.textContent = "Next";
+							btnHudNext.disabled = false;
+						}
+					}
 					return;
 				}
 
-				// 2. Query backend war target dispatch with matching maxFF/maxBS filter
-				const combinedExcludes = Array.from(
-					new Set([
-						...state.excludeIds.slice(-20),
-						...state.ignoredTargets,
-						user2Id,
-					]),
-				);
-				const params = new URLSearchParams({
-					exclude: combinedExcludes.join(","),
-					maxFF: state.hideHighFF ? String(state.maxFFThreshold) : "10.0",
-				});
-				if (state.hideHighBS) {
-					params.set("maxBS", String(state.maxBSThreshold));
+				if (res.retryAfter) {
+					let countdown = res.retryAfter || 5;
+					if (btnHudNext) btnHudNext.textContent = `Rest ${countdown}s`;
+					const timer = setInterval(() => {
+						countdown--;
+						if (countdown > 0) {
+							if (btnHudNext) btnHudNext.textContent = `Rest ${countdown}s`;
+						} else {
+							clearInterval(timer);
+							if (btnHudNext) {
+								btnHudNext.textContent = "Next";
+								btnHudNext.disabled = false;
+							}
+						}
+					}, 1000);
+					return;
 				}
-				const res = await apiRequest(
-					`/api/v1/target-finder/war/targets/next?${params.toString()}`,
-				);
-				if (res.target?.attackUrl) {
-					if (state.hideHighFF && res.target.fairFight > state.maxFFThreshold) {
-						alert(
-							`No opponents available within FF <= ${state.maxFFThreshold.toFixed(1)}`,
-						);
-						if (btnHudNext) {
-							btnHudNext.textContent = "Next Target";
-							btnHudNext.disabled = false;
-						}
-						return;
-					}
-					if (
-						state.hideHighBS &&
-						res.target.estimatedBs > state.maxBSThreshold
-					) {
-						alert(
-							`No opponents available within BS <= ${formatStats(state.maxBSThreshold)}`,
-						);
-						if (btnHudNext) {
-							btnHudNext.textContent = "Next Target";
-							btnHudNext.disabled = false;
-						}
-						return;
-					}
-					state.currentTarget = res.target;
-					GM_setValue(STORAGE.currentTarget, res.target);
-					state.excludeIds.push(res.target.id);
-					window.location.href = res.target.attackUrl;
-				} else {
-					alert(res.message || "No alternative war targets available.");
-					if (btnHudNext) {
-						btnHudNext.textContent = "Next Target";
-						btnHudNext.disabled = false;
-					}
+
+				alert(res.message || "No targets available.");
+				if (btnHudNext) {
+					btnHudNext.textContent = "Next";
+					btnHudNext.disabled = false;
 				}
 			} catch (err) {
 				alert(`Failed to acquire next target: ${err.message}`);
 				if (btnHudNext) {
-					btnHudNext.textContent = "Next Target";
+					btnHudNext.textContent = "Next";
 					btnHudNext.disabled = false;
 				}
 			}
 		}
+	}
+
+	let lastObservedUrl = window.location.href;
+	function handleAttackPageTick() {
+		if (window.location.href !== lastObservedUrl) {
+			lastObservedUrl = window.location.href;
+			lastHandledBountyDefeatId = 0;
+		}
+		initAttackPageHud();
+		checkBountyAttackPage();
 	}
 
 	function boot() {
@@ -2352,7 +3746,12 @@
 			return;
 		}
 		start();
-		initAttackPageHud();
+		handleAttackPageTick();
+
+		const pageObserver = new MutationObserver(() => {
+			checkBountyAttackPage();
+		});
+		pageObserver.observe(document.body, { childList: true, subtree: true });
 	}
 
 	if (document.readyState === "loading") {
@@ -2362,7 +3761,7 @@
 	}
 
 	// Periodic check for attack pages & SPA navigations
-	window.addEventListener("popstate", initAttackPageHud);
-	window.addEventListener("hashchange", initAttackPageHud);
-	setInterval(initAttackPageHud, 800);
+	window.addEventListener("popstate", handleAttackPageTick);
+	window.addEventListener("hashchange", handleAttackPageTick);
+	setInterval(handleAttackPageTick, 800);
 })();

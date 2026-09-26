@@ -1,11 +1,11 @@
 import { db, workerSchedules } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { reinitializeBattlestatsLedger } from "../../../workers/personal/battlestats";
-import { recordTargetDefeated } from "../../../workers/personal/bounty-finder";
 import { reinitializeCrimeLedger } from "../../../workers/personal/crimes";
 import { requestResetLogManager } from "../../../workers/personal/log-manager";
 import { reinitializeStocksLedger } from "../../../workers/personal/stocks";
 import { initWealthTracking } from "../../../workers/personal/wealth";
+import { recordTargetDefeated } from "../../../workers/subversive/bounty-finder";
 import { resetRecruitmentCache } from "../../../workers/subversive/recruitment-worker";
 import { triggerWorkerByName } from "../../scheduler";
 import type { IpcActionHandler, IpcHandlerContext } from "../types";

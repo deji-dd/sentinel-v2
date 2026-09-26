@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { DashboardView } from "@/components/AppSidebar";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useRouter } from "../router";
+import { DibsConfigPage } from "./DibsConfigPage";
 import { GuildConfigPage } from "./GuildConfigPage";
 import { RecruitmentPage } from "./RecruitmentPage";
 
@@ -11,6 +12,9 @@ export function DashboardPage() {
 	const determineInitialView = (): DashboardView => {
 		if (path === "/guild-config") {
 			return "guild-config";
+		}
+		if (path === "/dibs") {
+			return "dibs";
 		}
 		return "recruitment";
 	};
@@ -23,6 +27,8 @@ export function DashboardPage() {
 			setActiveView("guild-config");
 		} else if (path === "/recruitment") {
 			setActiveView("recruitment");
+		} else if (path === "/dibs") {
+			setActiveView("dibs");
 		} else if (path === "/") {
 			navigate("/recruitment");
 			setActiveView("recruitment");
@@ -37,11 +43,9 @@ export function DashboardPage() {
 				navigate(`/${view}`);
 			}}
 		>
-			{activeView === "guild-config" ? (
-				<GuildConfigPage />
-			) : (
-				<RecruitmentPage />
-			)}
+			{activeView === "guild-config" && <GuildConfigPage />}
+			{activeView === "recruitment" && <RecruitmentPage />}
+			{activeView === "dibs" && <DibsConfigPage />}
 		</DashboardLayout>
 	);
 }

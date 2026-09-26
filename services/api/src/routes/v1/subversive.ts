@@ -20,12 +20,15 @@ import {
 } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
+import { subversiveDibsManager } from "../../lib/dibs-manager";
 import { fetchDiscordApi } from "../../lib/discord-auth";
+import { resolveDiscordTornUser } from "../../lib/resolve-discord-torn-user";
 import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
 } from "../../lib/scheduler-ipc";
 import { authPlugin } from "../../middleware/auth";
+import { resolveUserSession } from "./subversive-target-finder";
 
 interface DiscordGuild {
 	id: string;
@@ -1162,7 +1165,259 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 		},
 	)
 
-	// ─── GET /api/v1/subversive/api-keys ──────────────────────────────────────
+	// ─── GET /api/v1/subversive/dibs-config ───────────────────────────────────
+	.get(
+		"/dibs-config",
+		async ({ user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+			const config = await subversiveDibsManager.getConfig();
+			return { config };
+		},
+		{
+			detail: {
+				summary: "Get Subversive Dibs Configuration",
+				description:
+					"Returns hospital dibs settings including lead time, limits, and Discord channel.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/subversive/dibs-config ───────────────────────────────────
+	.put(
+		"/dibs-config",
+		async ({ body, user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+			const updated = await subversiveDibsManager.updateConfig(
+				body,
+				user?.username ?? "admin",
+			);
+			return { success: true, config: updated };
+		},
+		{
+			body: t.Object({
+				enabled: t.Optional(t.Boolean()),
+				channelId: t.Optional(t.Nullable(t.String())),
+				claimLeadTime: t.Optional(t.Number({ minimum: 1, maximum: 60 })),
+				maxDibsPerPerson: t.Optional(t.Number({ minimum: 1, maximum: 10 })),
+				postHospTimeoutSeconds: t.Optional(
+					t.Number({ minimum: 5, maximum: 300 }),
+				),
+				autoDeleteOnDowned: t.Optional(t.Boolean()),
+			}),
+			detail: {
+				summary: "Update Subversive Dibs Configuration",
+				description: "Updates hospital dibs coordination settings.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/subversive/dibs/active ───────────────────────────────────
+	.get(
+		"/dibs/active",
+		async () => {
+			const dibs = subversiveDibsManager.getActiveDibs();
+			return { dibs };
+		},
+		{
+			detail: {
+				summary: "List Active Dibs Claims",
+				description: "Returns currently active hospital exit dibs claims.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/claim ───────────────────────────────────
+	.post(
+		"/dibs/claim",
+		async ({ body, headers, set }) => {
+			const authHeader = headers.authorization;
+			const token = authHeader?.startsWith("Bearer ")
+				? authHeader.slice(7)
+				: body.token;
+
+			if (!token) {
+				set.status = 401;
+				return { error: "Unauthorized: Missing authentication token" };
+			}
+
+			const session = await resolveUserSession(token);
+			if (!session) {
+				set.status = 401;
+				return { error: "Unauthorized: Invalid session" };
+			}
+
+			const result = await subversiveDibsManager.claimDibs(body.targetId, {
+				tornId: session.tornId,
+				tornName: session.tornName,
+				platform: "script",
+			});
+
+			if (!result.success) {
+				set.status = 400;
+				return { error: result.reason ?? "Failed to claim dibs" };
+			}
+
+			return { success: true, dibs: result.dibs };
+		},
+		{
+			body: t.Object({
+				targetId: t.Number(),
+				token: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Claim Hospital Dibs (Userscript)",
+				description:
+					"Claims an eligible hospital queue target for the authenticated userscript player.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/release ─────────────────────────────────
+	.post(
+		"/dibs/release",
+		async ({ body, headers, set }) => {
+			const authHeader = headers.authorization;
+			const token = authHeader?.startsWith("Bearer ")
+				? authHeader.slice(7)
+				: body.token;
+
+			if (!token) {
+				set.status = 401;
+				return { error: "Unauthorized: Missing authentication token" };
+			}
+
+			const session = await resolveUserSession(token);
+			if (!session) {
+				set.status = 401;
+				return { error: "Unauthorized: Invalid session" };
+			}
+
+			const result = await subversiveDibsManager.releaseDibs(body.targetId, {
+				tornId: session.tornId,
+			});
+
+			if (!result.success) {
+				set.status = 400;
+				return { error: result.reason ?? "Failed to release dibs" };
+			}
+
+			return { success: true };
+		},
+		{
+			body: t.Object({
+				targetId: t.Number(),
+				token: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Release Hospital Dibs (Userscript)",
+				description: "Releases a previously claimed hospital queue target.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/claim-discord ───────────────────────────
+	.post(
+		"/dibs/claim-discord",
+		async ({ body, set }) => {
+			// Resolve player's Torn info via Torn API / verifiedUsers cache
+			const resolved = await resolveDiscordTornUser(body.discordUserId);
+			if (!resolved) {
+				set.status = 400;
+				return {
+					error:
+						"Your Discord account is not verified with Torn. Please verify your Torn account first.",
+				};
+			}
+
+			const result = await subversiveDibsManager.claimDibs(body.targetId, {
+				discordId: body.discordUserId,
+				discordTag: body.discordUsername,
+				tornId: resolved.tornId,
+				tornName: resolved.tornName,
+				platform: "discord",
+			});
+
+			if (!result.success) {
+				set.status = 400;
+				return { error: result.reason ?? "Failed to claim dibs" };
+			}
+
+			return { success: true, dibs: result.dibs };
+		},
+		{
+			body: t.Object({
+				targetId: t.Number(),
+				discordUserId: t.String(),
+				discordUsername: t.String(),
+			}),
+			detail: {
+				summary: "Claim Hospital Dibs (Discord)",
+				description: "Claims dibs via Discord button click.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/release-discord ─────────────────────────
+	.post(
+		"/dibs/release-discord",
+		async ({ body, set }) => {
+			const resolved = await resolveDiscordTornUser(body.discordUserId);
+			const result = await subversiveDibsManager.releaseDibs(body.targetId, {
+				discordId: body.discordUserId,
+				tornId: resolved?.tornId,
+			});
+
+			if (!result.success) {
+				set.status = 400;
+				return { error: result.reason ?? "Failed to release dibs" };
+			}
+
+			return { success: true };
+		},
+		{
+			body: t.Object({
+				targetId: t.Number(),
+				discordUserId: t.String(),
+			}),
+			detail: {
+				summary: "Release Hospital Dibs (Discord)",
+				description: "Releases dibs via Discord button click.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/record-message ──────────────────────────
+	.post(
+		"/dibs/record-message",
+		async ({ body }) => {
+			subversiveDibsManager.recordDiscordMessage(
+				body.targetId,
+				body.channelId,
+				body.messageId,
+			);
+			return { success: true };
+		},
+		{
+			body: t.Object({
+				targetId: t.Number(),
+				channelId: t.String(),
+				messageId: t.String(),
+			}),
+			detail: {
+				summary: "Record Discord Dibs Message ID",
+				description:
+					"Records Discord channel and message IDs for an active dibs target.",
+			},
+		},
+	)
 	.get(
 		"/api-keys",
 		async ({ user, set }) => {

@@ -5,7 +5,9 @@ import {
 	eq,
 	subversiveTargetFinderTargets,
 	subversiveTargetFinderUsers,
+	tornUsers,
 } from "@sentinel/database";
+import type { UserProfileResponse } from "@sentinel/schemas";
 import {
 	decryptApiKey,
 	encryptApiKey,
@@ -14,11 +16,14 @@ import {
 	hashApiKey,
 	isValidApiKey,
 	TornApiClient,
+	tornApi,
 } from "@sentinel/torn-api";
 import { type Context, Elysia, t } from "elysia";
+import { getAvailableSubversiveKeyPool } from "../../lib/subversive-key-pool";
 import {
 	type CachedUserSession,
 	type CurrentWarInfo,
+	type MatchedTargetResult,
 	subversiveTargetCache,
 } from "../../lib/subversive-target-cache";
 
@@ -290,6 +295,23 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					},
 				});
 
+			// Write-through to general tornUsers registry
+			await db
+				.insert(tornUsers)
+				.values({
+					tornId,
+					name: playerName,
+					updatedAt: now,
+				})
+				.onConflictDoUpdate({
+					target: tornUsers.tornId,
+					set: {
+						name: playerName,
+						updatedAt: now,
+					},
+				})
+				.catch(() => {});
+
 			// Cache session in RAM for ultra-fast queries
 			subversiveTargetCache.setUserSession({
 				tornId,
@@ -319,7 +341,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		},
 	)
 
-	// ─── GET /targets/next (RAM-Served Next Matching Target) ────────────────────
+	// ─── GET /targets/next (On-Demand Burst-Verified Next Target) ───────────────
 	.get("/targets/next", async ({ headers, query, set }) => {
 		const token = extractBearerToken(headers.authorization);
 		if (!token) {
@@ -336,37 +358,37 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			};
 		}
 
-		const minFF = Number.parseFloat((query.minFF as string) || "1.5");
+		const minFF = Number.parseFloat((query.minFF as string) || "1.2");
 		const maxFF = Number.parseFloat((query.maxFF as string) || "3.0");
-		const factionlessOnly = query.factionlessOnly === "true";
-		const inactiveOnly = query.inactiveOnly === "true";
+		const clampedMinFF = Math.max(1.0, minFF);
+		const clampedMaxFF = Math.min(3.0, maxFF);
 
-		const rawExclude = (query.exclude as string) || "";
-		const excludeIds = new Set(
-			rawExclude
+		const rawIgnore =
+			(query.ignore as string) || (query.exclude as string) || "";
+		const ignoreIds = new Set(
+			rawIgnore
 				.split(",")
 				.map((id) => Number.parseInt(id.trim(), 10))
 				.filter((id) => Number.isInteger(id) && id > 0),
 		);
 
-		let target = subversiveTargetCache.findNextTarget({
+		// 1. Get candidate targets matching attacker's FF score bracket
+		let candidates = subversiveTargetCache.getCandidatesForVerification({
 			attackerScore: session.bsScore,
-			minFF,
-			maxFF,
-			factionlessOnly,
-			inactiveOnly,
-			excludeIds,
+			minFF: clampedMinFF,
+			maxFF: clampedMaxFF,
+			ignoreIds,
+			limit: 30,
 		});
 
-		// ─── On-Demand Fallback: Query FFScouter directly for requested FF range ───
-		if (!target) {
+		// Fallback: If cache has fewer than 10 candidates, seed from FFScouter
+		if (candidates.length < 10) {
 			try {
 				const freshTargets = await getFFScouterTargets({
-					minff: minFF,
-					maxff: maxFF,
-					factionless: factionlessOnly ? 1 : 0,
-					inactiveonly: inactiveOnly ? 1 : 0,
-					limit: 20,
+					minff: clampedMinFF,
+					maxff: clampedMaxFF,
+					inactiveonly: 1,
+					limit: 30,
 				});
 
 				const now = new Date();
@@ -387,7 +409,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 							factionId: t.faction_id ?? null,
 							factionName: t.faction_name ?? null,
 							daysOld: 30,
-							isInactive: inactiveOnly,
+							isInactive: true,
 							isFactionless,
 							inHospital: false,
 							hospitalUntil: null,
@@ -417,33 +439,183 @@ export const subversiveTargetFinderRoutes = new Elysia({
 						factionName: t.faction_name ?? null,
 						daysOld: 30,
 						lastAction: null,
-						isInactive: inactiveOnly,
+						isInactive: true,
 						isFactionless,
 						inHospital: false,
+						hospitalUntil: null,
 						estimatedBs: t.bs_estimate ?? 0,
 						estimatedScore: score,
 					});
 				}
 
-				// Retry pick after on-demand insertion
-				target = subversiveTargetCache.findNextTarget({
+				candidates = subversiveTargetCache.getCandidatesForVerification({
 					attackerScore: session.bsScore,
-					minFF,
-					maxFF,
-					factionlessOnly,
-					inactiveOnly,
-					excludeIds,
+					minFF: clampedMinFF,
+					maxFF: clampedMaxFF,
+					ignoreIds,
+					limit: 30,
 				});
 			} catch {
-				// Continue if FFScouter on-demand query fails
+				// Continue if FFScouter on-demand seeding fails
 			}
 		}
 
-		if (!target) {
+		if (candidates.length === 0) {
 			return {
 				success: false,
 				message:
 					"No matching targets found within your specified Fair Fight range and filters.",
+				totalPoolCount: subversiveTargetCache.getTotalTargetsCount(),
+			};
+		}
+
+		// 2. Obtain key pool for parallel batch execution
+		const keyPool = await getAvailableSubversiveKeyPool();
+		if (keyPool.length === 0) {
+			set.status = 503;
+			return {
+				success: false,
+				error: "No active API keys available to verify targets.",
+			};
+		}
+
+		// 3. Up to 3 continuous bursts of 10 profile checks
+		const BURST_SIZE = 10;
+		const MAX_BURSTS = 3;
+		const THREE_DAYS_SEC = 3 * 24 * 60 * 60; // 3 days in seconds
+		let verifiedTarget: MatchedTargetResult | null = null;
+		let currentIdx = 0;
+
+		for (
+			let burst = 0;
+			burst < MAX_BURSTS && currentIdx < candidates.length && !verifiedTarget;
+			burst++
+		) {
+			const burstCandidates = candidates.slice(
+				currentIdx,
+				currentIdx + BURST_SIZE,
+			);
+			currentIdx += BURST_SIZE;
+			if (burstCandidates.length === 0) break;
+
+			const results = await tornApi.executeBatchSettled(
+				"/user/{id}/profile",
+				burstCandidates,
+				(c) => ({ pathParams: { id: c.targetId } }),
+				keyPool,
+			);
+
+			const now = new Date();
+			const nowSec = Math.floor(now.getTime() / 1000);
+
+			for (let i = 0; i < results.length; i++) {
+				const res = results[i];
+				const candidate = burstCandidates[i];
+				if (!res || !candidate || res.status !== "fulfilled") continue;
+
+				const profileData = res.value as UserProfileResponse;
+				const lastActionTimestamp =
+					profileData.profile?.last_action?.timestamp ?? 0;
+				const statusObj = profileData.profile?.status;
+				const state = statusObj?.state;
+				const untilSec = statusObj?.until ?? nowSec + 15 * 60;
+
+				// Inactivity check: Permanently active (logged in < 3 days ago)?
+				// If player has been active within 3 days, remove from DB & cache permanently
+				if (
+					lastActionTimestamp > 0 &&
+					nowSec - lastActionTimestamp < THREE_DAYS_SEC
+				) {
+					await db
+						.delete(subversiveTargetFinderTargets)
+						.where(
+							eq(subversiveTargetFinderTargets.targetId, candidate.targetId),
+						)
+						.catch(() => {});
+					subversiveTargetCache.evict(candidate.targetId);
+					continue;
+				}
+
+				// Hospital / abroad check
+				if (state !== "Okay") {
+					const hospitalUntil = new Date(untilSec * 1000);
+					await db
+						.update(subversiveTargetFinderTargets)
+						.set({
+							inHospital: true,
+							hospitalUntil,
+							status:
+								state === "Hospital"
+									? "hospital"
+									: (state?.toLowerCase() ?? "other"),
+							lastAction:
+								lastActionTimestamp > 0
+									? new Date(lastActionTimestamp * 1000)
+									: null,
+							updatedAt: now,
+						})
+						.where(
+							eq(subversiveTargetFinderTargets.targetId, candidate.targetId),
+						)
+						.catch(() => {});
+					subversiveTargetCache.markHospital(
+						candidate.targetId,
+						untilSec * 1000,
+					);
+					continue;
+				}
+
+				// Target is Okay and permanently inactive (>= 3 days offline)
+				const rawFF =
+					1 + (8 / 3) * (candidate.estimatedScore / session.bsScore);
+				const calculatedFF = Math.max(
+					1.0,
+					Math.min(clampedMaxFF, Number(rawFF.toFixed(2))),
+				);
+
+				await db
+					.update(subversiveTargetFinderTargets)
+					.set({
+						inHospital: false,
+						hospitalUntil: null,
+						status: "okay",
+						lastAction:
+							lastActionTimestamp > 0
+								? new Date(lastActionTimestamp * 1000)
+								: null,
+						isInactive: true,
+						updatedAt: now,
+					})
+					.where(eq(subversiveTargetFinderTargets.targetId, candidate.targetId))
+					.catch(() => {});
+
+				if (
+					!verifiedTarget &&
+					calculatedFF >= clampedMinFF &&
+					calculatedFF <= clampedMaxFF
+				) {
+					verifiedTarget = {
+						id: candidate.targetId,
+						name: candidate.name,
+						level: candidate.level,
+						factionId: candidate.factionId,
+						factionName: candidate.factionName,
+						isFactionless: candidate.isFactionless,
+						isInactive: true,
+						estimatedBs: candidate.estimatedBs,
+						fairFight: calculatedFF,
+						attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${candidate.targetId}`,
+					};
+				}
+			}
+		}
+
+		if (!verifiedTarget) {
+			return {
+				success: false,
+				retryAfter: 5,
+				message:
+					"No targets currently available out of hospital. Please wait 5 seconds before retrying.",
 				totalPoolCount: subversiveTargetCache.getTotalTargetsCount(),
 			};
 		}
@@ -457,7 +629,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		return {
 			success: true,
-			target,
+			target: verifiedTarget,
 			member: {
 				tornId: session.tornId,
 				tornName: session.tornName,
@@ -912,11 +1084,19 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 async function serveUserscript(query: { env?: string }, set: Context["set"]) {
 	try {
-		const primaryPath = `${process.cwd()}/scripts/subversive-alliance.user.js`;
-		const fallbackPath = `${process.cwd()}/scripts/subversive-target-finder.user.js`;
-		let file = Bun.file(primaryPath);
-		if (!(await file.exists())) {
-			file = Bun.file(fallbackPath);
+		const candidatePaths = [
+			`${process.cwd()}/scripts/subversive-alliance.user.js`,
+			`${process.cwd()}/../../scripts/subversive-alliance.user.js`,
+			`${process.cwd()}/scripts/subversive-target-finder.user.js`,
+			`${process.cwd()}/../../scripts/subversive-target-finder.user.js`,
+		];
+		let file = Bun.file(candidatePaths[0] ?? "");
+		for (const path of candidatePaths) {
+			const candidate = Bun.file(path);
+			if (await candidate.exists()) {
+				file = candidate;
+				break;
+			}
 		}
 		if (!(await file.exists())) {
 			set.status = 404;

@@ -132,3 +132,33 @@ export async function getNextSubversiveUserKey(): Promise<ManagedApiKey | null> 
 	roundRobinIndex = (roundRobinIndex + 1) % pool.length;
 	return key;
 }
+
+/**
+ * Returns all active user and system keys available for parallel batch distribution.
+ */
+export async function getAvailableSubversiveKeyPool(): Promise<
+	ManagedApiKey[]
+> {
+	const userKeys = await getSubversiveUserKeys();
+	let pool = userKeys.filter(
+		(k) => !subversiveKeyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+	);
+
+	if (pool.length <= 1) {
+		try {
+			const systemKeys = await getActiveSystemKeyPool();
+			const activeSystemKeys = systemKeys.filter(
+				(k) => !subversiveKeyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+			);
+			if (activeSystemKeys.length > 0) {
+				pool = [...pool, ...activeSystemKeys];
+			}
+		} catch (err) {
+			logger.warn(
+				`Failed to load balance with system keys: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
+
+	return pool;
+}

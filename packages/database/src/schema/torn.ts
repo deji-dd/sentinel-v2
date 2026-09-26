@@ -170,3 +170,15 @@ export const travelAreaMappings = pgTable("travel_area_mappings", {
 		.defaultNow()
 		.notNull(),
 });
+
+export const tornUsers = pgTable("torn_users", {
+	tornId: integer("torn_id").primaryKey(),
+	name: text("name").notNull(),
+	discordId: text("discord_id").unique(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type TornUser = typeof tornUsers.$inferSelect;
+export type NewTornUser = typeof tornUsers.$inferInsert;

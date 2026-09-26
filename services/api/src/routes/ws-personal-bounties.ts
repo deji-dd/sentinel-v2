@@ -77,6 +77,7 @@ export const wsPersonalBountiesRoutes = new Elysia().ws(
 	{
 		query: t.Object({
 			apiKey: t.Optional(t.String()),
+			token: t.Optional(t.String()),
 		}),
 		body: t.Object({
 			type: t.String(),

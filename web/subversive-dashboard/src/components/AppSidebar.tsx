@@ -1,4 +1,4 @@
-import { LogOut, Sliders, UserPlus } from "lucide-react";
+import { LogOut, Sliders, Target, UserPlus } from "lucide-react";
 import type * as React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useSubversive } from "../contexts/SubversiveContext";
 import { useRouter } from "../router";
 
-export type DashboardView = "recruitment" | "guild-config";
+export type DashboardView = "recruitment" | "guild-config" | "dibs";
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 	activeView: DashboardView;
@@ -106,6 +106,20 @@ export function AppSidebar({
 								>
 									<UserPlus data-icon="inline-start" />
 									<span>Recruitment</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									isActive={activeView === "dibs"}
+									onClick={() => {
+										onSelectView("dibs");
+										navigate("/dibs");
+									}}
+									tooltip="War Dibs"
+									className="cursor-pointer"
+								>
+									<Target data-icon="inline-start" />
+									<span>War Dibs</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>

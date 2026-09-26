@@ -7,13 +7,9 @@ import {
 	lt,
 	or,
 	subversiveTargetFinderTargets,
-	subversiveTargetFinderUsers,
 } from "@sentinel/database";
 
-import type {
-	FactionMembersResponse,
-	UserProfileResponse,
-} from "@sentinel/schemas";
+import type { UserProfileResponse } from "@sentinel/schemas";
 import {
 	getPlayerStats,
 	type ManagedApiKey,
@@ -22,77 +18,16 @@ import {
 import { Logger } from "@sentinel/utils";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
-import {
-	getNextSubversiveUserKey,
-	getSubversiveUserKeys,
-	hasActiveSubversiveKeys,
-} from "./subversive-key-pool";
+import { hasActiveSubversiveKeys } from "./subversive-key-pool";
 import { computeScoreFromEstimate } from "./target-utils";
 
 const logger = new Logger("SubversiveTargetFinderWorker");
-
-const SUBVERSIVE_FACTION_ID = 2013;
-
-/**
- * Audit active Subversive Target Finder users against Faction 2013 roster.
- */
-async function auditSubversiveMembership(
-	apiKey: ManagedApiKey | null,
-): Promise<number> {
-	if (!apiKey) return 0;
-
-	const activeUsers = await db
-		.select()
-		.from(subversiveTargetFinderUsers)
-		.where(eq(subversiveTargetFinderUsers.isActive, true));
-
-	if (activeUsers.length === 0) return 0;
-
-	try {
-		const factionRes = (await tornApi.get("/faction/{id}/members", {
-			apiKey: apiKey.apiKey,
-			userId: apiKey.userId,
-			pathParams: { id: SUBVERSIVE_FACTION_ID },
-		})) as FactionMembersResponse;
-
-		const activeFactionMemberIds = new Set(
-			(factionRes.members ?? []).map((m) => m.id),
-		);
-
-		let revokedCount = 0;
-		for (const user of activeUsers) {
-			if (!activeFactionMemberIds.has(user.tornId)) {
-				logger.warn(
-					`User ${user.tornName} [${user.tornId}] is no longer in Subversive Alliance (${SUBVERSIVE_FACTION_ID}). Revoking access.`,
-				);
-				await db
-					.update(subversiveTargetFinderUsers)
-					.set({
-						isActive: false,
-						updatedAt: new Date(),
-					})
-					.where(eq(subversiveTargetFinderUsers.tornId, user.tornId));
-				revokedCount++;
-			}
-		}
-
-		if (revokedCount > 0) {
-			logger.info(
-				`Revoked Target Finder access for ${revokedCount} former member(s).`,
-			);
-		}
-		return revokedCount;
-	} catch (error) {
-		logger.error("Failed to audit Subversive Alliance faction roster:", error);
-		return 0;
-	}
-}
 
 /**
  * Enriches targets with battle stats from the FFScouter 30-day cache.
  * Note: Soft 30d limit; never re-scouts targets who are inactive to preserve calls.
  */
-async function enrichTargetStats(): Promise<number> {
+export async function enrichTargetStats(): Promise<number> {
 	const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
 	// Find up to 100 targets:
@@ -181,7 +116,7 @@ async function clearExpiredHospitalStatus(): Promise<number> {
 /**
  * Verifies a slice of ready targets to ensure they haven't been hospitalized externally.
  */
-async function verifyReadyTargetsHospitalStatus(
+export async function verifyReadyTargetsHospitalStatus(
 	userKeys: ManagedApiKey[],
 ): Promise<number> {
 	if (userKeys.length === 0) return 0;
@@ -276,24 +211,15 @@ async function verifyReadyTargetsHospitalStatus(
 }
 
 /**
- * Main Target Finder cycle.
+ * Main Target Finder maintenance cycle.
+ * Runs on a 15-minute quiet cadence to clear expired hospital timers and enrich candidate stats.
  */
 export async function runTargetFinderCycle(): Promise<void> {
-	const activeKeys = await hasActiveSubversiveKeys();
-	if (!activeKeys) {
-		logger.debug(
-			"No active Subversive script keys enrolled. Target finder worker dormant.",
-		);
-		return;
-	}
-
-	const userKeys = await getSubversiveUserKeys();
-	const nextKey = await getNextSubversiveUserKey();
-
-	await auditSubversiveMembership(nextKey);
 	await clearExpiredHospitalStatus();
-	await verifyReadyTargetsHospitalStatus(userKeys);
-	await enrichTargetStats();
+	const activeKeys = await hasActiveSubversiveKeys();
+	if (activeKeys) {
+		await enrichTargetStats();
+	}
 }
 
 export const startSubversiveTargetFinderWorker: WorkerStarter = (options?: {
@@ -301,7 +227,7 @@ export const startSubversiveTargetFinderWorker: WorkerStarter = (options?: {
 }) => {
 	startEventDrivenRunner({
 		worker: "subversive:target_finder_worker",
-		defaultCadenceSeconds: 20, // High-frequency 20-second loop
+		defaultCadenceSeconds: 15 * 60, // 15-minute loop
 		initialDelayMs: options?.initialDelayMs ?? 10000,
 		handler: async () => {
 			await runTargetFinderCycle();
