@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      3.0.0
+// @version      3.1.0
 // @description  Userscript for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -42,6 +42,9 @@
 		warState: "satf_war_state",
 		cachedBounties: "satf_cached_bounties",
 		bountiesSubTab: "satf_bounties_sub_tab",
+		warSubTab: "satf_war_sub_tab",
+		bountyMinReward: "satf_bounty_min_reward",
+		bountyMaxReward: "satf_bounty_max_reward",
 		disableHud: "satf_disable_hud",
 	};
 
@@ -50,6 +53,8 @@
 		minFFThreshold: 1.2,
 		maxFFThreshold: 3.0,
 		maxBSThreshold: 5e9,
+		bountyMinReward: 0,
+		bountyMaxReward: 0,
 		directAttack: true,
 		disableHud: false,
 		persistOpen: false,
@@ -66,6 +71,22 @@
 	function formatMoney(num) {
 		if (!num || !Number.isFinite(num)) return "$0";
 		return `$${Math.round(num).toLocaleString()}`;
+	}
+
+	function parseMoneyInput(str) {
+		if (!str) return 0;
+		const clean = String(str).replace(/[$,]/g, "").trim().toLowerCase();
+		if (!clean) return 0;
+		const match = clean.match(/^([\d.]+)\s*([kmbtq])?$/);
+		if (!match) {
+			const n = Number(clean);
+			return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+		}
+		const val = Number.parseFloat(match[1]);
+		if (Number.isNaN(val) || val <= 0) return 0;
+		const unit = match[2];
+		const mults = { k: 1e3, m: 1e6, b: 1e9, t: 1e12, q: 1e15 };
+		return Math.round(val * (mults[unit] || 1));
 	}
 
 	function getBountyFF(t) {
@@ -140,7 +161,12 @@
 		loading: false,
 		statusText: "Ready",
 		statusType: "ok",
-		activeTab: GM_getValue(STORAGE.activeTab, "bounties") || "bounties", // 'bounties' | 'hosp' | 'settings'
+		activeTab:
+			(() => {
+				const saved = GM_getValue(STORAGE.activeTab, "war");
+				return saved === "hosp" || saved === "target" ? "war" : saved;
+			})() || "war", // 'war' | 'bounties' | 'settings'
+		warSubTab: GM_getValue(STORAGE.warSubTab, "targets") || "targets", // 'targets' | 'hosp'
 		excludeIds: [],
 		bountiesReady: Array.isArray(rawCachedBounties.readyTargets)
 			? rawCachedBounties.readyTargets
@@ -149,11 +175,25 @@
 			? rawCachedBounties.hospitalQueue
 			: [],
 		bountiesSubTab: GM_getValue("satf_bounties_sub_tab", "ready") || "ready",
+		bountyMinReward: Number(GM_getValue(STORAGE.bountyMinReward, 0)) || 0,
+		bountyMaxReward: Number(GM_getValue(STORAGE.bountyMaxReward, 0)) || 0,
 		bountiesWs: null,
 		bountiesWsConnected: false,
 		bountiesLastWsMessageAt: 0,
 		bountiesReconnectTimer: null,
 	};
+
+	function getFilteredBountyList(list) {
+		if (!Array.isArray(list)) return [];
+		return list.filter((t) => {
+			const reward = t.reward || 0;
+			if (state.bountyMinReward > 0 && reward < state.bountyMinReward)
+				return false;
+			if (state.bountyMaxReward > 0 && reward > state.bountyMaxReward)
+				return false;
+			return true;
+		});
+	}
 
 	function isWarEngaged() {
 		const s = state.war ? state.war.state : state.warState;
@@ -1121,47 +1161,112 @@
 					<button id="satf-btn-close" class="satf-btn-close" title="Close Panel">X</button>
 				</div>
 				<div class="satf-action-bar">
-					<button id="satf-btn-get-target" class="satf-btn-get-target" type="button">Get Target</button>
+					<button id="satf-btn-get-target" class="satf-btn-get-target" type="button">Get Chain Target</button>
 				</div>
 				<div class="satf-tabs">
-					<button class="satf-tab-btn active" data-tab="bounties">Bounties (<span id="satf-bounties-tab-count">0</span>)</button>
-					<button class="satf-tab-btn" data-tab="hosp">War Hosp</button>
+					<button class="satf-tab-btn active" data-tab="war">Ranked War</button>
+					<button class="satf-tab-btn" data-tab="bounties">Bounties (<span id="satf-bounties-tab-count">0</span>)</button>
 					<button class="satf-tab-btn" data-tab="settings">Settings</button>
 				</div>
 			</div>
 
-			<!-- WAR SCOREBOARD BANNER -->
-			<div id="satf-war-banner" class="satf-war-banner">
-				<div class="satf-war-header-row">
-					<span id="satf-war-title">RANKED WAR</span>
-					<span id="satf-war-lead" class="satf-lead-badge lead-pos" style="display: none;">LEAD +0</span>
+			<!-- RANKED WAR VIEW -->
+			<div id="satf-view-war" style="display: none;">
+				<div id="satf-war-empty" style="display: none; text-align: center; padding: 30px 16px; color: var(--muted); font-size: 12px;">
+					No active or scheduled ranked war.
 				</div>
-				<div class="satf-score-row">
-					<div class="satf-score-box">
-						<span class="satf-score-lbl">Subversive Alliance</span>
-						<span id="satf-score-sa" class="satf-score-val">--</span>
-					</div>
-					<div class="satf-score-box" style="text-align:center;">
-						<span class="satf-score-lbl">Target</span>
-						<span id="satf-score-target" class="satf-score-val" style="color:var(--muted);">--</span>
-					</div>
-					<div class="satf-score-box" style="text-align:right;">
-						<span id="satf-opp-name" class="satf-score-lbl">Opponent</span>
-						<span id="satf-score-opp" class="satf-score-val">--</span>
-					</div>
-				</div>
-			</div>
 
-			<!-- TRAVEL LOCK WARNING -->
-			<div id="satf-travel-lock" class="satf-travel-lock">
-				[TRAVEL LOCK] Attacker is traveling or abroad. Target dispatch locked.
-			</div>
+				<div id="satf-war-active-content" style="display: none;">
+					<!-- WAR SCOREBOARD BANNER -->
+					<div id="satf-war-banner" class="satf-war-banner">
+						<div class="satf-war-header-row">
+							<span id="satf-war-title">RANKED WAR</span>
+							<span id="satf-war-lead" class="satf-lead-badge lead-pos" style="display: none;">LEAD +0</span>
+						</div>
+						<div class="satf-score-row">
+							<div class="satf-score-box">
+								<span class="satf-score-lbl">Subversive Alliance</span>
+								<span id="satf-score-sa" class="satf-score-val">--</span>
+							</div>
+							<div class="satf-score-box" style="text-align:center;">
+								<span class="satf-score-lbl">Target</span>
+								<span id="satf-score-target" class="satf-score-val" style="color:var(--muted);">--</span>
+							</div>
+							<div class="satf-score-box" style="text-align:right;">
+								<span id="satf-opp-name" class="satf-score-lbl">Opponent</span>
+								<span id="satf-score-opp" class="satf-score-val">--</span>
+							</div>
+						</div>
+					</div>
 
-			<!-- HOSPITAL QUEUE VIEW -->
-			<div id="satf-view-hosp" style="display: none;">
-				<div id="satf-hosp-container" class="satf-queue-list">
-					<div style="text-align: center; padding: 20px 0; color: var(--muted); font-size: 12px;">
-						Loading hospital queue...
+					<!-- TRAVEL LOCK WARNING -->
+					<div id="satf-travel-lock" class="satf-travel-lock">
+						[TRAVEL LOCK] Attacker is traveling or abroad. Target dispatch locked.
+					</div>
+
+					<!-- WAR SUBTABS -->
+					<div class="satf-bounty-controls" style="margin-bottom: 8px;">
+						<div class="satf-bounty-subtabs">
+							<button type="button" class="satf-bounty-subtab-btn active" data-subtab="targets" id="satf-war-subtab-targets">
+								Targets (<span id="satf-war-targets-count">0</span>)
+							</button>
+							<button type="button" class="satf-bounty-subtab-btn" data-subtab="hosp" id="satf-war-subtab-hosp">
+								Hosp Queue (<span id="satf-war-hosp-count">0</span>)
+							</button>
+						</div>
+					</div>
+
+					<!-- TARGETS SUB-PANE -->
+					<div id="satf-war-pane-targets">
+						<div class="satf-direct-toggle-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+							<label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--muted);">
+								<input type="checkbox" id="satf-chk-direct">
+								<span>Direct Attack</span>
+							</label>
+							<button id="satf-btn-modal-next" class="satf-btn satf-btn-primary satf-btn-sm" style="padding: 3px 10px; font-size: 11px;">Next Target →</button>
+						</div>
+						<div class="satf-filter-row" style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; padding: 6px 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted);">
+							<div style="display: flex; align-items: center; gap: 5px;">
+								<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+									<input type="checkbox" id="satf-chk-hide-high-ff">
+									<span>Max FF</span>
+								</label>
+								<input type="number" id="satf-input-hide-ff" min="1.0" max="10.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 44px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
+							</div>
+							<div style="display: flex; align-items: center; gap: 5px;">
+								<label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+									<input type="checkbox" id="satf-chk-hide-high-bs">
+									<span>Max BS</span>
+								</label>
+								<input type="text" id="satf-input-hide-bs" placeholder="e.g. 5B" value="${formatStats(state.maxBSThreshold)}" title="${state.maxBSThreshold.toLocaleString()}" style="width: 60px; padding: 2px 4px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; text-align: center;">
+							</div>
+						</div>
+
+						<!-- SCROLLABLE AVAILABLE TARGETS ROSTER -->
+						<div class="satf-roster-section">
+							<div class="satf-roster-header">
+								<span>Available Opponents (<span id="satf-avail-count">0</span>)</span>
+								<div class="satf-sort-pills">
+									<span class="satf-sort-pill" data-sort="ff">FF</span>
+									<span class="satf-sort-pill" data-sort="online">Online</span>
+									<span class="satf-sort-pill" data-sort="bs">BS</span>
+								</div>
+							</div>
+							<div id="satf-avail-list" class="satf-roster-list">
+								<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
+									No available targets currently in ready state.
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- HOSP QUEUE SUB-PANE -->
+					<div id="satf-war-pane-hosp" style="display: none;">
+						<div id="satf-hosp-container" class="satf-queue-list">
+							<div style="text-align: center; padding: 20px 0; color: var(--muted); font-size: 12px;">
+								Loading hospital queue...
+							</div>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -1179,7 +1284,6 @@
 					</div>
 					<div style="display: flex; align-items: center; gap: 8px;">
 						<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
-						<button type="button" id="satf-btn-bounties-refresh" class="satf-bounty-refresh-btn" title="Refresh Bounties">Refresh</button>
 					</div>
 				</div>
 
@@ -1212,7 +1316,8 @@
 				</div>
 
 				<div style="margin-bottom: 12px; padding: 10px; background: #09090b; border: 1px solid var(--border); border-radius: 8px;">
-					<div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Fair Fight Range</div>
+					<div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Chain Target Fair Fight Range</div>
+					<div style="font-size: 10px; color: var(--muted); margin-bottom: 8px;">Fair fight bounds applied when acquiring targets via "Get Chain Target".</div>
 					<div style="display: flex; gap: 12px;">
 						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
 							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Min FF</label>
@@ -1221,6 +1326,21 @@
 						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
 							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Max FF</label>
 							<input type="number" id="satf-input-max-ff" min="1.0" max="3.0" step="0.1" value="${state.maxFFThreshold.toFixed(1)}" style="width: 100%; padding: 6px 8px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px; text-align: center;">
+						</div>
+					</div>
+				</div>
+
+				<div style="margin-bottom: 12px; padding: 10px; background: #09090b; border: 1px solid var(--border); border-radius: 8px;">
+					<div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Bounty Reward Range</div>
+					<div style="font-size: 10px; color: var(--muted); margin-bottom: 8px;">Filter bounties by reward amount (e.g. 500k, 2M, or leave Max empty for no limit).</div>
+					<div style="display: flex; gap: 12px;">
+						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
+							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Min Reward</label>
+							<input type="text" id="satf-input-bounty-min" placeholder="e.g. 100k" value="${state.bountyMinReward > 0 ? formatMoney(state.bountyMinReward) : ""}" style="width: 100%; padding: 6px 8px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px; text-align: center;">
+						</div>
+						<div class="satf-field" style="flex: 1; margin-bottom: 0;">
+							<label style="font-size: 10px; color: var(--muted); margin-bottom: 4px; display: block;">Max Reward</label>
+							<input type="text" id="satf-input-bounty-max" placeholder="Any" value="${state.bountyMaxReward > 0 ? formatMoney(state.bountyMaxReward) : ""}" style="width: 100%; padding: 6px 8px; background: #18181b; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px; text-align: center;">
 						</div>
 					</div>
 				</div>
@@ -1277,10 +1397,13 @@
 		const warTitle = root.getElementById("satf-war-title");
 		const hospContainer = root.getElementById("satf-hosp-container");
 		const chkAttackNewTab = root.getElementById("satf-chk-attack-new-tab");
+		const chkDirect = root.getElementById("satf-chk-direct");
 		const chkDisableHud = root.getElementById("satf-chk-disable-hud");
 		const btnGetTarget = root.getElementById("satf-btn-get-target");
 		const inputMinFf = root.getElementById("satf-input-min-ff");
 		const inputMaxFf = root.getElementById("satf-input-max-ff");
+		const inputBountyMin = root.getElementById("satf-input-bounty-min");
+		const inputBountyMax = root.getElementById("satf-input-bounty-max");
 		const btnModalNext = root.getElementById("satf-btn-modal-next");
 		const chkHideHighFf = root.getElementById("satf-chk-hide-high-ff");
 		const inputHideFf = root.getElementById("satf-input-hide-ff");
@@ -1295,6 +1418,7 @@
 		const keyInputContainer = root.getElementById("satf-key-input-container");
 		const btnToggleKeyInput = root.getElementById("satf-btn-toggle-key-input");
 
+		if (chkDirect) chkDirect.checked = state.directAttack;
 		if (chkAttackNewTab) chkAttackNewTab.checked = !state.directAttack;
 		if (chkDisableHud) chkDisableHud.checked = state.disableHud;
 		if (chkHideHighFf) chkHideHighFf.checked = state.hideHighFF;
@@ -1334,14 +1458,13 @@
 		}
 
 		function renderWarBanner(war) {
+			const warEmpty = root.getElementById("satf-war-empty");
+			const warActiveContent = root.getElementById("satf-war-active-content");
+
 			if (!war || war.state === "no_war") {
-				warTitle.textContent = "STANDBY · NO ACTIVE WAR";
-				warLead.style.display = "none";
-				scoreSa.textContent = "--";
-				scoreTarget.textContent = "--";
-				scoreTarget.style.color = "var(--muted)";
-				oppName.textContent = "Opponent";
-				scoreOpp.textContent = "--";
+				// Show empty state, hide active content
+				if (warEmpty) warEmpty.style.display = "block";
+				if (warActiveContent) warActiveContent.style.display = "none";
 
 				// Clear local targets and storage when war ends
 				state.allTargets = [];
@@ -1356,6 +1479,10 @@
 				renderHospitalQueue([]);
 				return;
 			}
+
+			// War is active or scheduled — show active content, hide empty
+			if (warEmpty) warEmpty.style.display = "none";
+			if (warActiveContent) warActiveContent.style.display = "block";
 
 			if (war.state === "scheduled") {
 				const nowSec = Math.floor(Date.now() / 1000);
@@ -2149,7 +2276,7 @@
 				keyInput.value = "";
 				updateUserBadge();
 				setStatus("Connected! Ready for Ranked War.", "ok");
-				switchTab("target");
+				switchTab("war");
 				connectWebSocket();
 				connectBountiesWebSocket();
 				fetchWarStatus();
@@ -2173,14 +2300,33 @@
 			}
 		}
 
+		function updateBountyBadges() {
+			const readyFiltered = getFilteredBountyList(state.bountiesReady);
+			const hospFiltered = getFilteredBountyList(state.bountiesHosp);
+
+			const tabBadge = root.getElementById("satf-bounties-tab-count");
+			if (tabBadge) {
+				tabBadge.textContent = String(readyFiltered.length);
+			}
+			const countReady = root.getElementById("satf-bounty-ready-count");
+			if (countReady) {
+				countReady.textContent = String(readyFiltered.length);
+			}
+			const countHosp = root.getElementById("satf-bounty-hosp-count");
+			if (countHosp) {
+				countHosp.textContent = String(hospFiltered.length);
+			}
+		}
+
 		function renderBountyReadyTargets(targets) {
 			const pane = root.getElementById("satf-bounties-pane-ready");
 			if (!pane) return;
-			const list = Array.isArray(targets) ? targets : state.bountiesReady;
+			const rawList = Array.isArray(targets) ? targets : state.bountiesReady;
+			const list = getFilteredBountyList(rawList);
 			if (!list || list.length === 0) {
 				pane.innerHTML = `
 					<div class="satf-bounty-empty">
-						No bounty targets currently available.
+						No bounty targets currently available${state.bountyMinReward > 0 || state.bountyMaxReward > 0 ? " matching reward filter" : ""}.
 					</div>
 				`;
 				return;
@@ -2219,13 +2365,12 @@
 				row.addEventListener("click", (e) => {
 					if (e.target?.closest("a, button")) return;
 					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
-					const targetObj = list.find((t) => t.id === id);
-					if (!targetObj) return;
-
+					if (!id) return;
+					const profileUrl = `https://www.torn.com/profiles.php?XID=${id}`;
 					if (state.directAttack) {
-						window.location.href = targetObj.attackUrl;
+						window.location.href = profileUrl;
 					} else {
-						window.open(targetObj.attackUrl, "_blank");
+						window.open(profileUrl, "_blank");
 					}
 				});
 			});
@@ -2234,11 +2379,12 @@
 		function renderBountyHospitalQueue(queue) {
 			const pane = root.getElementById("satf-bounties-pane-hosp");
 			if (!pane) return;
-			const list = Array.isArray(queue) ? queue : state.bountiesHosp;
+			const rawList = Array.isArray(queue) ? queue : state.bountiesHosp;
+			const list = getFilteredBountyList(rawList);
 			if (!list || list.length === 0) {
 				pane.innerHTML = `
 					<div class="satf-bounty-empty">
-						No hospitalized bounty targets matching criteria.
+						No hospitalized bounty targets${state.bountyMinReward > 0 || state.bountyMaxReward > 0 ? " matching reward filter" : " matching criteria"}.
 					</div>
 				`;
 				return;
@@ -2269,8 +2415,6 @@
 							</div>
 							<div class="satf-bounty-right">
 								<span class="satf-bounty-reward">${formatMoney(t.reward)}</span>
-								<button type="button" class="satf-bounty-check-btn" data-id="${t.id}">Check</button>
-								<a class="satf-bounty-hit-btn" href="${t.attackUrl}" target="${state.directAttack ? "_self" : "_blank"}" rel="noopener">Hit</a>
 							</div>
 						</div>
 					`;
@@ -2281,43 +2425,12 @@
 				row.addEventListener("click", (e) => {
 					if (e.target?.closest("a, button")) return;
 					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
-					const targetObj = list.find((t) => t.id === id);
-					if (!targetObj) return;
-
+					if (!id) return;
+					const profileUrl = `https://www.torn.com/profiles.php?XID=${id}`;
 					if (state.directAttack) {
-						window.location.href = targetObj.attackUrl;
+						window.location.href = profileUrl;
 					} else {
-						window.open(targetObj.attackUrl, "_blank");
-					}
-				});
-			});
-
-			pane.querySelectorAll(".satf-bounty-check-btn").forEach((btn) => {
-				btn.addEventListener("click", async (e) => {
-					e.stopPropagation();
-					const targetId = Number(btn.getAttribute("data-id"));
-					if (!targetId) return;
-
-					btn.textContent = "Checking...";
-					btn.setAttribute("disabled", "true");
-
-					try {
-						const res = await apiRequest("/api/v1/personal/bounties/recheck", {
-							method: "POST",
-							body: { targetId },
-						});
-
-						if (res?.target) {
-							setBountiesStatus(
-								`Updated ${res.target.name}: ${res.target.status?.state || "Okay"}`,
-								"ok",
-							);
-							fetchBounties();
-						}
-					} catch (err) {
-						setBountiesStatus(err.message, "error");
-						btn.textContent = "Check";
-						btn.removeAttribute("disabled");
+						window.open(profileUrl, "_blank");
 					}
 				});
 			});
@@ -2341,18 +2454,7 @@
 				);
 			} catch {}
 
-			const tabBadge = root.getElementById("satf-bounties-tab-count");
-			if (tabBadge) {
-				tabBadge.textContent = String(state.bountiesReady.length);
-			}
-			const countReady = root.getElementById("satf-bounty-ready-count");
-			if (countReady) {
-				countReady.textContent = String(state.bountiesReady.length);
-			}
-			const countHosp = root.getElementById("satf-bounty-hosp-count");
-			if (countHosp) {
-				countHosp.textContent = String(state.bountiesHosp.length);
-			}
+			updateBountyBadges();
 
 			renderBountyReadyTargets(state.bountiesReady);
 			renderBountyHospitalQueue(state.bountiesHosp);
@@ -2467,26 +2569,51 @@
 			}
 		}
 
+		function switchWarSubTab(subtab) {
+			const safe =
+				subtab === "targets" || subtab === "hosp" ? subtab : "targets";
+			state.warSubTab = safe;
+			GM_setValue(STORAGE.warSubTab, safe);
+
+			const btnTargets = root.getElementById("satf-war-subtab-targets");
+			const btnHosp = root.getElementById("satf-war-subtab-hosp");
+			const paneTargets = root.getElementById("satf-war-pane-targets");
+			const paneHosp = root.getElementById("satf-war-pane-hosp");
+
+			if (btnTargets) btnTargets.classList.toggle("active", safe === "targets");
+			if (btnHosp) btnHosp.classList.toggle("active", safe === "hosp");
+			if (paneTargets)
+				paneTargets.style.display = safe === "targets" ? "block" : "none";
+			if (paneHosp) paneHosp.style.display = safe === "hosp" ? "block" : "none";
+
+			if (safe === "targets") {
+				renderAvailableTargets();
+				fetchAvailableTargets();
+				stopHospTimer();
+			} else if (safe === "hosp") {
+				fetchHospitalQueue();
+			}
+		}
+
 		function switchTab(tab) {
-			const safeTab = tab === "target" ? "bounties" : tab;
+			const safeTab = tab === "target" || tab === "hosp" ? "war" : tab;
 			state.activeTab = safeTab;
 			GM_setValue(STORAGE.activeTab, safeTab);
 			root.querySelectorAll(".satf-tab-btn").forEach((btn) => {
 				btn.classList.toggle("active", btn.dataset.tab === safeTab);
 			});
-			const viewHosp = root.getElementById("satf-view-hosp");
+			const viewWar = root.getElementById("satf-view-war");
 			const viewBounties = root.getElementById("satf-view-bounties");
 			const viewSettings = root.getElementById("satf-view-settings");
 
-			if (viewHosp)
-				viewHosp.style.display = safeTab === "hosp" ? "block" : "none";
+			if (viewWar) viewWar.style.display = safeTab === "war" ? "block" : "none";
 			if (viewBounties)
 				viewBounties.style.display = safeTab === "bounties" ? "block" : "none";
 			if (viewSettings)
 				viewSettings.style.display = safeTab === "settings" ? "block" : "none";
 
-			if (safeTab === "hosp") {
-				fetchHospitalQueue();
+			if (safeTab === "war") {
+				switchWarSubTab(state.warSubTab || "targets");
 			} else if (safeTab === "bounties") {
 				renderBountyReadyTargets(state.bountiesReady);
 				renderBountyHospitalQueue(state.bountiesHosp);
@@ -2539,7 +2666,7 @@
 						"ok",
 					);
 					if (btnGetTarget) {
-						btnGetTarget.textContent = "Get Target";
+						btnGetTarget.textContent = "Get Chain Target";
 						btnGetTarget.disabled = false;
 					}
 					state.isTargetScouting = false;
@@ -2576,7 +2703,7 @@
 							state.scoutCooldownTimer = null;
 							state.isTargetScouting = false;
 							if (btnGetTarget) {
-								btnGetTarget.textContent = "Get Target";
+								btnGetTarget.textContent = "Get Chain Target";
 								btnGetTarget.disabled = false;
 							}
 							setStatus("Ready", "ok");
@@ -2590,14 +2717,14 @@
 					"error",
 				);
 				if (btnGetTarget) {
-					btnGetTarget.textContent = "Get Target";
+					btnGetTarget.textContent = "Get Chain Target";
 					btnGetTarget.disabled = false;
 				}
 				state.isTargetScouting = false;
 			} catch (err) {
 				setStatus(`Failed to acquire target: ${err.message}`, "error");
 				if (btnGetTarget) {
-					btnGetTarget.textContent = "Get Target";
+					btnGetTarget.textContent = "Get Chain Target";
 					btnGetTarget.disabled = false;
 				}
 				state.isTargetScouting = false;
@@ -2719,7 +2846,7 @@
 			state.syncTimer = setInterval(() => {
 				if (!state.panelOpen) return;
 				fetchWarStatus();
-				if (state.activeTab === "hosp") {
+				if (state.activeTab === "war" && state.warSubTab === "hosp") {
 					fetchHospitalQueue();
 				} else if (state.activeTab === "bounties") {
 					fetchBounties();
@@ -2884,9 +3011,19 @@
 			});
 		});
 
+		chkDirect?.addEventListener("change", (e) => {
+			state.directAttack = e.target.checked;
+			GM_setValue(STORAGE.directAttack, state.directAttack);
+			if (chkAttackNewTab) chkAttackNewTab.checked = !state.directAttack;
+			renderAvailableTargets();
+			renderBountyReadyTargets();
+			renderBountyHospitalQueue();
+		});
+
 		chkAttackNewTab?.addEventListener("change", (e) => {
 			state.directAttack = !e.target.checked;
 			GM_setValue(STORAGE.directAttack, state.directAttack);
+			if (chkDirect) chkDirect.checked = state.directAttack;
 			renderAvailableTargets();
 			renderBountyReadyTargets();
 			renderBountyHospitalQueue();
@@ -2928,6 +3065,48 @@
 			state.maxFFThreshold = val;
 			inputMaxFf.value = val.toFixed(1);
 			GM_setValue(STORAGE.maxFFThreshold, val);
+		});
+
+		function commitBountyMin(elem) {
+			const parsed = parseMoneyInput(elem.value);
+			state.bountyMinReward = parsed;
+			GM_setValue(STORAGE.bountyMinReward, parsed);
+			elem.value = parsed > 0 ? formatMoney(parsed) : "";
+			updateBountyBadges();
+			renderBountyReadyTargets();
+			renderBountyHospitalQueue();
+		}
+
+		function commitBountyMax(elem) {
+			const parsed = parseMoneyInput(elem.value);
+			state.bountyMaxReward = parsed;
+			GM_setValue(STORAGE.bountyMaxReward, parsed);
+			elem.value = parsed > 0 ? formatMoney(parsed) : "";
+			updateBountyBadges();
+			renderBountyReadyTargets();
+			renderBountyHospitalQueue();
+		}
+
+		inputBountyMin?.addEventListener("change", (e) =>
+			commitBountyMin(e.target),
+		);
+		inputBountyMin?.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commitBountyMin(e.target);
+				e.target.blur();
+			}
+		});
+
+		inputBountyMax?.addEventListener("change", (e) =>
+			commitBountyMax(e.target),
+		);
+		inputBountyMax?.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commitBountyMax(e.target);
+				e.target.blur();
+			}
 		});
 
 		btnModalNext?.addEventListener("click", () => {
@@ -3058,6 +3237,7 @@
 		renderBountyReadyTargets(state.bountiesReady);
 		renderBountyHospitalQueue(state.bountiesHosp);
 		switchBountySubTab(state.bountiesSubTab || "ready");
+		switchWarSubTab(state.warSubTab || "targets");
 
 		root
 			.getElementById("satf-bounty-subtab-ready")
@@ -3066,16 +3246,11 @@
 			.getElementById("satf-bounty-subtab-hosp")
 			?.addEventListener("click", () => switchBountySubTab("hosp"));
 		root
-			.getElementById("satf-btn-bounties-refresh")
-			?.addEventListener("click", () => {
-				if (
-					state.bountiesWs &&
-					state.bountiesWs.readyState === WebSocket.OPEN
-				) {
-					state.bountiesWs.send(JSON.stringify({ type: "refresh" }));
-				}
-				fetchBounties();
-			});
+			.getElementById("satf-war-subtab-targets")
+			?.addEventListener("click", () => switchWarSubTab("targets"));
+		root
+			.getElementById("satf-war-subtab-hosp")
+			?.addEventListener("click", () => switchWarSubTab("hosp"));
 
 		// 1-second hospital queue countdown timer
 		setInterval(() => {
@@ -3132,8 +3307,7 @@
 		const ffColor = getFFColor(ffVal);
 		const ffText =
 			ffVal !== null && ffVal !== undefined ? ffVal.toFixed(2) : "Unknown";
-
-		const readyList = state.bountiesReady || [];
+		const readyList = getFilteredBountyList(state.bountiesReady || []);
 		const totalReady = readyList.length;
 		const isReadyTarget = idx >= 0 && idx < totalReady;
 		const nextTarget =
@@ -3142,17 +3316,6 @@
 					? readyList[(idx + 1) % totalReady]
 					: readyList[0]
 				: null;
-		const prevTarget =
-			totalReady > 0
-				? isReadyTarget
-					? readyList[(idx - 1 + totalReady) % totalReady]
-					: readyList[totalReady - 1]
-				: null;
-		const countText = isReadyTarget
-			? `${idx + 1} of ${totalReady}`
-			: totalReady > 0
-				? `0 of ${totalReady}`
-				: "None ready";
 		const canCycle = totalReady > (isReadyTarget ? 1 : 0);
 
 		hudRoot.innerHTML = `
@@ -3218,9 +3381,6 @@
 		<div id="satf-attack-bar">
 			<span class="satf-hud-badge">[BOUNTY]</span>
 			<div class="satf-hud-stat">
-				<span class="satf-hud-val">${bt.name}</span>
-			</div>
-			<div class="satf-hud-stat">
 				<span style="color:#a1a1aa;">Reward:</span>
 				<span class="satf-hud-val" style="color:#34d399;">${formatMoney(bt.reward)}</span>
 			</div>
@@ -3228,25 +3388,10 @@
 				<span style="color:#a1a1aa;">FF:</span>
 				<span class="satf-hud-val" style="color:${ffColor};">${ffText}</span>
 			</div>
-			<div style="display:flex;align-items:center;gap:6px;margin-left:6px;border-left:1px solid #27272a;padding-left:8px;">
-				<button id="satf-bounty-cycle-prev" class="satf-hud-btn" ${!canCycle ? "disabled" : ""}>&lt; Prev</button>
-				<span style="font-size:11px;color:#a1a1aa;">${countText}</span>
-				<button id="satf-bounty-cycle-next" class="satf-hud-btn" ${!canCycle ? "disabled" : ""}>Next &gt;</button>
-			</div>
+			<button id="satf-bounty-cycle-next" class="satf-hud-btn" ${!canCycle ? "disabled" : ""}>Next &gt;</button>
 		</div>
 		`;
 
-		hudRoot
-			.getElementById("satf-bounty-cycle-prev")
-			?.addEventListener("click", () => {
-				if (prevTarget?.attackUrl) {
-					if (state.directAttack) {
-						window.location.href = prevTarget.attackUrl;
-					} else {
-						window.open(prevTarget.attackUrl, "_blank");
-					}
-				}
-			});
 		hudRoot
 			.getElementById("satf-bounty-cycle-next")
 			?.addEventListener("click", () => {
@@ -3419,21 +3564,27 @@
 		}
 
 		// 0. Check if target is a known bounty target (in ready or hospital queue)
-		const bountyReadyIdx = state.bountiesReady.findIndex(
-			(t) => t.id === user2Id,
-		);
+		const readyFiltered = getFilteredBountyList(state.bountiesReady);
+		const bountyReadyIdx = readyFiltered.findIndex((t) => t.id === user2Id);
 		const bountyTarget =
 			bountyReadyIdx !== -1
-				? state.bountiesReady[bountyReadyIdx]
-				: state.bountiesHosp.find((t) => t.id === user2Id);
+				? readyFiltered[bountyReadyIdx]
+				: getFilteredBountyList(state.bountiesHosp).find(
+						(t) => t.id === user2Id,
+					);
 
 		if (bountyTarget) {
 			mountBountyHud(bountyTarget, bountyReadyIdx);
 			return;
 		}
 
-		// If not a bounty target and not in an active/scheduled war, do not display HUD (non-target)
-		if (!isWarEngaged()) {
+		// Check if this is an on-demand chain target (from Get Chain Target)
+		const isChainTarget =
+			(state.currentTarget && state.currentTarget.id === user2Id) ||
+			GM_getValue(STORAGE.currentTarget, null)?.id === user2Id;
+
+		// If not a bounty target and not in an active/scheduled war and not a chain target, do not display HUD
+		if (!isWarEngaged() && !isChainTarget) {
 			const host = document.getElementById("satf-attack-hud-host");
 			if (host) host.remove();
 			return;
@@ -3612,11 +3763,12 @@
 		}
 
 		// 1. Instant check: Mount immediately if user2Id matches currentTarget or is known
+		const savedCurrent = GM_getValue(STORAGE.currentTarget, null);
 		const currentTarget =
 			(state.currentTarget && state.currentTarget.id === user2Id
 				? state.currentTarget
 				: null) ||
-			GM_getValue(STORAGE.currentTarget, null) ||
+			(savedCurrent && savedCurrent.id === user2Id ? savedCurrent : null) ||
 			(state.availableTargets || []).find((t) => t.id === user2Id) ||
 			(state.hospitalQueue || []).find((t) => t.id === user2Id);
 
@@ -3627,45 +3779,53 @@
 			mountHud(null);
 		}
 
-		// 2. Query backend for target intel & ranked war verification
-		apiRequest(`/api/v1/target-finder/war/targets/${user2Id}`)
-			.then((res) => {
-				const isWarTarget =
-					res?.isWarTarget === true || res?.target?.isWarTarget === true;
+		// 2. Query backend for target intel & ranked war verification (only if in war)
+		if (isWarEngaged()) {
+			apiRequest(`/api/v1/target-finder/war/targets/${user2Id}`)
+				.then((res) => {
+					const isWarTarget =
+						res?.isWarTarget === true || res?.target?.isWarTarget === true;
 
-				if (isWarTarget) {
-					// Add to known war opponent cache
-					if (!state.warOpponentIds.includes(user2Id)) {
-						state.warOpponentIds.push(user2Id);
-						try {
-							GM_setValue(STORAGE.warOpponentIds, state.warOpponentIds);
-						} catch {}
-					}
+					if (isWarTarget) {
+						// Add to known war opponent cache
+						if (!state.warOpponentIds.includes(user2Id)) {
+							state.warOpponentIds.push(user2Id);
+							try {
+								GM_setValue(STORAGE.warOpponentIds, state.warOpponentIds);
+							} catch {}
+						}
 
-					const host = mountHud(res.target);
-					if (res.target) {
-						state.currentTarget = res.target;
-						GM_setValue(STORAGE.currentTarget, res.target);
-						if (host?.shadowRoot) {
-							applyHudDetails(host.shadowRoot, res.target);
+						const host = mountHud(res.target);
+						if (res.target) {
+							state.currentTarget = res.target;
+							GM_setValue(STORAGE.currentTarget, res.target);
+							if (host?.shadowRoot) {
+								applyHudDetails(host.shadowRoot, res.target);
+							}
+						}
+					} else if (
+						!isChainTarget &&
+						(!currentTarget || currentTarget.id !== user2Id)
+					) {
+						// Not in RW and not an active on-demand target: remove HUD if present
+						const host = document.getElementById("satf-attack-hud-host");
+						if (host && host.dataset.targetId === String(user2Id)) {
+							host.remove();
 						}
 					}
-				} else if (!currentTarget || currentTarget.id !== user2Id) {
-					// Not in RW and not an active on-demand target: remove HUD if present
-					const host = document.getElementById("satf-attack-hud-host");
-					if (host && host.dataset.targetId === String(user2Id)) {
-						host.remove();
+				})
+				.catch(() => {
+					if (
+						!isChainTarget &&
+						(!currentTarget || currentTarget.id !== user2Id)
+					) {
+						const host = document.getElementById("satf-attack-hud-host");
+						if (host && host.dataset.targetId === String(user2Id)) {
+							host.remove();
+						}
 					}
-				}
-			})
-			.catch(() => {
-				const host = document.getElementById("satf-attack-hud-host");
-				if (!currentTarget || currentTarget.id !== user2Id) {
-					if (host && host.dataset.targetId === String(user2Id)) {
-						host.remove();
-					}
-				}
-			});
+				});
+		}
 
 		async function loadNextTargetDirectly(hudRoot) {
 			const btnHudNext = hudRoot?.getElementById("satf-hud-next");
