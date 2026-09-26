@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      3.1.0
+// @version      3.2.0
 // @description  Userscript for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -41,7 +41,6 @@
 		warOpponentIds: "satf_war_opponent_ids",
 		warState: "satf_war_state",
 		cachedBounties: "satf_cached_bounties",
-		bountiesSubTab: "satf_bounties_sub_tab",
 		warSubTab: "satf_war_sub_tab",
 		bountyMinReward: "satf_bounty_min_reward",
 		bountyMaxReward: "satf_bounty_max_reward",
@@ -171,10 +170,6 @@
 		bountiesReady: Array.isArray(rawCachedBounties.readyTargets)
 			? rawCachedBounties.readyTargets
 			: [],
-		bountiesHosp: Array.isArray(rawCachedBounties.hospitalQueue)
-			? rawCachedBounties.hospitalQueue
-			: [],
-		bountiesSubTab: GM_getValue("satf_bounties_sub_tab", "ready") || "ready",
 		bountyMinReward: Number(GM_getValue(STORAGE.bountyMinReward, 0)) || 0,
 		bountyMaxReward: Number(GM_getValue(STORAGE.bountyMaxReward, 0)) || 0,
 		bountiesWs: null,
@@ -1273,25 +1268,13 @@
 
 			<!-- BOUNTIES VIEW -->
 			<div id="satf-view-bounties" style="display: none;">
-				<div class="satf-bounty-controls">
-					<div class="satf-bounty-subtabs">
-						<button type="button" class="satf-bounty-subtab-btn active" data-subtab="ready" id="satf-bounty-subtab-ready">
-							Ready (<span id="satf-bounty-ready-count">0</span>)
-						</button>
-						<button type="button" class="satf-bounty-subtab-btn" data-subtab="hosp" id="satf-bounty-subtab-hosp">
-							Hospital (<span id="satf-bounty-hosp-count">0</span>)
-						</button>
-					</div>
-					<div style="display: flex; align-items: center; gap: 8px;">
-						<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
-					</div>
+				<div class="satf-bounty-controls" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+					<span style="font-size: 11px; font-weight: 700; color: #fff;">Available Bounties (<span id="satf-bounty-ready-count">0</span>)</span>
+					<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
 				</div>
 
-				<!-- Ready pane -->
+				<!-- Bounties list -->
 				<div id="satf-bounties-pane-ready" class="satf-bounty-list"></div>
-
-				<!-- Hospital pane -->
-				<div id="satf-bounties-pane-hosp" class="satf-bounty-list" style="display: none;"></div>
 			</div>
 
 			<!-- SETTINGS VIEW -->
@@ -2302,7 +2285,6 @@
 
 		function updateBountyBadges() {
 			const readyFiltered = getFilteredBountyList(state.bountiesReady);
-			const hospFiltered = getFilteredBountyList(state.bountiesHosp);
 
 			const tabBadge = root.getElementById("satf-bounties-tab-count");
 			if (tabBadge) {
@@ -2311,10 +2293,6 @@
 			const countReady = root.getElementById("satf-bounty-ready-count");
 			if (countReady) {
 				countReady.textContent = String(readyFiltered.length);
-			}
-			const countHosp = root.getElementById("satf-bounty-hosp-count");
-			if (countHosp) {
-				countHosp.textContent = String(hospFiltered.length);
 			}
 		}
 
@@ -2376,88 +2354,22 @@
 			});
 		}
 
-		function renderBountyHospitalQueue(queue) {
-			const pane = root.getElementById("satf-bounties-pane-hosp");
-			if (!pane) return;
-			const rawList = Array.isArray(queue) ? queue : state.bountiesHosp;
-			const list = getFilteredBountyList(rawList);
-			if (!list || list.length === 0) {
-				pane.innerHTML = `
-					<div class="satf-bounty-empty">
-						No hospitalized bounty targets${state.bountyMinReward > 0 || state.bountyMaxReward > 0 ? " matching reward filter" : " matching criteria"}.
-					</div>
-				`;
-				return;
-			}
-
-			pane.innerHTML = list
-				.map((t) => {
-					const ffVal = getBountyFF(t);
-					const ffText =
-						ffVal !== null && ffVal !== undefined
-							? `FF: ${ffVal.toFixed(2)}`
-							: "FF: ?";
-					const ffColor = getFFColor(ffVal);
-					const timeText = formatSeconds(t.secondsRemaining ?? 0);
-
-					return `
-						<div class="satf-bounty-row" data-id="${t.id}">
-							<div class="satf-bounty-left">
-								<div class="satf-bounty-name-row">
-									<a href="https://www.torn.com/profiles.php?XID=${t.id}" target="_blank" style="color:inherit;text-decoration:none;font-weight:700;">${t.name}</a>
-									<span class="satf-bounty-id">[${t.id}]</span>
-								</div>
-								<div class="satf-bounty-sub">
-									<span style="font-weight: 700; font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid ${ffColor}50; background: ${ffColor}18; color: ${ffColor};">${ffText}</span>
-									<span>·</span>
-									<span class="satf-bounty-hosp-time" data-until="${t.status?.until || 0}">${timeText}</span>
-								</div>
-							</div>
-							<div class="satf-bounty-right">
-								<span class="satf-bounty-reward">${formatMoney(t.reward)}</span>
-							</div>
-						</div>
-					`;
-				})
-				.join("");
-
-			pane.querySelectorAll(".satf-bounty-row").forEach((row) => {
-				row.addEventListener("click", (e) => {
-					if (e.target?.closest("a, button")) return;
-					const id = Number.parseInt(row.getAttribute("data-id") || "", 10);
-					if (!id) return;
-					const profileUrl = `https://www.torn.com/profiles.php?XID=${id}`;
-					if (state.directAttack) {
-						window.location.href = profileUrl;
-					} else {
-						window.open(profileUrl, "_blank");
-					}
-				});
-			});
-		}
-
 		function applyBountyData(res) {
 			if (!res) return;
 			state.bountiesReady = Array.isArray(res.readyTargets)
 				? res.readyTargets
-				: [];
-			state.bountiesHosp = Array.isArray(res.hospitalQueue)
-				? res.hospitalQueue
 				: [];
 			try {
 				GM_setValue(
 					STORAGE.cachedBounties,
 					JSON.stringify({
 						readyTargets: state.bountiesReady,
-						hospitalQueue: state.bountiesHosp,
 					}),
 				);
 			} catch {}
 
 			updateBountyBadges();
-
 			renderBountyReadyTargets(state.bountiesReady);
-			renderBountyHospitalQueue(state.bountiesHosp);
 
 			const statusLabel = state.bountiesWsConnected ? "Live" : "Ready";
 			setBountiesStatus(statusLabel, "ok");
@@ -2547,28 +2459,6 @@
 			}
 		}
 
-		function switchBountySubTab(subtab) {
-			state.bountiesSubTab = subtab;
-			try {
-				GM_setValue(STORAGE.bountiesSubTab, subtab);
-			} catch {}
-
-			const btnReady = root.getElementById("satf-bounty-subtab-ready");
-			const btnHosp = root.getElementById("satf-bounty-subtab-hosp");
-			const paneReady = root.getElementById("satf-bounties-pane-ready");
-			const paneHosp = root.getElementById("satf-bounties-pane-hosp");
-
-			btnReady?.classList.toggle("active", subtab === "ready");
-			btnHosp?.classList.toggle("active", subtab === "hosp");
-
-			if (paneReady) {
-				paneReady.style.display = subtab === "ready" ? "flex" : "none";
-			}
-			if (paneHosp) {
-				paneHosp.style.display = subtab === "hosp" ? "flex" : "none";
-			}
-		}
-
 		function switchWarSubTab(subtab) {
 			const safe =
 				subtab === "targets" || subtab === "hosp" ? subtab : "targets";
@@ -2616,7 +2506,6 @@
 				switchWarSubTab(state.warSubTab || "targets");
 			} else if (safeTab === "bounties") {
 				renderBountyReadyTargets(state.bountiesReady);
-				renderBountyHospitalQueue(state.bountiesHosp);
 				fetchBounties();
 				stopHospTimer();
 			} else {
@@ -3017,7 +2906,6 @@
 			if (chkAttackNewTab) chkAttackNewTab.checked = !state.directAttack;
 			renderAvailableTargets();
 			renderBountyReadyTargets();
-			renderBountyHospitalQueue();
 		});
 
 		chkAttackNewTab?.addEventListener("change", (e) => {
@@ -3026,7 +2914,6 @@
 			if (chkDirect) chkDirect.checked = state.directAttack;
 			renderAvailableTargets();
 			renderBountyReadyTargets();
-			renderBountyHospitalQueue();
 		});
 
 		chkDisableHud?.addEventListener("change", (e) => {
@@ -3074,7 +2961,6 @@
 			elem.value = parsed > 0 ? formatMoney(parsed) : "";
 			updateBountyBadges();
 			renderBountyReadyTargets();
-			renderBountyHospitalQueue();
 		}
 
 		function commitBountyMax(elem) {
@@ -3084,7 +2970,6 @@
 			elem.value = parsed > 0 ? formatMoney(parsed) : "";
 			updateBountyBadges();
 			renderBountyReadyTargets();
-			renderBountyHospitalQueue();
 		}
 
 		inputBountyMin?.addEventListener("change", (e) =>
@@ -3223,9 +3108,7 @@
 			updateUserBadge();
 			renderAvailableTargets([]);
 			state.bountiesReady = [];
-			state.bountiesHosp = [];
 			renderBountyReadyTargets([]);
-			renderBountyHospitalQueue([]);
 			setStatus("Logged out. Please connect your API key.", "ok");
 		});
 
@@ -3235,34 +3118,14 @@
 		// Immediately populate cached targets and bounties
 		renderAvailableTargets();
 		renderBountyReadyTargets(state.bountiesReady);
-		renderBountyHospitalQueue(state.bountiesHosp);
-		switchBountySubTab(state.bountiesSubTab || "ready");
 		switchWarSubTab(state.warSubTab || "targets");
 
-		root
-			.getElementById("satf-bounty-subtab-ready")
-			?.addEventListener("click", () => switchBountySubTab("ready"));
-		root
-			.getElementById("satf-bounty-subtab-hosp")
-			?.addEventListener("click", () => switchBountySubTab("hosp"));
 		root
 			.getElementById("satf-war-subtab-targets")
 			?.addEventListener("click", () => switchWarSubTab("targets"));
 		root
 			.getElementById("satf-war-subtab-hosp")
 			?.addEventListener("click", () => switchWarSubTab("hosp"));
-
-		// 1-second hospital queue countdown timer
-		setInterval(() => {
-			const nowSec = Math.floor(Date.now() / 1000);
-			root.querySelectorAll(".satf-bounty-hosp-time").forEach((el) => {
-				const until = Number(el.getAttribute("data-until"));
-				if (until > 0) {
-					const rem = Math.max(0, until - nowSec);
-					el.textContent = formatSeconds(rem);
-				}
-			});
-		}, 1000);
 
 		// Auto-open if remember open window is enabled AND panel was open on last page
 		if (state.persistOpen && state.panelOpen) {
@@ -3409,34 +3272,8 @@
 
 	function handleBountyTargetDefeated(targetId, outcomeText, isDefeat = true) {
 		const targetIdx = state.bountiesReady.findIndex((t) => t.id === targetId);
-		let defeated = null;
 		if (targetIdx !== -1) {
-			const [removed] = state.bountiesReady.splice(targetIdx, 1);
-			defeated = removed ?? null;
-		} else {
-			defeated = state.bountiesHosp.find((t) => t.id === targetId) ?? null;
-		}
-
-		if (defeated) {
-			const nowSec = Math.floor(Date.now() / 1000);
-			const hospIdx = state.bountiesHosp.findIndex((t) => t.id === targetId);
-			const hospEntry = {
-				...defeated,
-				status: {
-					state: "Hospital",
-					description: outcomeText,
-					until: nowSec + 1800,
-				},
-				secondsRemaining: 1800,
-			};
-			if (hospIdx !== -1) {
-				state.bountiesHosp[hospIdx] = hospEntry;
-			} else {
-				state.bountiesHosp.push(hospEntry);
-			}
-			state.bountiesHosp.sort(
-				(a, b) => (a.secondsRemaining ?? 0) - (b.secondsRemaining ?? 0),
-			);
+			state.bountiesReady.splice(targetIdx, 1);
 		}
 
 		try {
@@ -3444,7 +3281,6 @@
 				STORAGE.cachedBounties,
 				JSON.stringify({
 					readyTargets: state.bountiesReady,
-					hospitalQueue: state.bountiesHosp,
 				}),
 			);
 		} catch {}
@@ -3492,9 +3328,9 @@
 		if (!currentTargetId || !Number.isInteger(currentTargetId)) return;
 		if (lastHandledBountyDefeatId === currentTargetId) return;
 
-		const isBountyTarget =
-			state.bountiesReady.some((t) => t.id === currentTargetId) ||
-			state.bountiesHosp.some((t) => t.id === currentTargetId);
+		const isBountyTarget = state.bountiesReady.some(
+			(t) => t.id === currentTargetId,
+		);
 		if (!isBountyTarget) return;
 
 		const dialogEls = document.querySelectorAll(
@@ -3567,11 +3403,7 @@
 		const readyFiltered = getFilteredBountyList(state.bountiesReady);
 		const bountyReadyIdx = readyFiltered.findIndex((t) => t.id === user2Id);
 		const bountyTarget =
-			bountyReadyIdx !== -1
-				? readyFiltered[bountyReadyIdx]
-				: getFilteredBountyList(state.bountiesHosp).find(
-						(t) => t.id === user2Id,
-					);
+			bountyReadyIdx !== -1 ? readyFiltered[bountyReadyIdx] : null;
 
 		if (bountyTarget) {
 			mountBountyHud(bountyTarget, bountyReadyIdx);
