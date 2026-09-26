@@ -114,6 +114,7 @@ class SubversiveTargetCache {
 	private targetMap: Map<number, CachedTarget> = new Map();
 	private userSessions: Map<number, CachedUserSession> = new Map();
 	private tokenToUserId: Map<string, number> = new Map();
+	private reservedTargets: Map<number, number> = new Map();
 
 	private currentWar: CurrentWarInfo = {
 		state: "no_war",
@@ -265,6 +266,33 @@ class SubversiveTargetCache {
 	}
 
 	/**
+	 * Reserves a target for a duration in ms (default: 60,000 ms / 60 seconds).
+	 */
+	reserveTarget(targetId: number, durationMs = 60_000): void {
+		this.reservedTargets.set(targetId, Date.now() + durationMs);
+	}
+
+	/**
+	 * Checks if a target is currently reserved.
+	 */
+	isTargetReserved(targetId: number): boolean {
+		const expiresAt = this.reservedTargets.get(targetId);
+		if (!expiresAt) return false;
+		if (Date.now() > expiresAt) {
+			this.reservedTargets.delete(targetId);
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Releases a target reservation immediately.
+	 */
+	releaseReservation(targetId: number): void {
+		this.reservedTargets.delete(targetId);
+	}
+
+	/**
 	 * Retrieves candidate targets matching the requested FF range for on-demand verification bursts.
 	 */
 	getCandidatesForVerification(options: {
@@ -303,6 +331,7 @@ class SubversiveTargetCache {
 		const candidates: CachedTarget[] = [];
 		const nowMs = Date.now();
 
+		// Primary pass: exclude hospitalized, ignored, and temporarily reserved targets
 		for (let i = startIndex; i < this.targets.length; i++) {
 			const t = this.targets[i];
 			if (!t) break;
@@ -315,6 +344,9 @@ class SubversiveTargetCache {
 			if (t.inHospital || (t.hospitalUntil && t.hospitalUntil > nowMs)) {
 				continue;
 			}
+			if (this.isTargetReserved(t.targetId)) {
+				continue;
+			}
 			if (ignoreIds.has(t.targetId)) {
 				continue;
 			}
@@ -324,7 +356,31 @@ class SubversiveTargetCache {
 			}
 		}
 
-		// Shuffle candidates slightly to distribute checks across different targets
+		// Fallback pass: if all matching targets in this bracket were reserved, allow soft-reserved
+		if (candidates.length === 0) {
+			for (let i = startIndex; i < this.targets.length; i++) {
+				const t = this.targets[i];
+				if (!t) break;
+				if (
+					maxScore !== Number.POSITIVE_INFINITY &&
+					t.estimatedScore > maxScore
+				) {
+					break;
+				}
+				if (t.inHospital || (t.hospitalUntil && t.hospitalUntil > nowMs)) {
+					continue;
+				}
+				if (ignoreIds.has(t.targetId)) {
+					continue;
+				}
+				candidates.push(t);
+				if (candidates.length >= limit * 2) {
+					break;
+				}
+			}
+		}
+
+		// Shuffle candidates to distribute verification across different targets
 		for (let i = candidates.length - 1; i > 0; i--) {
 			const j = Math.floor(Math.random() * (i + 1));
 			const temp = candidates[i];
@@ -871,7 +927,6 @@ class SubversiveTargetCache {
 		level: number;
 		estimatedBs: number;
 		fairFight: number;
-		isHighFF: boolean;
 		isOnline: boolean;
 		status: {
 			state: string;

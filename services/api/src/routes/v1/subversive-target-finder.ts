@@ -479,9 +479,9 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			};
 		}
 
-		// 3. Up to 3 continuous bursts of 10 profile checks
-		const BURST_SIZE = 10;
-		const MAX_BURSTS = 3;
+		// 3. Up to 4 continuous bursts of 5 profile checks (reduced to minimize parallel key load)
+		const BURST_SIZE = 5;
+		const MAX_BURSTS = 4;
 		const THREE_DAYS_SEC = 3 * 24 * 60 * 60; // 3 days in seconds
 		let verifiedTarget: MatchedTargetResult | null = null;
 		let currentIdx = 0;
@@ -594,6 +594,9 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					calculatedFF >= clampedMinFF &&
 					calculatedFF <= clampedMaxFF
 				) {
+					// Soft-reserve target for 60s so concurrent and staggered requests skip them
+					subversiveTargetCache.reserveTarget(candidate.targetId, 60_000);
+
 					verifiedTarget = {
 						id: candidate.targetId,
 						name: candidate.name,
