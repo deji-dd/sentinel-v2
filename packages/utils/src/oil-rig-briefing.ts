@@ -111,9 +111,9 @@ export async function callGemini(
 	apiKey: string,
 ): Promise<string | null> {
 	const models = [
-		"gemini-2.5-flash",
+		"gemini-2.0-flash",
+		"gemini-1.5-flash",
 		"gemini-flash-latest",
-		"gemini-3.5-flash",
 	];
 	for (const model of models) {
 		try {
@@ -168,9 +168,45 @@ export async function loadLatestSnapshotFromDb(): Promise<CompanySnapshot | null
 			? (row.stock as CompanySnapshot["stock"])
 			: [row.stock as CompanySnapshot["stock"][number]];
 
+		const rawEmployees = (
+			Array.isArray(row.employees) ? row.employees : []
+		) as Array<Record<string, unknown>>;
+
+		const employees: EmployeeSnapshot[] = rawEmployees.map((emp) => {
+			const stats = (emp.stats ?? {}) as Record<string, unknown>;
+			const eff = (emp.effectiveness ?? {}) as Record<string, unknown>;
+			const pos = emp.position as { id?: number; name?: string } | undefined;
+
+			return {
+				id: Number(emp.id ?? 0),
+				name: String(emp.name ?? ""),
+				position: pos ?? {
+					id: Number(emp.positionId ?? 0),
+					name: String(emp.positionName ?? ""),
+				},
+				days_in_company: Number(emp.days_in_company ?? emp.daysInCompany ?? 0),
+				wage: Number(emp.wage ?? 0),
+				stats: {
+					manual_labor: Number(stats.manual_labor ?? stats.manualLabor ?? 0),
+					intelligence: Number(stats.intelligence ?? 0),
+					endurance: Number(stats.endurance ?? 0),
+				},
+				effectiveness: {
+					working_stats: Number(eff.working_stats ?? eff.workingStats ?? 0),
+					settled_in: Number(eff.settled_in ?? eff.settledIn ?? 0),
+					director_education: Number(
+						eff.director_education ?? eff.directorEducation ?? 0,
+					),
+					addiction: Number(eff.addiction ?? 0),
+					inactivity: Number(eff.inactivity ?? 0),
+					total: Number(eff.total ?? 0),
+				},
+			};
+		});
+
 		return {
 			profile: row.profile as unknown as CompanySnapshot["profile"],
-			employees: row.employees as unknown as CompanySnapshot["employees"],
+			employees,
 			stock: stockArr,
 		};
 	} catch (err) {

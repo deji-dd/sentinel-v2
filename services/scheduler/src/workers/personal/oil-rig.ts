@@ -329,6 +329,59 @@ export function startOilRigCollector(_options?: WorkerStartOptions): void {
 					);
 					await generateAndSendDirectorBriefing({
 						useLiveData: false,
+						customSnapshot: {
+							profile: {
+								name: entry.name,
+								rating: entry.stars,
+								funds: entry.funds,
+								efficiency: entry.efficiency,
+								environment: entry.environment,
+								popularity: entry.popularity,
+								income: {
+									daily: entry.dailyIncome,
+									weekly: entry.weeklyIncome,
+								},
+								customers: {
+									daily: entry.dailyCustomers,
+									weekly: entry.weeklyCustomers,
+								},
+								employees: {
+									hired: entry.employees.hired,
+									capacity: entry.employees.capacity,
+								},
+								upgrades: { storage_capacity: entry.storageCapacity },
+								advertisement_budget: entry.adBudget,
+							},
+							stock: [
+								{
+									name: "Oil Barrel",
+									price: entry.stock.barrelPrice,
+									in_stock: entry.stock.inStock,
+									sold_amount: entry.stock.soldAmount,
+									sold_worth: entry.stock.soldWorth,
+								},
+							],
+							employees: entry.employees.roster.map((e) => ({
+								id: e.id,
+								name: e.name,
+								position: { id: e.positionId, name: e.positionName },
+								days_in_company: e.daysInCompany,
+								wage: e.wage,
+								stats: {
+									manual_labor: e.stats.manualLabor,
+									intelligence: e.stats.intelligence,
+									endurance: e.stats.endurance,
+								},
+								effectiveness: {
+									working_stats: e.effectiveness.workingStats,
+									settled_in: e.effectiveness.settledIn,
+									director_education: e.effectiveness.directorEducation,
+									addiction: e.effectiveness.addiction,
+									inactivity: e.effectiveness.inactivity,
+									total: e.effectiveness.total,
+								},
+							})),
+						},
 					});
 				}
 			})

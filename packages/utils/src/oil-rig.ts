@@ -90,14 +90,23 @@ export interface EmployeeData {
 	id?: number;
 	name: string;
 	position?: { id?: number; name?: string } | null;
+	positionId?: number;
+	positionName?: string;
+	days_in_company?: number;
+	daysInCompany?: number;
 	stats: {
-		manual_labor: number;
-		intelligence: number;
-		endurance: number;
+		manual_labor?: number;
+		manualLabor?: number;
+		intelligence?: number;
+		endurance?: number;
 	};
-	effectiveness: {
+	effectiveness?: {
 		working_stats?: number;
+		workingStats?: number;
 		settled_in?: number;
+		settledIn?: number;
+		director_education?: number;
+		directorEducation?: number;
 		addiction?: number;
 		inactivity?: number;
 		total?: number;
@@ -105,18 +114,42 @@ export interface EmployeeData {
 }
 
 export function calcStatScore(stat: number, req: number): number {
+	if (
+		!stat ||
+		stat <= 0 ||
+		!req ||
+		req <= 0 ||
+		!Number.isFinite(stat) ||
+		!Number.isFinite(req)
+	) {
+		return 0;
+	}
 	const linear = Math.min(45, (45 * stat) / req);
 	const logBonus = stat > req ? 5 * Math.log2(stat / req) : 0;
-	return linear + logBonus;
+	const res = linear + logBonus;
+	return Number.isFinite(res) ? res : 0;
 }
 
 export function calcRoleFit(
-	stats: { manual_labor: number; intelligence: number; endurance: number },
+	stats: {
+		manual_labor?: number;
+		manualLabor?: number;
+		intelligence?: number;
+		endurance?: number;
+	},
 	role: RoleDef,
 ): number {
-	const pri = calcStatScore(stats[role.primaryStat], role.primaryReq);
-	const sec = calcStatScore(stats[role.secondaryStat], role.secondaryReq);
-	return Math.floor(pri + sec);
+	const getStat = (statName: "manual_labor" | "intelligence" | "endurance") => {
+		if (statName === "manual_labor") {
+			return stats.manual_labor ?? stats.manualLabor ?? 0;
+		}
+		return stats[statName] ?? 0;
+	};
+
+	const pri = calcStatScore(getStat(role.primaryStat), role.primaryReq);
+	const sec = calcStatScore(getStat(role.secondaryStat), role.secondaryReq);
+	const total = Math.floor(pri + sec);
+	return Number.isFinite(total) ? total : 0;
 }
 
 /**
@@ -198,9 +231,10 @@ function maxWeightBipartiteMatching(costMatrix: number[][]): number[] {
 
 	const dim = Math.max(n, m);
 	const a: number[][] = Array.from({ length: dim }, (_, i) =>
-		Array.from({ length: dim }, (_, j) =>
-			i < n && j < m ? (costMatrix[i]?.[j] ?? 0) : 0,
-		),
+		Array.from({ length: dim }, (_, j) => {
+			const val = i < n && j < m ? costMatrix[i]?.[j] : 0;
+			return typeof val === "number" && Number.isFinite(val) ? val : 0;
+		}),
 	);
 
 	const u = new Array(dim + 1).fill(0);
@@ -213,6 +247,7 @@ function maxWeightBipartiteMatching(costMatrix: number[][]): number[] {
 		let j0 = 0;
 		const minv = new Array(dim + 1).fill(Infinity);
 		const used = new Array(dim + 1).fill(false);
+		let outerLoopGuard = 0;
 		do {
 			used[j0] = true;
 			const i0 = p[j0] ?? 0;
@@ -231,6 +266,9 @@ function maxWeightBipartiteMatching(costMatrix: number[][]): number[] {
 					}
 				}
 			}
+			if (!Number.isFinite(delta) || delta === Infinity) {
+				break;
+			}
 			for (let j = 0; j <= dim; j++) {
 				if (used[j]) {
 					u[p[j] ?? 0] += delta;
@@ -240,12 +278,19 @@ function maxWeightBipartiteMatching(costMatrix: number[][]): number[] {
 				}
 			}
 			j0 = j1;
+			if (++outerLoopGuard > dim * 5) {
+				break;
+			}
 		} while ((p[j0] ?? 0) !== 0);
 
+		let innerLoopGuard = 0;
 		do {
 			const j1 = way[j0] ?? 0;
 			p[j0] = p[j1] ?? 0;
 			j0 = j1;
+			if (++innerLoopGuard > dim * 5) {
+				break;
+			}
 		} while (j0 !== 0);
 	}
 
@@ -296,34 +341,39 @@ export function solveOptimalRoster(
 	const costMatrix: number[][] = [];
 	for (const emp of employees) {
 		const row: number[] = [];
+		const stats = emp.stats ?? {};
+		const manLabor = stats.manual_labor ?? stats.manualLabor ?? 0;
+		const intell = stats.intelligence ?? 0;
+		const currentRoleName = emp.position?.name ?? emp.positionName;
+		const eff = emp.effectiveness ?? {};
+		const settleBonus = eff.settled_in ?? eff.settledIn ?? 0;
+
 		for (const role of slots) {
 			const roleDef = OIL_RIG_ROLES[role];
 			let score = roleDef ? calcRoleFit(emp.stats, roleDef) : 0;
 
 			// Strategic domain anchors:
 			// High-INT worker (>400k) should anchor Sales Executive
-			if (emp.stats.intelligence >= 400_000 && role === "Sales Executive") {
+			if (intell >= 400_000 && role === "Sales Executive") {
 				score += 50;
 			}
 			// High-MAN worker (>300k) should anchor Driller
-			if (emp.stats.manual_labor >= 300_000 && role === "Driller") {
+			if (manLabor >= 300_000 && role === "Driller") {
 				score += 50;
 			}
 
 			// Role Stability / Anti-Churn Inertia:
 			// If employee is already in this role, give an inertia bonus so we don't shuffle
 			// workers back and forth due to minor temporary stat changes or small addiction debuffs.
-			const currentRoleName = emp.position?.name;
 			if (
 				currentRoleName &&
 				(currentRoleName as string) === role &&
 				currentRoleName !== "Unassigned"
 			) {
-				const settleBonus = emp.effectiveness?.settled_in ?? 0;
 				score += 15 + settleBonus;
 			}
 
-			row.push(score);
+			row.push(Number.isFinite(score) ? score : 0);
 		}
 		costMatrix.push(row);
 	}
@@ -338,8 +388,9 @@ export function solveOptimalRoster(
 		const emp = employees[i];
 		if (!emp) continue;
 
+		const currentRoleName = emp.position?.name ?? emp.positionName;
 		const slotIdx = match[i] ?? -1;
-		const assignedRole = slots[slotIdx] ?? emp.position?.name ?? "Roughneck";
+		const assignedRole = slots[slotIdx] ?? currentRoleName ?? "Roughneck";
 
 		if (!rosterByRole[assignedRole]) {
 			rosterByRole[assignedRole] = [];
@@ -347,14 +398,19 @@ export function solveOptimalRoster(
 		rosterByRole[assignedRole].push(emp.name);
 
 		const fromRole =
-			emp.position?.name && emp.position.name.trim() !== ""
-				? emp.position.name
+			currentRoleName && currentRoleName.trim() !== ""
+				? currentRoleName
 				: "Unassigned";
 
 		if (fromRole !== assignedRole) {
-			const manK = `${Math.round(emp.stats.manual_labor / 1000)}k MAN`;
-			const intK = `${Math.round(emp.stats.intelligence / 1000)}k INT`;
-			const endK = `${Math.round(emp.stats.endurance / 1000)}k END`;
+			const stats = emp.stats ?? {};
+			const manLabor = stats.manual_labor ?? stats.manualLabor ?? 0;
+			const intelligence = stats.intelligence ?? 0;
+			const endurance = stats.endurance ?? 0;
+
+			const manK = `${Math.round(manLabor / 1000)}k MAN`;
+			const intK = `${Math.round(intelligence / 1000)}k INT`;
+			const endK = `${Math.round(endurance / 1000)}k END`;
 
 			let statsStr = manK;
 			let rationale = "Optimizes department balance";
@@ -399,10 +455,10 @@ export function solveOptimalRoster(
 
 	// Rehab Tiers
 	const addicted = employees
-		.filter((e) => (e.effectiveness.addiction ?? 0) < 0)
+		.filter((e) => (e.effectiveness?.addiction ?? 0) < 0)
 		.sort(
 			(a, b) =>
-				(a.effectiveness.addiction ?? 0) - (b.effectiveness.addiction ?? 0),
+				(a.effectiveness?.addiction ?? 0) - (b.effectiveness?.addiction ?? 0),
 		);
 
 	const tier1: Array<{ name: string; penalty: number; role: string }> = [];
@@ -410,8 +466,8 @@ export function solveOptimalRoster(
 	const tier3: Array<{ name: string; penalty: number; role: string }> = [];
 
 	for (const e of addicted) {
-		const penalty = e.effectiveness.addiction ?? 0;
-		const role = e.position?.name ?? "Unassigned";
+		const penalty = e.effectiveness?.addiction ?? 0;
+		const role = e.position?.name ?? e.positionName ?? "Unassigned";
 		if (penalty <= -10) {
 			tier1.push({ name: e.name, penalty, role });
 		} else if (penalty <= -6) {
