@@ -1,4 +1,4 @@
-import { db, systemStates } from "@sentinel/database";
+import { db, eq, systemStates } from "@sentinel/database";
 import type {
 	TornBountiesResponse,
 	UserProfileResponse,
@@ -108,6 +108,114 @@ let inMemoryBountyState: PersonalBountyState = {
 let lastCycleCompletedAt = 0;
 export const MIN_CYCLE_COOLDOWN_SEC = 15;
 
+let isStateHydrated = false;
+
+export function isBountyStateHydrated(): boolean {
+	return isStateHydrated;
+}
+
+export function setBountyStateHydrated(hydrated: boolean): void {
+	isStateHydrated = hydrated;
+}
+
+export function getVerifiedAgeCacheSize(): number {
+	return verifiedAgeCache.size;
+}
+
+export function getTargetProfileCacheSize(): number {
+	return targetProfileCache.size;
+}
+
+/**
+ * Hydrates in-memory caches and bounty snapshot from PostgreSQL (system_states) across scheduler restarts.
+ * - Restores verifiedAgeCache (permanent account age >= 14d)
+ * - Restores active hospital timers (until > nowSec)
+ * - Restores readyTargets and snapshot if recent (< 120s ago)
+ */
+export async function hydrateBountyStateFromDb(): Promise<void> {
+	if (isStateHydrated) return;
+	isStateHydrated = true;
+
+	try {
+		const record = await db.query.systemStates.findFirst({
+			where: eq(systemStates.id, BOUNTY_STATE_ID),
+		});
+
+		if (!record?.data) return;
+
+		const saved = record.data as Partial<PersonalBountyState>;
+		const nowSec = Math.floor(Date.now() / 1000);
+		const lastSync = Number(saved.lastSyncTimestamp ?? 0);
+
+		const readyTargets = Array.isArray(saved.readyTargets)
+			? saved.readyTargets
+			: [];
+		const hospitalQueue = Array.isArray(saved.hospitalQueue)
+			? saved.hospitalQueue
+			: [];
+
+		// 1. Hydrate permanent verified age cache (account age >= 14d never decreases)
+		for (const target of [...readyTargets, ...hospitalQueue]) {
+			if (typeof target?.id === "number" && typeof target?.age === "number") {
+				verifiedAgeCache.set(target.id, target.age);
+			}
+		}
+
+		// 2. Hydrate active hospital timers (target still in hospital is guaranteed)
+		for (const target of hospitalQueue) {
+			if (typeof target?.id !== "number") continue;
+			const until = target.status?.until ?? 0;
+			if (until > nowSec) {
+				targetProfileCache.set(target.id, {
+					age: target.age ?? 100,
+					level: target.level ?? 1,
+					statusState: "Hospital",
+					statusDescription: target.status?.description,
+					statusUntil: until,
+					lastCheckedAt: target.lastCheckedAt ?? lastSync,
+				});
+			}
+		}
+
+		// 3. Hydrate ready targets if recent (< 120s)
+		if (nowSec - lastSync < 120) {
+			for (const target of readyTargets) {
+				if (typeof target?.id !== "number") continue;
+				targetProfileCache.set(target.id, {
+					age: target.age ?? 100,
+					level: target.level ?? 1,
+					statusState: "Okay",
+					statusDescription: target.status?.description,
+					statusUntil: target.status?.until,
+					lastCheckedAt: target.lastCheckedAt ?? lastSync,
+				});
+			}
+
+			// Pre-populate in-memory snapshot with active targets
+			const activeHosp = hospitalQueue
+				.filter((h) => (h.status?.until ?? 0) > nowSec)
+				.map((h) => ({
+					...h,
+					secondsRemaining: Math.max(0, (h.status?.until ?? 0) - nowSec),
+				}));
+
+			inMemoryBountyState = {
+				readyTargets,
+				hospitalQueue: activeHosp,
+				lastSyncTimestamp: lastSync,
+				targetCount: readyTargets.length + activeHosp.length,
+				pendingCount: saved.pendingCount ?? 0,
+			};
+		}
+
+		logger.info(
+			`Hydrated bounty state from database: ${verifiedAgeCache.size} verified ages, ${targetProfileCache.size} active profiles restored.`,
+		);
+	} catch (dbErr) {
+		logger.debug("Could not hydrate bounty state from database:", dbErr);
+	}
+}
+
 export function resetBountyFinderState(): void {
 	lastCycleCompletedAt = 0;
 	currentBountyOffset = 0;
@@ -123,6 +231,7 @@ export function resetBountyFinderState(): void {
 		lastSyncTimestamp: 0,
 		targetCount: 0,
 	};
+	isStateHydrated = true;
 }
 
 export function resetBountyFinderCooldown(): void {
@@ -181,6 +290,9 @@ export function getPendingCandidateCount(): number {
 export async function runBountyFinderCycle(
 	signalOrForce?: AbortSignal | boolean,
 ): Promise<void> {
+	if (!isStateHydrated) {
+		await hydrateBountyStateFromDb();
+	}
 	const force = typeof signalOrForce === "boolean" ? signalOrForce : false;
 	const hasSubversiveKeys = await hasActiveSubversiveKeys();
 	const personalKey = await getPersonalKey();
@@ -854,6 +966,8 @@ export function recordTargetDefeated(targetId: number, outcome?: string): void {
 export function startSubversiveBountyFinder(
 	options?: WorkerStartOptions,
 ): void {
+	void hydrateBountyStateFromDb();
+
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
 		schedule: {

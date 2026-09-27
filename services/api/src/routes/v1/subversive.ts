@@ -27,6 +27,7 @@ import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
 } from "../../lib/scheduler-ipc";
+import { hasActiveSubversiveKeys } from "../../lib/subversive-key-pool";
 import { authPlugin } from "../../middleware/auth";
 import { resolveUserSession } from "./subversive-target-finder";
 
@@ -904,32 +905,12 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const [existing] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
-
-			const configData = existing?.data as SubversiveConfigData | undefined;
-			if (!configData?.guildId) {
-				set.status = 400;
-				return { error: "Subversive guild is not configured." };
-			}
-
-			const [keyCount] = await db
-				.select({ count: count() })
-				.from(subversiveApiKeys)
-				.where(
-					and(
-						eq(subversiveApiKeys.guildId, configData.guildId),
-						eq(subversiveApiKeys.isValid, true),
-					),
-				);
-
-			if (!keyCount || keyCount.count === 0) {
+			const hasKeys = await hasActiveSubversiveKeys();
+			if (!hasKeys) {
 				set.status = 400;
 				return {
 					error:
-						"No active Torn API keys configured for Subversive. System keys cannot be used for guild recruitment. Please add a Torn API key in Guild Configuration.",
+						"No active Torn API keys available in the Subversive script key pool. Please ensure at least one active user or system key is available.",
 				};
 			}
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Subversive Alliance
 // @namespace    subversive.torn
-// @version      3.2.0
+// @version      3.2.1
 // @description  Userscript for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
@@ -3341,18 +3341,40 @@
 			const text = el.textContent?.trim() || "";
 			if (!text) continue;
 
+			// Check if the user was the one defeated or hospitalized (NOT the target!)
+			const isUserInHospitalOrLost =
+				/\b(?:you\s+can'?t\s+attack\s+(?:someone\s+)?while|you\s+cannot\s+attack\s+(?:someone\s+)?while|while\s+(?:you\s+are\s+)?in\s+(?:the\s+)?hospital|you\s+are\s+(?:currently\s+)?in\s+(?:the\s+)?hospital|you\s+were\s+(?:hospitalized|mugged|left|defeated)|you\s+lost\b|stalemate)/i.test(
+					text,
+				);
+
 			const isVictory =
+				!isUserInHospitalOrLost &&
 				/\b(?:hospitalized|mugged|left|defeated)\b/i.test(text) &&
-				/^You\s+(?:hospitalized|mugged|left|defeated)\b/i.test(text);
+				/(?:^|\b)You\s+(?:hospitalized|mugged|left|defeated)\b/i.test(text);
 
 			const isAlreadyHospitalized =
-				/\b(?:in hospital|cannot be attacked|is currently in hospital|currently in the hospital|someone else is attacking)\b/i.test(
+				!isUserInHospitalOrLost &&
+				/\b(?:is\s+(?:currently\s+)?in\s+(?:the\s+)?hospital|cannot\s+be\s+attacked|someone\s+else\s+is\s+(?:currently\s+)?attacking|cannot\s+attack\s+this\s+(?:player|person)|they\s+are\s+(?:currently\s+)?in\s+(?:the\s+)?hospital)\b/i.test(
 					text,
 				);
 
 			if (isVictory) {
 				lastHandledBountyDefeatId = currentTargetId;
 				handleBountyTargetDefeated(currentTargetId, text, true);
+				return;
+			}
+			if (isUserInHospitalOrLost) {
+				lastHandledBountyDefeatId = currentTargetId;
+				const host = document.getElementById("satf-attack-hud-host");
+				if (host?.shadowRoot) {
+					const bar = host.shadowRoot.getElementById("satf-attack-bar");
+					if (bar) {
+						bar.innerHTML = `
+							<span class="satf-hud-badge" style="color:#ef4444;">[YOU IN HOSPITAL]</span>
+							<span class="satf-hud-val">${text.slice(0, 80)}</span>
+						`;
+					}
+				}
 				return;
 			}
 			if (isAlreadyHospitalized) {

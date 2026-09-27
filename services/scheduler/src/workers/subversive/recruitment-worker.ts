@@ -14,15 +14,20 @@ import type {
 	FactionWarfareRankedResponse,
 } from "@sentinel/schemas";
 import {
-	getNextSubversiveKey,
 	getPlayerStats,
 	type ManagedApiKey,
+	TornError,
 	tornApi,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
+import {
+	getNextSubversiveUserKey,
+	markSubversiveKeyDisabled,
+	recordSubversiveKeySuccess,
+} from "./subversive-key-pool";
 import {
 	detectTermedWar,
 	type RankedWarFactionReport,
@@ -32,6 +37,47 @@ const logger = new Logger("Scheduler", "SubversiveRecruitment");
 
 export const SUBVERSIVE_RECRUITMENT_CONFIG_ID = "subversive:recruitment_config";
 export const SUBVERSIVE_RECRUITMENT_STATE_ID = "subversive:recruitment_state";
+
+export const MAX_RANKED_WAR_DURATION_SECONDS = 123 * 3600; // 123 hours theoretical max duration
+export const MAX_RECRUITMENT_PAGES = 10;
+export const RECRUITMENT_PAGE_LIMIT = 100;
+
+function parseNextLinkParams(
+	nextLink: string,
+): Record<string, string | number> {
+	const params: Record<string, string | number> = {
+		limit: RECRUITMENT_PAGE_LIMIT,
+		sort: "DESC",
+	};
+	try {
+		const url = new URL(nextLink, "https://api.torn.com");
+		for (const [key, val] of url.searchParams.entries()) {
+			if (key === "key" || key === "comment" || key === "timestamp") continue;
+			const num = Number(val);
+			params[key] = !Number.isNaN(num) && String(num) === val ? num : val;
+		}
+	} catch {
+		const toMatch = nextLink.match(/[?&]to=(\d+)/);
+		const toVal = toMatch?.[1];
+		if (toVal) {
+			params.to = Number.parseInt(toVal, 10);
+		}
+	}
+	return params;
+}
+
+function handleKeyError(key: ManagedApiKey, err: unknown): void {
+	if (
+		(err instanceof TornError &&
+			(err.code === 2 ||
+				err.code === 10 ||
+				err.code === 13 ||
+				err.code === 18)) ||
+		String(err).includes("Key temporarily disabled")
+	) {
+		markSubversiveKeyDisabled(key.apiKey);
+	}
+}
 
 export interface SubversiveRecruitmentConfig {
 	minStats: number;
@@ -150,11 +196,26 @@ export async function runRecruitmentCycle(options?: {
 		.where(eq(systemStates.id, SUBVERSIVE_RECRUITMENT_STATE_ID));
 
 	const isInitialRun = !stateEntry?.init;
-	// On initial run, look back to the start of the current UTC day (00:00:00 UTC)
+	const nowSec = Math.floor(Date.now() / 1000);
 	const startOfCurrentDayUtc = Math.floor(
 		new Date().setUTCHours(0, 0, 0, 0) / 1000,
 	);
-	const minCompletedTimestamp = isInitialRun ? startOfCurrentDayUtc : 0;
+
+	// On initial run, look back to the start of today UTC.
+	// On subsequent runs, look back to lastScanTimestamp (with a 1-hour grace window) or up to 7 days.
+	const stateData = stateEntry?.data as
+		| { lastScanTimestamp?: number }
+		| undefined;
+	const minCompletedTimestamp = isInitialRun
+		? startOfCurrentDayUtc
+		: stateData?.lastScanTimestamp
+			? Math.max(stateData.lastScanTimestamp - 3600, nowSec - 7 * 86400)
+			: startOfCurrentDayUtc;
+
+	const startCutoffTimestamp =
+		minCompletedTimestamp > 0
+			? minCompletedTimestamp - MAX_RANKED_WAR_DURATION_SECONDS
+			: 0;
 
 	if (isInitialRun) {
 		logger.info(
@@ -162,32 +223,9 @@ export async function runRecruitmentCycle(options?: {
 		);
 	}
 
-	// Resolve configured Subversive guild for key pool resolution
-	const [subversiveConfigEntry] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, "subversive:guild_config"));
-
-	const subversiveGuildId = (
-		subversiveConfigEntry?.data as { guildId?: string } | undefined
-	)?.guildId;
-
-	if (!subversiveGuildId) {
-		logger.warn(
-			"Subversive guild is not configured. Skipping recruitment scan.",
-		);
-		return {
-			scannedWars: 0,
-			completedWars: 0,
-			termedWars: 0,
-			forfeitedWars: 0,
-			candidatesFound: 0,
-		};
-	}
-
 	const getApiKey = async (): Promise<ManagedApiKey | null> => {
 		try {
-			return await getNextSubversiveKey(subversiveGuildId);
+			return await getNextSubversiveUserKey();
 		} catch {
 			return null;
 		}
@@ -196,7 +234,7 @@ export async function runRecruitmentCycle(options?: {
 	const initialKey = await getApiKey();
 	if (!initialKey) {
 		logger.warn(
-			`No active Torn API keys configured for Subversive guild (${subversiveGuildId}). Skipping recruitment scan (guild recruitment strictly requires configured guild keys, system keys are not used).`,
+			"No active Torn API keys available in the Subversive script key pool. Skipping recruitment scan.",
 		);
 		return {
 			scannedWars: 0,
@@ -207,30 +245,89 @@ export async function runRecruitmentCycle(options?: {
 		};
 	}
 
-	// 1. Fetch recent ranked wars using the Subversive guild key
-	let warResponse: FactionWarfareRankedResponse;
-	try {
-		warResponse = (await tornApi.get("/faction/warfareranked", {
-			apiKey: initialKey.apiKey,
-			userId: initialKey.userId,
-			queryParams: {
-				limit: 100,
-				sort: "DESC",
-			},
-		})) as FactionWarfareRankedResponse;
-	} catch (err) {
-		logger.error("Failed to fetch /faction/warfareranked from Torn API:", err);
-		return {
-			scannedWars: 0,
-			completedWars: 0,
-			termedWars: 0,
-			forfeitedWars: 0,
-			candidatesFound: 0,
-		};
+	// 1. Fetch recent ranked wars across multiple pages using the Subversive script key pool
+	const allWarsToEvaluate: FactionRankedWarDetails[] = [];
+	const seenWarIds = new Set<number>();
+	let totalScannedWars = 0;
+	let currentQueryParams: Record<string, string | number> = {
+		limit: RECRUITMENT_PAGE_LIMIT,
+		sort: "DESC",
+	};
+
+	for (let page = 1; page <= MAX_RECRUITMENT_PAGES; page++) {
+		const pageKey = (await getApiKey()) ?? initialKey;
+		let warResponse: FactionWarfareRankedResponse;
+		try {
+			warResponse = (await tornApi.get("/faction/warfareranked", {
+				apiKey: pageKey.apiKey,
+				userId: pageKey.userId,
+				queryParams: currentQueryParams as unknown as {
+					limit?: number;
+					sort?: "ASC" | "DESC";
+					from?: number;
+					to?: number;
+				},
+			})) as FactionWarfareRankedResponse;
+			recordSubversiveKeySuccess(pageKey.apiKey);
+		} catch (err) {
+			handleKeyError(pageKey, err);
+			logger.error(
+				`Failed to fetch /faction/warfareranked page ${page} from Torn API:`,
+				err,
+			);
+			break;
+		}
+
+		const rawWars: FactionRankedWarDetails[] = warResponse.warfareranked ?? [];
+		if (rawWars.length === 0) {
+			break;
+		}
+
+		totalScannedWars += rawWars.length;
+
+		// Filter for finished wars that haven't been evaluated yet
+		for (const w of rawWars) {
+			if (!w.end || w.end === 0) continue; // Ongoing or scheduled
+			if (minCompletedTimestamp > 0 && w.end < minCompletedTimestamp) continue;
+			if (evaluatedWarIds.has(w.id)) continue;
+			if (!seenWarIds.has(w.id)) {
+				seenWarIds.add(w.id);
+				allWarsToEvaluate.push(w);
+			}
+		}
+
+		// Calculate oldest start timestamp on this page
+		let oldestStartOnPage = 0;
+		for (const w of rawWars) {
+			if (w.start && w.start > 0) {
+				if (oldestStartOnPage === 0 || w.start < oldestStartOnPage) {
+					oldestStartOnPage = w.start;
+				}
+			}
+		}
+
+		// Stopping condition: if the oldest war on this page started before startCutoffTimestamp,
+		// then because max ranked war duration is 123 hours, NO wars on subsequent pages could have completed >= minCompletedTimestamp.
+		if (
+			startCutoffTimestamp > 0 &&
+			oldestStartOnPage > 0 &&
+			oldestStartOnPage < startCutoffTimestamp
+		) {
+			logger.debug(
+				`Page ${page} reached start timestamp cutoff (${oldestStartOnPage} < ${startCutoffTimestamp}). Stopping pagination.`,
+			);
+			break;
+		}
+
+		const nextLink = warResponse._metadata?.links?.next;
+		if (!nextLink || rawWars.length === 0) {
+			break;
+		}
+
+		currentQueryParams = parseNextLinkParams(nextLink);
 	}
 
-	const rawWars: FactionRankedWarDetails[] = warResponse.warfareranked ?? [];
-	if (rawWars.length === 0) {
+	if (totalScannedWars === 0) {
 		logger.info("No ranked wars returned from API.");
 		return {
 			scannedWars: 0,
@@ -241,17 +338,8 @@ export async function runRecruitmentCycle(options?: {
 		};
 	}
 
-	// Filter for finished wars that haven't been evaluated yet
-	const warsToEvaluate = rawWars.filter((w) => {
-		if (!w.end || w.end === 0) return false; // Ongoing
-		if (minCompletedTimestamp > 0 && w.end < minCompletedTimestamp)
-			return false;
-		if (evaluatedWarIds.has(w.id)) return false;
-		return true;
-	});
-
 	logger.info(
-		`Evaluating ${warsToEvaluate.length} newly completed ranked wars (out of ${rawWars.length} returned)...`,
+		`Pagination complete across ${totalScannedWars} raw wars scanned. Evaluating ${allWarsToEvaluate.length} newly completed ranked wars...`,
 	);
 
 	let completedWars = 0;
@@ -261,7 +349,7 @@ export async function runRecruitmentCycle(options?: {
 
 	const excludedFactionSet = new Set(config.excludedFactionIds ?? []);
 
-	for (const war of warsToEvaluate) {
+	for (const war of allWarsToEvaluate) {
 		evaluatedWarIds.add(war.id);
 
 		// Double-check DB in case of multiple replicas
@@ -279,8 +367,8 @@ export async function runRecruitmentCycle(options?: {
 		// 2. Fetch detailed war report
 		let warReport: FactionRankedWarReportResponse["rankedwarreport"] | null =
 			null;
+		const reportKey = (await getApiKey()) ?? initialKey;
 		try {
-			const reportKey = (await getApiKey()) ?? initialKey;
 			const reportResponse = (await tornApi.get(
 				"/faction/{rankedWarId}/rankedwarreport",
 				{
@@ -289,8 +377,10 @@ export async function runRecruitmentCycle(options?: {
 					pathParams: { rankedWarId: war.id },
 				},
 			)) as FactionRankedWarReportResponse;
+			recordSubversiveKeySuccess(reportKey.apiKey);
 			warReport = reportResponse.rankedwarreport;
 		} catch (err) {
+			handleKeyError(reportKey, err);
 			logger.error(`Failed to fetch report for war #${war.id}:`, err);
 			await db
 				.insert(subversiveRankedWars)
@@ -443,13 +533,14 @@ export async function runRecruitmentCycle(options?: {
 			];
 			await Promise.all(
 				candidateFactionIds.map(async (fid) => {
+					const memberKey = (await getApiKey()) ?? initialKey;
 					try {
-						const memberKey = (await getApiKey()) ?? initialKey;
 						const factionRes = (await tornApi.get("/faction/{id}/members", {
 							apiKey: memberKey.apiKey,
 							userId: memberKey.userId,
 							pathParams: { id: fid },
 						})) as FactionMembersResponse;
+						recordSubversiveKeySuccess(memberKey.apiKey);
 						for (const member of factionRes.members ?? []) {
 							daysInFactionMap.set(member.id, member.days_in_faction);
 							if (member.position) {
@@ -457,6 +548,7 @@ export async function runRecruitmentCycle(options?: {
 							}
 						}
 					} catch (err) {
+						handleKeyError(memberKey, err);
 						logger.warn(
 							`Failed to fetch member roster for faction ${fid}:`,
 							err,
@@ -612,7 +704,7 @@ export async function runRecruitmentCycle(options?: {
 	);
 
 	return {
-		scannedWars: rawWars.length,
+		scannedWars: totalScannedWars,
 		completedWars,
 		termedWars,
 		forfeitedWars,

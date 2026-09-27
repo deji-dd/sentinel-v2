@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { db } from "@sentinel/database";
 import * as ffscouterModule from "@sentinel/torn-api";
 import * as managerModule from "@sentinel/torn-api";
 import {
@@ -6,9 +7,13 @@ import {
 	getCurrentSweepId,
 	getDynamicFloorPageCount,
 	getInMemoryBountyState,
+	getTargetProfileCacheSize,
+	getVerifiedAgeCacheSize,
+	hydrateBountyStateFromDb,
 	resetBountyFinderCooldown,
 	resetBountyFinderState,
 	runBountyFinderCycle,
+	setBountyStateHydrated,
 	setDynamicFloorPageCount,
 } from "../src/workers/subversive/bounty-finder";
 import * as keyPoolModule from "../src/workers/subversive/subversive-key-pool";
@@ -682,5 +687,146 @@ describe("Personal Bounty Target Finder Worker", () => {
 	it("uses the Subversive key pool for bounty requests instead of only personal key", async () => {
 		await runBountyFinderCycle();
 		expect(getNextSubversiveUserKeySpy).toHaveBeenCalled();
+	});
+
+	it("hydrates state from database on startup restoring verified ages, hospital timers, and recent ready targets", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+		const dbFindSpy = spyOn(
+			db.query.systemStates,
+			"findFirst",
+		).mockResolvedValue({
+			id: "personal:bounties",
+			init: true,
+			data: {
+				readyTargets: [
+					{
+						id: 501,
+						name: "CachedReadyTarget",
+						level: 20,
+						reward: 250000,
+						fairFight: 2.0,
+						estimatedBs: 10000,
+						age: 50,
+						status: { state: "Okay" },
+						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=501",
+						lastCheckedAt: nowSec - 30,
+					},
+				],
+				hospitalQueue: [
+					{
+						id: 502,
+						name: "CachedHospTarget",
+						level: 30,
+						reward: 500000,
+						fairFight: 1.5,
+						estimatedBs: 25000,
+						age: 120,
+						status: {
+							state: "Hospital",
+							description: "In hospital",
+							until: nowSec + 900,
+						},
+						secondsRemaining: 900,
+						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=502",
+						lastCheckedAt: nowSec - 30,
+					},
+				],
+				lastSyncTimestamp: nowSec - 30,
+				targetCount: 2,
+				pendingCount: 0,
+			},
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		} as unknown as Awaited<
+			ReturnType<typeof db.query.systemStates.findFirst>
+		>);
+
+		try {
+			setBountyStateHydrated(false);
+			await hydrateBountyStateFromDb();
+
+			expect(dbFindSpy).toHaveBeenCalled();
+			expect(getVerifiedAgeCacheSize()).toBe(2);
+			expect(getTargetProfileCacheSize()).toBe(2);
+
+			const state = getInMemoryBountyState();
+			expect(state.readyTargets.length).toBe(1);
+			expect(state.readyTargets[0]?.id).toBe(501);
+			expect(state.hospitalQueue.length).toBe(1);
+			expect(state.hospitalQueue[0]?.id).toBe(502);
+			expect(state.hospitalQueue[0]?.secondsRemaining).toBeGreaterThan(800);
+		} finally {
+			dbFindSpy.mockRestore();
+		}
+	});
+
+	it("skips expired hospital timers and stale ready targets when hydrating older state", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+		const dbFindSpy = spyOn(
+			db.query.systemStates,
+			"findFirst",
+		).mockResolvedValue({
+			id: "personal:bounties",
+			init: true,
+			data: {
+				readyTargets: [
+					{
+						id: 601,
+						name: "StaleReadyTarget",
+						level: 25,
+						reward: 100000,
+						fairFight: null,
+						estimatedBs: null,
+						age: 80,
+						status: { state: "Okay" },
+						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=601",
+						lastCheckedAt: nowSec - 600, // 10 mins ago
+					},
+				],
+				hospitalQueue: [
+					{
+						id: 602,
+						name: "ExpiredHospTarget",
+						level: 40,
+						reward: 200000,
+						fairFight: null,
+						estimatedBs: null,
+						age: 200,
+						status: {
+							state: "Hospital",
+							description: "Already left",
+							until: nowSec - 60, // expired hospital timer
+						},
+						secondsRemaining: 0,
+						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=602",
+						lastCheckedAt: nowSec - 600,
+					},
+				],
+				lastSyncTimestamp: nowSec - 600,
+				targetCount: 2,
+				pendingCount: 0,
+			},
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		} as unknown as Awaited<
+			ReturnType<typeof db.query.systemStates.findFirst>
+		>);
+
+		try {
+			setBountyStateHydrated(false);
+			await hydrateBountyStateFromDb();
+
+			// Age cache should still be saved (permanent)
+			expect(getVerifiedAgeCacheSize()).toBe(2);
+			// Profiles should NOT be cached for stale okay or expired hospital
+			expect(getTargetProfileCacheSize()).toBe(0);
+
+			// In-memory state remains clean
+			const state = getInMemoryBountyState();
+			expect(state.readyTargets.length).toBe(0);
+			expect(state.hospitalQueue.length).toBe(0);
+		} finally {
+			dbFindSpy.mockRestore();
+		}
 	});
 });
