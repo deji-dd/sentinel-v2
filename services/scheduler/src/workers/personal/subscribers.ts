@@ -1,6 +1,7 @@
 import { startBattlestatsLedger } from "./battlestats";
 import { startCompanySync } from "./company";
 import { startCrimesLedger } from "./crimes";
+import { startOilRigCollector } from "./oil-rig";
 import { startStocksLedger } from "./stocks";
 
 /**
@@ -12,4 +13,5 @@ export function registerPersonalLogSubscribers(): void {
 	startBattlestatsLedger();
 	startStocksLedger();
 	startCompanySync();
+	startOilRigCollector();
 }

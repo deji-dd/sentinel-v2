@@ -139,6 +139,36 @@ export const companyDailyProfits = pgTable("company_daily_profits", {
 		.notNull(),
 });
 
+export const oilRigSnapshots = pgTable("oil_rig_snapshots", {
+	id: text("id").primaryKey(),
+	companyId: integer("company_id").notNull(),
+	timestamp: timestamp("timestamp", {
+		withTimezone: true,
+		mode: "date",
+	}).notNull(),
+	rating: integer("rating").notNull(),
+	dailyRevenue: doublePrecision("daily_revenue").notNull(),
+	weeklyRevenue: doublePrecision("weekly_revenue").notNull(),
+	dailyCustomers: integer("daily_customers").notNull(),
+	weeklyCustomers: integer("weekly_customers").notNull(),
+	barrelsSold: integer("barrels_sold").notNull(),
+	barrelsInStock: integer("barrels_in_stock").notNull(),
+	barrelPrice: integer("barrel_price").notNull(),
+	adBudget: doublePrecision("ad_budget").notNull(),
+	storageCapacity: integer("storage_capacity").notNull(),
+	efficiency: integer("efficiency").notNull(),
+	environment: integer("environment").notNull(),
+	popularity: integer("popularity").notNull(),
+	trains: integer("trains").notNull(),
+	profile: jsonb("profile").notNull(),
+	employees: jsonb("employees").notNull(),
+	stock: jsonb("stock").notNull(),
+	metrics: jsonb("metrics").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
 export const userStocks = pgTable("user_stocks", {
 	id: text("id").primaryKey(),
 	shares: integer("shares").default(0).notNull(),

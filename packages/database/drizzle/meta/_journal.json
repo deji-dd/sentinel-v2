@@ -162,6 +162,13 @@
 			"when": 1789490723088,
 			"tag": "0022_early_mastermind",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1790463668834,
+			"tag": "0023_legal_senator_kelly",
+			"breakpoints": true
 		}
 	]
 }

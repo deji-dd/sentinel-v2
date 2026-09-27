@@ -13,6 +13,7 @@ import { configCommand } from "./config";
 import { dashboardCommand } from "./dashboard";
 import { donationSummaryCommand } from "./donation-summary";
 import { itemRequestHelpCommand } from "./item-request-help";
+import { oilBriefingCommand } from "./oil-briefing";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { targetFinderCommand } from "./target-finder";
@@ -58,6 +59,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...allianceMapCommand, scope: "normal" },
 	{ ...burnMapCommand, scope: "normal" },
 	{ ...targetFinderCommand, scope: "normal" },
+	{ ...oilBriefingCommand, scope: "both" },
 ];
 
 // 2. Elims Commands (scoped strictly to the active tournament operations guild)

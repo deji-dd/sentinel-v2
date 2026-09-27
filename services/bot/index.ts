@@ -12,6 +12,11 @@ import { guildMemberAddEvent } from "./src/events/guild-member-add";
 import { interactionCreateEvent } from "./src/events/interaction-create";
 import { readyEvent } from "./src/events/ready";
 import { handleArmoryStorageChatMessage } from "./src/lib/elims-armory-storage";
+import {
+	createBaseEmbed,
+	createErrorEmbed,
+	EMBED_COLORS,
+} from "./src/lib/embeds";
 import { setupBotIpcListeners } from "./src/lib/ipc";
 import { logger } from "./src/lib/logger";
 import { handleReactionRoleAdd } from "./src/lib/reaction-roles";
@@ -43,6 +48,7 @@ async function main(): Promise<void> {
 			GatewayIntentBits.GuildMembers,
 			GatewayIntentBits.GuildMessageReactions,
 			GatewayIntentBits.MessageContent,
+			GatewayIntentBits.DirectMessages,
 		],
 		partials: [
 			Partials.Message,
@@ -68,8 +74,102 @@ async function main(): Promise<void> {
 	client.on(Events.MessageReactionAdd, (reaction, user) =>
 		handleReactionRoleAdd(reaction, user),
 	);
-	client.on(Events.MessageCreate, (message) => {
+	client.on(Events.MessageCreate, async (message) => {
 		void handleArmoryStorageChatMessage(message);
+
+		// Handle on-demand personal DM command for Succession Oil briefing
+		const allowedUserId = process.env.DISCORD_USER_ID;
+		if (
+			allowedUserId &&
+			message.author.id === allowedUserId &&
+			!message.guild
+		) {
+			const clean = message.content.trim().toLowerCase();
+			if (
+				clean === "!oil" ||
+				clean === "oil" ||
+				clean === "!briefing" ||
+				clean === "briefing"
+			) {
+				try {
+					await message.channel.sendTyping();
+					const standbyEmbed = createBaseEmbed(
+						"Director Briefing",
+						"Analyzing...Stand by for your briefing.",
+						EMBED_COLORS.PRIMARY,
+					);
+					await message.reply({ embeds: [standbyEmbed] });
+					const { generateAndSendDirectorBriefing } = await import(
+						"@sentinel/utils"
+					);
+					const { db, desc, oilRigSnapshots } = await import(
+						"@sentinel/database"
+					);
+					await generateAndSendDirectorBriefing({
+						useLiveData: true,
+						fetchLiveData: async () => {
+							const { tornApi } = await import("@sentinel/torn-api");
+							const live = await tornApi.getPersonal("/company", {
+								queryParams: { selections: ["profile", "employees", "stock"] },
+							});
+							return live as unknown as import("@sentinel/utils").CompanySnapshot;
+						},
+						fetchHistory: async () => {
+							const rows = await db
+								.select()
+								.from(oilRigSnapshots)
+								.orderBy(desc(oilRigSnapshots.timestamp))
+								.limit(14);
+							return rows.reverse().map((r) => ({
+								timestamp: Math.floor(r.timestamp.getTime() / 1000),
+								isoDate: r.timestamp.toISOString().slice(0, 10),
+								stars: r.rating,
+								dailyIncome: r.dailyRevenue,
+								weeklyIncome: r.weeklyRevenue,
+								efficiency: r.efficiency,
+								environment: r.environment,
+								popularity: r.popularity,
+								adBudget: r.adBudget,
+								stock: {
+									barrelPrice: r.barrelPrice,
+									inStock: r.barrelsInStock,
+									soldAmount: r.barrelsSold,
+									fillPct:
+										r.storageCapacity > 0
+											? Number(
+													(
+														(r.barrelsInStock / r.storageCapacity) *
+														100
+													).toFixed(1),
+												)
+											: 0,
+								},
+								metrics: {
+									totalAddictionPenalty: Number(
+										(r.metrics as { totalAddictionPenalty?: number })
+											?.totalAddictionPenalty ?? 0,
+									),
+									employeesWithAddiction: Number(
+										(r.metrics as { employeesWithAddiction?: number })
+											?.employeesWithAddiction ?? 0,
+									),
+								},
+							}));
+						},
+					});
+				} catch (err) {
+					logger.error("Failed to generate on-demand oil briefing in DM:", err);
+					await message.reply({
+						embeds: [
+							createErrorEmbed(
+								"Briefing Generation Failed",
+								`Failed to generate briefing: ${err instanceof Error ? err.message : String(err)}`,
+							),
+						],
+					});
+				}
+			}
+		}
 	});
 
 	// Register IPC event listeners for real-time dashboard dispatches

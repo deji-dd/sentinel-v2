@@ -50,3 +50,7 @@ repomix.config.json
 
 # agents
 .agents/
+
+# oil rig scratch snapshots
+data/oil_rig_history.jsonl
+data/oil_rig_snapshot.json

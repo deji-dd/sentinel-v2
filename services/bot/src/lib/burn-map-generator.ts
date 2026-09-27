@@ -171,7 +171,10 @@ export function generateBurnMapWithLegend(
  */
 export async function convertSvgToPng(svgBuffer: Buffer): Promise<Buffer> {
 	try {
-		const resvg = new Resvg(svgBuffer, { dpi: 150 });
+		const resvg = new Resvg(svgBuffer, {
+			dpi: 150,
+			font: { loadSystemFonts: false },
+		});
 		const rendered = resvg.render();
 		return Buffer.from(rendered.asPng());
 	} catch (error) {
