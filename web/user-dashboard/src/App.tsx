@@ -13,7 +13,6 @@ import { LoadingProvider, useGlobalLoading } from "@/contexts/LoadingContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { BattlestatsLedgerPage } from "@/pages/BattlestatsLedgerPage";
-import { CrimeLedgerPage } from "@/pages/CrimeLedgerPage";
 import { LogManagerPage } from "@/pages/LogManagerPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { StocksLedgerPage } from "@/pages/StocksLedgerPage";
@@ -76,14 +75,6 @@ function MainRouter() {
 		path === "/logs"
 	) {
 		return <LogManagerPage />;
-	}
-
-	if (
-		path === "/crime-ledger" ||
-		path === "/crimes" ||
-		path === "/personal-crimes"
-	) {
-		return <CrimeLedgerPage />;
 	}
 
 	if (

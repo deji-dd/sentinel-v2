@@ -2,7 +2,6 @@ import {
 	Coins,
 	Dumbbell,
 	FileText,
-	Fingerprint,
 	LayoutDashboard,
 	Moon,
 	Sun,
@@ -61,11 +60,6 @@ const navGroups: NavGroup[] = [
 				label: "Logs",
 				href: "/logs",
 				icon: FileText,
-			},
-			{
-				label: "Crimes",
-				href: "/crimes",
-				icon: Fingerprint,
 			},
 			{
 				label: "Battlestats",

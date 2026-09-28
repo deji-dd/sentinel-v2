@@ -4,7 +4,6 @@ import {
 	Coins,
 	Dumbbell,
 	FileText,
-	Fingerprint,
 	LayoutDashboard,
 	ShieldCheck,
 	Sparkles,
@@ -40,15 +39,6 @@ const ACTIVE_MODULES = [
 		href: "/logs",
 		icon: FileText,
 		accent: "from-blue-500/20 to-blue-500/5 text-blue-400 border-blue-500/30",
-		badge: "Active",
-	},
-	{
-		title: "Crime Ledger",
-		description:
-			"Crimes 2.0 payout tracking, success rates, progressive payouts, and historical analytics.",
-		href: "/crimes",
-		icon: Fingerprint,
-		accent: "from-red-500/20 to-red-500/5 text-red-400 border-red-500/30",
 		badge: "Active",
 	},
 	{

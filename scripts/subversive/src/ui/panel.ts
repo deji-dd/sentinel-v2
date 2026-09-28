@@ -66,10 +66,7 @@ export function updateUserBadge(): void {
 	if (!userBadgeElem) return;
 	const displayName = state.user?.name || state.user?.tornName;
 	if (displayName) {
-		const bsStr = state.user?.bsScore
-			? ` · BS: ${Math.round(state.user.bsScore).toLocaleString()}`
-			: "";
-		userBadgeElem.textContent = `${displayName} [${state.user?.tornId}]${bsStr}`;
+		userBadgeElem.textContent = `${displayName} [${state.user?.tornId}]`;
 		userBadgeElem.style.color = "var(--accent)";
 	} else {
 		userBadgeElem.textContent = "Guest (Not connected)";

@@ -26,7 +26,7 @@ import {
 	initRosterElements,
 	renderAvailableTargets,
 } from "./war/roster";
-import { initWarBannerElements } from "./war/war-banner";
+import { initWarBannerElements, renderWarBanner } from "./war/war-banner";
 import {
 	executeGetTarget,
 	fetchNextTarget,
@@ -53,6 +53,7 @@ function start(): void {
 	// Initialize UI Modules
 	initPanel(root);
 	initWarBannerElements(root);
+	renderWarBanner(null); // show empty state until first API response
 	initRosterElements(root);
 	initHospitalElements(root, setStatus);
 	initBounties(root, setBountiesStatus);

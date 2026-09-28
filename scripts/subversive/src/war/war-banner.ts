@@ -3,6 +3,8 @@ import type { CurrentWarInfo } from "../types";
 import { formatSeconds } from "../utils/formatters";
 
 let warBanner: HTMLElement | null = null;
+let warEmpty: HTMLElement | null = null;
+let warActiveContent: HTMLElement | null = null;
 let warOpponentName: HTMLElement | null = null;
 let warTimer: HTMLElement | null = null;
 let warScoreSubversive: HTMLElement | null = null;
@@ -11,6 +13,10 @@ let warScoreLead: HTMLElement | null = null;
 
 export function initWarBannerElements(root: ShadowRoot | Document): void {
 	warBanner = root.getElementById("satf-war-banner") as HTMLElement | null;
+	warEmpty = root.getElementById("satf-war-empty") as HTMLElement | null;
+	warActiveContent = root.getElementById(
+		"satf-war-active-content",
+	) as HTMLElement | null;
 	warOpponentName = (root.getElementById("satf-war-opp-name") ||
 		root.getElementById("satf-opp-name")) as HTMLElement | null;
 	warTimer = (root.getElementById("satf-war-timer") ||
@@ -49,8 +55,14 @@ export function stopCountdownTimer(): void {
 }
 
 export function renderWarBanner(war: CurrentWarInfo | null): void {
+	const engaged = war && isWarEngaged();
+
+	if (warEmpty) warEmpty.style.display = engaged ? "none" : "block";
+	if (warActiveContent)
+		warActiveContent.style.display = engaged ? "block" : "none";
+
 	if (!warBanner) return;
-	if (!war || !isWarEngaged()) {
+	if (!engaged) {
 		warBanner.style.display = "none";
 		stopCountdownTimer();
 		return;

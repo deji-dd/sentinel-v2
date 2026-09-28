@@ -17,7 +17,6 @@ import {
 	sql,
 	systemStates,
 	tornCrimes,
-	userSessions,
 } from "@sentinel/database";
 import { getPersonalKey } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
@@ -172,7 +171,6 @@ export async function getCrimeLedgerStateObject() {
 
 export async function authenticateCrimeLedgerRequest(
 	headers: Record<string, string | undefined>,
-	cookie?: Record<string, { value?: unknown }>,
 ): Promise<boolean> {
 	// If in test environment without auth provided, allow test runner to pass
 	if (process.env.NODE_ENV === "test") {
@@ -194,43 +192,27 @@ export async function authenticateCrimeLedgerRequest(
 		}
 	}
 
-	if (providedKey) {
-		if (
-			process.env.PERSONAL_API_KEY &&
-			providedKey === process.env.PERSONAL_API_KEY
-		) {
-			return true;
-		}
-		if (
-			process.env.BLASTED_SCRIPT_KEY &&
-			providedKey === process.env.BLASTED_SCRIPT_KEY
-		) {
-			return true;
-		}
-		try {
-			const personalKey = await getPersonalKey();
-			if (personalKey?.apiKey && providedKey === personalKey.apiKey) {
-				return true;
-			}
-		} catch {
-			// fallthrough
-		}
-	}
+	if (!providedKey) return false;
 
-	const sessionToken =
-		cookie?.sentinel_session?.value ?? cookie?.session?.value;
-	if (typeof sessionToken === "string" && sessionToken) {
-		try {
-			const [session] = await db
-				.select()
-				.from(userSessions)
-				.where(eq(userSessions.id, sessionToken));
-			if (session) {
-				return true;
-			}
-		} catch {
-			// fallthrough
+	if (
+		process.env.PERSONAL_API_KEY &&
+		providedKey === process.env.PERSONAL_API_KEY
+	) {
+		return true;
+	}
+	if (
+		process.env.BLASTED_SCRIPT_KEY &&
+		providedKey === process.env.BLASTED_SCRIPT_KEY
+	) {
+		return true;
+	}
+	try {
+		const personalKey = await getPersonalKey();
+		if (personalKey?.apiKey && providedKey === personalKey.apiKey) {
+			return true;
 		}
+	} catch {
+		// fallthrough
 	}
 
 	return false;
@@ -280,11 +262,11 @@ export async function serveBlastedUserscript(
 }
 
 export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
-	.onBeforeHandle(async ({ headers, cookie, set, path }) => {
+	.onBeforeHandle(async ({ headers, set, path }) => {
 		if (path.endsWith("/script.user.js") || path.endsWith("/script")) {
 			return;
 		}
-		const isAuthed = await authenticateCrimeLedgerRequest(headers, cookie);
+		const isAuthed = await authenticateCrimeLedgerRequest(headers);
 		if (!isAuthed) {
 			set.status = 401;
 			return {
