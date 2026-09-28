@@ -316,6 +316,15 @@ export function handleWarTargetOutcome(
 	}
 }
 
+/** Extract dialog message text with button/link labels stripped out. */
+function extractDialogText(el: Element): string {
+	const clone = el.cloneNode(true) as Element;
+	for (const node of clone.querySelectorAll("button, a, [role='button']")) {
+		node.remove();
+	}
+	return clone.textContent?.replace(/\s+/g, " ").trim() || "";
+}
+
 export function checkAttackPageOutcome(): void {
 	const urlParams = new URLSearchParams(window.location.search);
 	if (urlParams.get("sid") !== "attack") return;
@@ -334,7 +343,7 @@ export function checkAttackPageOutcome(): void {
 	);
 
 	for (const el of dialogEls) {
-		const text = el.textContent?.trim() || "";
+		const text = extractDialogText(el);
 		if (!text) continue;
 
 		const isUserInHospitalOrLost =
