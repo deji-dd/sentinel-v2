@@ -24,11 +24,12 @@ COPY web/user-dashboard/package.json ./web/user-dashboard/
 
 RUN bun install --frozen-lockfile || bun install
 
-# Build stage: compile web frontends
+# Build stage: compile web frontends and userscripts
 FROM dependencies AS builder
 WORKDIR /app
 COPY . .
 RUN bun run web:build
+RUN bun run scripts:build
 
 # Production runner image
 FROM builder AS runner

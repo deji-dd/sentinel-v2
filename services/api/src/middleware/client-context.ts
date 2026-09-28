@@ -6,6 +6,7 @@ export type ClientAppType =
 	| "user-dashboard"
 	| "elims-dashboard"
 	| "subversive-dashboard"
+	| "blasted-script"
 	| "unknown";
 
 /**
@@ -52,6 +53,8 @@ export const clientContextPlugin = new Elysia({
 		origin.startsWith("https://sentinel.ayodejib.dev")
 	) {
 		clientApp = "user-dashboard";
+	} else if (clientHeader === "blasted-script") {
+		clientApp = "blasted-script";
 	}
 
 	return {

@@ -1,4 +1,4 @@
-import { Logger, loadLatestSnapshotFromDb } from "../packages/utils";
+import { Logger, loadLatestSnapshotFromDb } from "../../packages/utils";
 
 const logger = new Logger("OilRigAudit");
 
@@ -241,4 +241,6 @@ async function main(): Promise<void> {
 	console.log("==========================================================\n");
 }
 
-void main();
+if (import.meta.main) {
+	void main();
+}

@@ -61,6 +61,9 @@ jobs:
       - name: Build Web Dashboards
         run: bun run web:build
 
+      - name: Build Userscripts
+        run: bun run scripts:build
+
       - name: Run Database Migrations
         run: bun run db:migrate
 

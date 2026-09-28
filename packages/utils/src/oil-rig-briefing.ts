@@ -1,8 +1,10 @@
 import { Logger } from "./logger";
 import {
-	analyzeHiringPriorities,
 	analyzeStockAndPricing,
+	buildWeekToDateLogEntries,
 	formatHistoryTable,
+	formatWeekToDateSummary,
+	formatWeekToDateTable,
 	getCompetitorBenchmarkContext,
 	type OilRigHistoryRecord,
 	solveOptimalRoster,
@@ -110,11 +112,7 @@ export async function callGemini(
 	prompt: string,
 	apiKey: string,
 ): Promise<string | null> {
-	const models = [
-		"gemini-2.0-flash",
-		"gemini-1.5-flash",
-		"gemini-flash-latest",
-	];
+	const models = ["gemini-flash-latest"];
 	for (const model of models) {
 		try {
 			logger.info(`Requesting completion from Google AI (${model})...`);
@@ -232,7 +230,8 @@ export async function loadRollingHistory(
 			.limit(days);
 
 		if (rows && rows.length > 0) {
-			return rows.reverse().map((r) => {
+			const chronological = rows.reverse();
+			return chronological.map((r, idx) => {
 				const metrics = r.metrics as {
 					emptyEmployeeSlots?: number;
 					employeesWithAddiction?: number;
@@ -244,12 +243,34 @@ export async function loadRollingHistory(
 						? Number(((r.barrelsInStock / r.storageCapacity) * 100).toFixed(1))
 						: 0;
 
+				const rawEmps = (
+					Array.isArray(r.employees) ? r.employees : []
+				) as Array<Record<string, unknown>>;
+				const dailyWages = rawEmps.reduce(
+					(sum, e) => sum + Number(e.wage ?? 0),
+					0,
+				);
+				const dailyProfit = r.dailyRevenue - dailyWages - (r.adBudget ?? 0);
+
+				let dailyProduced: number | undefined;
+				const prev = idx > 0 ? chronological[idx - 1] : undefined;
+				if (prev && r.barrelsSold >= 0) {
+					const delta = r.barrelsInStock - prev.barrelsInStock;
+					const est = delta + r.barrelsSold;
+					if (est >= 0) {
+						dailyProduced = est;
+					}
+				}
+
 				return {
 					timestamp: Math.floor(r.timestamp.getTime() / 1000),
 					isoDate: r.timestamp.toISOString().slice(0, 10),
 					stars: r.rating,
 					dailyIncome: r.dailyRevenue,
 					weeklyIncome: r.weeklyRevenue,
+					dailyWages,
+					dailyProfit,
+					dailyProduced,
 					efficiency: r.efficiency,
 					environment: r.environment,
 					popularity: r.popularity,
@@ -344,18 +365,42 @@ export async function generateAndSendDirectorBriefing(
 	const fillPct = ((inStock / storageCap) * 100).toFixed(1);
 	const dailySold = oilStock?.sold_amount ?? 0;
 	const currentPrice = oilStock?.price ?? 181;
-	let dailyProduced: number | undefined;
-	if (history.length >= 2) {
-		const latestHist = history[history.length - 1];
-		const prevHist = history[history.length - 2];
-		if (latestHist && prevHist && latestHist.stock.soldAmount > 0) {
-			const delta = latestHist.stock.inStock - prevHist.stock.inStock;
-			const estProduced = delta + latestHist.stock.soldAmount;
-			if (estProduced >= 0) {
-				dailyProduced = estProduced;
+
+	// Profit calculations must NEVER be live; always pull from DB snapshots
+	// because live wage or budget changes would distort historical/current tick accounting.
+	const latestDbRecord =
+		history.length > 0 ? history[history.length - 1] : undefined;
+
+	const dailyRevenue = latestDbRecord?.dailyIncome ?? snap.profile.income.daily;
+	const dailyWages =
+		latestDbRecord?.dailyWages ??
+		snap.employees.reduce((sum, e) => sum + (e.wage ?? 0), 0);
+	const dailyAdBudget =
+		latestDbRecord?.adBudget ?? snap.profile.advertisement_budget;
+	const dailyProfit =
+		latestDbRecord?.dailyProfit ?? dailyRevenue - dailyWages - dailyAdBudget;
+
+	let dailyProduced: number | undefined = latestDbRecord?.dailyProduced;
+	if (dailyProduced === undefined && history.length >= 2) {
+		const prev = history[history.length - 2];
+		if (latestDbRecord && prev && latestDbRecord.stock.soldAmount >= 0) {
+			const delta = latestDbRecord.stock.inStock - prev.stock.inStock;
+			const est = delta + latestDbRecord.stock.soldAmount;
+			if (est >= 0) {
+				dailyProduced = est;
 			}
 		}
 	}
+	const producedValue =
+		dailyProduced !== undefined ? dailyProduced * currentPrice : undefined;
+
+	// Build strictly Monday - Sunday week-to-date daily logs directly from DB snapshots
+	const wtdSummary = buildWeekToDateLogEntries({
+		history,
+	});
+	const wtdProfit = wtdSummary.totalProfit;
+	const wtdTable = formatWeekToDateTable(wtdSummary);
+	const wtdSummaryText = formatWeekToDateSummary(wtdSummary);
 
 	// Build raw employee matrix table for LLM
 	const employeeRows = snap.employees
@@ -388,43 +433,44 @@ export async function generateAndSendDirectorBriefing(
 		adBudget: snap.profile.advertisement_budget,
 		dailyIncome: snap.profile.income.daily,
 	});
-	const hiringAnalysis = analyzeHiringPriorities(
-		snap.profile.employees.hired,
-		snap.profile.employees.capacity,
-		rosterAnalysis.rosterByRole,
-	);
 
-	// Dynamically format active transfers
+	const hasRoleTransfers = rosterAnalysis.activeTransfers.length > 0;
+	const hasPriceSuggestion =
+		stockAnalysis.recommendedPrice.action !== "maintain" &&
+		stockAnalysis.recommendedPrice.exact !== currentPrice;
+	const hasAdSuggestion =
+		stockAnalysis.recommendedAdSpend.action !== "maintain" &&
+		stockAnalysis.recommendedAdSpend.amount !== dailyAdBudget;
+
+	// Dynamically format active transfers and target lineup
 	let transfersFormatted = "";
-	if (rosterAnalysis.activeTransfers.length > 0) {
+	let lineupFormatted = "";
+	if (hasRoleTransfers) {
 		transfersFormatted = rosterAnalysis.activeTransfers
 			.map(
 				(t) =>
 					`• **${t.name}** (${t.statsStr}): ${t.fromRole} ➔ **${t.toRole}**`,
 			)
 			.join("\n");
-	} else {
-		transfersFormatted =
-			"**Roster is fully aligned with target blueprint** — all employees are locked in their designated positions.";
-	}
 
-	// Dynamically format target lineup
-	const lineupFormatted = Object.entries(rosterAnalysis.rosterByRole)
-		.map(
-			([role, members]) =>
-				`• **${role}** (${members.length}): ${members.join(", ")}`,
-		)
-		.join("\n");
+		lineupFormatted = Object.entries(rosterAnalysis.rosterByRole)
+			.map(
+				([role, members]) =>
+					`• **${role}** (${members.length}): ${members.join(", ")}`,
+			)
+			.join("\n");
+	}
 
 	// Dynamically format rehab tiers
 	const t1 = rosterAnalysis.rehabTiers.tier1;
 	const t2 = rosterAnalysis.rehabTiers.tier2;
 	const t3 = rosterAnalysis.rehabTiers.tier3;
+	const hasAddiction = t1.length > 0 || t2.length > 0 || t3.length > 0;
 
 	let rehabFormatted = "";
-	if (t1.length === 0 && t2.length === 0 && t3.length === 0) {
+	if (!hasAddiction) {
 		rehabFormatted =
-			"• **Zero addiction penalties detected** across all staff.";
+			"• **Staff Health:** Zero addiction debuffs detected across all staff.";
 	} else {
 		const lines: string[] = [];
 		if (t1.length > 0) {
@@ -445,9 +491,70 @@ export async function generateAndSendDirectorBriefing(
 		rehabFormatted = lines.join("\n");
 	}
 
+	// Stock & Pricing bullets conditionally formatted
+	const stockVerdictBullets: string[] = [];
+	if (
+		hasPriceSuggestion ||
+		hasAdSuggestion ||
+		stockAnalysis.state !== "equilibrium"
+	) {
+		stockVerdictBullets.push(
+			`• **Storage Status:** ${stockAnalysis.stateDescription}`,
+		);
+	}
+	if (hasPriceSuggestion) {
+		stockVerdictBullets.push(
+			`• **Pricing:** ${stockAnalysis.recommendedPrice.formatted}`,
+		);
+	}
+	if (hasAdSuggestion) {
+		stockVerdictBullets.push(
+			`• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}`,
+		);
+	}
+
+	// Action item rules for LLM
+	const actionItemRules: string[] = [];
+	if (hasRoleTransfers) {
+		actionItemRules.push(
+			`- Under "### Immediate Action Items", start directly with "**Role Transfers:**" (one concise bullet per transfer: "• **Employee** (KeyStat): CurrentRole ➔ **TargetRole**").`,
+			`- Follow with "**Target Lineup:**" (one line summary per role: "• **RoleName** (Count): Name1, Name2, ...").`,
+		);
+	} else {
+		actionItemRules.push(
+			`- IMPORTANT: All employees are currently locked in their optimal target positions. STRICTLY DO NOT output any "**Role Transfers:**" or "**Target Lineup:**" sections.`,
+		);
+	}
+	actionItemRules.push(
+		`- For Swiss Rehab: Output concise tier bullets with employee names and penalties (or state zero debuffs).`,
+	);
+
+	if (hasPriceSuggestion) {
+		actionItemRules.push(
+			`- For Pricing: Output "• **Pricing:** ${stockAnalysis.recommendedPrice.formatted}"`,
+		);
+	} else {
+		actionItemRules.push(
+			`- IMPORTANT: Pricing is already optimal. STRICTLY DO NOT output any Pricing bullet.`,
+		);
+	}
+
+	if (hasAdSuggestion) {
+		actionItemRules.push(
+			`- For Ad Budget: Output "• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}"`,
+		);
+	} else {
+		actionItemRules.push(
+			`- IMPORTANT: Ad budget is already optimal. STRICTLY DO NOT output any Ad Budget bullet.`,
+		);
+	}
+	actionItemRules.push(
+		`- IMPORTANT: STRICTLY DO NOT output any "10★ Progression Roadmap" section.`,
+	);
+
 	const prompt = `
-You are the Chief Operations Advisor for Succession Oil, a Torn City Oil Rig pushing for 10 stars.
-You are conducting a thorough strategic evaluation. You are provided with:
+You are the Chief Operations Advisor for Succession Oil, a Torn City Oil Rig.
+Conduct a concise strategic operational evaluation. You are provided with:
 1. Live Telemetry & Rig Profile
 2. Employee Roster Matrix
 3. Rolling 7–14 Day History Table
@@ -456,30 +563,21 @@ You are conducting a thorough strategic evaluation. You are provided with:
 
 FORMATTING & STYLE RULES:
 - Output MUST be concise, punchy, and formatted strictly as actionable bullet points. No long paragraphs, essays, or wordy explanations.
-- Under "### Immediate Action Items", do NOT output any introductory text or explanation about efficiency or environment. Start IMMEDIATELY with "**Role Transfers:**".
-- For Role Transfers: Output exactly ONE concise bullet per transfer: "• **Employee** (KeyStat): CurrentRole ➔ **TargetRole**". Do NOT include reasons, justifications, or text in brackets after the target role.
-- For Target Lineup: Output a clean single-line summary for each role: "• **RoleName** (Count): Name1, Name2, ...".
-- For Swiss Rehab: Output 3 concise tier bullets with employee names, debuffs, and a short 1-sentence risk note.
-- For Stock & Pricing Verdict: Output exactly 3 concise one-line bullets (Storage Status, Pricing, Ad Budget). No rationale paragraph:
-  • **Storage Status:** ${stockAnalysis.stateDescription}
-  • **Pricing:** ${stockAnalysis.recommendedPrice.formatted}
-  • **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}
-- For 10★ Progression Roadmap: Output 1 crisp single-line bullet:
-  • **Capacity Utilization (${hiringAnalysis.hired} ➔ ${hiringAnalysis.capacity} Seats):** Next priority hires: ${hiringAnalysis.shortSummary}
+${actionItemRules.join("\n")}
 - Do NOT use any emojis anywhere in your output. Keep all text completely emoji-free.
 - Do NOT output any memo header, greeting, or preamble (NO "TO:", "FROM:", "DATE:", "SUBJECT:", or "EXECUTIVE BRIEFING").
 - Start directly with the first section header: "### Immediate Action Items".
-- Use clean title-case headers ("### Immediate Action Items", "### Stock & Pricing Verdict", "### 10★ Progression Roadmap"). Never use all-caps headers.
-- Total character count for each section MUST be under 1,500 characters so nothing ever truncates.
+- Use clean title-case headers ("### Immediate Action Items", "### Stock & Pricing Verdict"). Never use all-caps headers.
+- Total character count MUST be under 1,500 characters so nothing ever truncates.
 
 ---
 ### DATA BLOCK 1: LIVE RIG TELEMETRY
 • Rating: ${snap.profile.rating}★
-• Daily Revenue: $${snap.profile.income.daily.toLocaleString()} | Weekly Revenue: $${snap.profile.income.weekly.toLocaleString()}
-• Funds in Vault: $${snap.profile.funds.toLocaleString()}
+• Daily Revenue: $${dailyRevenue.toLocaleString()} | Weekly Revenue: $${snap.profile.income.weekly.toLocaleString()}
+• Daily Profit: ${dailyProfit >= 0 ? "+" : ""}$${dailyProfit.toLocaleString()} | WTD Profit: ${wtdProfit >= 0 ? "+" : ""}$${wtdProfit.toLocaleString()}
 • Stock in Storage: ${inStock.toLocaleString()} / ${storageCap.toLocaleString()} barrels (${fillPct}% full)
 • Daily Sales: ${dailySold.toLocaleString()} barrels at $${currentPrice}/barrel
-• Daily Ad Budget: $${snap.profile.advertisement_budget.toLocaleString()}/day (Daily customers: ${snap.profile.customers.daily})
+• Daily Ad Budget: $${dailyAdBudget.toLocaleString()}/day (Daily customers: ${snap.profile.customers.daily})
 • Current Staff: ${snap.profile.employees.hired}/${snap.profile.employees.capacity}
 • Overall Efficiency: ${snap.profile.efficiency}% | Environment: ${snap.profile.environment}%
 
@@ -497,39 +595,22 @@ ${competitorBenchmark}
 
 ---
 ### DATA BLOCK 5: ECONOMIC RULES & SOLVER BASELINES
-• Role Transfer Solution:
-${transfersFormatted}
-• Finalized Target Lineup:
-${lineupFormatted}
+${hasRoleTransfers ? `• Role Transfer Solution:\n${transfersFormatted}\n• Finalized Target Lineup:\n${lineupFormatted}` : "• Roster: 100% optimal. All employees in target roles. 0 transfers needed."}
 • Addiction Debuff Priorities:
 ${rehabFormatted}
 • Inventory State & Recommendation: ${stockAnalysis.state.toUpperCase()} (${stockAnalysis.stateDescription})
-• Pricing Engine Baseline: Action: ${stockAnalysis.recommendedPrice.action.toUpperCase()} | Range: $${stockAnalysis.recommendedPrice.min}–$${stockAnalysis.recommendedPrice.max} | Rationale: ${stockAnalysis.recommendedPrice.rationale}
-• Ad Spend Baseline: Action: ${stockAnalysis.recommendedAdSpend.action.toUpperCase()} | Amount: $${stockAnalysis.recommendedAdSpend.amount.toLocaleString()}/day | Rationale: ${stockAnalysis.recommendedAdSpend.rationale}
-• Capacity & Open Seats: ${hiringAnalysis.openSeats} open seats. Priority Next Hires: ${hiringAnalysis.shortSummary}
+• Pricing Engine Baseline: Action: ${stockAnalysis.recommendedPrice.action.toUpperCase()} | Exact: $${stockAnalysis.recommendedPrice.exact} | Suggested: ${hasPriceSuggestion ? "YES" : "NO"}
+• Ad Spend Baseline: Action: ${stockAnalysis.recommendedAdSpend.action.toUpperCase()} | Amount: $${stockAnalysis.recommendedAdSpend.amount.toLocaleString()}/day | Suggested: ${hasAdSuggestion ? "YES" : "NO"}
 
 ---
 ### YOUR ADVISORY MANDATE:
 Output the briefing strictly following this compact, actionable bullet structure (start directly with ### Immediate Action Items, NO introductory sentence):
 
 ### Immediate Action Items
-
-**Role Transfers:**
-${transfersFormatted}
-
-**Target Lineup:**
-${lineupFormatted}
-
+${hasRoleTransfers ? `\n**Role Transfers:**\n${transfersFormatted}\n\n**Target Lineup:**\n${lineupFormatted}\n` : ""}
 **Mandatory Swiss Rehab:**
 ${rehabFormatted}
-
-### Stock & Pricing Verdict
-• **Storage Status:** ${stockAnalysis.stateDescription}
-• **Pricing:** ${stockAnalysis.recommendedPrice.formatted}
-• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}
-
-### 10★ Progression Roadmap
-• **Capacity Utilization (${hiringAnalysis.hired} ➔ ${hiringAnalysis.capacity} Seats):** Next priority hires: ${hiringAnalysis.shortSummary}
+${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdictBullets.join("\n")}` : ""}
 `;
 
 	let advisorText = "";
@@ -537,48 +618,105 @@ ${rehabFormatted}
 		const llmOutput = await callGemini(prompt, geminiApiKey);
 		if (llmOutput) {
 			advisorText = llmOutput;
-			// Strip any accidental introductory paragraph before **Role Transfers:**
+			// Strip 10★ Progression Roadmap completely if generated
 			advisorText = advisorText.replace(
-				/### Immediate Action Items\s+[\s\S]*?(?=\*\*Role Transfers:\*\*)/,
-				"### Immediate Action Items\n\n",
+				/###\s*10[★*]\s*Progression Roadmap[\s\S]*?(?=###|$)/gi,
+				"",
 			);
-			// Strip any bracketed rationale after the target role in Role Transfers
+			advisorText = advisorText.replace(
+				/\n• \*\*10[★*] Milestone:\*\*.*$/gm,
+				"",
+			);
+
+			// If no role transfers, enforce stripping Role Transfers and Target Lineup
+			if (!hasRoleTransfers) {
+				advisorText = advisorText.replace(
+					/\*\*Role Transfers:\*\*[\s\S]*?(?=\*\*(?:Target Lineup|Mandatory Swiss Rehab|Staff Health):\*\*|###|$)/gi,
+					"",
+				);
+				advisorText = advisorText.replace(
+					/\*\*Target Lineup:\*\*[\s\S]*?(?=\*\*(?:Mandatory Swiss Rehab|Staff Health):\*\*|###|$)/gi,
+					"",
+				);
+			}
+
+			// If no price suggestion, strip pricing bullet
+			if (!hasPriceSuggestion) {
+				advisorText = advisorText.replace(
+					/[•\-*]\s*\*\*Pricing:\*\*.*$/gim,
+					"",
+				);
+			}
+
+			// If no ad suggestion, strip ad budget bullet
+			if (!hasAdSuggestion) {
+				advisorText = advisorText.replace(
+					/[•\-*]\s*\*\*Ad Budget:\*\*.*$/gim,
+					"",
+				);
+			}
+
+			// If stock verdict is empty or has no bullets, strip the header
+			advisorText = advisorText.replace(
+				/###\s*Stock & Pricing Verdict\s*(?=(?:###|$))/gi,
+				"",
+			);
+
+			// Strip bracketed rationale after target role
 			advisorText = advisorText.replace(
 				/(• \*\*.+?\*\* \([^\n)]+\): [^\n➔]+ ➔ \*\*[^\n*]+\*\*) \([^)\n]+\)/g,
 				"$1",
 			);
-			// Strip 10★ Milestone bullet if generated
-			advisorText = advisorText.replace(/\n• \*\*10★ Milestone:\*\*.*$/gm, "");
+
+			advisorText = advisorText.trim();
 		}
 	}
 
-	// Comprehensive deterministic fallback if LLM is offline
+	// Comprehensive deterministic fallback if LLM is offline or output was empty
 	if (!advisorText) {
-		advisorText = `### Immediate Action Items
+		const actionParts: string[] = [];
+		if (hasRoleTransfers) {
+			actionParts.push(`**Role Transfers:**\n${transfersFormatted}`);
+			actionParts.push(`**Target Lineup:**\n${lineupFormatted}`);
+		}
+		actionParts.push(`**Mandatory Swiss Rehab:**\n${rehabFormatted}`);
 
-**Role Transfers:**
-${transfersFormatted}
+		if (!hasRoleTransfers && !hasAddiction) {
+			actionParts.push(
+				"• **All operations optimal** — Roster is fully aligned with target blueprint and all staff are clean.",
+			);
+		}
 
-**Target Lineup:**
-${lineupFormatted}
+		const sections: string[] = [
+			`### Immediate Action Items\n\n${actionParts.join("\n\n")}`,
+		];
 
-**Mandatory Swiss Rehab:**
-${rehabFormatted}
+		if (stockVerdictBullets.length > 0) {
+			sections.push(
+				`### Stock & Pricing Verdict\n${stockVerdictBullets.join("\n")}`,
+			);
+		}
 
-### Stock & Pricing Verdict
-• **Storage Status:** ${stockAnalysis.stateDescription}
-• **Pricing:** ${stockAnalysis.recommendedPrice.formatted}
-• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}
-
-### 10★ Progression Roadmap
-• **Capacity Utilization (${hiringAnalysis.hired} ➔ ${hiringAnalysis.capacity} Seats):** Next priority hires: ${hiringAnalysis.shortSummary}`;
+		advisorText = sections.join("\n\n");
 	}
 
 	logger.info("================ EXECUTIVE BRIEFING ================");
 	console.log(advisorText);
+	console.log("\n================ COMPANY DETAILS ================");
+	console.log(
+		`Daily Rev: $${dailyRevenue.toLocaleString()} | Daily Wages: $${dailyWages.toLocaleString()} | Daily Ad: $${dailyAdBudget.toLocaleString()} | Daily Profit: ${dailyProfit >= 0 ? "+" : ""}$${dailyProfit.toLocaleString()} | WTD Profit: ${wtdProfit >= 0 ? "+" : ""}$${wtdProfit.toLocaleString()}`,
+	);
+	console.log(
+		`Stock: ${inStock.toLocaleString()}/${storageCap.toLocaleString()} (${fillPct}%) | Sold: ${dailySold.toLocaleString()} bbl | Produced: ${dailyProduced?.toLocaleString() ?? "N/A"} bbl`,
+	);
+	console.log(
+		"\n================ WEEK-TO-DATE LOGS (MON–SUN) ================",
+	);
+	console.log(wtdTable);
+	console.log(wtdSummaryText);
 	logger.info("====================================================");
 
-	// Send Discord DMs as 2 separate messages to ensure rich detail never exceeds Discord caps
+	// Send Discord DMs as 3 distinct messages (Advice, Company Details, WTD Logs)
 	if (discordToken && discordUserId) {
 		logger.info(`Sending Discord DMs to user ${discordUserId}...`);
 
@@ -592,105 +730,83 @@ ${rehabFormatted}
 			),
 		);
 
-		const rawSections = advisorText
-			.split(/(?=### )/)
-			.map((s) => s.trim())
-			.filter(Boolean);
+		const signDaily = dailyProfit >= 0 ? "+" : "";
+		const signWtd = wtdProfit >= 0 ? "+" : "";
+		const prodText =
+			dailyProduced !== undefined
+				? `${dailyProduced.toLocaleString()} bbl`
+				: "N/A";
+		const prodValText =
+			producedValue !== undefined
+				? `$${producedValue.toLocaleString()}`
+				: "N/A";
 
-		if (rawSections.length >= 2) {
-			// Message 1: Immediate Action Items
-			const actionSection = rawSections[0] ?? "";
-			await sendDiscordDm(discordUserId, discordToken, {
-				embeds: [
-					{
-						title: `Succession Oil (${snap.profile.rating}★) — Operations Briefing (Part 1/2)`,
-						description: actionSection.slice(0, 4000),
-						color: 0xf59e0b, // Amber Gold
-						fields: [
-							{
-								name: "Efficiency",
-								value: `${snap.profile.efficiency}%`,
-								inline: true,
-							},
-							{
-								name: "Environment",
-								value: `${snap.profile.environment}%`,
-								inline: true,
-							},
-							{
-								name: "Addicted Staff",
-								value: `${addictedEmployees.length} employees (-${totalAddictionPenalty} pts)`,
-								inline: true,
-							},
-						],
+		// Message 1: All Advice in one embed
+		await sendDiscordDm(discordUserId, discordToken, {
+			embeds: [
+				{
+					title: `Succession Oil (${snap.profile.rating}★) — Operations Advice (Part 1/3)`,
+					description: advisorText.slice(0, 4000),
+					color: 0xf59e0b, // Amber Gold
+					footer: {
+						text: "Sentinel • Strategic Operational Advisory",
 					},
-				],
-			});
+					timestamp: new Date().toISOString(),
+				},
+			],
+		});
 
-			// Message 2: Stock, Pricing & 10★ Roadmap
-			const remainingSections = rawSections.slice(1).join("\n\n").trim();
-			await sendDiscordDm(discordUserId, discordToken, {
-				embeds: [
-					{
-						title: "Stock, Pricing & 10★ Roadmap (Part 2/2)",
-						description: remainingSections.slice(0, 4000),
-						color: 0x3b82f6, // Blue
-						fields: [
-							{
-								name: "Financials",
-								value: `Daily Rev: **$${snap.profile.income.daily.toLocaleString()}**\nWeekly Rev: **$${snap.profile.income.weekly.toLocaleString()}**\nFunds: **$${snap.profile.funds.toLocaleString()}**`,
-								inline: true,
-							},
-							{
-								name: "Stock & Pricing",
-								value: `Price: **$${currentPrice}**/barrel\nStock: **${inStock.toLocaleString()}** (${fillPct}%)\nSold: **${dailySold.toLocaleString()}** barrels`,
-								inline: true,
-							},
-						],
-						footer: {
-							text: "Sentinel • Succession Oil Operations",
+		// Message 2: Company Details in second embed
+		await sendDiscordDm(discordUserId, discordToken, {
+			embeds: [
+				{
+					title: `Succession Oil (${snap.profile.rating}★) — Company Details (Part 2/3)`,
+					description: `Current operational telemetry and daily financials for **${snap.profile.name}**.`,
+					color: 0x3b82f6, // Blue
+					fields: [
+						{
+							name: "Financials",
+							value: `Daily Rev: **$${dailyRevenue.toLocaleString()}**\nDaily Wages: **$${dailyWages.toLocaleString()}**\nDaily Ad: **$${dailyAdBudget.toLocaleString()}**\nDaily Profit: **${signDaily}$${dailyProfit.toLocaleString()}**\nWTD Profit: **${signWtd}$${wtdProfit.toLocaleString()}**`,
+							inline: true,
 						},
-						timestamp: new Date().toISOString(),
-					},
-				],
-			});
-		} else {
-			await sendDiscordDm(discordUserId, discordToken, {
-				embeds: [
-					{
-						title: `Succession Oil (${snap.profile.rating}★) — Operations Briefing`,
-						description: advisorText.slice(0, 4000),
-						color: 0xf59e0b,
-						fields: [
-							{
-								name: "Efficiency",
-								value: `${snap.profile.efficiency}%`,
-								inline: true,
-							},
-							{
-								name: "Environment",
-								value: `${snap.profile.environment}%`,
-								inline: true,
-							},
-							{
-								name: "Addicted Staff",
-								value: `${addictedEmployees.length} employees (-${totalAddictionPenalty} pts)`,
-								inline: true,
-							},
-						],
-						footer: {
-							text: "Sentinel • Succession Oil Operations",
+						{
+							name: "Stock & Production",
+							value: `Price: **$${currentPrice}**/barrel\nStock: **${inStock.toLocaleString()}** (${fillPct}%)\nSold: **${dailySold.toLocaleString()}** bbl\nProduced: **${prodText}**\nProduced Value: **${prodValText}**`,
+							inline: true,
 						},
-						timestamp: new Date().toISOString(),
+						{
+							name: "Operational Health",
+							value: `Efficiency: **${snap.profile.efficiency}%** | Environment: **${snap.profile.environment}%**\nPopularity: **${snap.profile.popularity}%** | Staff: **${snap.profile.employees.hired}/${snap.profile.employees.capacity}**\nAddicted Staff: **${addictedEmployees.length}** (-${totalAddictionPenalty} pts)`,
+							inline: false,
+						},
+					],
+					footer: {
+						text: "Sentinel • Succession Oil Operations",
 					},
-				],
-			});
-		}
+					timestamp: new Date().toISOString(),
+				},
+			],
+		});
 
-		logger.info("Discord DMs successfully delivered!");
+		// Message 3: Week-to-Date Performance Logs
+		await sendDiscordDm(discordUserId, discordToken, {
+			embeds: [
+				{
+					title: `Succession Oil — Week-to-Date Performance Logs (Part 3/3)`,
+					description: `${wtdTable}\n\n${wtdSummaryText}`,
+					color: 0x10b981, // Emerald Green
+					footer: {
+						text: `Accounting Week (${wtdSummary.mondayIso} to ${wtdSummary.sundayIso}) • Sentinel`,
+					},
+					timestamp: new Date().toISOString(),
+				},
+			],
+		});
+
+		logger.info("Discord DMs successfully delivered (3 parts)!");
 	} else {
 		logger.warn("Discord credentials missing. Skipping DM.");
 	}
 
-	return advisorText;
+	return `${advisorText}\n\n${wtdTable}\n\n${wtdSummaryText}`;
 }

@@ -41,44 +41,71 @@ export const oilBriefingCommand = {
 						.from(oilRigSnapshots)
 						.orderBy(desc(oilRigSnapshots.timestamp))
 						.limit(14);
-					return rows.reverse().map((r) => ({
-						timestamp: Math.floor(r.timestamp.getTime() / 1000),
-						isoDate: r.timestamp.toISOString().slice(0, 10),
-						stars: r.rating,
-						dailyIncome: r.dailyRevenue,
-						weeklyIncome: r.weeklyRevenue,
-						efficiency: r.efficiency,
-						environment: r.environment,
-						popularity: r.popularity,
-						adBudget: r.adBudget,
-						stock: {
-							barrelPrice: r.barrelPrice,
-							inStock: r.barrelsInStock,
-							soldAmount: r.barrelsSold,
-							fillPct:
-								r.storageCapacity > 0
-									? Number(
-											((r.barrelsInStock / r.storageCapacity) * 100).toFixed(1),
-										)
-									: 0,
-						},
-						metrics: {
-							totalAddictionPenalty: Number(
-								(r.metrics as { totalAddictionPenalty?: number })
-									?.totalAddictionPenalty ?? 0,
-							),
-							employeesWithAddiction: Number(
-								(r.metrics as { employeesWithAddiction?: number })
-									?.employeesWithAddiction ?? 0,
-							),
-						},
-					}));
+					const chronological = rows.reverse();
+					return chronological.map((r, idx) => {
+						const rawEmps = (
+							Array.isArray(r.employees) ? r.employees : []
+						) as Array<Record<string, unknown>>;
+						const dailyWages = rawEmps.reduce(
+							(sum, e) => sum + Number(e.wage ?? 0),
+							0,
+						);
+						const dailyProfit = r.dailyRevenue - dailyWages - (r.adBudget ?? 0);
+
+						let dailyProduced: number | undefined;
+						const prev = idx > 0 ? chronological[idx - 1] : undefined;
+						if (prev && r.barrelsSold >= 0) {
+							const delta = r.barrelsInStock - prev.barrelsInStock;
+							const est = delta + r.barrelsSold;
+							if (est >= 0) {
+								dailyProduced = est;
+							}
+						}
+
+						return {
+							timestamp: Math.floor(r.timestamp.getTime() / 1000),
+							isoDate: r.timestamp.toISOString().slice(0, 10),
+							stars: r.rating,
+							dailyIncome: r.dailyRevenue,
+							weeklyIncome: r.weeklyRevenue,
+							dailyWages,
+							dailyProfit,
+							dailyProduced,
+							efficiency: r.efficiency,
+							environment: r.environment,
+							popularity: r.popularity,
+							adBudget: r.adBudget,
+							stock: {
+								barrelPrice: r.barrelPrice,
+								inStock: r.barrelsInStock,
+								soldAmount: r.barrelsSold,
+								fillPct:
+									r.storageCapacity > 0
+										? Number(
+												((r.barrelsInStock / r.storageCapacity) * 100).toFixed(
+													1,
+												),
+											)
+										: 0,
+							},
+							metrics: {
+								totalAddictionPenalty: Number(
+									(r.metrics as { totalAddictionPenalty?: number })
+										?.totalAddictionPenalty ?? 0,
+								),
+								employeesWithAddiction: Number(
+									(r.metrics as { employeesWithAddiction?: number })
+										?.employeesWithAddiction ?? 0,
+								),
+							},
+						};
+					});
 				},
 			});
 
 			const successEmbed = createBaseEmbed(
 				"Oil Rig Director Briefing Delivered",
-				"Your comprehensive operational analysis, role optimization, and 10★ scaling roadmap have been dispatched directly to your Discord DMs.",
+				"Your comprehensive operational analysis, role optimization, and week-to-date performance logs have been dispatched directly to your Discord DMs.",
 				EMBED_COLORS.SUCCESS,
 			);
 

@@ -1,5 +1,5 @@
-import { TornApiClient } from "../packages/torn-api";
-import { Logger } from "../packages/utils";
+import { TornApiClient } from "../../packages/torn-api";
+import { Logger } from "../../packages/utils";
 
 const logger = new Logger("CompetitorBenchmark");
 

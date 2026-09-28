@@ -54,3 +54,9 @@ repomix.config.json
 # oil rig scratch snapshots
 data/oil_rig_history.jsonl
 data/oil_rig_snapshot.json
+
+*.csv
+
+# Compiled userscripts
+scripts/blasted-script.user.js
+scripts/subversive-alliance.user.js

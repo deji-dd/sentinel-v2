@@ -1979,6 +1979,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/faction/crimeexp": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your faction members crime experience
+		 * @description Requires minimal access key. <br>Members are ordered descending, from highest crime experience to lowest.
+		 */
+		get: operations["getMyFactionCrimeExp"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/faction/crimes": {
 		parameters: {
 			query?: never;
@@ -2075,6 +2095,26 @@ export interface paths {
 		 * @description Requires public access key. <br>
 		 */
 		get: operations["getFactionHoF"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/faction/inventory": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your faction's inventory items.
+		 * @description <b>Cached selection (1 hour, all items cached at once).</b><br><br>Requires limited access key. <br>
+		 */
+		get: operations["getMyFactionInventory"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4145,7 +4185,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/torn/{id}/itemdetails": {
+	"/torn/{ids}/itemdetails": {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -4153,7 +4193,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * Get information about a specific item
+		 * Get details for specific item(s)
 		 * @description Requires public key.
 		 */
 		get: operations["getTornItemDetails"];
@@ -4177,6 +4217,26 @@ export interface paths {
 		 * @description Requires public key.
 		 */
 		get: operations["getTornItemMods"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/torn/{ids}/itemstats": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get specific item(s) stats
+		 * @description Requires public key.<br>
+		 */
+		get: operations["getTornItemStats"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4425,6 +4485,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/torn/rockpaperscissors": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get rock paper scissors competition stats
+		 * @description Requires public key.
+		 */
+		get: operations["getTornRps"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/torn/searchforcash": {
 		parameters: {
 			query?: never;
@@ -4457,6 +4537,26 @@ export interface paths {
 		 * @description Requires public access key. <br>
 		 */
 		get: operations["getTornShoplifting"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/torn/stats": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get daily city stats
+		 * @description Requires public key.
+		 */
+		get: operations["getTornCityStats"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4611,6 +4711,36 @@ export interface components {
 	schemas: {
 		/** @enum {string} */
 		RaceClassEnum: "A" | "B" | "C" | "D" | "E";
+		/** @enum {string} */
+		TornItemStatTitleEnum:
+			| "Damage"
+			| "Rounds fired"
+			| "Hits"
+			| "Misses"
+			| "Damage taken"
+			| "Reloads"
+			| "Highest damage"
+			| "Hits received"
+			| "Most damage taken"
+			| "Damage mitigated"
+			| "Most damage mitigated"
+			| "Finishing hits"
+			| "Critical hits"
+			| "First owner"
+			| "First faction owner"
+			| "Time created"
+			| "Respect earned";
+		/** @enum {string} */
+		FactionArmoryCategoryEnum:
+			| "weapons"
+			| "armor"
+			| "temporary"
+			| "medical"
+			| "consumables"
+			| "drugs"
+			| "boosters"
+			| "utilities"
+			| "loot";
 		/** @enum {string} */
 		MissionDifficultyEnum:
 			| "Very easy"
@@ -9350,6 +9480,8 @@ export interface components {
 		/** Format: int64 */
 		ItemId: number;
 		/** Format: int32 */
+		ItemStatId: number;
+		/** Format: int32 */
 		AuctionListingId: number;
 		/** Format: int32 */
 		ItemModId: number;
@@ -9819,8 +9951,8 @@ export interface components {
 			respect_gain: number;
 			/** Format: float */
 			respect_loss: number;
-			/** Format: int32 */
-			chain: number;
+			/** @description Important! Starting January 1st, 2027, the value '0' will be replaced with 'null'. */
+			chain: number | null;
 			/** @description This is an experimental flag which should help determine 'assist' attacks which have not contributed to the chain. For example, attacks such as where the opponent lost to someoene else before the attacker could finish the attack. This flag might not work entirely correctly, so use with caution. */
 			is_interrupted: boolean;
 			is_stealthed: boolean;
@@ -10313,6 +10445,22 @@ export interface components {
 			code: 30;
 			error: string;
 		};
+		ErrorCityStatsCronFailed: {
+			/**
+			 * Format: int32
+			 * @enum {integer}
+			 */
+			code: 31;
+			error: string;
+		};
+		ErrorEndpointClosedUntilAttackingPeriod: {
+			/**
+			 * Format: int32
+			 * @enum {integer}
+			 */
+			code: 32;
+			error: string;
+		};
 		ApiError:
 			| components["schemas"]["ErrorUnknown"]
 			| components["schemas"]["ErrorKeyEmpty"]
@@ -10344,7 +10492,9 @@ export interface components {
 			| components["schemas"]["ErrorMustMigrateToOrganizedCrimesV2"]
 			| components["schemas"]["ErrorIncorrectLogId"]
 			| components["schemas"]["ErrorCategorySelectionUnavailableForInteractionLogs"]
-			| components["schemas"]["ErrorFileDoesNotExist"];
+			| components["schemas"]["ErrorFileDoesNotExist"]
+			| components["schemas"]["ErrorCityStatsCronFailed"]
+			| components["schemas"]["ErrorEndpointClosedUntilAttackingPeriod"];
 		UserGymResponse: {
 			gym: {
 				id: components["schemas"]["GymId"];
@@ -10480,6 +10630,7 @@ export interface components {
 			 * @description This field is depracted and replaced with 'completed_at' field.
 			 */
 			timestamp?: number;
+			description: string;
 			/** @description Populated when selected category is 'finished'. */
 			completed_at: number | null;
 			/** @description Populated when selected category is 'ongoing'. */
@@ -10847,6 +10998,7 @@ export interface components {
 			/** Format: int32 */
 			score: number;
 			team: string;
+			team_id: components["schemas"]["EliminationTeamId"] | null;
 			/** Format: int32 */
 			attacks: number;
 		};
@@ -13009,6 +13161,28 @@ export interface components {
 			| "forgeryskill"
 			| "scammingskill"
 			| "arsonskill";
+		FactionCrimeExpResponse: {
+			crimeexp: components["schemas"]["UserId"][];
+		};
+		FactionInventoryItem: {
+			id: components["schemas"]["ItemId"];
+			name: string;
+			type: components["schemas"]["MarketSpecializedBazaarCategoryEnum"];
+			/** Format: int32 */
+			amount: number;
+			/** @description Returns up to 250 uids. */
+			uids: components["schemas"]["ItemUid"][];
+			loaned: {
+				id: components["schemas"]["UserId"];
+				name: string;
+			} | null;
+		};
+		FactionInventoryResponse: {
+			/** Format: int64 */
+			inventory_timestamp: number;
+			inventory: components["schemas"]["FactionInventoryItem"][];
+			_metadata: components["schemas"]["RequestMetadataWithLinksAndTotal"];
+		};
 		FactionRaidReport: {
 			id: components["schemas"]["RaidWarId"];
 			/** Format: int32 */
@@ -13842,6 +14016,7 @@ export interface components {
 					| "contributors"
 					| "crime"
 					| "crimes"
+					| "crimeexp"
 					| "dirtbombs"
 					| "hof"
 					| "lookup"
@@ -13869,16 +14044,6 @@ export interface components {
 					| "warfareranked"
 					| "warfareterritory"
 					| "wars"
-					| "armor"
-					| "boosters"
-					| "caches"
-					| "cesium"
-					| "crimeexp"
-					| "drugs"
-					| "medical"
-					| "utilities"
-					| "temporary"
-					| "weapons"
 			  )
 			| string;
 		FactionLookupResponse: {
@@ -14589,7 +14754,7 @@ export interface components {
 		};
 		ItemMarketListingItemDetails: {
 			uid: components["schemas"]["ItemUid"];
-			stats: components["schemas"]["ItemMarketListingItemStats"];
+			stats: components["schemas"]["ItemMarketListingItemStats"] | null;
 			bonuses: components["schemas"]["ItemMarketListingItemBonus"][];
 			rarity: ("yellow" | "orange" | "red") | null;
 		};
@@ -14806,6 +14971,245 @@ export interface components {
 		PropertySelectionName: ("property" | "lookup" | "timestamp") | string;
 		PropertyLookupResponse: {
 			selections: components["schemas"]["PropertySelectionName"][];
+		};
+		TornItemStat: {
+			id: components["schemas"]["ItemStatId"];
+			title: string;
+			/** Format: int64 */
+			value: number;
+		};
+		TornItemStats: {
+			id: components["schemas"]["ItemId"];
+			uid: components["schemas"]["ItemUid"];
+			name: components["schemas"]["TornItemStatTitleEnum"];
+			type: components["schemas"]["TornItemTypeEnum"];
+			sub_type: components["schemas"]["TornItemWeaponTypeEnum"] | null;
+			stats: components["schemas"]["TornItemStat"][];
+		};
+		TornItemStatsResponse: {
+			itemdetails: components["schemas"]["TornItemStats"][];
+		};
+		TornRockPaperScissorsResponse: {
+			rockpaperscissors: {
+				/** @enum {string} */
+				type: "rock" | "paper" | "scissors";
+				/** Format: int64 */
+				count: number;
+			}[];
+		};
+		TornCityStatsResponse: {
+			stats: {
+				users: {
+					/** Format: int64 */
+					total: number;
+					/** Format: int64 */
+					male: number;
+					/** Format: int64 */
+					female: number;
+					/** Format: int64 */
+					enby: number;
+					/** Format: int64 */
+					married: number;
+				};
+				items: {
+					/** Format: int64 */
+					found_in_city: number;
+					/** Format: int64 */
+					found_in_dump: number;
+					/** Format: int64 */
+					trashed: number;
+					/** Format: int64 */
+					total: number;
+				};
+				trading: {
+					/** Format: int64 */
+					sold_on_market: number;
+					/** Format: int64 */
+					sold_in_bazaar: number;
+					/** Format: int64 */
+					sold_points: number;
+					/** Format: int64 */
+					bazaar_profit: number;
+					/** Format: int64 */
+					auctions: number;
+					/** Format: int64 */
+					trades: number;
+					/** Format: int64 */
+					items_sent: number;
+				};
+				currency: {
+					/** Format: int64 */
+					money_on_hand: number;
+					/** Format: int64 */
+					money_on_hand_average: number;
+					/** Format: int64 */
+					money_in_bank: number;
+					/** Format: int64 */
+					points_total: number;
+					/** Format: int64 */
+					points_players: number;
+					/** Format: int64 */
+					points_factions: number;
+					/** Format: int64 */
+					points_market: number;
+					/** Format: int64 */
+					points_used: number;
+				};
+				attacking: {
+					/** Format: int64 */
+					attacks_won: number;
+					/** Format: int64 */
+					attacks_lost: number;
+					/** Format: int64 */
+					attacks_stalemated: number;
+					/** Format: int64 */
+					attacks_stealthed: number;
+					/** Format: int64 */
+					escapes: number;
+					/** Format: int64 */
+					hits: number;
+					/** Format: int64 */
+					misses: number;
+					/** Format: int64 */
+					critical_hits: number;
+					/** Format: int64 */
+					rounds_fired: number;
+					/** Format: int64 */
+					money_mugged: number;
+					/** Format: int64 */
+					respect_gained: number;
+				};
+				jobs: {
+					/** Format: int64 */
+					army: number;
+					/** Format: int64 */
+					grocer: number;
+					/** Format: int64 */
+					casino: number;
+					/** Format: int64 */
+					education: number;
+					/** Format: int64 */
+					medical: number;
+					/** Format: int64 */
+					law: number;
+					/** Format: int64 */
+					company: number;
+					/** Format: int64 */
+					unemployed: number;
+				};
+				jail: {
+					/** Format: int64 */
+					jailings: number;
+					/** Format: int64 */
+					busts: number;
+					/** Format: int64 */
+					busts_failed: number;
+					/** Format: int64 */
+					bails: number;
+					/** Format: int64 */
+					bails_spent: number;
+				};
+				hospital: {
+					/** Format: int64 */
+					trips: number;
+					/** Format: int64 */
+					medical_items_used: number;
+					/** Format: int64 */
+					revives: number;
+				};
+				drugs: {
+					/** Format: int64 */
+					total_used: number;
+					/** Format: int64 */
+					overdoses: number;
+					/** Format: int64 */
+					cannabis: number;
+					/** Format: int64 */
+					ecstasy: number;
+					/** Format: int64 */
+					ketamine: number;
+					/** Format: int64 */
+					lsd: number;
+					/** Format: int64 */
+					opium: number;
+					/** Format: int64 */
+					shrooms: number;
+					/** Format: int64 */
+					speed: number;
+					/** Format: int64 */
+					pcp: number;
+					/** Format: int64 */
+					xanax: number;
+					/** Format: int64 */
+					vicodin: number;
+				};
+				traveling: {
+					/** Format: int64 */
+					items_bought_abroad: number;
+					/** Format: int64 */
+					total_trips: number;
+					/** Format: int64 */
+					argentina: number;
+					/** Format: int64 */
+					mexico: number;
+					/** Format: int64 */
+					united_arab_emirates: number;
+					/** Format: int64 */
+					hawaii: number;
+					/** Format: int64 */
+					japan: number;
+					/** Format: int64 */
+					united_kingdom: number;
+					/** Format: int64 */
+					south_africa: number;
+					/** Format: int64 */
+					switzerland: number;
+					/** Format: int64 */
+					china: number;
+					/** Format: int64 */
+					cayman_islands: number;
+				};
+				bounties: {
+					/** Format: int64 */
+					placed: number;
+					/** Format: int64 */
+					money_spent: number;
+				};
+				crimes: {
+					/** Format: int64 */
+					total: number;
+					/** Format: int64 */
+					jail_sentences: number;
+				};
+				communication: {
+					/** Format: int64 */
+					total_messages: number;
+					/** Format: int64 */
+					friends: number;
+					/** Format: int64 */
+					coworkers: number;
+					/** Format: int64 */
+					spouses: number;
+					/** Format: int64 */
+					classified_ads_placed: number;
+					/** Format: int64 */
+					personals_placed: number;
+				};
+				other: {
+					/** Format: int64 */
+					logins: number;
+					/** Format: int64 */
+					years_played: number;
+					/** Format: int64 */
+					merits_bought: number;
+					/** Format: int64 */
+					energy_refills: number;
+					/** Format: int64 */
+					company_trains: number;
+					/** Format: int64 */
+					stat_enhancers_used: number;
+				};
+			};
 		};
 		TornPokerTable: {
 			id: components["schemas"]["PokerTableId"];
@@ -15044,11 +15448,18 @@ export interface components {
 		TornEliminationTeamLeader: components["schemas"]["BasicUser"] & {
 			active: boolean;
 		};
+		TornEliminationTeamAttacksSummary: {
+			team_id: components["schemas"]["EliminationTeamId"];
+			/** Format: int32 */
+			attacks: number;
+		};
 		TornEliminationTeam: {
 			id: components["schemas"]["EliminationTeamId"];
 			name: string;
 			/** Format: int32 */
 			participants: number;
+			/** Format: int32 */
+			participants_left: number;
 			/** Format: int32 */
 			position: number;
 			/** Format: int32 */
@@ -15060,8 +15471,12 @@ export interface components {
 			/** Format: int32 */
 			losses: number;
 			eliminated: boolean;
+			attacking_summary: components["schemas"]["TornEliminationTeamAttacksSummary"][];
 			eliminated_timestamp: number | null;
-			leaders: components["schemas"]["TornEliminationTeamLeader"][];
+			leaders: {
+				captain: components["schemas"]["TornEliminationTeamLeader"] | null;
+				vice_captains: components["schemas"]["TornEliminationTeamLeader"][];
+			};
 		};
 		TornEliminationTeamsResponse: {
 			elimination: components["schemas"]["TornEliminationTeam"][];
@@ -15088,8 +15503,21 @@ export interface components {
 			type: components["schemas"]["TornItemTypeEnum"];
 			sub_type: components["schemas"]["TornItemWeaponTypeEnum"] | null;
 		};
+		/**
+		 * @deprecated
+		 * @description This object is deprecated, and starting on 1st January 2027 it will be replaced with an array of TornItemDetails.
+		 */
+		TornItemDetailsDeprecated: components["schemas"]["ItemMarketListingItemDetails"] & {
+			id: components["schemas"]["ItemId"];
+			name: string;
+			type: components["schemas"]["TornItemTypeEnum"];
+			sub_type: components["schemas"]["TornItemWeaponTypeEnum"] | null;
+		};
 		TornItemDetailsResponse: {
-			itemdetails: components["schemas"]["TornItemDetails"];
+			/** @description Starting 1st January 2027, this response will return only an array of TornItemDetails. */
+			itemdetails:
+				| components["schemas"]["TornItemDetails"][]
+				| components["schemas"]["TornItemDetailsDeprecated"];
 		};
 		TornMerit: {
 			id: components["schemas"]["MeritId"];
@@ -15586,6 +16014,7 @@ export interface components {
 					| "itemammo"
 					| "itemdetails"
 					| "itemmods"
+					| "itemstats"
 					| "items"
 					| "logcategories"
 					| "logtypes"
@@ -15596,17 +16025,16 @@ export interface components {
 					| "organizedcrimes"
 					| "pokertables"
 					| "properties"
+					| "rockpaperscissors"
 					| "searchforcash"
 					| "shoplifting"
+					| "stats"
 					| "stocks"
 					| "subcrimes"
 					| "territory"
 					| "timestamp"
 					| "competition"
-					| "itemstats"
 					| "organisedcrimes"
-					| "rockpaperscissors"
-					| "stats"
 			  )
 			| string;
 		TornLookupResponse: {
@@ -15733,6 +16161,8 @@ export interface components {
 		ApiTarget: number;
 		/** @description Sorted by the greatest timestamps */
 		ApiSort: "DESC" | "ASC";
+		/** @description Opaque cursor from pagination links for searches without a name, in either sort direction. Offset is ignored for these searches. */
+		ApiCursor: string;
 		/** @description Sorted by the greatest timestamps */
 		ApiSortDesc: "DESC" | "ASC";
 		/** @description Sort rows from newest to oldest<br>Default ordering is ascending */
@@ -17965,6 +18395,10 @@ export interface operations {
 				 */
 				filters?: components["parameters"]["ApiUserSearchFilter"];
 				offset?: components["parameters"]["ApiOffset"];
+				/** @description Sorted by the greatest timestamps */
+				sort?: components["parameters"]["ApiSort"];
+				/** @description Opaque cursor from pagination links for searches without a name, in either sort direction. Offset is ignored for these searches. */
+				cursor?: components["parameters"]["ApiCursor"];
 				/** @description Timestamp to bypass cache */
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
@@ -18803,6 +19237,33 @@ export interface operations {
 			};
 		};
 	};
+	getMyFactionCrimeExp: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["FactionCrimeExpResponse"];
+				};
+			};
+		};
+	};
 	getMyFactionOrganizedCrimes: {
 		parameters: {
 			query?: {
@@ -18960,6 +19421,37 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["FactionHofResponse"];
+				};
+			};
+		};
+	};
+	getMyFactionInventory: {
+		parameters: {
+			query: {
+				/** @description Armory category */
+				cat: components["schemas"]["FactionArmoryCategoryEnum"];
+				limit?: components["parameters"]["ApiLimit100Default20"];
+				offset?: components["parameters"]["ApiOffset"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyLimited"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["FactionInventoryResponse"];
 				};
 			};
 		};
@@ -20063,6 +20555,7 @@ export interface operations {
 					  )
 					| components["schemas"]["FactionNewsCategory"]
 					| components["schemas"]["FactionRankedWarsCategoryEnum"]
+					| components["schemas"]["FactionArmoryCategoryEnum"]
 					| components["schemas"]["ReportTypeEnum"]
 					| components["schemas"]["FactionWarfareTypeEnum"]
 					| components["schemas"]["FactionTerritoryWarsCategoryEnum"];
@@ -20128,6 +20621,8 @@ export interface operations {
 						| components["schemas"]["FactionUpgradesResponse"]
 						| components["schemas"]["FactionStatsResponse"]
 						| components["schemas"]["FactionContributorsResponse"]
+						| components["schemas"]["FactionInventoryResponse"]
+						| components["schemas"]["FactionCrimeExpResponse"]
 						| components["schemas"]["FactionRacketsResponse"]
 						| components["schemas"]["FactionRankedWarResponse"]
 						| components["schemas"]["FactionLookupResponse"]
@@ -22310,8 +22805,8 @@ export interface operations {
 			};
 			header?: never;
 			path: {
-				/** @description Item uid */
-				id: components["schemas"]["ItemUid"];
+				/** @description Item uid or a list of item uids (comma separated), 25 uids maximum */
+				ids: components["schemas"]["ItemUid"][];
 			};
 			cookie?: never;
 		};
@@ -22351,6 +22846,36 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["TornItemModsResponse"];
+				};
+			};
+		};
+	};
+	getTornItemStats: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path: {
+				/** @description Item uid or a list of item uids (comma separated), 25 uids maximum */
+				ids: components["schemas"]["ItemUid"][];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["TornItemStatsResponse"];
 				};
 			};
 		};
@@ -22694,6 +23219,33 @@ export interface operations {
 			};
 		};
 	};
+	getTornRps: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["TornRockPaperScissorsResponse"];
+				};
+			};
+		};
+	};
 	getTornSearchForCash: {
 		parameters: {
 			query?: {
@@ -22744,6 +23296,33 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["TornShopliftingResponse"];
+				};
+			};
+		};
+	};
+	getTornCityStats: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["TornCityStatsResponse"];
 				};
 			};
 		};
@@ -22982,10 +23561,13 @@ export interface operations {
 						| components["schemas"]["TornLogTypesResponse"]
 						| components["schemas"]["TornCardsResponse"]
 						| components["schemas"]["TornItemsResponse"]
+						| components["schemas"]["TornRockPaperScissorsResponse"]
+						| components["schemas"]["TornCityStatsResponse"]
 						| components["schemas"]["TornLogCategoriesResponse"]
 						| components["schemas"]["TornEducationResponse"]
 						| components["schemas"]["TornMeritsResponse"]
 						| components["schemas"]["TornOrganizedCrimeResponse"]
+						| components["schemas"]["TornItemStatsResponse"]
 						| components["schemas"]["TornHonorsResponse"]
 						| components["schemas"]["TornItemDetailsResponse"]
 						| components["schemas"]["TornEliminationTeamsResponse"]

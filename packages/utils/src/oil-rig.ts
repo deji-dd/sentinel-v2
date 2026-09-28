@@ -803,6 +803,9 @@ export interface OilRigHistoryRecord {
 	environment: number;
 	popularity?: number;
 	adBudget: number;
+	dailyWages?: number;
+	dailyProfit?: number;
+	dailyProduced?: number;
 	stock: {
 		barrelPrice: number;
 		inStock: number;
@@ -812,7 +815,200 @@ export interface OilRigHistoryRecord {
 	metrics: {
 		totalAddictionPenalty: number;
 		employeesWithAddiction: number;
+		emptyEmployeeSlots?: number;
+		unsettledEmployees?: number;
 	};
+}
+
+/**
+ * Calculates the Date corresponding to Monday 00:00:00 UTC of the week containing date `d`.
+ * Weeks strictly run Monday through Sunday in Torn accounting.
+ */
+export function getMondayOfWeek(d: Date = new Date()): Date {
+	const date = new Date(
+		Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+	);
+	const day = date.getUTCDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+	const diff = (day + 6) % 7; // days elapsed since Monday
+	date.setUTCDate(date.getUTCDate() - diff);
+	date.setUTCHours(0, 0, 0, 0);
+	return date;
+}
+
+export interface WeekDayLogEntry {
+	isoDate: string;
+	dayOfWeek: string;
+	revenue: number;
+	wages: number;
+	adBudget: number;
+	profit: number;
+	soldBarrels: number;
+	producedBarrels?: number;
+	barrelPrice: number;
+}
+
+export interface WeekToDateSummary {
+	entries: WeekDayLogEntry[];
+	totalRevenue: number;
+	totalWages: number;
+	totalAd: number;
+	totalProfit: number;
+	totalSold: number;
+	totalProduced: number;
+	mondayIso: string;
+	sundayIso: string;
+}
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+export function buildWeekToDateLogEntries(params: {
+	history: OilRigHistoryRecord[];
+	referenceDate?: Date;
+}): WeekToDateSummary {
+	const refDate = params.referenceDate ?? new Date();
+	const mondayDate = getMondayOfWeek(refDate);
+	const mondayIso = mondayDate.toISOString().slice(0, 10);
+	const sundayDate = new Date(mondayDate);
+	sundayDate.setUTCDate(mondayDate.getUTCDate() + 6);
+	const sundayIso = sundayDate.toISOString().slice(0, 10);
+
+	const entriesMap = new Map<string, WeekDayLogEntry>();
+
+	for (const h of params.history) {
+		if (h.isoDate >= mondayIso && h.isoDate <= sundayIso) {
+			const d = new Date(`${h.isoDate}T00:00:00Z`);
+			const dayOfWeek = DAY_NAMES[d.getUTCDay()] ?? "Mon";
+			const wages = h.dailyWages ?? 0;
+			const adBudget = h.adBudget ?? 0;
+			const profit = h.dailyProfit ?? h.dailyIncome - wages - adBudget;
+
+			entriesMap.set(h.isoDate, {
+				isoDate: h.isoDate,
+				dayOfWeek,
+				revenue: h.dailyIncome,
+				wages,
+				adBudget,
+				profit,
+				soldBarrels: h.stock?.soldAmount ?? 0,
+				producedBarrels: h.dailyProduced,
+				barrelPrice: h.stock?.barrelPrice ?? 0,
+			});
+		}
+	}
+
+	const sortedEntries = Array.from(entriesMap.values()).sort((a, b) =>
+		a.isoDate.localeCompare(b.isoDate),
+	);
+
+	let totalRevenue = 0;
+	let totalWages = 0;
+	let totalAd = 0;
+	let totalProfit = 0;
+	let totalSold = 0;
+	let totalProduced = 0;
+
+	for (const e of sortedEntries) {
+		totalRevenue += e.revenue;
+		totalWages += e.wages;
+		totalAd += e.adBudget;
+		totalProfit += e.profit;
+		totalSold += e.soldBarrels;
+		totalProduced += e.producedBarrels ?? 0;
+	}
+
+	return {
+		entries: sortedEntries,
+		totalRevenue,
+		totalWages,
+		totalAd,
+		totalProfit,
+		totalSold,
+		totalProduced,
+		mondayIso,
+		sundayIso,
+	};
+}
+
+function fmtMoney(val: number): string {
+	const sign = val < 0 ? "-" : "";
+	const abs = Math.abs(val);
+	if (abs >= 1_000_000) {
+		return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+	}
+	if (abs >= 1000) {
+		return `${sign}$${(abs / 1000).toFixed(0)}k`;
+	}
+	return `${sign}$${abs.toFixed(0)}`;
+}
+
+function fmtProfit(val: number): string {
+	const sign = val > 0 ? "+" : val < 0 ? "-" : "";
+	const abs = Math.abs(val);
+	if (abs >= 1_000_000) {
+		return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+	}
+	if (abs >= 1000) {
+		return `${sign}$${(abs / 1000).toFixed(0)}k`;
+	}
+	return `${sign}$${abs.toFixed(0)}`;
+}
+
+function fmtThousands(val?: number): string {
+	if (val === undefined) return "-";
+	return `${Math.round(val / 1000)}k`;
+}
+
+export function formatWeekToDateTable(summary: WeekToDateSummary): string {
+	if (summary.entries.length === 0) {
+		return `_No logs recorded yet for current week (${summary.mondayIso} ➔ ${summary.sundayIso}). Today's snapshot will be recorded as Day 1._`;
+	}
+
+	const header =
+		"Date   Day    Revenue    Wages     Ad      Profit    Sold   Prod   Price";
+	const divider =
+		"───────────────────────────────────────────────────────────────────────";
+
+	const rows = summary.entries.map((e) => {
+		const dt = e.isoDate.slice(5); // "MM-DD"
+		const day = e.dayOfWeek.padEnd(3);
+		const rev = fmtMoney(e.revenue).padStart(9);
+		const wag = fmtMoney(e.wages).padStart(8);
+		const ad = fmtMoney(e.adBudget).padStart(7);
+		const prof = fmtProfit(e.profit).padStart(11);
+		const sold = fmtThousands(e.soldBarrels).padStart(7);
+		const prod = fmtThousands(e.producedBarrels).padStart(6);
+		const price = `$${e.barrelPrice}`.padStart(6);
+
+		return `${dt}  ${day}  ${rev}  ${wag}  ${ad}  ${prof}  ${sold}  ${prod}  ${price}`;
+	});
+
+	const totRev = fmtMoney(summary.totalRevenue).padStart(9);
+	const totWag = fmtMoney(summary.totalWages).padStart(8);
+	const totAd = fmtMoney(summary.totalAd).padStart(7);
+	const totProf = fmtProfit(summary.totalProfit).padStart(11);
+	const totSold = fmtThousands(summary.totalSold).padStart(7);
+	const totProd = fmtThousands(summary.totalProduced).padStart(6);
+	const totalsRow = `WTD    Tot  ${totRev}  ${totWag}  ${totAd}  ${totProf}  ${totSold}  ${totProd}        `;
+
+	return `\`\`\`\n${header}\n${divider}\n${rows.join("\n")}\n${divider}\n${totalsRow}\n\`\`\``;
+}
+
+export function formatWeekToDateSummary(summary: WeekToDateSummary): string {
+	const profitSign = summary.totalProfit >= 0 ? "+" : "";
+	const operatingCosts = summary.totalWages + summary.totalAd;
+	const producedVal =
+		summary.entries.length > 0
+			? summary.entries.reduce(
+					(s, e) => s + (e.producedBarrels ?? 0) * e.barrelPrice,
+					0,
+				)
+			: 0;
+
+	return `• **WTD Net Profit:** **${profitSign}$${summary.totalProfit.toLocaleString()}**
+• **WTD Gross Revenue:** **$${summary.totalRevenue.toLocaleString()}**
+• **Operating Costs:** **$${operatingCosts.toLocaleString()}** (Wages: $${(summary.totalWages / 1_000_000).toFixed(1)}M | Ad: $${(summary.totalAd / 1_000_000).toFixed(1)}M)
+• **Barrels Sold:** **${summary.totalSold.toLocaleString()}** bbl
+• **Barrels Produced:** **${summary.totalProduced.toLocaleString()}** bbl${producedVal > 0 ? ` ($${producedVal.toLocaleString()} value)` : ""}`;
 }
 
 export function formatHistoryTable(history: OilRigHistoryRecord[]): string {

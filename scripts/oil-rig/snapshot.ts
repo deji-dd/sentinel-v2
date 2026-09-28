@@ -1,6 +1,6 @@
-import { db, oilRigSnapshots } from "../packages/database";
-import { TornApiClient } from "../packages/torn-api";
-import { Logger } from "../packages/utils";
+import { db, oilRigSnapshots } from "../../packages/database";
+import { TornApiClient } from "../../packages/torn-api";
+import { Logger } from "../../packages/utils";
 
 const logger = new Logger("OilRigSnapshot");
 

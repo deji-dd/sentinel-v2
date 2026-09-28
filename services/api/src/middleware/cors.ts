@@ -41,6 +41,7 @@ export const corsPlugin = new Elysia({ name: "middleware.cors" }).use(
 			"Authorization",
 			"X-Client-App",
 			"X-Requested-With",
+			"X-Api-Key",
 		],
 		methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 	}),

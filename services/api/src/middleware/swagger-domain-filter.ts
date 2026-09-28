@@ -46,6 +46,7 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 		isPathAllowed: (path: string) =>
 			path.startsWith("/api/health") ||
 			path.startsWith("/api/v1/guilds") ||
+			path.startsWith("/api/v1/system") ||
 			path.startsWith("/api/v1/auth"),
 	},
 
