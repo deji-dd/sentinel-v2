@@ -12,7 +12,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { LoadingProvider, useGlobalLoading } from "@/contexts/LoadingContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
-import { BattlestatsLedgerPage } from "@/pages/BattlestatsLedgerPage";
 import { LogManagerPage } from "@/pages/LogManagerPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { StocksLedgerPage } from "@/pages/StocksLedgerPage";
@@ -75,17 +74,6 @@ function MainRouter() {
 		path === "/logs"
 	) {
 		return <LogManagerPage />;
-	}
-
-	if (
-		path === "/battlestats-ledger" ||
-		path === "/battlestats" ||
-		path === "/gym-ledger" ||
-		path === "/gym" ||
-		path === "/personal-gym" ||
-		path === "/personal-battlestats"
-	) {
-		return <BattlestatsLedgerPage />;
 	}
 
 	if (

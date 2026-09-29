@@ -298,6 +298,8 @@ export const SHADOW_STYLES = `
 	gap: 4px;
 }
 
+
+
 .kpi-label {
 	font-size: 11px;
 	font-weight: 600;
@@ -319,8 +321,11 @@ export const SHADOW_STYLES = `
 }
 
 .val-green { color: #34d399 !important; }
+.val-emerald { color: #34d399 !important; }
 .val-amber { color: #fbbf24 !important; }
 .val-blue { color: #38bdf8 !important; }
+.val-sky { color: #38bdf8 !important; }
+.val-purple { color: #a855f7 !important; }
 
 /* ─── Chart Container ─── */
 .chart-card {
@@ -525,6 +530,178 @@ tr:hover td {
 	font-size: 13px;
 	color: #cbd5e1;
 }
+
+/* --- Battlestats Target Ratio Bar Styles --- */
+.stat-ratio-bars {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.ratio-stat-row {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.ratio-stat-meta {
+	display: flex;
+	justify-content: space-between;
+	font-size: 11px;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.ratio-stat-meta .stat-name {
+	font-weight: 700;
+	text-transform: capitalize;
+}
+
+.ratio-stat-meta .stat-name.strength { color: #f97316; }
+.ratio-stat-meta .stat-name.defense { color: #06b6d4; }
+.ratio-stat-meta .stat-name.speed { color: #10b981; }
+.ratio-stat-meta .stat-name.dexterity { color: #a855f7; }
+
+.ratio-stat-meta .stat-diff.deficit { color: #f87171; }
+.ratio-stat-meta .stat-diff.surplus { color: #34d399; }
+
+.ratio-bar-track {
+	position: relative;
+	height: 6px;
+	background: #1e293b;
+	border-radius: 3px;
+	overflow: visible;
+}
+
+.ratio-bar-fill {
+	height: 100%;
+	border-radius: 3px;
+	transition: width 0.3s ease;
+}
+
+.ratio-bar-fill.strength { background: #f97316; }
+.ratio-bar-fill.defense { background: #06b6d4; }
+.ratio-bar-fill.speed { background: #10b981; }
+.ratio-bar-fill.dexterity { background: #a855f7; }
+
+.ratio-bar-target {
+	position: absolute;
+	top: -2px;
+	bottom: -2px;
+	width: 2px;
+	background: #f8fafc;
+	box-shadow: 0 0 4px #ffffff;
+	z-index: 2;
+}
+
+/* ─── Goal Prediction Section ─── */
+.goal-input-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.goal-input-wrap {
+	display: flex;
+	align-items: center;
+	background: #0f172a;
+	border: 1px solid #334155;
+	border-radius: 6px;
+	padding: 5px 10px;
+	flex: 1;
+	min-width: 180px;
+}
+
+.goal-input-wrap:focus-within {
+	border-color: #38bdf8;
+}
+
+.goal-input-wrap .goal-prefix {
+	font-size: 11px;
+	font-weight: 700;
+	color: #64748b;
+	margin-right: 6px;
+	text-transform: uppercase;
+}
+
+.goal-input-field {
+	background: transparent;
+	border: none;
+	outline: none;
+	color: #f8fafc;
+	font-size: 13px;
+	font-weight: 600;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+	width: 100%;
+}
+
+.goal-quick-chips {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.btn-chip {
+	background: #1e293b;
+	border: 1px solid #334155;
+	color: #94a3b8;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 4px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.btn-chip:hover {
+	background: #334155;
+	color: #f8fafc;
+	border-color: #475569;
+}
+
+.prediction-results-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 10px;
+	margin-top: 10px;
+}
+
+@media (min-width: 480px) {
+	.prediction-results-grid {
+		grid-template-columns: repeat(3, 1fr);
+	}
+}
+
+.prediction-card {
+	background: #0f172a;
+	border: 1px solid #334155;
+	border-radius: 6px;
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.prediction-label {
+	font-size: 10px;
+	font-weight: 700;
+	color: #94a3b8;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.prediction-value {
+	font-size: 16px;
+	font-weight: 700;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+	color: #f8fafc;
+}
+
+.prediction-sub {
+	font-size: 11px;
+	color: #64748b;
+}
 `;
 
 export const IN_PAGE_BADGE_STYLES = `
@@ -585,5 +762,120 @@ export const IN_PAGE_BADGE_STYLES = `
 
 .blasted-crime-badge .badge-sep {
 	color: #64748b;
+}
+
+/* --- Torn Gym In-Page Styles --- */
+#blasted-gym-hud {
+	display: flex;
+	align-items: center;
+	background: rgba(15, 23, 42, 0.85);
+	border: 1px solid rgba(56, 189, 248, 0.35);
+	border-radius: 6px;
+	padding: 6px 12px;
+	margin: 8px 0 10px 0;
+	backdrop-filter: blur(8px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.blasted-hud-metrics {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11.5px;
+	color: #cbd5e1;
+	flex-wrap: wrap;
+}
+
+.blasted-hud-item .hud-label {
+	color: #94a3b8;
+	margin-right: 4px;
+}
+
+.blasted-hud-item .hud-value {
+	font-weight: 600;
+}
+
+.blasted-hud-divider {
+	color: #475569;
+}
+
+/* Priority Card Highlight */
+.blasted-gym-card-priority {
+	position: relative;
+	box-shadow: inset 0 0 0 2px #38bdf8 !important;
+	border-color: #38bdf8 !important;
+}
+
+/* Stat Card Live Efficiency Pill */
+.blasted-stat-efficiency-pill {
+	background: rgba(15, 23, 42, 0.85);
+	border: 1px solid rgba(56, 189, 248, 0.25);
+	border-radius: 4px;
+	padding: 5px 8px;
+	margin: 6px 0 8px 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 11px;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.blasted-pill-target-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border-bottom: 1px solid rgba(56, 189, 248, 0.3);
+	padding-bottom: 3px;
+	margin-bottom: 3px;
+}
+
+.blasted-pill-target-label {
+	font-size: 9px;
+	font-weight: 800;
+	color: #38bdf8;
+	letter-spacing: 0.5px;
+}
+
+.blasted-pill-target-tag {
+	font-size: 9px;
+	font-weight: 700;
+	color: #f87171;
+}
+
+.blasted-pill-target-tag.surplus {
+	color: #34d399;
+}
+
+.blasted-pill-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.blasted-pill-label {
+	color: #94a3b8;
+}
+
+.blasted-pill-val.gain {
+	font-weight: 700;
+	color: #38bdf8;
+}
+
+.blasted-pill-val.deficit {
+	font-weight: 600;
+	color: #f87171;
+}
+
+.blasted-pill-val.surplus {
+	font-weight: 600;
+	color: #34d399;
+}
+
+@media screen and (max-width: 386px) {
+	.blasted-stat-efficiency-pill {
+		font-size: 9px;
+		padding: 3px 4px;
+	}
 }
 `;

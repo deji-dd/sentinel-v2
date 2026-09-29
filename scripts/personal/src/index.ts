@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./config";
 import { CrimesDomObserver } from "./modules/crimes-observer";
+import { GymDomObserver } from "./modules/gym-observer";
 import { IN_PAGE_BADGE_STYLES, SHADOW_STYLES } from "./styles";
 import { DrawerPanel } from "./ui/drawer";
 import { FloatingLauncher } from "./ui/launcher";
@@ -32,13 +33,18 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	shadowRoot.appendChild(shadowStyle);
 
 	// 3. Initialize Drawer & Launcher
-	let observer: CrimesDomObserver | null = null;
+	let crimesObserver: CrimesDomObserver | null = null;
+	let gymObserver: GymDomObserver | null = null;
 
-	const drawer = new DrawerPanel(() => {
-		if (observer) {
-			observer.reloadData();
-		}
-	});
+	const drawer = new DrawerPanel(
+		() => {
+			if (crimesObserver) crimesObserver.reloadData();
+			if (gymObserver) gymObserver.reloadData();
+		},
+		() => {
+			if (gymObserver) gymObserver.scanAndInject(true);
+		},
+	);
 
 	const launcher = new FloatingLauncher(() => {
 		drawer.toggle();
@@ -49,17 +55,20 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	shadowRoot.appendChild(drawerEl);
 	shadowRoot.appendChild(launcher.getElement());
 
-	// 4. Initialize In-Page DOM Observer for Crimes 2.0
+	// 4. Initialize In-Page DOM Observers
 	const showBadges = GM_getValue<boolean>(
 		STORAGE_KEYS.showBadges,
 		DEFAULT_SETTINGS.showBadges,
 	);
 
 	if (showBadges) {
-		observer = new CrimesDomObserver(() => {
-			drawer.open();
+		crimesObserver = new CrimesDomObserver(() => {
+			drawer.open("crimes");
 		});
-		observer.start();
+		crimesObserver.start();
+
+		gymObserver = new GymDomObserver();
+		gymObserver.start();
 	}
 
 	// 5. Restore open state if persistOpen is enabled

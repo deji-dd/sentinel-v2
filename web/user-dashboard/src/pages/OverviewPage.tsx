@@ -2,7 +2,6 @@ import {
 	Activity,
 	ArrowUpRight,
 	Coins,
-	Dumbbell,
 	FileText,
 	LayoutDashboard,
 	ShieldCheck,
@@ -39,16 +38,6 @@ const ACTIVE_MODULES = [
 		href: "/logs",
 		icon: FileText,
 		accent: "from-blue-500/20 to-blue-500/5 text-blue-400 border-blue-500/30",
-		badge: "Active",
-	},
-	{
-		title: "Battlestats & Gym",
-		description:
-			"Strength, speed, defense, and dexterity growth tracking with stat projection matrices.",
-		href: "/battlestats",
-		icon: Dumbbell,
-		accent:
-			"from-emerald-500/20 to-emerald-500/5 text-emerald-400 border-emerald-500/30",
 		badge: "Active",
 	},
 	{

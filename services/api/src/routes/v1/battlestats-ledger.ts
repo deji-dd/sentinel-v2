@@ -802,6 +802,91 @@ export const battlestatsLedgerRoutes = new Elysia({
 					"Returns data required to calculate the optimal gym training efficiency.",
 			},
 		},
+	)
+	// GET /api/v1/system/battlestats-ledger/preferences
+	.get(
+		"/preferences",
+		async () => {
+			const [record] = await db
+				.select()
+				.from(systemStates)
+				.where(eq(systemStates.id, "personal:battlestats_preferences"));
+
+			const data = (record?.data as Record<string, unknown>) ?? {};
+			const ratioType = data.ratioType === "hank" ? "hank" : "baldr";
+			const mainStat =
+				data.mainStat === "strength" ||
+				data.mainStat === "defense" ||
+				data.mainStat === "speed" ||
+				data.mainStat === "dexterity"
+					? data.mainStat
+					: "dexterity";
+
+			return {
+				ratioType,
+				mainStat,
+				updatedAt: record?.updatedAt
+					? new Date(record.updatedAt).toISOString()
+					: null,
+			};
+		},
+		{
+			detail: {
+				summary: "Get Battlestats Build Preferences",
+				description:
+					"Returns the synchronized target ratio build preset and main stat.",
+			},
+		},
+	)
+	// PUT /api/v1/system/battlestats-ledger/preferences
+	.put(
+		"/preferences",
+		async ({ body }) => {
+			const now = new Date();
+			await db
+				.insert(systemStates)
+				.values({
+					id: "personal:battlestats_preferences",
+					data: {
+						ratioType: body.ratioType,
+						mainStat: body.mainStat,
+					},
+					updatedAt: now,
+				})
+				.onConflictDoUpdate({
+					target: systemStates.id,
+					set: {
+						data: {
+							ratioType: body.ratioType,
+							mainStat: body.mainStat,
+						},
+						updatedAt: now,
+					},
+				});
+
+			return {
+				success: true,
+				ratioType: body.ratioType,
+				mainStat: body.mainStat,
+				updatedAt: now.toISOString(),
+			};
+		},
+		{
+			body: t.Object({
+				ratioType: t.Union([t.Literal("baldr"), t.Literal("hank")]),
+				mainStat: t.Union([
+					t.Literal("strength"),
+					t.Literal("defense"),
+					t.Literal("speed"),
+					t.Literal("dexterity"),
+				]),
+			}),
+			detail: {
+				summary: "Save Battlestats Build Preferences",
+				description:
+					"Persists the synchronized target ratio build preset and main stat across all devices.",
+			},
+		},
 	);
 
 export const gymLedgerRoutes = new Elysia({ prefix: "/gym-ledger" }).use(

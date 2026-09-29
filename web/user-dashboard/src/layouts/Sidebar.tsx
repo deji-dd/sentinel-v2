@@ -1,6 +1,5 @@
 import {
 	Coins,
-	Dumbbell,
 	FileText,
 	LayoutDashboard,
 	Moon,
@@ -60,11 +59,6 @@ const navGroups: NavGroup[] = [
 				label: "Logs",
 				href: "/logs",
 				icon: FileText,
-			},
-			{
-				label: "Battlestats",
-				href: "/battlestats",
-				icon: Dumbbell,
 			},
 			{
 				label: "Stocks",

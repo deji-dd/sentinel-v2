@@ -80,4 +80,107 @@ export interface ScriptSettings {
 	chartMetric: "financials" | "activity";
 	position: { x: number; y: number };
 	showBadges: boolean;
+	ratioType: "baldr" | "hank";
+	mainStat: "strength" | "defense" | "speed" | "dexterity";
+}
+
+export type StatType = "strength" | "defense" | "speed" | "dexterity";
+export type RatioType = "baldr" | "hank";
+
+export interface DailyBattlestatsTimeline {
+	date: string;
+	strength: number;
+	defense: number;
+	speed: number;
+	dexterity: number;
+	totalGained: number;
+	trains: number;
+	energyUsed: number;
+	count: number;
+}
+
+export interface StatCategoryAnalytics {
+	statType: string;
+	count: number;
+	gained: number;
+	trains: number;
+	energy: number;
+	efficiency: number;
+	percentage: number;
+}
+
+export interface StatSourceAnalytics {
+	source: "gym" | "item" | "book" | "company";
+	count: number;
+	gained: number;
+	trains: number;
+	energy: number;
+	percentage: number;
+}
+
+export interface BattlestatsAnalyticsResponse {
+	summary: {
+		totalGained: number;
+		totalTrains: number;
+		totalEnergyUsed: number;
+		totalLogs: number;
+		avgGainPerTrain: number;
+		avgGainPerEnergy: number;
+	};
+	statBreakdown: StatCategoryAnalytics[];
+	sourceBreakdown?: StatSourceAnalytics[];
+	timeline: DailyBattlestatsTimeline[];
+}
+
+export interface BattlestatsLedgerState {
+	status: "idle" | "running" | "completed" | "error";
+	totalIndexedLogs: number;
+	lastProcessedTimestamp: number | null;
+	lastError: string | null;
+	updatedAt: string;
+	totals?: {
+		totalInDb: number;
+		totalStatGained: number;
+		totalTrains: number;
+		totalEnergyUsed: number;
+		avgGainPerTrain: number;
+		avgGainPerEnergy: number;
+		matchingPersonalLogs: number;
+		minTimestamp: number | null;
+		maxTimestamp: number | null;
+	};
+	allTimeStats?: StatCategoryAnalytics[];
+}
+
+export interface ActiveGymData {
+	id: string;
+	name: string;
+	cost: number;
+	energy: number;
+	strength: number;
+	speed: number;
+	defense: number;
+	dexterity: number;
+}
+
+export interface EfficiencyDataPayload {
+	stats: {
+		strength: number;
+		defense: number;
+		speed: number;
+		dexterity: number;
+	};
+	maxHappy: number;
+	perks: {
+		strength: number;
+		defense: number;
+		speed: number;
+		dexterity: number;
+	};
+	activeGyms: {
+		strength: ActiveGymData | null;
+		defense: ActiveGymData | null;
+		speed: ActiveGymData | null;
+		dexterity: ActiveGymData | null;
+	};
 }

@@ -1,5 +1,13 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./config";
-import type { CrimeAnalyticsResponse, CrimeLedgerState } from "./types";
+import type {
+	BattlestatsAnalyticsResponse,
+	BattlestatsLedgerState,
+	CrimeAnalyticsResponse,
+	CrimeLedgerState,
+	EfficiencyDataPayload,
+	RatioType,
+	StatType,
+} from "./types";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
 declare function GM_setValue<T>(key: string, value: T): void;
@@ -28,7 +36,7 @@ export class BlastedApiClient {
 
 	public async request<T>(
 		endpoint: string,
-		options?: { method?: "GET" | "POST"; body?: unknown },
+		options?: { method?: "GET" | "POST" | "PUT"; body?: unknown },
 	): Promise<T> {
 		const method = options?.method ?? "GET";
 		const url = `${this.apiUrl}${endpoint}`;
@@ -119,6 +127,56 @@ export class BlastedApiClient {
 		return data;
 	}
 
+	public async getBattlestatsState(): Promise<BattlestatsLedgerState> {
+		const data = await this.request<BattlestatsLedgerState>(
+			"/api/v1/system/battlestats-ledger/state",
+		);
+		GM_setValue(STORAGE_KEYS.cachedBattlestatsState, JSON.stringify(data));
+		return data;
+	}
+
+	public async getBattlestatsAnalytics(
+		timeframe = "30d",
+	): Promise<BattlestatsAnalyticsResponse> {
+		const daysParam = timeframe === "all" ? "all" : timeframe.replace("d", "");
+		const data = await this.request<BattlestatsAnalyticsResponse>(
+			`/api/v1/system/battlestats-ledger/analytics?days=${daysParam}`,
+		);
+		GM_setValue(STORAGE_KEYS.cachedBattlestatsAnalytics, JSON.stringify(data));
+		return data;
+	}
+
+	public async getEfficiencyData(): Promise<EfficiencyDataPayload> {
+		const data = await this.request<EfficiencyDataPayload>(
+			"/api/v1/system/battlestats-ledger/efficiency-data",
+		);
+		GM_setValue(STORAGE_KEYS.cachedEfficiency, JSON.stringify(data));
+		return data;
+	}
+
+	public async getBattlestatsPreferences(): Promise<{
+		ratioType: RatioType;
+		mainStat: StatType;
+	}> {
+		return this.request<{ ratioType: RatioType; mainStat: StatType }>(
+			"/api/v1/system/battlestats-ledger/preferences",
+		);
+	}
+
+	public async saveBattlestatsPreferences(prefs: {
+		ratioType: RatioType;
+		mainStat: StatType;
+	}): Promise<{ success: boolean; ratioType: RatioType; mainStat: StatType }> {
+		return this.request<{
+			success: boolean;
+			ratioType: RatioType;
+			mainStat: StatType;
+		}>("/api/v1/system/battlestats-ledger/preferences", {
+			method: "PUT",
+			body: prefs,
+		});
+	}
+
 	public getCachedState(): CrimeLedgerState | null {
 		const raw = GM_getValue<string>(STORAGE_KEYS.cachedState, "");
 		if (!raw) return null;
@@ -134,6 +192,39 @@ export class BlastedApiClient {
 		if (!raw) return null;
 		try {
 			return JSON.parse(raw) as CrimeAnalyticsResponse;
+		} catch {
+			return null;
+		}
+	}
+
+	public getCachedBattlestatsState(): BattlestatsLedgerState | null {
+		const raw = GM_getValue<string>(STORAGE_KEYS.cachedBattlestatsState, "");
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as BattlestatsLedgerState;
+		} catch {
+			return null;
+		}
+	}
+
+	public getCachedBattlestatsAnalytics(): BattlestatsAnalyticsResponse | null {
+		const raw = GM_getValue<string>(
+			STORAGE_KEYS.cachedBattlestatsAnalytics,
+			"",
+		);
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as BattlestatsAnalyticsResponse;
+		} catch {
+			return null;
+		}
+	}
+
+	public getCachedEfficiency(): EfficiencyDataPayload | null {
+		const raw = GM_getValue<string>(STORAGE_KEYS.cachedEfficiency, "");
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as EfficiencyDataPayload;
 		} catch {
 			return null;
 		}

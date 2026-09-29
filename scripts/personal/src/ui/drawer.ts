@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../config";
+import { BattlestatsTab } from "../modules/battlestats-tab";
 import { CrimesTab } from "../modules/crimes-tab";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
@@ -8,6 +9,8 @@ export class DrawerPanel {
 	private overlay: HTMLElement;
 	private drawer: HTMLElement;
 	private crimesTab: CrimesTab | null = null;
+	private battlestatsTab: BattlestatsTab | null = null;
+	private onRatioChange?: () => void;
 	private activeTabName:
 		| "crimes"
 		| "stocks"
@@ -16,8 +19,9 @@ export class DrawerPanel {
 		| "settings" = "crimes";
 	private onSettingsSaved?: () => void;
 
-	constructor(onSettingsSaved?: () => void) {
+	constructor(onSettingsSaved?: () => void, onRatioChange?: () => void) {
 		this.onSettingsSaved = onSettingsSaved;
+		this.onRatioChange = onRatioChange;
 		this.activeTabName = GM_getValue<
 			"crimes" | "stocks" | "battlestats" | "wealth" | "settings"
 		>(STORAGE_KEYS.activeTab, "crimes");
@@ -41,12 +45,19 @@ export class DrawerPanel {
 		return this.drawer.classList.contains("open");
 	}
 
-	public open(): void {
+	public open(
+		tab?: "crimes" | "stocks" | "battlestats" | "wealth" | "settings",
+	): void {
+		if (tab) {
+			this.switchTab(tab);
+		}
 		this.drawer.classList.add("open");
 		this.overlay.classList.add("open");
 		GM_setValue(STORAGE_KEYS.panelOpen, true);
 		if (this.activeTabName === "crimes" && this.crimesTab) {
 			this.crimesTab.refresh();
+		} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
+			this.battlestatsTab.refresh();
 		}
 		this.startPolling();
 	}
@@ -67,6 +78,8 @@ export class DrawerPanel {
 			}
 			if (this.activeTabName === "crimes" && this.crimesTab) {
 				this.crimesTab.refresh().catch(() => {});
+			} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
+				this.battlestatsTab.refresh().catch(() => {});
 			}
 		}, 15000);
 	}
@@ -107,11 +120,11 @@ export class DrawerPanel {
 					<button class="drawer-tab ${this.activeTabName === "crimes" ? "active" : ""}" data-tab="crimes">
 						Crimes
 					</button>
+					<button class="drawer-tab ${this.activeTabName === "battlestats" ? "active" : ""}" data-tab="battlestats">
+						Battlestats
+					</button>
 					<button class="drawer-tab disabled" data-tab="stocks" title="Coming soon">
 						Stocks <span class="tab-badge">Soon</span>
-					</button>
-					<button class="drawer-tab disabled" data-tab="battlestats" title="Coming soon">
-						Battlestats <span class="tab-badge">Soon</span>
 					</button>
 					<button class="drawer-tab disabled" data-tab="wealth" title="Coming soon">
 						Wealth <span class="tab-badge">Soon</span>
@@ -158,6 +171,16 @@ export class DrawerPanel {
 					.catch((_e) => {
 						this.setStatus("Error", "error");
 					});
+			} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
+				this.setStatus("Syncing...", "loading");
+				this.battlestatsTab
+					.refresh()
+					.then(() => {
+						this.setStatus("Connected", "ok");
+					})
+					.catch((_e) => {
+						this.setStatus("Error", "error");
+					});
 			}
 		});
 
@@ -184,6 +207,15 @@ export class DrawerPanel {
 			if (this.activeTabName === "crimes") {
 				this.crimesTab = new CrimesTab(body, () => this.openSettings());
 				this.crimesTab.init();
+			} else if (this.activeTabName === "battlestats") {
+				this.battlestatsTab = new BattlestatsTab(
+					body,
+					() => this.openSettings(),
+					() => {
+						if (this.onRatioChange) this.onRatioChange();
+					},
+				);
+				this.battlestatsTab.init();
 			} else if (this.activeTabName === "settings") {
 				this.renderSettings(body);
 			}
@@ -213,6 +245,19 @@ export class DrawerPanel {
 				this.crimesTab = new CrimesTab(body, () => this.openSettings());
 			}
 			this.crimesTab.render();
+		} else if (tab === "battlestats") {
+			if (!this.battlestatsTab) {
+				this.battlestatsTab = new BattlestatsTab(
+					body,
+					() => this.openSettings(),
+					() => {
+						if (this.onRatioChange) this.onRatioChange();
+					},
+				);
+				this.battlestatsTab.init();
+			} else {
+				this.battlestatsTab.render();
+			}
 		} else if (tab === "settings") {
 			this.renderSettings(body);
 		}
