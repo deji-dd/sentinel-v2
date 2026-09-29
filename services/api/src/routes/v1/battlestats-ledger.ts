@@ -888,7 +888,3 @@ export const battlestatsLedgerRoutes = new Elysia({
 			},
 		},
 	);
-
-export const gymLedgerRoutes = new Elysia({ prefix: "/gym-ledger" }).use(
-	battlestatsLedgerRoutes,
-);

@@ -11,7 +11,6 @@ export const env = {
 		"https://elims.blasted-labs.tech",
 		"https://api.elims.blasted-labs.tech",
 		"https://subversive.blasted-labs.tech",
-		"https://sentinel.ayodejib.dev",
 		"https://aquasense.ayodejib.dev",
 		"https://api.ayodejib.dev",
 		"http://localhost:3000",

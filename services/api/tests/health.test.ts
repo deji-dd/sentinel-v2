@@ -138,16 +138,32 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(response.status).toBe(200);
 	});
 
-	it("identifies user-dashboard client context from origin", async () => {
+	it("blocks requests to retired domain sentinel.ayodejib.dev with 404", async () => {
 		const response = await app.handle(
 			new Request("https://sentinel.ayodejib.dev/api/health", {
 				headers: {
+					host: "sentinel.ayodejib.dev",
 					origin: "https://sentinel.ayodejib.dev",
 				},
 			}),
 		);
 
-		expect(response.status).toBe(200);
+		expect(response.status).toBe(404);
+	});
+
+	it("rejects CORS for retired domain sentinel.ayodejib.dev", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/api/health", {
+				method: "OPTIONS",
+				headers: {
+					origin: "https://sentinel.ayodejib.dev",
+					"access-control-request-method": "GET",
+				},
+			}),
+		);
+
+		const allowOrigin = response.headers.get("access-control-allow-origin");
+		expect(allowOrigin).not.toBe("https://sentinel.ayodejib.dev");
 	});
 
 	it("identifies elims-dashboard client context from origin and host", async () => {

@@ -49,18 +49,6 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 			path.startsWith("/api/v1/system") ||
 			path.startsWith("/api/v1/auth"),
 	},
-
-	// User Dashboard
-	"sentinel.ayodejib.dev": {
-		title: "Sentinel V2 — User Dashboard API",
-		description:
-			"Ledger analytics, personal wealth, crime stats, and real-time ledger feeds.",
-		isPathAllowed: (path: string) =>
-			path.startsWith("/api/health") ||
-			path.startsWith("/api/v1/system") ||
-			path.startsWith("/api/v1/auth") ||
-			path.startsWith("/api/ws/"),
-	},
 };
 
 export const DEFAULT_SWAGGER_CONFIG: SwaggerDomainConfig = {

@@ -11,6 +11,17 @@ export const corsPlugin = new Elysia({ name: "middleware.cors" }).use(
 			const origin = request.headers.get("origin");
 			if (!origin) return true; // Allow non-browser / server-to-server calls
 
+			let url: URL;
+			try {
+				url = new URL(origin);
+			} catch {
+				return false;
+			}
+
+			if (url.hostname === "sentinel.ayodejib.dev") {
+				return false;
+			}
+
 			if (env.NODE_ENV === "development") {
 				return true;
 			}
@@ -19,18 +30,13 @@ export const corsPlugin = new Elysia({ name: "middleware.cors" }).use(
 				return true;
 			}
 
-			try {
-				const url = new URL(origin);
-				if (
-					url.hostname === "blasted-labs.tech" ||
-					url.hostname.endsWith(".blasted-labs.tech") ||
-					url.hostname === "ayodejib.dev" ||
-					url.hostname.endsWith(".ayodejib.dev")
-				) {
-					return true;
-				}
-			} catch {
-				return false;
+			if (
+				url.hostname === "blasted-labs.tech" ||
+				url.hostname.endsWith(".blasted-labs.tech") ||
+				url.hostname === "ayodejib.dev" ||
+				url.hostname.endsWith(".ayodejib.dev")
+			) {
+				return true;
 			}
 
 			return false;

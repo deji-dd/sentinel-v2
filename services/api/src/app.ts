@@ -9,13 +9,8 @@ import { healthRoutes } from "./routes/health";
 import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
 import { fetchElimsUsers } from "./routes/v1/elims";
-import { wsBattlestatsLedgerRoutes } from "./routes/ws-battlestats-ledger";
-import { wsCrimeLedgerRoutes } from "./routes/ws-crime-ledger";
 import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
-import { wsGymLedgerRoutes } from "./routes/ws-gym-ledger";
-import { wsLogManagerRoutes } from "./routes/ws-log-manager";
 import { wsPersonalBountiesRoutes } from "./routes/ws-personal-bounties";
-import { wsStockLedgerRoutes } from "./routes/ws-stocks-ledger";
 import { wsSubversiveWarRoutes } from "./routes/ws-subversive-war";
 
 export const app = new Elysia()
@@ -36,11 +31,6 @@ export const app = new Elysia()
 		}),
 	)
 	.use(healthRoutes)
-	.use(wsLogManagerRoutes)
-	.use(wsCrimeLedgerRoutes)
-	.use(wsBattlestatsLedgerRoutes)
-	.use(wsGymLedgerRoutes)
-	.use(wsStockLedgerRoutes)
 	.use(wsElimsTournamentRoutes)
 	.use(wsSubversiveWarRoutes)
 	.use(wsPersonalBountiesRoutes)

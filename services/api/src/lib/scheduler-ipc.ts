@@ -1,10 +1,7 @@
 import net from "node:net";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcClient } from "@sentinel/utils/ipc";
-import { broadcastBattlestatsLedgerState } from "../routes/ws-battlestats-ledger";
-import { broadcastCrimeLedgerState } from "../routes/ws-crime-ledger";
 import { broadcastPersonalBountiesState } from "../routes/ws-personal-bounties";
-import { broadcastStockLedgerState } from "../routes/ws-stocks-ledger";
 import { broadcastWarUpdate } from "../routes/ws-subversive-war";
 import {
 	type CurrentWarInfo,
@@ -13,9 +10,6 @@ import {
 } from "./subversive-target-cache";
 
 const logger = new Logger("API", "SchedulerIPC");
-
-/** Worker registry name of the personal log manager worker in the scheduler. */
-export const LOG_MANAGER_WORKER_NAME = "personal:log_manager";
 
 let ipcClient: IpcClient | null = null;
 
@@ -34,19 +28,6 @@ export function initSchedulerIpcListener(): void {
 			};
 			if (message.action === "personal_bounties_updated" && message.data) {
 				broadcastPersonalBountiesState(message.data);
-			}
-			if (message.action === "crime_ledger_state_updated" && message.data) {
-				broadcastCrimeLedgerState(message.data);
-			}
-			if (
-				(message.action === "battlestats_ledger_state_updated" ||
-					message.action === "gym_ledger_state_updated") &&
-				message.data
-			) {
-				broadcastBattlestatsLedgerState(message.data);
-			}
-			if (message.action === "stocks_ledger_state_updated" && message.data) {
-				broadcastStockLedgerState(message.data);
 			}
 			if (message.action === "subversive_war_updated" && message.data) {
 				const payload = message.data as {
@@ -125,47 +106,6 @@ export function notifySchedulerForceRun(
 }
 
 /**
- * Requests the Scheduler to reset the Log Manager state through the worker
- * itself. The worker applies the reset atomically at the start of its next
- * sync cycle (preserving backfill cursors), so it is race-safe even while a
- * cycle is currently executing. The DB-persisted reset written by the API acts
- * as a fallback if the scheduler is offline.
- */
-export async function requestLogManagerReset(): Promise<boolean> {
-	try {
-		const delivered = await notifySchedulerAction("reset_log_manager");
-		if (!delivered) {
-			logger.warn(
-				"Could not reach scheduler via IPC; log manager reset will apply on its next startup/cadence from persisted state.",
-			);
-		}
-		return delivered;
-	} catch (err) {
-		logger.error("Failed to send log manager reset IPC:", err);
-		return false;
-	}
-}
-
-/**
- * Nudges the scheduler to run a log manager sync cycle immediately
- * (forward poll + backfill burst + pending resync job processing).
- */
-export async function triggerLogManagerSync(): Promise<boolean> {
-	try {
-		const delivered = await notifySchedulerForceRun(LOG_MANAGER_WORKER_NAME);
-		if (!delivered) {
-			logger.warn(
-				"Could not reach scheduler via IPC; log manager will pick up state on its next cadence.",
-			);
-		}
-		return delivered;
-	} catch (err) {
-		logger.error("Failed to send log manager IPC trigger:", err);
-		return false;
-	}
-}
-
-/**
  * Dispatches an IPC request to the Scheduler to re-initialize the crime ledger:
  * wipes crime_logs and regenerates all records from personal_logs.
  */
@@ -204,49 +144,6 @@ export async function requestBattlestatsLedgerReinitialize(): Promise<boolean> {
 			"Failed to send battlestats ledger reinitialization IPC:",
 			err,
 		);
-		return false;
-	}
-}
-
-export const requestGymLedgerReinitialize =
-	requestBattlestatsLedgerReinitialize;
-
-/**
- * Dispatches an IPC request to the Scheduler to re-initialize the stocks ledger:
- * wipes stock_ledgers & stock_dividend ledger_events and regenerates all records from personal_logs.
- */
-export async function requestStocksLedgerReinitialize(): Promise<boolean> {
-	try {
-		const delivered = await notifySchedulerAction("reinitialize_stocks_ledger");
-		if (!delivered) {
-			logger.warn(
-				"Could not reach scheduler via IPC; stocks ledger reinitialization will run on scheduler startup.",
-			);
-		}
-		return delivered;
-	} catch (err) {
-		logger.error("Failed to send stocks ledger reinitialization IPC:", err);
-		return false;
-	}
-}
-
-/**
- * Dispatches an IPC request to the Scheduler to initialize / snapshot wealth tracking.
- */
-export async function requestWealthInit(timestamp?: number): Promise<boolean> {
-	try {
-		const delivered = await notifySchedulerAction(
-			"reinitialize_wealth",
-			timestamp !== undefined ? { timestamp } : undefined,
-		);
-		if (!delivered) {
-			logger.warn(
-				"Could not reach scheduler via IPC; wealth initialization will run on scheduler startup.",
-			);
-		}
-		return delivered;
-	} catch (err) {
-		logger.error("Failed to send wealth initialization IPC:", err);
 		return false;
 	}
 }

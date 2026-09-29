@@ -90,33 +90,14 @@ describe("Swagger Domain-Scoped Documentation", () => {
 		expect(paths.some((p) => p.startsWith("/pond"))).toBe(false);
 	});
 
-	it("scopes sentinel.ayodejib.dev to user dashboard endpoints", async () => {
+	it("blocks sentinel.ayodejib.dev requests from accessing swagger docs", async () => {
 		const res = await app.handle(
 			new Request("https://sentinel.ayodejib.dev/swagger/json", {
 				headers: { host: "sentinel.ayodejib.dev" },
 			}),
 		);
 
-		expect(res.status).toBe(200);
-		const json = (await res.json()) as {
-			info: { title: string; description: string };
-			paths: Record<string, unknown>;
-		};
-
-		expect(json.info.title).toBe("Sentinel V2 — User Dashboard API");
-
-		const paths = Object.keys(json.paths);
-		expect(paths.length).toBeGreaterThan(0);
-
-		// Must include system, auth, health
-		expect(paths.some((p) => p.startsWith("/api/v1/system"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/v1/auth"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/health"))).toBe(true);
-
-		// Must NOT include elims, tt, pond
-		expect(paths.some((p) => p.startsWith("/api/v1/elims"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/api/v1/tt"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/pond"))).toBe(false);
+		expect(res.status).toBe(404);
 	});
 
 	it("serves all endpoints on swagger.ayodejib.dev and localhost", async () => {

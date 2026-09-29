@@ -20,7 +20,7 @@ const MIME_TYPES: Record<string, string> = {
 
 /**
  * Host-based & SPA fallback static file serving plugin for Elysia.
- * Serves bundled static assets from web/bot-dashboard/dist or web/user-dashboard/dist based on request Host/Origin.
+ * Serves bundled static assets from web frontends based on request Host/Origin.
  */
 export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 	"*",
@@ -28,6 +28,14 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		const url = new URL(request.url);
 		const host = request.headers.get("host") ?? "";
 		const origin = request.headers.get("origin") ?? "";
+
+		if (
+			host.toLowerCase().startsWith("sentinel.ayodejib.dev") ||
+			origin.toLowerCase().startsWith("https://sentinel.ayodejib.dev")
+		) {
+			set.status = 404;
+			return;
+		}
 
 		if (
 			host.startsWith("api.elims") &&
@@ -75,13 +83,6 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 			origin.includes("subversive")
 		) {
 			appDir = "web/subversive-dashboard/dist";
-		} else if (
-			host.includes("user-dashboard") ||
-			host.includes("ayodejib.dev") ||
-			host.startsWith("user.") ||
-			origin.includes("user-dashboard")
-		) {
-			appDir = "web/user-dashboard/dist";
 		}
 
 		const rootDir = join(import.meta.dir, "../../../..", appDir);
