@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../config";
 import { BattlestatsTab } from "../modules/battlestats-tab";
+import { CompanyTab } from "../modules/company-tab";
 import { CrimesTab } from "../modules/crimes-tab";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
@@ -10,11 +11,13 @@ export class DrawerPanel {
 	private drawer: HTMLElement;
 	private crimesTab: CrimesTab | null = null;
 	private battlestatsTab: BattlestatsTab | null = null;
+	private companyTab: CompanyTab | null = null;
 	private onRatioChange?: () => void;
 	private activeTabName:
 		| "crimes"
-		| "stocks"
 		| "battlestats"
+		| "company"
+		| "stocks"
 		| "wealth"
 		| "settings" = "crimes";
 	private onSettingsSaved?: () => void;
@@ -23,7 +26,7 @@ export class DrawerPanel {
 		this.onSettingsSaved = onSettingsSaved;
 		this.onRatioChange = onRatioChange;
 		this.activeTabName = GM_getValue<
-			"crimes" | "stocks" | "battlestats" | "wealth" | "settings"
+			"crimes" | "battlestats" | "company" | "stocks" | "wealth" | "settings"
 		>(STORAGE_KEYS.activeTab, "crimes");
 		this.overlay = document.createElement("div");
 		this.overlay.className = "blasted-drawer-overlay";
@@ -46,7 +49,13 @@ export class DrawerPanel {
 	}
 
 	public open(
-		tab?: "crimes" | "stocks" | "battlestats" | "wealth" | "settings",
+		tab?:
+			| "crimes"
+			| "battlestats"
+			| "company"
+			| "stocks"
+			| "wealth"
+			| "settings",
 	): void {
 		if (tab) {
 			this.switchTab(tab);
@@ -58,6 +67,8 @@ export class DrawerPanel {
 			this.crimesTab.refresh();
 		} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
 			this.battlestatsTab.refresh();
+		} else if (this.activeTabName === "company" && this.companyTab) {
+			this.companyTab.refresh();
 		}
 		this.startPolling();
 	}
@@ -80,6 +91,8 @@ export class DrawerPanel {
 				this.crimesTab.refresh().catch(() => {});
 			} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
 				this.battlestatsTab.refresh().catch(() => {});
+			} else if (this.activeTabName === "company" && this.companyTab) {
+				this.companyTab.refresh().catch(() => {});
 			}
 		}, 15000);
 	}
@@ -122,6 +135,9 @@ export class DrawerPanel {
 					</button>
 					<button class="drawer-tab ${this.activeTabName === "battlestats" ? "active" : ""}" data-tab="battlestats">
 						Battlestats
+					</button>
+					<button class="drawer-tab ${this.activeTabName === "company" ? "active" : ""}" data-tab="company">
+						Company
 					</button>
 					<button class="drawer-tab disabled" data-tab="stocks" title="Coming soon">
 						Stocks <span class="tab-badge">Soon</span>
@@ -181,6 +197,16 @@ export class DrawerPanel {
 					.catch((_e) => {
 						this.setStatus("Error", "error");
 					});
+			} else if (this.activeTabName === "company" && this.companyTab) {
+				this.setStatus("Syncing...", "loading");
+				this.companyTab
+					.refresh()
+					.then(() => {
+						this.setStatus("Connected", "ok");
+					})
+					.catch((_e) => {
+						this.setStatus("Error", "error");
+					});
 			}
 		});
 
@@ -191,8 +217,9 @@ export class DrawerPanel {
 				btn.addEventListener("click", () => {
 					const tabName = btn.getAttribute("data-tab") as
 						| "crimes"
-						| "stocks"
 						| "battlestats"
+						| "company"
+						| "stocks"
 						| "wealth"
 						| "settings";
 					if (tabName && !btn.classList.contains("disabled")) {
@@ -216,6 +243,9 @@ export class DrawerPanel {
 					},
 				);
 				this.battlestatsTab.init();
+			} else if (this.activeTabName === "company") {
+				this.companyTab = new CompanyTab(body, () => this.openSettings());
+				this.companyTab.init();
 			} else if (this.activeTabName === "settings") {
 				this.renderSettings(body);
 			}
@@ -223,7 +253,13 @@ export class DrawerPanel {
 	}
 
 	public switchTab(
-		tab: "crimes" | "stocks" | "battlestats" | "wealth" | "settings",
+		tab:
+			| "crimes"
+			| "battlestats"
+			| "company"
+			| "stocks"
+			| "wealth"
+			| "settings",
 	): void {
 		this.activeTabName = tab;
 		GM_setValue(STORAGE_KEYS.activeTab, tab);
@@ -257,6 +293,13 @@ export class DrawerPanel {
 				this.battlestatsTab.init();
 			} else {
 				this.battlestatsTab.render();
+			}
+		} else if (tab === "company") {
+			if (!this.companyTab) {
+				this.companyTab = new CompanyTab(body, () => this.openSettings());
+				this.companyTab.init();
+			} else {
+				this.companyTab.render();
 			}
 		} else if (tab === "settings") {
 			this.renderSettings(body);

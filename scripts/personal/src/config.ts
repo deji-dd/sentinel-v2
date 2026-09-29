@@ -19,6 +19,9 @@ export const STORAGE_KEYS = {
 	cachedBattlestatsAnalytics: "blasted_cached_battlestats_analytics",
 	cachedEfficiency: "blasted_cached_efficiency",
 	battlestatsGoal: "blasted_battlestats_goal",
+	cachedCompanyState: "blasted_cached_company_state",
+	companyChartMode: "blasted_company_chart_mode",
+	companyWeeklyOffset: "blasted_company_weekly_offset",
 };
 
 export const DEFAULT_SETTINGS: ScriptSettings = {

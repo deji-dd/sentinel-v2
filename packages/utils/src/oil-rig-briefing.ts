@@ -227,11 +227,11 @@ export async function loadRollingHistory(
 			.select()
 			.from(oilRigSnapshots)
 			.orderBy(desc(oilRigSnapshots.timestamp))
-			.limit(days);
+			.limit(days + 5);
 
 		if (rows && rows.length > 0) {
 			const chronological = rows.reverse();
-			return chronological.map((r, idx) => {
+			const mapped = chronological.map((r, idx) => {
 				const metrics = r.metrics as {
 					emptyEmployeeSlots?: number;
 					employeesWithAddiction?: number;
@@ -261,6 +261,9 @@ export async function loadRollingHistory(
 						dailyProduced = est;
 					}
 				}
+				if (dailyProduced === undefined && r.barrelsSold > 0) {
+					dailyProduced = r.barrelsSold;
+				}
 
 				return {
 					timestamp: Math.floor(r.timestamp.getTime() / 1000),
@@ -289,6 +292,7 @@ export async function loadRollingHistory(
 					},
 				};
 			});
+			return mapped.slice(-days);
 		}
 	} catch (err) {
 		logger.error(
@@ -456,7 +460,7 @@ export async function generateAndSendDirectorBriefing(
 		lineupFormatted = Object.entries(rosterAnalysis.rosterByRole)
 			.map(
 				([role, members]) =>
-					`• **${role}** (${members.length}): ${members.join(", ")}`,
+					`• **${role}** (${members.length}): ${members.join(" • ")}`,
 			)
 			.join("\n");
 	}
@@ -475,17 +479,17 @@ export async function generateAndSendDirectorBriefing(
 		const lines: string[] = [];
 		if (t1.length > 0) {
 			lines.push(
-				`• **Tier 1 (Send Today):** ${t1.map((e) => `**${e.name}** (${e.penalty} pts)`).join(", ")}.`,
+				`• **Tier 1 (Send Today):** ${t1.map((e) => `**${e.name}** (${e.penalty} pts)`).join(" • ")}.`,
 			);
 		}
 		if (t2.length > 0) {
 			lines.push(
-				`• **Tier 2 (Send Next):** ${t2.map((e) => `**${e.name}** (${e.penalty} pts)`).join(", ")}.`,
+				`• **Tier 2 (Send Next):** ${t2.map((e) => `**${e.name}** (${e.penalty} pts)`).join(" • ")}.`,
 			);
 		}
 		if (t3.length > 0) {
 			lines.push(
-				`• **Tier 3 (Monitor):** ${t3.map((e) => `**${e.name}** (${e.penalty} pts)`).join(", ")}.`,
+				`• **Tier 3 (Monitor):** ${t3.map((e) => `**${e.name}** (${e.penalty} pts)`).join(" • ")}.`,
 			);
 		}
 		rehabFormatted = lines.join("\n");
@@ -745,7 +749,7 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 		await sendDiscordDm(discordUserId, discordToken, {
 			embeds: [
 				{
-					title: `Succession Oil (${snap.profile.rating}★) — Operations Advice (Part 1/3)`,
+					title: `Succession Oil (${snap.profile.rating}★) — Operations Advice (Part 1/2)`,
 					description: advisorText.slice(0, 4000),
 					color: 0xf59e0b, // Amber Gold
 					footer: {
@@ -760,7 +764,7 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 		await sendDiscordDm(discordUserId, discordToken, {
 			embeds: [
 				{
-					title: `Succession Oil (${snap.profile.rating}★) — Company Details (Part 2/3)`,
+					title: `Succession Oil (${snap.profile.rating}★) — Company Details (Part 2/2)`,
 					description: `Current operational telemetry and daily financials for **${snap.profile.name}**.`,
 					color: 0x3b82f6, // Blue
 					fields: [
@@ -788,22 +792,7 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 			],
 		});
 
-		// Message 3: Week-to-Date Performance Logs
-		await sendDiscordDm(discordUserId, discordToken, {
-			embeds: [
-				{
-					title: `Succession Oil — Week-to-Date Performance Logs (Part 3/3)`,
-					description: `${wtdTable}\n\n${wtdSummaryText}`,
-					color: 0x10b981, // Emerald Green
-					footer: {
-						text: `Accounting Week (${wtdSummary.mondayIso} to ${wtdSummary.sundayIso}) • Sentinel`,
-					},
-					timestamp: new Date().toISOString(),
-				},
-			],
-		});
-
-		logger.info("Discord DMs successfully delivered (3 parts)!");
+		logger.info("Discord DMs successfully delivered (2 parts)!");
 	} else {
 		logger.warn("Discord credentials missing. Skipping DM.");
 	}

@@ -24,6 +24,7 @@ import {
 	triggerLogManagerSync,
 } from "../../lib/scheduler-ipc";
 import { battlestatsLedgerRoutes } from "./battlestats-ledger";
+import { companyRoutes } from "./company";
 import { crimeLedgerRoutes } from "./crime-ledger";
 import { gymLedgerRoutes } from "./gym-ledger";
 import { stockLedgerRoutes } from "./stock-ledger";
@@ -43,6 +44,7 @@ const RESYNC_STATE_ID = "personal:log_manager:resync_job";
 export const systemRoutes = new Elysia({ prefix: "/system" })
 	.use(crimeLedgerRoutes)
 	.use(battlestatsLedgerRoutes)
+	.use(companyRoutes)
 	.use(gymLedgerRoutes)
 	.use(stockLedgerRoutes)
 	.use(wealthRoutes)

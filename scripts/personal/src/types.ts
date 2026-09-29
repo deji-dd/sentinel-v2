@@ -75,7 +75,13 @@ export interface ScriptSettings {
 	apiKey: string;
 	panelOpen: boolean;
 	persistOpen: boolean;
-	activeTab: "crimes" | "stocks" | "battlestats" | "wealth" | "settings";
+	activeTab:
+		| "crimes"
+		| "stocks"
+		| "battlestats"
+		| "company"
+		| "wealth"
+		| "settings";
 	timeframe: "7d" | "30d" | "90d" | "all";
 	chartMetric: "financials" | "activity";
 	position: { x: number; y: number };
@@ -183,4 +189,140 @@ export interface EfficiencyDataPayload {
 		speed: ActiveGymData | null;
 		dexterity: ActiveGymData | null;
 	};
+}
+
+export interface CompanyProfile {
+	name: string;
+	rating: number;
+	funds: number;
+	efficiency: number;
+	environment: number;
+	popularity: number;
+	employees: { hired: number; capacity: number };
+	storageCapacity: number;
+}
+
+export interface CompanyKPIs {
+	wtdProfit: number;
+	wtdRevenue: number;
+	wtdExpenses: number;
+	dailyIncome: number;
+	dailyWages: number;
+	dailyAdBudget: number;
+	dailyExpenses: number;
+	dailyProfit: number;
+	inStock: number;
+	storageCapacity: number;
+	fillPct: number;
+	barrelPrice: number;
+	dailySold: number;
+	dailyProduced?: number;
+}
+
+export interface CompanyDirectives {
+	roleTransfers: Array<{
+		name: string;
+		fromRole: string;
+		toRole: string;
+		statsStr: string;
+	}>;
+	adSpend: {
+		action: string;
+		amount: number;
+		formatted: string;
+		isChanged: boolean;
+	};
+	pricing: {
+		action: string;
+		exact: number;
+		formatted: string;
+		isChanged: boolean;
+	};
+	rehabTiers: {
+		tier1: Array<{ name: string; penalty: number }>;
+		tier2: Array<{ name: string; penalty: number }>;
+		tier3: Array<{ name: string; penalty: number }>;
+	};
+	allOptimal: boolean;
+}
+
+export interface CompanyEmployee {
+	id: number;
+	name: string;
+	positionName: string;
+	wage: number;
+	addiction: number;
+	stats: {
+		manualLabor: number;
+		intelligence: number;
+		endurance: number;
+	};
+	targetRole?: string;
+	isOptimal: boolean;
+	rehabTier?: 1 | 2 | 3;
+}
+
+export interface CompanyStateResponse {
+	success: boolean;
+	profile: CompanyProfile | null;
+	kpis: CompanyKPIs | null;
+	directives: CompanyDirectives | null;
+	employees: CompanyEmployee[];
+	message?: string;
+}
+
+export interface WeeklyLogEntry {
+	dayOfWeek: string;
+	isoDate: string;
+	revenue: number;
+	wages: number;
+	adBudget: number;
+	expenses: number;
+	profit: number;
+	soldBarrels: number;
+	producedBarrels?: number;
+	barrelPrice: number;
+}
+
+export interface WeeklyTotals {
+	totalRevenue: number;
+	totalWages: number;
+	totalAd: number;
+	totalExpenses: number;
+	totalProfit: number;
+	totalSold: number;
+	totalProduced: number;
+	avgPrice: number;
+}
+
+export interface CompanyWeeklyLogsResponse {
+	success: boolean;
+	offset: number;
+	hasPrev: boolean;
+	hasNext: boolean;
+	mondayIso: string;
+	sundayIso: string;
+	weekLabel: string;
+	entries: WeeklyLogEntry[];
+	totals: WeeklyTotals;
+}
+
+export interface CompanyHistoryEntry {
+	isoDate: string;
+	timestamp: number;
+	income: number;
+	wages: number;
+	adBudget: number;
+	expenses: number;
+	profit: number;
+	sold: number;
+	produced: number;
+	stock: number;
+	fillPct: number;
+	barrelPrice: number;
+}
+
+export interface CompanyHistoryResponse {
+	success: boolean;
+	timeline: CompanyHistoryEntry[];
 }

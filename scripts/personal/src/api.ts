@@ -2,6 +2,9 @@ import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./config";
 import type {
 	BattlestatsAnalyticsResponse,
 	BattlestatsLedgerState,
+	CompanyHistoryResponse,
+	CompanyStateResponse,
+	CompanyWeeklyLogsResponse,
 	CrimeAnalyticsResponse,
 	CrimeLedgerState,
 	EfficiencyDataPayload,
@@ -225,6 +228,38 @@ export class BlastedApiClient {
 		if (!raw) return null;
 		try {
 			return JSON.parse(raw) as EfficiencyDataPayload;
+		} catch {
+			return null;
+		}
+	}
+
+	public async getCompanyState(): Promise<CompanyStateResponse> {
+		const data = await this.request<CompanyStateResponse>(
+			"/api/v1/system/company/state",
+		);
+		GM_setValue(STORAGE_KEYS.cachedCompanyState, JSON.stringify(data));
+		return data;
+	}
+
+	public async getCompanyWeeklyLogs(
+		offset = 0,
+	): Promise<CompanyWeeklyLogsResponse> {
+		return this.request<CompanyWeeklyLogsResponse>(
+			`/api/v1/system/company/weekly-logs?offset=${offset}`,
+		);
+	}
+
+	public async getCompanyHistory(days = 30): Promise<CompanyHistoryResponse> {
+		return this.request<CompanyHistoryResponse>(
+			`/api/v1/system/company/history?days=${days}`,
+		);
+	}
+
+	public getCachedCompanyState(): CompanyStateResponse | null {
+		const raw = GM_getValue<string>(STORAGE_KEYS.cachedCompanyState, "");
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as CompanyStateResponse;
 		} catch {
 			return null;
 		}

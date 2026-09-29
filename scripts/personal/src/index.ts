@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./config";
+import { CompanyDomObserver } from "./modules/company-observer";
 import { CrimesDomObserver } from "./modules/crimes-observer";
 import { GymDomObserver } from "./modules/gym-observer";
 import { IN_PAGE_BADGE_STYLES, SHADOW_STYLES } from "./styles";
@@ -35,11 +36,13 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	// 3. Initialize Drawer & Launcher
 	let crimesObserver: CrimesDomObserver | null = null;
 	let gymObserver: GymDomObserver | null = null;
+	let companyObserver: CompanyDomObserver | null = null;
 
 	const drawer = new DrawerPanel(
 		() => {
 			if (crimesObserver) crimesObserver.reloadData();
 			if (gymObserver) gymObserver.reloadData();
+			if (companyObserver) companyObserver.reloadData();
 		},
 		() => {
 			if (gymObserver) gymObserver.scanAndInject(true);
@@ -69,6 +72,9 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 
 		gymObserver = new GymDomObserver();
 		gymObserver.start();
+
+		companyObserver = new CompanyDomObserver();
+		companyObserver.start();
 	}
 
 	// 5. Restore open state if persistOpen is enabled

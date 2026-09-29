@@ -702,6 +702,272 @@ tr:hover td {
 	font-size: 11px;
 	color: #64748b;
 }
+
+/* ─── Company Directives & Action Items ─── */
+.directives-card {
+	background: #1e293b;
+	border: 1px solid #334155;
+	border-radius: 8px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.directives-card.optimal {
+	background: rgba(16, 185, 129, 0.08);
+	border-color: rgba(16, 185, 129, 0.3);
+}
+
+.directives-card.warning {
+	background: rgba(245, 158, 11, 0.08);
+	border-color: rgba(245, 158, 11, 0.35);
+}
+
+.directives-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.status-indicator-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	display: inline-block;
+}
+
+.dot-green {
+	background: #10b981;
+	box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+
+.dot-amber {
+	background: #f59e0b;
+	box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+}
+
+.directives-title {
+	font-size: 13px;
+	font-weight: 700;
+	color: #f8fafc;
+}
+
+.directive-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 4px;
+	font-size: 12px;
+}
+
+.directive-tag {
+	font-size: 9px;
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	white-space: nowrap;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.tag-role {
+	background: rgba(56, 189, 248, 0.15);
+	color: #38bdf8;
+	border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.tag-price {
+	background: rgba(168, 85, 247, 0.15);
+	color: #c084fc;
+	border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.tag-ad {
+	background: rgba(245, 158, 11, 0.15);
+	color: #fbbf24;
+	border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.tag-rehab {
+	background: rgba(239, 68, 68, 0.15);
+	color: #f87171;
+	border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.tag-rehab-sub {
+	background: rgba(251, 146, 60, 0.15);
+	color: #fb923c;
+	border: 1px solid rgba(251, 146, 60, 0.3);
+}
+
+.directive-text {
+	color: #cbd5e1;
+	font-size: 12px;
+}
+
+.kpi-value.positive {
+	color: #10b981;
+}
+
+.kpi-value.negative {
+	color: #f43f5e;
+}
+
+/* ─── Company Weekly Ledger Table ─── */
+.weekly-table-card {
+	background: #1e293b;
+	border: 1px solid #334155;
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.weekly-paginator {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 14px;
+	background: rgba(15, 23, 42, 0.6);
+	border-bottom: 1px solid #334155;
+}
+
+.paginator-title {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.paginator-title span:first-child {
+	font-size: 12px;
+	font-weight: 700;
+	color: #f8fafc;
+}
+
+.paginator-range {
+	font-size: 10.5px;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+	color: #94a3b8;
+}
+
+.paginator-controls {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.btn-paginator {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 8px;
+	font-size: 11px;
+	font-weight: 600;
+	background: #0f172a;
+	color: #cbd5e1;
+	border: 1px solid #334155;
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.btn-paginator:hover:not(:disabled) {
+	background: #334155;
+	color: #f8fafc;
+	border-color: #475569;
+}
+
+.btn-paginator.active {
+	background: #0284c7;
+	color: #ffffff;
+	border-color: #38bdf8;
+}
+
+.btn-paginator:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.weekly-table-scroll {
+	width: 100%;
+	overflow-x: auto;
+}
+
+.company-ledger-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 11px;
+	text-align: left;
+	font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.company-ledger-table th {
+	background: rgba(15, 23, 42, 0.4);
+	color: #94a3b8;
+	font-weight: 600;
+	padding: 8px 10px;
+	border-bottom: 1px solid #334155;
+	text-transform: uppercase;
+	font-size: 10px;
+	letter-spacing: 0.5px;
+}
+
+.company-ledger-table td {
+	padding: 7px 10px;
+	border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+	color: #e2e8f0;
+	white-space: nowrap;
+}
+
+.company-ledger-table tbody tr:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.td-day {
+	font-weight: 700;
+	color: #38bdf8;
+}
+
+.td-date {
+	color: #64748b;
+}
+
+.td-num {
+	text-align: right;
+}
+
+.company-ledger-table th:nth-child(n+3) {
+	text-align: right;
+}
+
+.profit-pos {
+	color: #10b981;
+	font-weight: 700;
+}
+
+.profit-neg {
+	color: #f43f5e;
+	font-weight: 700;
+}
+
+.tfoot-totals {
+	background: rgba(15, 23, 42, 0.85);
+	font-weight: 700;
+	border-top: 1px solid #475569;
+}
+
+.tfoot-totals td {
+	padding: 8px 10px;
+	border-bottom: none;
+	color: #f8fafc;
+}
+
+.td-total-label {
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: #94a3b8;
+	font-size: 10px;
+}
 `;
 
 export const IN_PAGE_BADGE_STYLES = `
@@ -877,5 +1143,21 @@ export const IN_PAGE_BADGE_STYLES = `
 		font-size: 9px;
 		padding: 3px 4px;
 	}
+}
+
+/* ─── Company In-Page Row Badges ─── */
+.blasted-role-badge {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	background: rgba(56, 189, 248, 0.15) !important;
+	border: 1px solid #0284c7 !important;
+	color: #38bdf8 !important;
+	font-size: 10px !important;
+	font-family: ui-monospace, SFMono-Regular, monospace !important;
+	font-weight: 700 !important;
+	line-height: 1.2 !important;
+	vertical-align: middle;
 }
 `;

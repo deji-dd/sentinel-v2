@@ -890,7 +890,12 @@ export function buildWeekToDateLogEntries(params: {
 				adBudget,
 				profit,
 				soldBarrels: h.stock?.soldAmount ?? 0,
-				producedBarrels: h.dailyProduced,
+				producedBarrels:
+					h.dailyProduced !== undefined && h.dailyProduced > 0
+						? h.dailyProduced
+						: (h.stock?.soldAmount ?? 0) > 0
+							? h.stock.soldAmount
+							: 0,
 				barrelPrice: h.stock?.barrelPrice ?? 0,
 			});
 		}
