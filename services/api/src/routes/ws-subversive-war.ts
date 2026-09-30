@@ -4,6 +4,7 @@ import {
 	type CachedUserSession,
 	subversiveTargetCache,
 } from "../lib/subversive-target-cache";
+import { subversiveWarEventManager } from "../lib/subversive-war-events";
 import { resolveUserSession } from "./v1/subversive-target-finder";
 
 interface WarSocketClient {
@@ -15,6 +16,7 @@ const activeWarSockets = new Set<WarSocketClient>();
 
 // Set callback so any dibs changes immediately push to all connected userscripts
 subversiveDibsManager.setBroadcastCallback((dibs) => {
+	subversiveWarEventManager.notifyUpdate();
 	if (activeWarSockets.size === 0) return;
 	for (const client of activeWarSockets) {
 		try {

@@ -26,6 +26,7 @@ import {
 	type MatchedTargetResult,
 	subversiveTargetCache,
 } from "../../lib/subversive-target-cache";
+import { subversiveWarEventManager } from "../../lib/subversive-war-events";
 
 const SUBVERSIVE_FACTION_ID = 2013;
 
@@ -1075,6 +1076,40 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			success: true,
 			queue,
 		};
+	})
+
+	// ─── GET /war/events (HTTP Reverse Polling / Long Polling Push) ──────────────
+	.get("/war/events", async ({ headers, query, request, set }) => {
+		const token = extractBearerToken(headers.authorization);
+		if (!token) {
+			set.status = 401;
+			return { success: false, error: "Authentication token required." };
+		}
+
+		const session = await resolveUserSession(token);
+		if (!session?.isActive) {
+			set.status = 401;
+			return { success: false, error: "Session expired or invalid." };
+		}
+
+		const sinceVersion =
+			Number.parseInt((query.sinceVersion as string) || "0", 10) || 0;
+		const maxFF = query.maxFF
+			? Number.parseFloat(query.maxFF as string)
+			: undefined;
+		const maxBS = query.maxBS
+			? Number.parseFloat(query.maxBS as string)
+			: undefined;
+		const timeoutMs = query.timeout
+			? Number.parseInt(query.timeout as string, 10)
+			: undefined;
+
+		return subversiveWarEventManager.waitForUpdate(session, sinceVersion, {
+			maxFF,
+			maxBS,
+			timeoutMs,
+			signal: request.signal,
+		});
 	})
 
 	// ─── GET /script & /script.user.js (Serve Userscript Directly for 1-Click Install) ────────────

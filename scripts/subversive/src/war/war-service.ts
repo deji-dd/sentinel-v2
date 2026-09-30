@@ -7,7 +7,7 @@ import {
 import { isWarEngaged, state } from "../state";
 import type { CurrentWarInfo, WarTarget } from "../types";
 import { formatStats } from "../utils/formatters";
-import { fetchHospitalQueue } from "./hospital";
+import { fetchHospitalQueue, renderHospitalQueue } from "./hospital";
 import {
 	fetchAvailableTargets,
 	getNextTargetCandidate,
@@ -330,28 +330,31 @@ export async function executeSyncTick(isFastTick = false): Promise<void> {
 	if (!state.token || isSyncing) return;
 	isSyncing = true;
 	try {
-		await fetchWarStatus();
-		if (state.panelOpen) {
-			if (state.activeTab === "war") {
-				if (state.warSubTab === "hosp") {
-					await fetchHospitalQueue();
-				} else {
-					await fetchAvailableTargets();
+		// If long-polling is active and healthy, it pushes war status, targets, hospital queue, and dibs.
+		// Only run full REST war polling as a fallback if long-polling is not active or on idle ticks.
+		if (!isFastTick || !isLongPolling) {
+			await fetchWarStatus();
+			if (state.panelOpen) {
+				if (state.activeTab === "war") {
+					if (state.warSubTab === "hosp") {
+						await fetchHospitalQueue();
+					} else {
+						await fetchAvailableTargets();
+					}
 				}
-			} else if (state.activeTab === "bounties" && fetchBountiesFn) {
-				await fetchBountiesFn();
+			} else if (isHudCyclingActive()) {
+				// Modal is closed, but user is cycling through targets with the HUD!
+				if (isWarEngaged()) {
+					await Promise.allSettled([
+						fetchAvailableTargets(),
+						fetchHospitalQueue(),
+					]);
+				}
 			}
-		} else if (isHudCyclingActive()) {
-			// Modal is closed, but user is cycling through targets with the HUD!
-			if (isWarEngaged()) {
-				await Promise.allSettled([
-					fetchAvailableTargets(),
-					fetchHospitalQueue(),
-				]);
-			}
-			if (fetchBountiesFn) {
-				await fetchBountiesFn();
-			}
+		}
+
+		if (state.activeTab === "bounties" && fetchBountiesFn) {
+			await fetchBountiesFn();
 		} else if (!isFastTick) {
 			// Ramped-down idle tick
 			if (fetchBountiesFn) {
@@ -363,9 +366,72 @@ export async function executeSyncTick(isFastTick = false): Promise<void> {
 	}
 }
 
+let lastSeenWarVersion = 0;
+let isLongPolling = false;
+
+export async function runLongPollLoop(): Promise<void> {
+	if (isLongPolling || !state.token) return;
+	isLongPolling = true;
+
+	while (shouldSyncFast() && state.token) {
+		try {
+			const params = new URLSearchParams({
+				sinceVersion: String(lastSeenWarVersion),
+				maxFF: state.hideHighFF ? String(state.maxFFThreshold) : "10.0",
+			});
+			if (state.hideHighBS) {
+				params.set("maxBS", String(state.maxBSThreshold));
+			}
+
+			const res = await apiRequest<{
+				success: boolean;
+				modified: boolean;
+				version: number;
+				war?: CurrentWarInfo;
+				targets?: WarTarget[];
+				hospitalQueue?: WarTarget[];
+				dibs?: Array<{ targetId: number; [key: string]: unknown }>;
+			}>(`/api/v1/target-finder/war/events?${params.toString()}`);
+
+			if (res?.version) {
+				lastSeenWarVersion = res.version;
+			}
+
+			if (res?.modified) {
+				if (res.war) {
+					state.war = res.war;
+					state.warState = res.war.state;
+					try {
+						GM_setValue(STORAGE.warState, res.war.state);
+					} catch {}
+					renderWarBanner(res.war);
+				}
+				if (Array.isArray(res.targets)) {
+					renderAvailableTargets(res.targets);
+				}
+				if (Array.isArray(res.hospitalQueue)) {
+					renderHospitalQueue(res.hospitalQueue);
+				}
+				if (Array.isArray(res.dibs)) {
+					for (const d of res.dibs) {
+						if (typeof d.targetId === "number") {
+							state.dibs.set(d.targetId, d as never);
+						}
+					}
+				}
+			}
+		} catch {
+			// If reverse-polling network fails or times out, pause briefly before retrying
+			await new Promise((r) => setTimeout(r, 1500));
+		}
+	}
+	isLongPolling = false;
+}
+
 export function evaluateSyncRate(forceImmediate = false): void {
 	const fast = shouldSyncFast();
 	if (fast) {
+		runLongPollLoop().catch(() => {});
 		if (!isRampedUpActive || forceImmediate) {
 			isRampedUpActive = true;
 			stopAutoSync();

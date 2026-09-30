@@ -8,6 +8,7 @@ import {
 	type RankedWarOpponent,
 	subversiveTargetCache,
 } from "./subversive-target-cache";
+import { subversiveWarEventManager } from "./subversive-war-events";
 
 const logger = new Logger("API", "SchedulerIPC");
 
@@ -41,6 +42,7 @@ export function initSchedulerIpcListener(): void {
 					subversiveTargetCache.setWarOpponents(payload.opponents);
 				}
 				broadcastWarUpdate();
+				subversiveWarEventManager.notifyUpdate();
 			}
 		});
 	} catch (err) {
