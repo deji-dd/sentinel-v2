@@ -21,10 +21,16 @@ export class DrawerPanel {
 		| "wealth"
 		| "settings" = "crimes";
 	private onSettingsSaved?: () => void;
+	private onOpenChange?: (isOpen: boolean) => void;
 
-	constructor(onSettingsSaved?: () => void, onRatioChange?: () => void) {
+	constructor(
+		onSettingsSaved?: () => void,
+		onRatioChange?: () => void,
+		onOpenChange?: (isOpen: boolean) => void,
+	) {
 		this.onSettingsSaved = onSettingsSaved;
 		this.onRatioChange = onRatioChange;
+		this.onOpenChange = onOpenChange;
 		this.activeTabName = GM_getValue<
 			"crimes" | "battlestats" | "company" | "stocks" | "wealth" | "settings"
 		>(STORAGE_KEYS.activeTab, "crimes");
@@ -63,6 +69,7 @@ export class DrawerPanel {
 		this.drawer.classList.add("open");
 		this.overlay.classList.add("open");
 		GM_setValue(STORAGE_KEYS.panelOpen, true);
+		this.onOpenChange?.(true);
 		if (this.activeTabName === "crimes" && this.crimesTab) {
 			this.crimesTab.refresh();
 		} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
@@ -78,6 +85,7 @@ export class DrawerPanel {
 		this.overlay.classList.remove("open");
 		GM_setValue(STORAGE_KEYS.panelOpen, false);
 		this.stopPolling();
+		this.onOpenChange?.(false);
 	}
 
 	private startPolling(): void {

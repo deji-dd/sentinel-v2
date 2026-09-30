@@ -3,6 +3,7 @@ import {
 	initBounties,
 	renderBountyReadyTargets,
 } from "./bounties/bounties";
+import { SYNC_CONFIG } from "./constants";
 import { checkAttackPageOutcome, initAttackPageHud } from "./hud/attack-hud";
 import { state } from "./state";
 import { initLauncher } from "./ui/launcher";
@@ -21,16 +22,12 @@ import {
 import { initSettings } from "./ui/settings";
 import { getPanelHtml } from "./ui/template";
 import { initHospitalElements } from "./war/hospital";
-import {
-	fetchAvailableTargets,
-	initRosterElements,
-	renderAvailableTargets,
-} from "./war/roster";
+import { initRosterElements, renderAvailableTargets } from "./war/roster";
 import { initWarBannerElements, renderWarBanner } from "./war/war-banner";
 import {
+	evaluateSyncRate,
 	executeGetTarget,
 	fetchNextTarget,
-	fetchWarStatus,
 	initWarService,
 } from "./war/war-service";
 
@@ -123,20 +120,16 @@ function start(): void {
 
 	if (state.token) {
 		setStatus("Connected", "ok");
-		fetchWarStatus();
-		fetchAvailableTargets();
-		fetchBounties();
+		evaluateSyncRate(true);
 	} else {
 		setStatus("Not connected. Enter key in Settings.", "error");
 	}
 
-	// Background polling when panel is closed to keep launcher badges and war status fresh
-	setInterval(() => {
-		if (!state.panelOpen && state.token) {
-			fetchWarStatus();
-			fetchBounties();
+	window.addEventListener("storage", (e) => {
+		if (e.key === SYNC_CONFIG.STORAGE_HUD_CYCLE) {
+			evaluateSyncRate();
 		}
-	}, 30000);
+	});
 
 	isInitialized = true;
 }

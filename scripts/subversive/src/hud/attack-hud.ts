@@ -1,5 +1,5 @@
 import { apiRequest } from "../api/client";
-import { STORAGE } from "../constants";
+import { STORAGE, SYNC_CONFIG } from "../constants";
 import { getFilteredBountyList, isWarEngaged, state } from "../state";
 import type { BountyTarget, WarTarget } from "../types";
 import { formatMoney, getBountyFF, getFFColor } from "../utils/formatters";
@@ -9,10 +9,67 @@ export const sessionWarTargets = new Set<number>();
 let warTargetVerifiedId = 0;
 let warTargetVerificationInProgress = false;
 let lastHandledOutcomeId = 0;
+let lastHudActivityTime = 0;
+const hudActivityListeners = new Set<() => void>();
+
+export function registerHudActivityListener(fn: () => void): () => void {
+	hudActivityListeners.add(fn);
+	return () => {
+		hudActivityListeners.delete(fn);
+	};
+}
+
+export function recordHudActivity(): void {
+	lastHudActivityTime = Date.now();
+	try {
+		localStorage.setItem(
+			SYNC_CONFIG.STORAGE_HUD_CYCLE,
+			String(lastHudActivityTime),
+		);
+		GM_setValue(STORAGE.lastHudActivity, lastHudActivityTime);
+	} catch {}
+	hudActivityListeners.forEach((fn) => {
+		try {
+			fn();
+		} catch {}
+	});
+}
+
+export function isHudCyclingActive(): boolean {
+	const now = Date.now();
+	if (now - lastHudActivityTime < SYNC_CONFIG.HUD_ACTIVITY_TIMEOUT_MS) {
+		return true;
+	}
+	try {
+		const stored = Number(
+			localStorage.getItem(SYNC_CONFIG.STORAGE_HUD_CYCLE) || 0,
+		);
+		if (now - stored < SYNC_CONFIG.HUD_ACTIVITY_TIMEOUT_MS) {
+			lastHudActivityTime = stored;
+			return true;
+		}
+	} catch {}
+	const href = window.location.href;
+	const isAttackPage =
+		/sid=(attack|getInAttack)/i.test(href) ||
+		/page=attack/i.test(href) ||
+		href.includes("loader.php?sid=attack") ||
+		href.includes("loader2.php?sid=attack") ||
+		href.includes("page.php?sid=attack");
+	if (
+		isAttackPage &&
+		typeof document !== "undefined" &&
+		document.getElementById("satf-attack-hud-host")
+	) {
+		return true;
+	}
+	return false;
+}
 
 export async function loadNextTargetDirectly(
 	hudRoot: ShadowRoot | Document | null,
 ): Promise<void> {
+	recordHudActivity();
 	const btnHudNext = (hudRoot?.getElementById("satf-hud-next") ||
 		hudRoot?.getElementById(
 			"satf-hud-outcome-next",
@@ -213,6 +270,7 @@ export function mountBountyHud(bt: BountyTarget, idx: number): HTMLElement {
 	hudRoot
 		.getElementById("satf-bounty-cycle-next")
 		?.addEventListener("click", () => {
+			recordHudActivity();
 			if (nextTarget?.attackUrl) {
 				if (state.directAttack) {
 					window.location.href = nextTarget.attackUrl;
@@ -230,6 +288,7 @@ export function handleBountyTargetDefeated(
 	outcomeText: string,
 	isDefeat = true,
 ): void {
+	recordHudActivity();
 	const targetIdx = state.bountiesReady.findIndex((t) => t.id === targetId);
 	if (targetIdx !== -1) {
 		state.bountiesReady.splice(targetIdx, 1);
@@ -263,6 +322,7 @@ export function handleBountyTargetDefeated(
 				host.shadowRoot
 					.getElementById("satf-bounty-hud-next")
 					?.addEventListener("click", () => {
+						recordHudActivity();
 						if (state.directAttack) {
 							window.location.href = attackUrl;
 						} else {
@@ -286,6 +346,7 @@ export function handleWarTargetOutcome(
 	isVictory: boolean,
 	isUserHosp: boolean,
 ): void {
+	recordHudActivity();
 	const host = document.getElementById("satf-attack-hud-host");
 	if (host?.shadowRoot) {
 		const bar = host.shadowRoot.getElementById("satf-attack-bar");
@@ -304,6 +365,7 @@ export function handleWarTargetOutcome(
 			host.shadowRoot
 				.getElementById("satf-hud-outcome-next")
 				?.addEventListener("click", () => {
+					recordHudActivity();
 					loadNextTargetDirectly(host.shadowRoot);
 				});
 		}
@@ -520,6 +582,7 @@ function mountHud(user2Id: number, initialData: WarTarget | null): HTMLElement {
 	const btnHudNext = hudRoot.getElementById("satf-hud-next");
 
 	btnHudIgnore?.addEventListener("click", () => {
+		recordHudActivity();
 		if (!state.ignoredTargets.includes(user2Id)) {
 			state.ignoredTargets.push(user2Id);
 			GM_setValue(STORAGE.ignoredTargets, state.ignoredTargets);
@@ -528,6 +591,7 @@ function mountHud(user2Id: number, initialData: WarTarget | null): HTMLElement {
 	});
 
 	btnHudNext?.addEventListener("click", () => {
+		recordHudActivity();
 		loadNextTargetDirectly(hudRoot);
 	});
 
@@ -574,6 +638,8 @@ export function initAttackPageHud(): void {
 		lastHandledOutcomeId = 0;
 		return;
 	}
+
+	recordHudActivity();
 
 	if (existingHost && existingHost.dataset.targetId !== String(user2Id)) {
 		existingHost.remove();

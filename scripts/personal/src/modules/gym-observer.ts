@@ -6,6 +6,7 @@ import {
 	formatDecimal,
 	GYM_DEFINITIONS,
 	getTargetRatios,
+	POLLING_CONFIG,
 	STORAGE_KEYS,
 } from "../config";
 import type {
@@ -22,8 +23,26 @@ export class GymDomObserver {
 	private observer: MutationObserver | null = null;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+	private currentPollInterval: number = POLLING_CONFIG.SLOW_INTERVAL_MS;
 	private efficiencyData: EfficiencyDataPayload | null = null;
 	private analyticsData: BattlestatsAnalyticsResponse | null = null;
+
+	public setRampedUp(active: boolean): void {
+		const targetInterval = active
+			? POLLING_CONFIG.FAST_INTERVAL_MS
+			: POLLING_CONFIG.SLOW_INTERVAL_MS;
+		if (this.currentPollInterval === targetInterval) return;
+		this.currentPollInterval = targetInterval;
+		if (this.backgroundPollTimer) {
+			clearInterval(this.backgroundPollTimer);
+			if (active) {
+				this.reloadData().catch(() => {});
+			}
+			this.backgroundPollTimer = setInterval(() => {
+				this.reloadData().catch(() => {});
+			}, this.currentPollInterval);
+		}
+	}
 
 	public async start(): Promise<void> {
 		if (!window.location.href.includes("gym.php")) {
@@ -48,7 +67,7 @@ export class GymDomObserver {
 
 		this.backgroundPollTimer = setInterval(() => {
 			this.reloadData().catch(() => {});
-		}, 30000);
+		}, this.currentPollInterval);
 	}
 
 	public stop(): void {

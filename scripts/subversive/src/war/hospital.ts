@@ -9,6 +9,7 @@ import {
 } from "../utils/formatters";
 
 let hospContainer: HTMLElement | null = null;
+let tabHospCount: HTMLElement | null = null;
 let setStatusFn: ((msg: string, type: "ok" | "error") => void) | null = null;
 
 export function initHospitalElements(
@@ -17,6 +18,9 @@ export function initHospitalElements(
 ): void {
 	hospContainer = (root.getElementById("satf-hosp-container") ||
 		root.getElementById("satf-hosp-queue")) as HTMLElement | null;
+	tabHospCount = root.getElementById(
+		"satf-war-hosp-count",
+	) as HTMLElement | null;
 	setStatusFn = setStatus;
 }
 
@@ -142,6 +146,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 	if (!hospContainer) return;
 	if (!isWarEngaged()) {
 		state.hospitalQueue = [];
+		if (tabHospCount) tabHospCount.textContent = "0";
 		hospContainer.innerHTML = `
 			<div style="text-align: center; padding: 20px 0; color: var(--muted); font-size: 12px;">
 				No active or scheduled ranked war. Hospital queue on standby.
@@ -173,6 +178,9 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 			},
 		};
 	});
+
+	if (tabHospCount)
+		tabHospCount.textContent = String(state.hospitalQueue.length);
 
 	if (state.hospitalQueue.length === 0) {
 		hospContainer.innerHTML = `

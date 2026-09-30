@@ -24,6 +24,14 @@ export const STORAGE = {
 	bountyMinReward: "satf_bounty_min_reward",
 	bountyMaxReward: "satf_bounty_max_reward",
 	disableHud: "satf_disable_hud",
+	lastHudActivity: "satf_last_hud_activity",
+} as const;
+
+export const SYNC_CONFIG = {
+	FAST_INTERVAL_MS: 1000,
+	SLOW_INTERVAL_MS: 120000,
+	HUD_ACTIVITY_TIMEOUT_MS: 60000,
+	STORAGE_HUD_CYCLE: "sentinel_last_hud_cycle",
 } as const;
 
 export const DEFAULTS = {

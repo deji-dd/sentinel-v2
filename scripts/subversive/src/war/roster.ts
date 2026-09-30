@@ -2,15 +2,19 @@ import { apiRequest } from "../api/client";
 import { STORAGE } from "../constants";
 import { isWarEngaged, state } from "../state";
 import type { WarTarget } from "../types";
-import { formatStats } from "../utils/formatters";
+import { formatStats, getFFColor, getFFTier } from "../utils/formatters";
 import { renderWarBanner } from "./war-banner";
 
 let availList: HTMLElement | null = null;
 let availCount: HTMLElement | null = null;
+let tabTargetsCount: HTMLElement | null = null;
 
 export function initRosterElements(root: ShadowRoot | Document): void {
 	availList = root.getElementById("satf-avail-list") as HTMLElement | null;
 	availCount = root.getElementById("satf-avail-count") as HTMLElement | null;
+	tabTargetsCount = root.getElementById(
+		"satf-war-targets-count",
+	) as HTMLElement | null;
 }
 
 export function getNextTargetCandidate(excludeId?: number): WarTarget | null {
@@ -60,7 +64,8 @@ export function renderAvailableTargets(targets?: WarTarget[]): void {
 
 	if (!isWarEngaged()) {
 		state.availableTargets = [];
-		availCount.textContent = "0";
+		if (availCount) availCount.textContent = "0";
+		if (tabTargetsCount) tabTargetsCount.textContent = "0";
 		availList.innerHTML = `
 			<div style="text-align: center; padding: 16px 0; color: var(--muted); font-size: 11px;">
 				No active or scheduled ranked war. Opponent tracking on standby.
@@ -80,7 +85,9 @@ export function renderAvailableTargets(targets?: WarTarget[]): void {
 		if (st === "hospital") return false;
 		return true;
 	});
-	availCount.textContent = String(state.availableTargets.length);
+	const countStr = String(state.availableTargets.length);
+	if (availCount) availCount.textContent = countStr;
+	if (tabTargetsCount) tabTargetsCount.textContent = countStr;
 
 	if (state.availableTargets.length === 0) {
 		const activeFilters: string[] = [];
@@ -115,16 +122,20 @@ export function renderAvailableTargets(targets?: WarTarget[]): void {
 			const onlineDot = t.isOnline
 				? '<span class="satf-dot-online"></span>'
 				: "";
+			const ff =
+				typeof t.fairFight === "number" && !Number.isNaN(t.fairFight)
+					? t.fairFight
+					: 1.0;
 			return `
 				<div class="satf-roster-row" data-id="${t.id}" data-url="${t.attackUrl}">
 					<div class="satf-roster-left">
 						<div class="satf-roster-name">
 							${onlineDot}
-							<span>${t.name}</span>
-							<span style="color:var(--muted); font-size:11px;">[${t.id}]</span>
+							<span style="font-weight:700;">${t.name}</span>
+							<span style="color:var(--muted); font-size:11px;">[${t.id}] Lvl ${t.level}</span>
 						</div>
 						<div class="satf-roster-sub">
-							Lvl ${t.level} · BS ${formatStats(t.estimatedBs)}
+							BS ${formatStats(t.estimatedBs)} · <span class="ff-${getFFTier(ff)}" style="font-weight:700; color:${getFFColor(ff)};">FF: ${ff.toFixed(2)}</span>
 						</div>
 					</div>
 					<div class="satf-roster-right">

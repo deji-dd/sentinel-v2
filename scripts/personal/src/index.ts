@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./config";
+import { DEFAULT_SETTINGS, POLLING_CONFIG, STORAGE_KEYS } from "./config";
 import { CompanyDomObserver } from "./modules/company-observer";
 import { CrimesDomObserver } from "./modules/crimes-observer";
 import { GymDomObserver } from "./modules/gym-observer";
@@ -38,6 +38,31 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	let gymObserver: GymDomObserver | null = null;
 	let companyObserver: CompanyDomObserver | null = null;
 
+	function isHudCyclingActive(): boolean {
+		try {
+			const lastCycle = Number(
+				localStorage.getItem(POLLING_CONFIG.STORAGE_HUD_CYCLE) || 0,
+			);
+			if (Date.now() - lastCycle < POLLING_CONFIG.HUD_ACTIVITY_TIMEOUT_MS) {
+				return true;
+			}
+		} catch {}
+		if (
+			typeof document !== "undefined" &&
+			document.getElementById("satf-attack-hud-host")
+		) {
+			return true;
+		}
+		return false;
+	}
+
+	function updateObserverPollRates(drawerOpen: boolean): void {
+		const active = drawerOpen || isHudCyclingActive();
+		crimesObserver?.setRampedUp(active);
+		gymObserver?.setRampedUp(active);
+		companyObserver?.setRampedUp(active);
+	}
+
 	const drawer = new DrawerPanel(
 		() => {
 			if (crimesObserver) crimesObserver.reloadData();
@@ -46,6 +71,9 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 		},
 		() => {
 			if (gymObserver) gymObserver.scanAndInject(true);
+		},
+		(isOpen) => {
+			updateObserverPollRates(isOpen);
 		},
 	);
 
@@ -75,7 +103,20 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 
 		companyObserver = new CompanyDomObserver();
 		companyObserver.start();
+
+		updateObserverPollRates(drawer.isOpen());
 	}
+
+	// Periodically evaluate HUD cycling state to ramp down observers when idle
+	setInterval(() => {
+		updateObserverPollRates(drawer.isOpen());
+	}, 10000);
+
+	window.addEventListener("storage", (e) => {
+		if (e.key === POLLING_CONFIG.STORAGE_HUD_CYCLE) {
+			updateObserverPollRates(drawer.isOpen());
+		}
+	});
 
 	// 5. Restore open state if persistOpen is enabled
 	const wasOpen = GM_getValue<boolean>(STORAGE_KEYS.panelOpen, false);

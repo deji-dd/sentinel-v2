@@ -1,5 +1,5 @@
 import { apiClient } from "../api";
-import { CRIME_SLUG_MAP, formatMoney } from "../config";
+import { CRIME_SLUG_MAP, formatMoney, POLLING_CONFIG } from "../config";
 import type { CrimeCategoryAnalytics } from "../types";
 
 export class CrimesDomObserver {
@@ -8,9 +8,27 @@ export class CrimesDomObserver {
 	private onOpenDrawer: () => void;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+	private currentPollInterval: number = POLLING_CONFIG.SLOW_INTERVAL_MS;
 
 	constructor(onOpenDrawer: () => void) {
 		this.onOpenDrawer = onOpenDrawer;
+	}
+
+	public setRampedUp(active: boolean): void {
+		const targetInterval = active
+			? POLLING_CONFIG.FAST_INTERVAL_MS
+			: POLLING_CONFIG.SLOW_INTERVAL_MS;
+		if (this.currentPollInterval === targetInterval) return;
+		this.currentPollInterval = targetInterval;
+		if (this.backgroundPollTimer) {
+			clearInterval(this.backgroundPollTimer);
+			if (active) {
+				this.reloadData().catch(() => {});
+			}
+			this.backgroundPollTimer = setInterval(() => {
+				this.reloadData().catch(() => {});
+			}, this.currentPollInterval);
+		}
 	}
 
 	public async start(): Promise<void> {
@@ -35,7 +53,7 @@ export class CrimesDomObserver {
 
 		this.backgroundPollTimer = setInterval(() => {
 			this.reloadData().catch(() => {});
-		}, 30000);
+		}, this.currentPollInterval);
 	}
 
 	public stop(): void {

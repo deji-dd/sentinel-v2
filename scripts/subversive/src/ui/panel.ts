@@ -4,11 +4,7 @@ import { STORAGE } from "../constants";
 import { state } from "../state";
 import { fetchHospitalQueue, stopHospTimer } from "../war/hospital";
 import { renderAvailableTargets } from "../war/roster";
-import {
-	fetchWarStatus,
-	startAutoSync,
-	stopAutoSync,
-} from "../war/war-service";
+import { evaluateSyncRate } from "../war/war-service";
 
 let rootElement: ShadowRoot | Document | null = null;
 let panelElem: HTMLElement | null = null;
@@ -198,9 +194,8 @@ export function openPanel(): void {
 	}
 	positionPanel();
 	updateTravelLock();
-	fetchWarStatus();
 	switchTab(state.activeTab || "bounties");
-	startAutoSync();
+	evaluateSyncRate(true);
 }
 
 export function closePanel(): void {
@@ -209,5 +204,5 @@ export function closePanel(): void {
 	panelElem.classList.remove("open");
 	GM_setValue(STORAGE.panelOpen, false);
 	stopHospTimer();
-	stopAutoSync();
+	evaluateSyncRate();
 }

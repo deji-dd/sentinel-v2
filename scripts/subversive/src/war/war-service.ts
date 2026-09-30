@@ -1,5 +1,9 @@
 import { apiRequest, detectAttackerFlightState } from "../api/client";
-import { STORAGE } from "../constants";
+import { STORAGE, SYNC_CONFIG } from "../constants";
+import {
+	isHudCyclingActive,
+	registerHudActivityListener,
+} from "../hud/attack-hud";
 import { isWarEngaged, state } from "../state";
 import type { CurrentWarInfo, WarTarget } from "../types";
 import { formatStats } from "../utils/formatters";
@@ -33,6 +37,7 @@ export function initWarService(params: {
 	switchTabFn = params.switchTab;
 	fetchBountiesFn = params.fetchBounties;
 	btnGetTargetElem = params.btnGetTarget ?? null;
+	registerHudActivityListener(() => evaluateSyncRate(true));
 }
 
 export async function fetchWarStatus(): Promise<void> {
@@ -314,27 +319,91 @@ export async function executeGetTarget(): Promise<void> {
 	}
 }
 
-export function startAutoSync(): void {
-	stopAutoSync();
-	state.syncTimer = setInterval(() => {
-		if (!state.panelOpen) return;
-		fetchWarStatus();
-		if (state.activeTab === "war") {
-			if (state.warSubTab === "hosp") {
-				fetchHospitalQueue();
-			} else {
-				fetchAvailableTargets();
-			}
-		} else if (state.activeTab === "bounties" && fetchBountiesFn) {
-			fetchBountiesFn();
-		}
-	}, 3000);
+let isRampedUpActive = false;
+let isSyncing = false;
 
-	stopCountdownTimer();
-	state.countdownTimer = setInterval(() => {
-		if (!state.panelOpen) return;
-		updateWarCountdown();
-	}, 1000);
+export function shouldSyncFast(): boolean {
+	return Boolean(state.panelOpen || isHudCyclingActive());
+}
+
+export async function executeSyncTick(isFastTick = false): Promise<void> {
+	if (!state.token || isSyncing) return;
+	isSyncing = true;
+	try {
+		await fetchWarStatus();
+		if (state.panelOpen) {
+			if (state.activeTab === "war") {
+				if (state.warSubTab === "hosp") {
+					await fetchHospitalQueue();
+				} else {
+					await fetchAvailableTargets();
+				}
+			} else if (state.activeTab === "bounties" && fetchBountiesFn) {
+				await fetchBountiesFn();
+			}
+		} else if (isHudCyclingActive()) {
+			// Modal is closed, but user is cycling through targets with the HUD!
+			if (isWarEngaged()) {
+				await Promise.allSettled([
+					fetchAvailableTargets(),
+					fetchHospitalQueue(),
+				]);
+			}
+			if (fetchBountiesFn) {
+				await fetchBountiesFn();
+			}
+		} else if (!isFastTick) {
+			// Ramped-down idle tick
+			if (fetchBountiesFn) {
+				await fetchBountiesFn();
+			}
+		}
+	} finally {
+		isSyncing = false;
+	}
+}
+
+export function evaluateSyncRate(forceImmediate = false): void {
+	const fast = shouldSyncFast();
+	if (fast) {
+		if (!isRampedUpActive || forceImmediate) {
+			isRampedUpActive = true;
+			stopAutoSync();
+			executeSyncTick(true);
+			state.syncTimer = setInterval(() => {
+				if (!shouldSyncFast()) {
+					evaluateSyncRate();
+					return;
+				}
+				executeSyncTick(true);
+			}, SYNC_CONFIG.FAST_INTERVAL_MS);
+		}
+	} else {
+		if (isRampedUpActive || !state.syncTimer || forceImmediate) {
+			isRampedUpActive = false;
+			stopAutoSync();
+			state.syncTimer = setInterval(() => {
+				if (shouldSyncFast()) {
+					evaluateSyncRate(true);
+					return;
+				}
+				executeSyncTick(false);
+			}, SYNC_CONFIG.SLOW_INTERVAL_MS);
+		}
+	}
+
+	if (state.panelOpen && !state.countdownTimer) {
+		state.countdownTimer = setInterval(() => {
+			if (!state.panelOpen) return;
+			updateWarCountdown();
+		}, 1000);
+	} else if (!state.panelOpen && state.countdownTimer) {
+		stopCountdownTimer();
+	}
+}
+
+export function startAutoSync(): void {
+	evaluateSyncRate(true);
 }
 
 export function stopAutoSync(): void {

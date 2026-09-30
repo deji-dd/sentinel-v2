@@ -24,6 +24,14 @@ export const STORAGE_KEYS = {
 	companyWeeklyOffset: "blasted_company_weekly_offset",
 };
 
+export const POLLING_CONFIG = {
+	FAST_INTERVAL_MS: 30000,
+	SLOW_INTERVAL_MS: 120000,
+	DRAWER_INTERVAL_MS: 15000,
+	HUD_ACTIVITY_TIMEOUT_MS: 60000,
+	STORAGE_HUD_CYCLE: "sentinel_last_hud_cycle",
+} as const;
+
 export const DEFAULT_SETTINGS: ScriptSettings = {
 	apiUrl: "https://sentinel.blasted-labs.tech",
 	apiKey: "",
