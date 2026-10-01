@@ -10,6 +10,75 @@ export const FF_SCOUTER_BATCH_SIZE = 200; // API maximum is 205; 200 provides sa
 export const FF_SCOUTER_RATE_LIMIT_MAX = 20;
 export const FF_SCOUTER_RATE_LIMIT_WINDOW_MS = 60_000;
 export const FF_SCOUTER_COALESCE_DELAY_MS = 50;
+export const FF_SCOUTER_INITIAL_SERVICE_BACKOFF_MS = 30_000; // 30s base backoff on service outage
+export const FF_SCOUTER_MAX_SERVICE_BACKOFF_MS = 300_000; // 5 min max backoff
+
+/**
+ * Service-level Circuit Breaker with Exponential Backoff for FFScouter.
+ * Protects downstream callers and prevents hammering FFScouter during service outages (e.g. HTTP 500/503/429).
+ */
+export class FFScouterCircuitBreaker {
+	private consecutiveFailures = 0;
+	private backoffUntil = 0;
+	private initialBackoffMs: number;
+	private maxBackoffMs: number;
+
+	constructor(
+		initialBackoffMs = FF_SCOUTER_INITIAL_SERVICE_BACKOFF_MS,
+		maxBackoffMs = FF_SCOUTER_MAX_SERVICE_BACKOFF_MS,
+	) {
+		this.initialBackoffMs = initialBackoffMs;
+		this.maxBackoffMs = maxBackoffMs;
+	}
+
+	isOpen(): boolean {
+		if (this.backoffUntil === 0) return false;
+		if (Date.now() >= this.backoffUntil) {
+			// Backoff expired — allow trial probe request through
+			return false;
+		}
+		return true;
+	}
+
+	getRemainingBackoffMs(): number {
+		return Math.max(0, this.backoffUntil - Date.now());
+	}
+
+	getConsecutiveFailures(): number {
+		return this.consecutiveFailures;
+	}
+
+	recordSuccess(): void {
+		if (this.consecutiveFailures > 0 || this.backoffUntil > 0) {
+			logger.info(
+				"FFScouter service health restored. Consecutive failures reset.",
+			);
+		}
+		this.consecutiveFailures = 0;
+		this.backoffUntil = 0;
+	}
+
+	recordFailure(error?: unknown): number {
+		this.consecutiveFailures++;
+		const backoffMs = Math.min(
+			this.initialBackoffMs * 2 ** (this.consecutiveFailures - 1),
+			this.maxBackoffMs,
+		);
+		this.backoffUntil = Date.now() + backoffMs;
+		const errMsg = error instanceof Error ? error.message : String(error);
+		logger.warn(
+			`FFScouter service failure #${this.consecutiveFailures} (${errMsg}). Entering exponential backoff for ${(backoffMs / 1000).toFixed(0)}s (until ${new Date(this.backoffUntil).toLocaleTimeString()}).`,
+		);
+		return backoffMs;
+	}
+
+	reset(): void {
+		this.consecutiveFailures = 0;
+		this.backoffUntil = 0;
+	}
+}
+
+export const ffScouterCircuitBreaker = new FFScouterCircuitBreaker();
 
 /**
  * Known FFScouter API error codes and their human-readable descriptions.
@@ -189,6 +258,14 @@ export async function fetchFFScouterBatchWithRetry(
 	apiKey: string,
 	options?: FetchRetryOptions,
 ): Promise<FFScouterTargetResult[]> {
+	if (ffScouterCircuitBreaker.isOpen()) {
+		const remaining = ffScouterCircuitBreaker.getRemainingBackoffMs();
+		throw new FFScouterApiError(
+			`FFScouter service is in exponential backoff (${(remaining / 1000).toFixed(0)}s remaining)`,
+			{ isRetryable: true, httpStatus: 503 },
+		);
+	}
+
 	const maxRetries = options?.maxRetries ?? 3;
 	const initialBackoffMs = options?.initialBackoffMs ?? 1000;
 	const maxBackoffMs = options?.maxBackoffMs ?? 30_000;
@@ -280,6 +357,7 @@ export async function fetchFFScouterBatchWithRetry(
 
 			const data = (await res.json()) as unknown;
 			if (Array.isArray(data)) {
+				ffScouterCircuitBreaker.recordSuccess();
 				return data as FFScouterTargetResult[];
 			}
 
@@ -305,6 +383,7 @@ export async function fetchFFScouterBatchWithRetry(
 			lastError = err;
 			if (attempt === maxRetries) {
 				logger.error("Failed to query FFScouter API after retries:", err);
+				ffScouterCircuitBreaker.recordFailure(err);
 				break;
 			}
 
@@ -380,9 +459,22 @@ interface BatchState {
 export class FFScouterBatcher {
 	private states = new Map<string, BatchState>();
 	private coalesceMs: number;
+	private retryOptions?: FetchRetryOptions;
 
-	constructor(coalesceMs = FF_SCOUTER_COALESCE_DELAY_MS) {
+	constructor(
+		coalesceMs = FF_SCOUTER_COALESCE_DELAY_MS,
+		retryOptions?: FetchRetryOptions,
+	) {
 		this.coalesceMs = coalesceMs;
+		this.retryOptions = retryOptions;
+	}
+
+	setRetryOptions(options?: FetchRetryOptions): void {
+		this.retryOptions = options;
+	}
+
+	getRetryOptions(): FetchRetryOptions | undefined {
+		return this.retryOptions;
 	}
 
 	async fetch(
@@ -453,17 +545,28 @@ export class FFScouterBatcher {
 		for (let i = 0; i < uniqueIds.length; i += FF_SCOUTER_BATCH_SIZE) {
 			const chunk = uniqueIds.slice(i, i + FF_SCOUTER_BATCH_SIZE);
 			try {
-				const freshResults = await fetchFFScouterBatchWithRetry(chunk, apiKey);
+				const freshResults = await fetchFFScouterBatchWithRetry(
+					chunk,
+					apiKey,
+					this.retryOptions,
+				);
 
 				// Persist into database cache incrementally per batch
 				if (freshResults.length > 0) {
-					await upsertPlayerStatCacheRaw(
-						freshResults as unknown as Array<{
-							player_id: number;
-							source?: string | null;
-							[key: string]: unknown;
-						}>,
-					);
+					try {
+						await upsertPlayerStatCacheRaw(
+							freshResults as unknown as Array<{
+								player_id: number;
+								source?: string | null;
+								[key: string]: unknown;
+							}>,
+						);
+					} catch (cacheErr) {
+						logger.warn(
+							"Failed to persist FFScouter results to database cache:",
+							cacheErr,
+						);
+					}
 				}
 
 				for (const item of freshResults) {
@@ -511,6 +614,7 @@ export class FFScouterBatcher {
 			}
 		}
 		this.states.clear();
+		this.retryOptions = undefined;
 	}
 }
 
@@ -532,10 +636,12 @@ export async function flushFFScouterBatcher(): Promise<void> {
  *
  * @param playerIds - Torn player IDs to look up.
  * @param apiKey    - Optional API key override (falls back to FF_SCOUTER_KEY env var).
+ * @param options   - Optional retry and backoff configuration overrides.
  */
 export async function getPlayerStats(
 	playerIds: number[],
 	apiKey?: string,
+	options?: FetchRetryOptions,
 ): Promise<FFScouterTargetResult[]> {
 	const key = (apiKey ?? process.env.FF_SCOUTER_KEY ?? "").trim();
 	if (!key) {
@@ -552,7 +658,12 @@ export async function getPlayerStats(
 	}
 
 	// 1. Batch-check the DB cache for all requested IDs
-	const cacheHits = await getPlayerStatCacheRaw(uniqueIds);
+	let cacheHits = new Map<number, Record<string, unknown>>();
+	try {
+		cacheHits = await getPlayerStatCacheRaw(uniqueIds);
+	} catch (cacheErr) {
+		logger.warn("Failed to check database cache for player stats:", cacheErr);
+	}
 
 	const cachedResults: FFScouterTargetResult[] = [];
 	const staleIds: number[] = [];
@@ -574,10 +685,32 @@ export async function getPlayerStats(
 		return cachedResults;
 	}
 
-	// 2. Fetch missing/stale IDs via the smart coalescing batcher
-	const freshResults = await defaultFFScouterBatcher.fetch(staleIds, key);
+	// 2. If FFScouter service is in exponential backoff, serve cached stats immediately
+	if (ffScouterCircuitBreaker.isOpen()) {
+		const remainingSec = Math.ceil(
+			ffScouterCircuitBreaker.getRemainingBackoffMs() / 1000,
+		);
+		logger.warn(
+			`FFScouter service is in exponential backoff (${remainingSec}s remaining). Serving ${cachedResults.length} cached stats and skipping remote fetch for ${staleIds.length} missing targets.`,
+		);
+		return cachedResults;
+	}
 
-	// 3. Return merged results (cached + fresh)
+	// 3. Fetch missing/stale IDs via the smart coalescing batcher
+	let freshResults: FFScouterTargetResult[] = [];
+	try {
+		if (options) {
+			defaultFFScouterBatcher.setRetryOptions(options);
+		}
+		freshResults = await defaultFFScouterBatcher.fetch(staleIds, key);
+	} catch (err) {
+		logger.warn(
+			`FFScouter remote fetch failed for ${staleIds.length} target(s), proceeding with ${cachedResults.length} cached results:`,
+			err,
+		);
+	}
+
+	// 4. Return merged results (cached + fresh)
 	return [...cachedResults, ...freshResults];
 }
 
@@ -617,6 +750,14 @@ export async function getFFScouterTargets(
 	if (!key) {
 		throw new Error(
 			"FF_SCOUTER_KEY is not configured in the environment. Please set FF_SCOUTER_KEY in your environment variables.",
+		);
+	}
+
+	if (ffScouterCircuitBreaker.isOpen()) {
+		const remaining = ffScouterCircuitBreaker.getRemainingBackoffMs();
+		throw new FFScouterApiError(
+			`FFScouter service is in exponential backoff (${(remaining / 1000).toFixed(0)}s remaining)`,
+			{ isRetryable: true, httpStatus: 503 },
 		);
 	}
 
@@ -664,11 +805,19 @@ export async function getFFScouterTargets(
 		logger.error(
 			`FFScouter get-targets failed with HTTP ${res.status}: ${errorText}`,
 		);
-		throw new FFScouterApiError(
+		const isRetryable =
+			res.status === 429 || (res.status >= 500 && res.status < 600);
+		const err = new FFScouterApiError(
 			`FFScouter get-targets returned HTTP ${res.status}: ${errorText}`,
-			{ httpStatus: res.status },
+			{ httpStatus: res.status, isRetryable },
 		);
+		if (isRetryable) {
+			ffScouterCircuitBreaker.recordFailure(err);
+		}
+		throw err;
 	}
+
+	ffScouterCircuitBreaker.recordSuccess();
 
 	const data = (await res.json()) as unknown;
 

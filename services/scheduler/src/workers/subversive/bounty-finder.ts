@@ -507,6 +507,9 @@ export async function runBountyFinderCycle(
 				err,
 			);
 		}
+		logger.info(
+			`FFScouter resolved ${scouts.length} scout(s) out of ${candidateIds.length} candidate(s).`,
+		);
 
 		const scoutMap = new Map<number, (typeof scouts)[number]>();
 		for (const scout of scouts) {

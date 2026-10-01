@@ -829,4 +829,77 @@ describe("Personal Bounty Target Finder Worker", () => {
 			dbFindSpy.mockRestore();
 		}
 	});
+
+	it("continues and returns targets even if FFScouter throws an error or is down", async () => {
+		// Mock FFScouter to reject / fail with 500 error
+		getPlayerStatsSpy.mockRejectedValue(
+			new Error("FFScouter request failed with HTTP 500: Server Error"),
+		);
+
+		const mockBounties = [
+			{
+				target_id: 801,
+				target_name: "LowLevelTarget",
+				target_level: 12, // <= 15 qualifies even without scout
+				reward: 500_000,
+				quantity: 1,
+				is_anonymous: false,
+				valid_until: Math.floor(Date.now() / 1000) + 3600,
+				lister_id: 1,
+				lister_name: "Lister",
+				reason: null,
+			},
+			{
+				target_id: 802,
+				target_name: "HighLevelTargetUnscouted",
+				target_level: 60, // > 15 filtered out when unscouted for safety
+				reward: 800_000,
+				quantity: 1,
+				is_anonymous: false,
+				valid_until: Math.floor(Date.now() / 1000) + 3600,
+				lister_id: 1,
+				lister_name: "Lister",
+				reason: null,
+			},
+		];
+
+		tornApiGetSpy = spyOn(managerModule.tornApi, "get").mockImplementation(
+			(async (path: string, options: unknown) => {
+				if (path === "/torn/bounties") {
+					return {
+						bounties: mockBounties,
+						bounties_timestamp: Math.floor(Date.now() / 1000),
+						bounties_delay: 30,
+						_metadata: { links: { next: null, prev: null }, total: 2 },
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				if (path === "/user/{id}/profile") {
+					const opt = options as { pathParams: { id: number } };
+					return {
+						profile: {
+							id: opt.pathParams.id,
+							name:
+								opt.pathParams.id === 801
+									? "LowLevelTarget"
+									: "HighLevelTargetUnscouted",
+							level: opt.pathParams.id === 801 ? 12 : 60,
+							age: 100,
+							status: { state: "Okay" },
+						},
+					} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+				}
+
+				return {} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+			}) as unknown as typeof managerModule.tornApi.get,
+		);
+
+		await runBountyFinderCycle();
+
+		const state = getInMemoryBountyState();
+		// Low level target is safely retained even with FF down
+		expect(state.readyTargets.length).toBe(1);
+		expect(state.readyTargets[0]?.id).toBe(801);
+		expect(state.readyTargets[0]?.fairFight).toBeNull();
+	});
 });

@@ -35,7 +35,8 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"sync:env": "rsync -avz .env.production root@dejis-cloud:/opt/sentinel-v2/.env.production"
+		"sync:env": "rsync -avz .env.production root@dejis-cloud:/opt/sentinel-v2/.env.production",
+		"pre-push": "bun typecheck && bun lint:fix && bun test"
 	},
 	"type": "module",
 	"private": true,
