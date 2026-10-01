@@ -391,6 +391,7 @@ export async function runLongPollLoop(): Promise<void> {
 				targets?: WarTarget[];
 				hospitalQueue?: WarTarget[];
 				dibs?: Array<{ targetId: number; [key: string]: unknown }>;
+				dibsLeadTimeSeconds?: number;
 			}>(`/api/v1/target-finder/war/events?${params.toString()}`);
 
 			if (res?.version) {
@@ -398,6 +399,12 @@ export async function runLongPollLoop(): Promise<void> {
 			}
 
 			if (res?.modified) {
+				if (
+					typeof res.dibsLeadTimeSeconds === "number" &&
+					res.dibsLeadTimeSeconds > 0
+				) {
+					state.dibsLeadTimeSeconds = res.dibsLeadTimeSeconds;
+				}
 				if (res.war) {
 					state.war = res.war;
 					state.warState = res.war.state;

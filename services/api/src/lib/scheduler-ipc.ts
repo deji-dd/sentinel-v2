@@ -3,6 +3,7 @@ import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcClient } from "@sentinel/utils/ipc";
 import { broadcastPersonalBountiesState } from "../routes/ws-personal-bounties";
 import { broadcastWarUpdate } from "../routes/ws-subversive-war";
+import { subversiveDibsManager } from "./dibs-manager";
 import {
 	type CurrentWarInfo,
 	type RankedWarOpponent,
@@ -41,8 +42,11 @@ export function initSchedulerIpcListener(): void {
 				if (Array.isArray(payload.opponents)) {
 					subversiveTargetCache.setWarOpponents(payload.opponents);
 				}
-				broadcastWarUpdate();
-				subversiveWarEventManager.notifyUpdate();
+				void (async () => {
+					await subversiveDibsManager.evaluateHospitalQueue();
+					broadcastWarUpdate();
+					subversiveWarEventManager.notifyUpdate();
+				})();
 			}
 		});
 	} catch (err) {

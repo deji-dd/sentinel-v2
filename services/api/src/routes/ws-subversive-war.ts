@@ -35,13 +35,6 @@ export function broadcastWarUpdate(): void {
 	if (activeWarSockets.size === 0) return;
 
 	const war = subversiveTargetCache.getWarState();
-	const baseHospitalQueue = subversiveTargetCache.getHospitalQueue({
-		limit: 25,
-		attackerBsScore: 0,
-	});
-
-	// Process queue through Dibs Manager
-	void subversiveDibsManager.processWarHospitalQueue(baseHospitalQueue, war);
 	const dibs = subversiveDibsManager.getActiveDibs();
 
 	for (const client of activeWarSockets) {

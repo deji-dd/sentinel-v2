@@ -13,9 +13,7 @@ import { logger } from "./logger";
 
 const API_BASE_URL =
 	process.env.API_URL ||
-	(process.env.PORT
-		? `http://127.0.0.1:${process.env.PORT}`
-		: "http://127.0.0.1:3002");
+	`http://127.0.0.1:${process.env.API_PORT || process.env.PORT || (process.env.NODE_ENV === "production" ? "3002" : "3000")}`;
 
 function formatStats(num: number | null | undefined): string {
 	if (!num || !Number.isFinite(num)) return "Unknown";

@@ -10,6 +10,7 @@ export interface WarEventPayload {
 	targets?: ReturnType<typeof subversiveTargetCache.getAvailableWarTargets>;
 	hospitalQueue?: ReturnType<typeof subversiveTargetCache.getHospitalQueue>;
 	dibs?: ReturnType<typeof subversiveDibsManager.getActiveDibs>;
+	dibsLeadTimeSeconds?: number;
 }
 
 interface PendingSubscriber {
@@ -51,6 +52,8 @@ class SubversiveWarEventManager {
 			attackerBsScore,
 		});
 		const dibs = subversiveDibsManager.getActiveDibs();
+		const dibsLeadTimeSeconds =
+			(subversiveDibsManager.getCachedConfig()?.claimLeadTime ?? 5) * 60;
 
 		return {
 			success: true,
@@ -60,6 +63,7 @@ class SubversiveWarEventManager {
 			targets,
 			hospitalQueue,
 			dibs,
+			dibsLeadTimeSeconds,
 		};
 	}
 

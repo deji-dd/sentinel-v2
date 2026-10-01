@@ -7,9 +7,10 @@ import {
 } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { notifyBotAction } from "./bot-ipc";
-import type {
-	CurrentWarInfo,
-	RankedWarOpponent,
+import {
+	type CurrentWarInfo,
+	type RankedWarOpponent,
+	subversiveTargetCache,
 } from "./subversive-target-cache";
 
 const logger = new Logger("API", "SubversiveDibsManager");
@@ -34,6 +35,53 @@ class SubversiveDibsManager {
 	setConfigForTesting(config?: Partial<SubversiveDibsConfig>): void {
 		this.config = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG, ...config };
 		this.configLoaded = true;
+	}
+
+	/**
+	 * Returns the cached in-memory configuration synchronously.
+	 */
+	getCachedConfig(): SubversiveDibsConfig {
+		return this.config;
+	}
+
+	/**
+	 * Evaluates the full hospital queue directly from subversiveTargetCache.
+	 */
+	async evaluateHospitalQueue(): Promise<void> {
+		const war = subversiveTargetCache.getWarState();
+		const hospitalQueue = subversiveTargetCache.getHospitalQueue({
+			limit: 1000,
+			attackerBsScore: 0,
+		});
+		await this.processWarHospitalQueue(hospitalQueue, war);
+	}
+
+	private loopTimer: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * Starts background interval timer evaluating hospital queue countdowns.
+	 */
+	startEvaluationLoop(intervalMs = 1000): void {
+		if (this.loopTimer) return;
+		this.loopTimer = setInterval(() => {
+			const war = subversiveTargetCache.getWarState();
+			if (war.state === "active" || war.state === "scheduled") {
+				void this.evaluateHospitalQueue();
+			} else if (this.activeDibs.size > 0) {
+				this.activeDibs.clear();
+				this.notifyBroadcast();
+			}
+		}, intervalMs);
+	}
+
+	/**
+	 * Stops background interval timer.
+	 */
+	stopEvaluationLoop(): void {
+		if (this.loopTimer) {
+			clearInterval(this.loopTimer);
+			this.loopTimer = null;
+		}
 	}
 
 	/**
@@ -315,7 +363,56 @@ class SubversiveDibsManager {
 			return { success: false, reason: "War dibs is currently disabled." };
 		}
 
-		const dibs = this.activeDibs.get(targetId);
+		let dibs = this.activeDibs.get(targetId);
+		if (!dibs) {
+			// On-demand evaluation for target if in active/scheduled war hospital queue
+			const war = subversiveTargetCache.getWarState();
+			if (war.state === "active" || war.state === "scheduled") {
+				const opp = subversiveTargetCache.getWarOpponent(targetId);
+				if (opp) {
+					const nowSec = Math.floor(Date.now() / 1000);
+					const state = opp.status.state?.toLowerCase() ?? "";
+					if (state === "hospital") {
+						const until =
+							opp.status.until !== null && opp.status.until > 0
+								? opp.status.until
+								: nowSec;
+						const secondsRemaining = Math.max(0, until - nowSec);
+						const leadTimeSec = config.claimLeadTime * 60;
+						if (
+							secondsRemaining <= leadTimeSec &&
+							(secondsRemaining > 0 || opp.hasEarlyDischarge)
+						) {
+							const rawFF =
+								opp.estimatedScore > 0
+									? 1 + (8 / 3) * (opp.estimatedScore / 1)
+									: 1.0;
+							const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
+							dibs = {
+								targetId: opp.id,
+								targetName: opp.name,
+								targetLevel: opp.level,
+								estimatedBs: opp.estimatedBs,
+								fairFight,
+								hospitalUntil: until,
+								status: "open",
+								createdAt: Date.now(),
+							};
+							this.activeDibs.set(opp.id, dibs);
+
+							// Send alert to Discord Bot if a dibs channel is configured
+							if (config.channelId) {
+								void notifyBotAction("post_dibs_alert", {
+									channelId: config.channelId,
+									dibs,
+								});
+							}
+						}
+					}
+				}
+			}
+		}
+
 		if (!dibs) {
 			return {
 				success: false,
@@ -440,3 +537,6 @@ class SubversiveDibsManager {
 }
 
 export const subversiveDibsManager = new SubversiveDibsManager();
+if (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) {
+	subversiveDibsManager.startEvaluationLoop();
+}

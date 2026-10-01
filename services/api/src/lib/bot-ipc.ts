@@ -20,14 +20,16 @@ export function notifyBotAction(
 		const finish = (delivered: boolean) => {
 			if (settled) return;
 			settled = true;
-			client.destroy();
+			try {
+				client.destroy();
+			} catch {}
 			resolve(delivered);
 		};
 
 		const timeout = setTimeout(() => finish(false), timeoutMs);
 
 		client.on("connect", () => {
-			client.write(
+			client.end(
 				`${JSON.stringify({ action, ...(data ? { data } : {}) })}\n`,
 				() => {
 					clearTimeout(timeout);

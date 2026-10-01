@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { subversiveDibsManager } from "../src/lib/dibs-manager";
-import type {
-	CurrentWarInfo,
-	RankedWarOpponent,
+import {
+	type CurrentWarInfo,
+	type RankedWarOpponent,
+	subversiveTargetCache,
 } from "../src/lib/subversive-target-cache";
 
 describe("SubversiveDibsManager", () => {
@@ -207,5 +208,117 @@ describe("SubversiveDibsManager", () => {
 		});
 		expect(otherClaim.success).toBe(true);
 		expect(otherClaim.dibs?.status).toBe("claimed");
+	});
+
+	it("evaluates hospital queue directly from subversiveTargetCache without requiring websockets", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+		subversiveTargetCache.setWarState(mockWar);
+		subversiveTargetCache.setWarOpponents([
+			{
+				id: 2001,
+				name: "CacheOpponentOne",
+				level: 80,
+				daysInFaction: 30,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: { status: "Offline", timestamp: 0, relative: "5m" },
+				status: {
+					description: "In hospital",
+					details: null,
+					state: "hospital",
+					color: "red",
+					until: nowSec + 180,
+				},
+				estimatedBs: 600_000_000,
+				estimatedScore: 50_000,
+			},
+			{
+				id: 2002,
+				name: "CacheOpponentTwo",
+				level: 90,
+				daysInFaction: 90,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: { status: "Offline", timestamp: 0, relative: "1m" },
+				status: {
+					description: "In hospital",
+					details: null,
+					state: "hospital",
+					color: "red",
+					until: nowSec + 800,
+				},
+				estimatedBs: 900_000_000,
+				estimatedScore: 70_000,
+			},
+		]);
+
+		await subversiveDibsManager.evaluateHospitalQueue();
+
+		const dibs2001 = subversiveDibsManager.getDibsByTargetId(2001);
+		expect(dibs2001).toBeDefined();
+		expect(dibs2001?.status).toBe("open");
+		expect(dibs2001?.targetName).toBe("CacheOpponentOne");
+
+		// 2002 has 800s remaining (> 300s lead time), should NOT be in dibs
+		const dibs2002 = subversiveDibsManager.getDibsByTargetId(2002);
+		expect(dibs2002).toBeUndefined();
+	});
+
+	it("claims target on-demand from cache if not yet pre-evaluated in activeDibs", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+		// Add opponent 3001 directly to target cache
+		subversiveTargetCache.setWarOpponents([
+			...subversiveTargetCache.getWarOpponents(),
+			{
+				id: 3001,
+				name: "OnDemandOpponent",
+				level: 75,
+				daysInFaction: 40,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: { status: "Offline", timestamp: 0, relative: "2m" },
+				status: {
+					description: "In hospital",
+					details: null,
+					state: "hospital",
+					color: "red",
+					until: nowSec + 150,
+				},
+				estimatedBs: 400_000_000,
+				estimatedScore: 35_000,
+			},
+		]);
+
+		// Notice: 3001 is NOT yet in activeDibs
+		expect(subversiveDibsManager.getDibsByTargetId(3001)).toBeUndefined();
+
+		// Claiming should dynamically detect that 3001 is in hospital within lead time
+		const res = await subversiveDibsManager.claimDibs(3001, {
+			tornId: 77777,
+			tornName: "InstantClaimant",
+			platform: "script",
+		});
+
+		expect(res.success).toBe(true);
+		expect(res.dibs?.targetId).toBe(3001);
+		expect(res.dibs?.status).toBe("claimed");
+		expect(res.dibs?.claimedBy?.tornId).toBe(77777);
+	});
+
+	it("rejects dibs for target not in hospital or not in war", async () => {
+		const resNonExistent = await subversiveDibsManager.claimDibs(999999, {
+			tornId: 88888,
+			platform: "script",
+		});
+		expect(resNonExistent.success).toBe(false);
+		expect(resNonExistent.reason).toBe(
+			"Target is not currently available for dibs.",
+		);
 	});
 });

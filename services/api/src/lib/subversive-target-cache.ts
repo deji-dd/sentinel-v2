@@ -589,6 +589,10 @@ class SubversiveTargetCache {
 		return Array.from(this.warOpponents.values());
 	}
 
+	getWarOpponent(targetId: number): RankedWarOpponent | undefined {
+		return this.isWarEngaged() ? this.warOpponents.get(targetId) : undefined;
+	}
+
 	isWarOpponent(targetId: number): boolean {
 		return this.isWarEngaged() && this.warOpponents.has(targetId);
 	}
