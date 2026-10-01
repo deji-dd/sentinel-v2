@@ -180,6 +180,16 @@ class SubversiveDibsManager {
 		if (dibs) {
 			dibs.discordChannelId = channelId;
 			dibs.discordMessageId = messageId;
+
+			// If dibs was already claimed while the message was being posted, update Discord embed immediately
+			if (dibs.status === "claimed") {
+				void notifyBotAction("edit_dibs_alert", {
+					channelId,
+					messageId,
+					status: "claimed",
+					dibs,
+				});
+			}
 		}
 	}
 
@@ -236,6 +246,7 @@ class SubversiveDibsManager {
 						hospitalUntil: until,
 						status: "open",
 						createdAt: Date.now(),
+						discordChannelId: config.channelId ?? undefined,
 					};
 
 					this.activeDibs.set(opp.id, record);
@@ -388,7 +399,7 @@ class SubversiveDibsManager {
 									? 1 + (8 / 3) * (opp.estimatedScore / 1)
 									: 1.0;
 							const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
-							dibs = {
+							const createdDibs: DibsRecord = {
 								targetId: opp.id,
 								targetName: opp.name,
 								targetLevel: opp.level,
@@ -397,8 +408,10 @@ class SubversiveDibsManager {
 								hospitalUntil: until,
 								status: "open",
 								createdAt: Date.now(),
+								discordChannelId: config.channelId ?? undefined,
 							};
-							this.activeDibs.set(opp.id, dibs);
+							dibs = createdDibs;
+							this.activeDibs.set(opp.id, createdDibs);
 
 							// Send alert to Discord Bot if a dibs channel is configured
 							if (config.channelId) {

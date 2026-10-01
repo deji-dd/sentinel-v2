@@ -321,4 +321,15 @@ describe("SubversiveDibsManager", () => {
 			"Target is not currently available for dibs.",
 		);
 	});
+
+	it("associates Discord channel and message IDs via recordDiscordMessage", () => {
+		const dibs = subversiveDibsManager.getDibsByTargetId(3001);
+		expect(dibs).toBeDefined();
+
+		subversiveDibsManager.recordDiscordMessage(3001, "chan_123", "msg_456");
+
+		const updated = subversiveDibsManager.getDibsByTargetId(3001);
+		expect(updated?.discordChannelId).toBe("chan_123");
+		expect(updated?.discordMessageId).toBe("msg_456");
+	});
 });

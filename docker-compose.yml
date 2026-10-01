@@ -39,6 +39,7 @@ services:
     environment:
       PORT: 3000
       NODE_ENV: production
+      API_URL: http://sentinel-api:3002
     volumes:
       - /var/run/postgres-sockets:/var/run/postgresql
       - sentinel_ipc:/app/data
@@ -67,6 +68,7 @@ services:
     environment:
       PORT: 3001
       NODE_ENV: production
+      API_URL: http://sentinel-api:3002
     volumes:
       - /var/run/postgres-sockets:/var/run/postgresql
       - sentinel_ipc:/app/data

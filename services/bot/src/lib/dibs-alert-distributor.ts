@@ -13,7 +13,9 @@ import { logger } from "./logger";
 
 const API_BASE_URL =
 	process.env.API_URL ||
-	`http://127.0.0.1:${process.env.API_PORT || process.env.PORT || (process.env.NODE_ENV === "production" ? "3002" : "3000")}`;
+	(process.env.API_PORT
+		? `http://127.0.0.1:${process.env.API_PORT}`
+		: "http://127.0.0.1:3002");
 
 function formatStats(num: number | null | undefined): string {
 	if (!num || !Number.isFinite(num)) return "Unknown";
@@ -83,7 +85,7 @@ export async function postDibsAlert(
 
 		const targetProfileUrl = `https://www.torn.com/profiles.php?XID=${dibs.targetId}`;
 		const embed = createBaseEmbed(
-			`Target Exiting Hospital: ${dibs.targetName} [${dibs.targetId}]`,
+			`${dibs.targetName} [${dibs.targetId}]`,
 			`Target: [${dibs.targetName} [${dibs.targetId}]](${targetProfileUrl})\nLevel ${dibs.targetLevel} | Estimated BS: ${formatStats(dibs.estimatedBs)}`,
 			EMBED_COLORS.PRIMARY,
 		);
@@ -154,7 +156,7 @@ export async function updateDibsAlert(
 
 		const targetProfileUrl = `https://www.torn.com/profiles.php?XID=${dibs.targetId}`;
 		const embed = createBaseEmbed(
-			`Target Exiting Hospital: ${dibs.targetName} [${dibs.targetId}]`,
+			`${dibs.targetName} [${dibs.targetId}]`,
 			`Target: [${dibs.targetName} [${dibs.targetId}]](${targetProfileUrl})\nLevel ${dibs.targetLevel} | Estimated BS: ${formatStats(dibs.estimatedBs)}`,
 			isClaimed ? EMBED_COLORS.WARNING : EMBED_COLORS.PRIMARY,
 		);
@@ -213,6 +215,8 @@ export async function handleDibsClaimButton(
 	if (!targetId || Number.isNaN(targetId)) return;
 
 	try {
+		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
 		const res = await fetch(
 			`${API_BASE_URL}/api/v1/subversive/dibs/claim-discord`,
 			{
@@ -226,11 +230,17 @@ export async function handleDibsClaimButton(
 			},
 		);
 
-		const json = (await res.json()) as {
+		let json: {
 			success?: boolean;
 			error?: string;
 			dibs?: DibsRecord;
-		};
+		} = {};
+
+		try {
+			json = (await res.json()) as typeof json;
+		} catch {
+			json = { error: `Server response error (${res.status})` };
+		}
 
 		if (json.success && json.dibs) {
 			const claimant =
@@ -238,24 +248,30 @@ export async function handleDibsClaimButton(
 					? `${json.dibs.claimedBy.tornName} [${json.dibs.claimedBy.tornId}]`
 					: "You";
 
-			await interaction.reply({
+			await interaction.editReply({
 				content: `Dibs confirmed for ${json.dibs.targetName} [${json.dibs.targetId}] by ${claimant}. You have 20 seconds after hospital exit to initiate attack.`,
-				flags: MessageFlags.Ephemeral,
 			});
 		} else {
-			await interaction.reply({
+			await interaction.editReply({
 				content: json.error || "Unable to claim dibs.",
-				flags: MessageFlags.Ephemeral,
 			});
 		}
 	} catch (err) {
 		logger.error("Error claiming dibs via Discord button:", err);
-		await interaction
-			.reply({
-				content: "Internal error processing claim. Please try again.",
-				flags: MessageFlags.Ephemeral,
-			})
-			.catch(() => {});
+		if (interaction.deferred || interaction.replied) {
+			await interaction
+				.editReply({
+					content: "Internal error processing claim. Please try again.",
+				})
+				.catch(() => {});
+		} else {
+			await interaction
+				.reply({
+					content: "Internal error processing claim. Please try again.",
+					flags: MessageFlags.Ephemeral,
+				})
+				.catch(() => {});
+		}
 	}
 }
 
@@ -270,6 +286,8 @@ export async function handleDibsReleaseButton(
 	if (!targetId || Number.isNaN(targetId)) return;
 
 	try {
+		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
 		const res = await fetch(
 			`${API_BASE_URL}/api/v1/subversive/dibs/release-discord`,
 			{
@@ -282,29 +300,41 @@ export async function handleDibsReleaseButton(
 			},
 		);
 
-		const json = (await res.json()) as {
+		let json: {
 			success?: boolean;
 			error?: string;
-		};
+		} = {};
+
+		try {
+			json = (await res.json()) as typeof json;
+		} catch {
+			json = { error: `Server response error (${res.status})` };
+		}
 
 		if (json.success) {
-			await interaction.reply({
+			await interaction.editReply({
 				content: "Dibs claim released.",
-				flags: MessageFlags.Ephemeral,
 			});
 		} else {
-			await interaction.reply({
+			await interaction.editReply({
 				content: json.error || "Unable to release dibs.",
-				flags: MessageFlags.Ephemeral,
 			});
 		}
 	} catch (err) {
 		logger.error("Error releasing dibs via Discord button:", err);
-		await interaction
-			.reply({
-				content: "Internal error releasing claim. Please try again.",
-				flags: MessageFlags.Ephemeral,
-			})
-			.catch(() => {});
+		if (interaction.deferred || interaction.replied) {
+			await interaction
+				.editReply({
+					content: "Internal error releasing claim. Please try again.",
+				})
+				.catch(() => {});
+		} else {
+			await interaction
+				.reply({
+					content: "Internal error releasing claim. Please try again.",
+					flags: MessageFlags.Ephemeral,
+				})
+				.catch(() => {});
+		}
 	}
 }
