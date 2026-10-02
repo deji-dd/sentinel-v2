@@ -7,7 +7,6 @@ import {
 	Loader2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,7 +61,7 @@ export function ClientContractCreatePage() {
 	const [sessionError, setSessionError] = useState<string | null>(null);
 	const [session, setSession] = useState<ContractSession | null>(null);
 
-	const [validatingFaction, setValidatingFaction] = useState(false);
+	const [_validatingFaction, setValidatingFaction] = useState(false);
 	const [factionData, setFactionData] = useState<ValidatedFactionData | null>(
 		null,
 	);
@@ -357,25 +356,14 @@ export function ClientContractCreatePage() {
 	if (submittedContract) {
 		return (
 			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4 py-12">
-				<Card className="max-w-xl w-full border-emerald-500/30 bg-card/90 shadow-2xl backdrop-blur-md rounded-2xl p-8 space-y-6">
+				<Card className="max-w-xl w-full border-emerald-500/30 bg-card/90 shadow-2xl backdrop-blur-md rounded-2xl p-8 space-y-2">
 					<div className="size-16 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/20">
 						<CheckCircle2 className="size-8" />
 					</div>
 					<div className="text-center space-y-2">
-						<Badge
-							variant="outline"
-							className="text-emerald-400 border-emerald-500/30"
-						>
-							Contract Live & Registered
-						</Badge>
 						<h1 className="text-2xl font-bold tracking-tight">
 							Mercenary Contract Confirmed!
 						</h1>
-						<p className="text-sm text-muted-foreground">
-							Your contract has been deployed to the Sentinel mercenary
-							automation service. Announcements have been sent to your private
-							channel and the mercenaries.
-						</p>
 					</div>
 
 					<div className="p-4 rounded-xl bg-muted/30 border border-border/80 space-y-3 font-mono text-xs">
@@ -388,8 +376,7 @@ export function ClientContractCreatePage() {
 						<div className="flex items-center justify-between text-muted-foreground">
 							<span>TARGET FACTION</span>
 							<span className="text-foreground">
-								{factionData?.name ?? session?.factionName} [
-								{session?.factionId}]
+								{factionData?.name ?? session?.factionName}
 							</span>
 						</div>
 						<div className="flex items-center justify-between text-muted-foreground">

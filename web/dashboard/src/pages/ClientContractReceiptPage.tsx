@@ -6,9 +6,6 @@ import {
 	Loader2,
 	RefreshCw,
 	Search,
-	ShieldAlert,
-	Swords,
-	Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -208,11 +205,10 @@ export function ClientContractReceiptPage({
 				<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/40 pb-6">
 					<div>
 						<div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/20 bg-primary/10 text-primary text-xs font-mono uppercase tracking-wider mb-2">
-							<ShieldAlert className="size-3.5" />
 							Subversive Merc Service • Receipt Viewer
 						</div>
 						<h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-							{contract.factionName} [{contract.factionId}]
+							{contract.factionName}
 						</h1>
 						<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground font-mono mt-1">
 							<span>CONTRACT: {contract.id.slice(0, 8)}</span>
@@ -220,15 +216,6 @@ export function ClientContractReceiptPage({
 							<span>
 								CREATED: {new Date(contract.createdAt).toLocaleDateString()}
 							</span>
-							{contract.warOpponent && (
-								<>
-									<span>•</span>
-									<span className="text-rose-400 flex items-center gap-1 font-semibold">
-										<Swords className="size-3" /> VS {contract.warOpponent.name}{" "}
-										[{contract.warOpponent.id}]
-									</span>
-								</>
-							)}
 						</div>
 					</div>
 
@@ -282,9 +269,6 @@ export function ClientContractReceiptPage({
 						<div className="text-2xl font-black text-foreground">
 							{summary.totalHits.toLocaleString()}
 						</div>
-						<span className="text-[10px] text-muted-foreground">
-							Across {summary.targetsHitCount} targets
-						</span>
 					</Card>
 
 					<Card className="border-border/80 bg-card/90 shadow-md rounded-2xl p-4 space-y-1">
@@ -294,9 +278,6 @@ export function ClientContractReceiptPage({
 						<div className="text-2xl font-black text-emerald-400">
 							${summary.totalPayout.toLocaleString()}
 						</div>
-						<span className="text-[10px] text-muted-foreground font-mono">
-							${contract.hitPrice.toLocaleString()} / hit
-						</span>
 					</Card>
 
 					<Card className="border-border/80 bg-card/90 shadow-md rounded-2xl p-4 space-y-1">
@@ -308,9 +289,6 @@ export function ClientContractReceiptPage({
 								.reduce((acc, t) => acc + t.standardHitsReceived, 0)
 								.toLocaleString()}
 						</div>
-						<span className="text-[10px] text-muted-foreground">
-							Hospitalized
-						</span>
 					</Card>
 
 					<Card className="border-border/80 bg-card/90 shadow-md rounded-2xl p-4 space-y-1">
@@ -322,9 +300,6 @@ export function ClientContractReceiptPage({
 								.reduce((acc, t) => acc + t.strickenHitsReceived, 0)
 								.toLocaleString()}
 						</div>
-						<span className="text-[10px] text-muted-foreground">
-							Warlord hits
-						</span>
 					</Card>
 				</div>
 
@@ -333,7 +308,6 @@ export function ClientContractReceiptPage({
 					<CardHeader className="border-b border-border/40 pb-4">
 						<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
 							<CardTitle className="text-base font-semibold flex items-center gap-2">
-								<Users className="size-4 text-primary" />
 								Faction Target Breakdown ({filteredTargets.length})
 							</CardTitle>
 
