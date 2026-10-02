@@ -4,6 +4,7 @@ import {
 	eq,
 	isNotNull,
 	lt,
+	reconcileTargetGuildsAndModules,
 	systemMetrics,
 	travelDestinations,
 	verificationLogs,
@@ -160,6 +161,25 @@ export async function executeMaintenance(): Promise<void> {
 		} catch (err) {
 			logger.error(
 				"Error reconciling historical battlestats logs during maintenance:",
+				err,
+			);
+		}
+
+		// 6. Guild configuration & module cleanup sweep (reconciles against current env settings)
+		try {
+			const cleanupResult = await reconcileTargetGuildsAndModules();
+			if (cleanupResult.deauthorizedGuilds.length > 0) {
+				logger.warn(
+					`Maintenance: Deauthorized ${cleanupResult.deauthorizedGuilds.length} stale guild(s) and disabled ${cleanupResult.deactivatedModulesCount} orphaned module(s): [${cleanupResult.deauthorizedGuilds.join(", ")}]`,
+				);
+			} else {
+				logger.info(
+					`Maintenance: Verified ${cleanupResult.reconciledGuilds.length} target guild(s) - all active modules aligned with current environment.`,
+				);
+			}
+		} catch (err) {
+			logger.error(
+				"Error reconciling guild configurations during maintenance:",
 				err,
 			);
 		}

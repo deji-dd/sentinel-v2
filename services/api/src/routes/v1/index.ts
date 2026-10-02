@@ -1,21 +1,18 @@
 import { Elysia } from "elysia";
-import { authRoutes } from "./auth";
-import { elimsRoutes } from "./elims";
-import { giveawayRoutes } from "./giveaways";
-import { guildRoutes } from "./guilds";
-import { personalBountiesRoutes } from "./personal-bounties";
-import { subversiveRoutes } from "./subversive";
-import { subversiveTargetFinderRoutes } from "./subversive-target-finder";
-import { systemRoutes } from "./system";
-import { ttRoutes } from "./tt";
+import { personalBountiesRoutes } from "../v2/personal-bounties";
+import { subversiveRoutes } from "../v2/subversive";
+import { subversiveTargetFinderRoutes } from "../v2/subversive-target-finder";
 
+/**
+ * Legacy v1 API Route Gateway.
+ * All core platform APIs (auth, elims, guilds, merc, tt, system) have been retired and migrated to /v2.
+ * This gateway strictly preserves endpoints required by the public Subversive Alliance userscript
+ * to ensure backward compatibility for players with existing browser script installations.
+ */
 export const v1Routes = new Elysia({ prefix: "/api/v1" })
-	.use(authRoutes)
-	.use(elimsRoutes)
-	.use(giveawayRoutes)
-	.use(guildRoutes)
+	// Bounty endpoints called by Subversive userscript
 	.use(personalBountiesRoutes)
-	.use(subversiveRoutes)
+	// Target finder endpoints called by Subversive userscript
 	.use(subversiveTargetFinderRoutes)
 	// Backward-compatibility alias for legacy scripts requesting /subversive/target-finder
 	.group("/subversive/target-finder", (app) => {
@@ -42,5 +39,20 @@ export const v1Routes = new Elysia({ prefix: "/api/v1" })
 			.patch("", forward, { detail: { hide: true } })
 			.patch("/*", forward, { detail: { hide: true } });
 	})
-	.use(systemRoutes)
-	.use(ttRoutes);
+	// Backward-compatibility dibs endpoints called by legacy Subversive userscript
+	.group("/subversive/dibs", (app) => {
+		const forward = ({ request }: { request: Request }): Promise<Response> => {
+			const url = new URL(request.url);
+			const targetPath = url.pathname.slice(
+				url.pathname.indexOf("/subversive"),
+			);
+			const targetUrl = new URL(targetPath + url.search, url.origin);
+			return subversiveRoutes.handle(
+				new Request(targetUrl.toString(), request),
+			);
+		};
+
+		return app
+			.post("/claim", forward, { detail: { hide: true } })
+			.post("/release", forward, { detail: { hide: true } });
+	});

@@ -1,0 +1,2 @@
+ALTER TABLE "guild_configs" ADD COLUMN "merc_default_hit_price" integer DEFAULT 3000000;--> statement-breakpoint
+ALTER TABLE "guild_configs" ADD COLUMN "merc_default_stricken_hit_price" integer DEFAULT 4000000;

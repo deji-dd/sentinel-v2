@@ -49,6 +49,8 @@ export const corsPlugin = new Elysia({ name: "middleware.cors" }).use(
 			"X-Requested-With",
 			"X-Api-Key",
 		],
+		exposeHeaders: ["Content-Disposition", "Content-Type"],
+		maxAge: 86400,
 		methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 	}),
 );

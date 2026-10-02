@@ -128,7 +128,7 @@ export function GiveawaysPage() {
 		if (!guild?.id) return;
 		setLoadingChannels(true);
 		try {
-			const res = await fetch(`/api/v1/elims/guild-channels/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-channels/${guild.id}`);
 			if (!res.ok) throw new Error("Failed to load guild channels");
 			const data = (await res.json()) as { channels?: DiscordChannel[] };
 			if (data.channels && Array.isArray(data.channels)) {
@@ -147,7 +147,7 @@ export function GiveawaysPage() {
 	const fetchGuildMembers = useCallback(async () => {
 		if (!guild?.id) return;
 		try {
-			const res = await fetch(`/api/v1/elims/guild-members/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-members/${guild.id}`);
 			if (!res.ok) return;
 			const data = (await res.json()) as { members?: GuildMemberSummary[] };
 			if (data.members && Array.isArray(data.members)) {
@@ -162,7 +162,7 @@ export function GiveawaysPage() {
 	const fetchConfig = useCallback(async () => {
 		setLoadingConfig(true);
 		try {
-			const res = await fetch("/api/v1/elims/giveaways/config");
+			const res = await fetch("/v2/elims/giveaways/config");
 			if (!res.ok) throw new Error("Failed to load giveaway configuration");
 			const data = (await res.json()) as { config?: GiveawayConfig };
 			if (data.config) {
@@ -190,7 +190,7 @@ export function GiveawaysPage() {
 		setLoadingGiveaways(true);
 		try {
 			const res = await fetch(
-				`/api/v1/elims/giveaways?status=${activeTab}&limit=50`,
+				`/v2/elims/giveaways?status=${activeTab}&limit=50`,
 			);
 			if (!res.ok) throw new Error("Failed to load giveaways");
 			const data = (await res.json()) as { giveaways?: GiveawayItem[] };
@@ -324,7 +324,7 @@ export function GiveawaysPage() {
 		setSavingConfig(true);
 
 		try {
-			const res = await fetch("/api/v1/elims/giveaways/config", {
+			const res = await fetch("/v2/elims/giveaways/config", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -394,7 +394,7 @@ export function GiveawaysPage() {
 
 		setCancellingId(id);
 		try {
-			const res = await fetch(`/api/v1/elims/giveaways/${id}/cancel`, {
+			const res = await fetch(`/v2/elims/giveaways/${id}/cancel`, {
 				method: "POST",
 			});
 			if (!res.ok) {

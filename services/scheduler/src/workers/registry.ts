@@ -5,6 +5,8 @@ import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
 } from "./elimination";
+import { startMercAttackValidatorWorker } from "./merc/merc-attack-validator-worker";
+import { startMercContractWorker } from "./merc/merc-contract-worker";
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
@@ -133,7 +135,6 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Adaptive (15s active / 60s idle) continuous target discovery crawler via FFScouter get-targets API (PAUSED FOR RANKED WAR)",
 		start: startSubversiveFFScouterCrawlerWorker,
-		enabled: false,
 	},
 	{
 		id: "subversive:ranked_war_worker",
@@ -146,6 +147,18 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Daily Torn active players snapshot CSV ingestion and filtering engine",
 		start: startSubversiveSnapshotIngestionWorker,
+	},
+	{
+		id: "merc:contract_worker",
+		description:
+			"1-second continuous mercenary contract target monitoring, dibs alerts, and hospital lead tracker",
+		start: startMercContractWorker,
+	},
+	{
+		id: "merc:attack_validator",
+		description:
+			"5-second mercenary outgoing attacks poller and hit validation engine",
+		start: startMercAttackValidatorWorker,
 	},
 ];
 

@@ -14,8 +14,13 @@ const logger = new Logger("Scheduler");
 async function main() {
 	logger.info("Initializing...");
 
-	// 1. Auto-provision target guild configs
-	await ensureTargetGuildConfigs();
+	// 1. Auto-provision target guild configs and reconcile modules against environment
+	const cleanupResult = await ensureTargetGuildConfigs();
+	if (cleanupResult.deauthorizedGuilds.length > 0) {
+		logger.warn(
+			`Startup: Deauthorized ${cleanupResult.deauthorizedGuilds.length} stale guild(s) and disabled ${cleanupResult.deactivatedModulesCount} orphaned module(s): [${cleanupResult.deauthorizedGuilds.join(", ")}]`,
+		);
+	}
 
 	// 2. Setup & Start IPC Server
 	const ipcServer = await setupSchedulerIpc();

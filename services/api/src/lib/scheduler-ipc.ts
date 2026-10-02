@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcClient } from "@sentinel/utils/ipc";
-import { broadcastPersonalBountiesState } from "../routes/ws-personal-bounties";
 import { broadcastWarUpdate } from "../routes/ws-subversive-war";
 import { subversiveDibsManager } from "./dibs-manager";
 import {
@@ -15,6 +15,14 @@ const logger = new Logger("API", "SchedulerIPC");
 
 let ipcClient: IpcClient | null = null;
 
+interface PendingRequest {
+	resolve: (data: unknown) => void;
+	reject: (err: Error) => void;
+	timer: NodeJS.Timeout;
+}
+
+const pendingSchedulerRequests = new Map<string, PendingRequest>();
+
 /**
  * Initializes a background IPC client that receives state broadcast events
  * from the scheduler and forwards them to active WebSockets.
@@ -26,11 +34,22 @@ export function initSchedulerIpcListener(): void {
 			if (!msg || typeof msg !== "object") return;
 			const message = msg as {
 				action?: string;
+				requestId?: string;
 				data?: Record<string, unknown>;
 			};
-			if (message.action === "personal_bounties_updated" && message.data) {
-				broadcastPersonalBountiesState(message.data);
+
+			if (
+				message.requestId &&
+				pendingSchedulerRequests.has(message.requestId)
+			) {
+				const pending = pendingSchedulerRequests.get(message.requestId);
+				if (pending) {
+					clearTimeout(pending.timer);
+					pendingSchedulerRequests.delete(message.requestId);
+					pending.resolve(message.data);
+				}
 			}
+
 			if (message.action === "subversive_war_updated" && message.data) {
 				const payload = message.data as {
 					war?: CurrentWarInfo;
@@ -190,5 +209,95 @@ export async function notifyBountyDefeated(
 	} catch (err) {
 		logger.warn("Failed to notify scheduler of bounty defeat:", err);
 		return false;
+	}
+}
+
+/**
+ * Sends an IPC request to the Scheduler and awaits the corresponding response.
+ */
+export function sendSchedulerRequest<T = Record<string, unknown>>(
+	action: string,
+	data?: Record<string, unknown>,
+	timeoutMs = 5000,
+): Promise<T> {
+	initSchedulerIpcListener();
+	const requestId = randomUUID();
+
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			pendingSchedulerRequests.delete(requestId);
+			reject(
+				new Error(
+					`Scheduler request '${action}' timed out after ${timeoutMs}ms.`,
+				),
+			);
+		}, timeoutMs);
+
+		pendingSchedulerRequests.set(requestId, {
+			resolve: resolve as (data: unknown) => void,
+			reject,
+			timer,
+		});
+
+		if (ipcClient) {
+			ipcClient.send({ action, requestId, ...(data ? { data } : {}) });
+		} else {
+			clearTimeout(timer);
+			pendingSchedulerRequests.delete(requestId);
+			reject(new Error("Scheduler IPC client not initialized."));
+		}
+	});
+}
+
+/**
+ * Dispatches an IPC request to claim a mercenary target in scheduler worker memory.
+ */
+export async function requestMercClaimTarget(
+	contractId: string,
+	targetId: number,
+	claimant: {
+		discordId: string;
+		discordTag: string;
+		tornId?: number;
+		tornName?: string;
+	},
+): Promise<{ success: boolean; reason?: string }> {
+	try {
+		return await sendSchedulerRequest<{ success: boolean; reason?: string }>(
+			"merc_claim_target_request",
+			{ contractId, targetId, claimant },
+			3000,
+		);
+	} catch (err) {
+		logger.warn("Failed requesting merc claim via scheduler IPC:", err);
+		return {
+			success: false,
+			reason:
+				err instanceof Error ? err.message : "Scheduler process unreachable",
+		};
+	}
+}
+
+/**
+ * Dispatches an IPC request to release a claimed mercenary target in scheduler worker memory.
+ */
+export async function requestMercReleaseTarget(
+	contractId: string,
+	targetId: number,
+	discordUserId: string,
+): Promise<{ success: boolean; reason?: string }> {
+	try {
+		return await sendSchedulerRequest<{ success: boolean; reason?: string }>(
+			"merc_release_target_request",
+			{ contractId, targetId, discordUserId },
+			3000,
+		);
+	} catch (err) {
+		logger.warn("Failed requesting merc release via scheduler IPC:", err);
+		return {
+			success: false,
+			reason:
+				err instanceof Error ? err.message : "Scheduler process unreachable",
+		};
 	}
 }

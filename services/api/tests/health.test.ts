@@ -25,7 +25,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 
 		expect(response.status).toBe(200);
 		const html = await response.text();
-		expect(html).toContain("<title>Sentinel - Bot Dashboard</title>");
+		expect(html).toContain("<title>Sentinel - Dashboard</title>");
 	});
 
 	it("GET bundled JS asset returns 200 OK with javascript content-type", async () => {
@@ -43,9 +43,9 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(contentType).toContain("javascript");
 	});
 
-	it("GET /api/v1/auth/me returns 200 OK with unauthenticated state", async () => {
+	it("GET /v2/auth/me returns 200 OK with unauthenticated state", async () => {
 		const response = await app.handle(
-			new Request("http://localhost/api/v1/auth/me"),
+			new Request("http://localhost/v2/auth/me"),
 		);
 
 		expect(response.status).toBe(200);
@@ -55,10 +55,18 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(data.user).toBeNull();
 	});
 
+	it("GET /api/v1/auth/me returns 404 (retired v1 endpoint)", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/api/v1/auth/me"),
+		);
+
+		expect(response.status).toBe(404);
+	});
+
 	it("performs full in-house database session lifecycle (login -> me -> logout)", async () => {
-		// 1. Login via /demo-login
+		// 1. Login via /v2/auth/demo-login
 		const loginResponse = await app.handle(
-			new Request("http://localhost/api/v1/auth/demo-login", {
+			new Request("http://localhost/v2/auth/demo-login", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -80,7 +88,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 
 		// 2. Fetch /me with session cookie
 		const meResponse = await app.handle(
-			new Request("http://localhost/api/v1/auth/me", {
+			new Request("http://localhost/v2/auth/me", {
 				headers: {
 					Cookie: cookieHeader,
 				},
@@ -97,9 +105,9 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(meData.user?.username).toBe("test_sentinel_admin");
 		expect(meData.user?.role).toBe("admin");
 
-		// 3. Logout via /logout with session cookie
+		// 3. Logout via /v2/auth/logout with session cookie
 		const logoutResponse = await app.handle(
-			new Request("http://localhost/api/v1/auth/logout", {
+			new Request("http://localhost/v2/auth/logout", {
 				method: "POST",
 				headers: {
 					cookie: cookieHeader,
@@ -111,7 +119,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 
 		// 4. Verify /me is now unauthenticated
 		const postLogoutResponse = await app.handle(
-			new Request("http://localhost/api/v1/auth/me", {
+			new Request("http://localhost/v2/auth/me", {
 				headers: {
 					cookie: cookieHeader,
 				},
@@ -124,6 +132,19 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		};
 
 		expect(postLogoutData.authenticated).toBe(false);
+	});
+
+	it("identifies dashboard client context from origin", async () => {
+		const response = await app.handle(
+			new Request("https://dashboard.blasted-labs.tech/health", {
+				headers: {
+					origin: "https://dashboard.blasted-labs.tech",
+					host: "dashboard.blasted-labs.tech",
+				},
+			}),
+		);
+
+		expect(response.status).toBe(200);
 	});
 
 	it("identifies bot-dashboard client context from origin", async () => {
@@ -204,7 +225,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(response.status).toBe(200);
 	});
 
-	it("GET / serves subversive-dashboard static SPA when Host contains subversive", async () => {
+	it("GET / serves dashboard static SPA when Host contains subversive", async () => {
 		const response = await app.handle(
 			new Request("http://localhost/", {
 				headers: {
@@ -215,6 +236,6 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 
 		expect(response.status).toBe(200);
 		const html = await response.text();
-		expect(html).toContain('<div id="root"></div>');
+		expect(html).toContain('id="root"');
 	});
 });

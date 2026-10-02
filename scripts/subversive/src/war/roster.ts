@@ -174,7 +174,7 @@ export async function fetchAvailableTargets(): Promise<void> {
 		const res = await apiRequest<{
 			war?: typeof state.war;
 			targets?: WarTarget[];
-		}>(`/api/v1/target-finder/war/targets/available?${params.toString()}`);
+		}>(`/v2/target-finder/war/targets/available?${params.toString()}`);
 		if (res?.war) {
 			state.war = res.war;
 			state.warState = res.war.state;

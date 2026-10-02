@@ -11,6 +11,7 @@ import {
 	db,
 	elimsApiKeys,
 	eq,
+	guildApiKeys,
 	subversiveApiKeys,
 } from "../../database";
 import { Logger } from "../../utils";
@@ -81,19 +82,40 @@ export async function getGuildKeyPool(
 	guildId: string,
 ): Promise<ManagedApiKey[]> {
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
-	const keysInDb = await db
-		.select()
-		.from(elimsApiKeys)
-		.where(
-			and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
-		)
-		.orderBy(elimsApiKeys.lastUsedAt);
+	const [guildKeys, elimsKeys, subversiveKeys] = await Promise.all([
+		db
+			.select()
+			.from(guildApiKeys)
+			.where(
+				and(eq(guildApiKeys.guildId, guildId), eq(guildApiKeys.isValid, true)),
+			)
+			.orderBy(guildApiKeys.lastUsedAt),
+		db
+			.select()
+			.from(elimsApiKeys)
+			.where(
+				and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
+			)
+			.orderBy(elimsApiKeys.lastUsedAt),
+		db
+			.select()
+			.from(subversiveApiKeys)
+			.where(
+				and(
+					eq(subversiveApiKeys.guildId, guildId),
+					eq(subversiveApiKeys.isValid, true),
+				),
+			)
+			.orderBy(subversiveApiKeys.lastUsedAt),
+	]);
 
-	if (keysInDb.length > 0) {
+	const allKeys = [...guildKeys, ...elimsKeys, ...subversiveKeys];
+
+	if (allKeys.length > 0) {
 		const result: ManagedApiKey[] = [];
 		const seenKeys = new Set<string>();
 
-		for (const k of keysInDb) {
+		for (const k of allKeys) {
 			const rawKey =
 				k.apiKeyEncrypted.length > 16 && masterKey
 					? decryptApiKey(k.apiKeyEncrypted, masterKey)
@@ -147,16 +169,27 @@ export async function getSubversiveKeyPool(
 	guildId: string,
 ): Promise<ManagedApiKey[]> {
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
-	const keysInDb = await db
-		.select()
-		.from(subversiveApiKeys)
-		.where(
-			and(
-				eq(subversiveApiKeys.guildId, guildId),
-				eq(subversiveApiKeys.isValid, true),
-			),
-		)
-		.orderBy(subversiveApiKeys.lastUsedAt);
+	const [subversiveKeys, guildKeys] = await Promise.all([
+		db
+			.select()
+			.from(subversiveApiKeys)
+			.where(
+				and(
+					eq(subversiveApiKeys.guildId, guildId),
+					eq(subversiveApiKeys.isValid, true),
+				),
+			)
+			.orderBy(subversiveApiKeys.lastUsedAt),
+		db
+			.select()
+			.from(guildApiKeys)
+			.where(
+				and(eq(guildApiKeys.guildId, guildId), eq(guildApiKeys.isValid, true)),
+			)
+			.orderBy(guildApiKeys.lastUsedAt),
+	]);
+
+	const keysInDb = [...subversiveKeys, ...guildKeys];
 
 	if (keysInDb.length > 0) {
 		const result: ManagedApiKey[] = [];

@@ -22,15 +22,22 @@ describe("Swagger Domain-Scoped Documentation", () => {
 		expect(paths.length).toBeGreaterThan(0);
 
 		// Must include elims, users, health
-		expect(paths.some((p) => p.startsWith("/api/v1/elims"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/users"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/health"))).toBe(true);
+		expect(paths.some((p) => p.startsWith("/v2/elims"))).toBe(true);
+		expect(
+			paths.some(
+				(p) => p.startsWith("/users") || p.startsWith("/v2/elims/users"),
+			),
+		).toBe(true);
+		expect(
+			paths.some((p) => p.startsWith("/api/health") || p.startsWith("/health")),
+		).toBe(true);
 
-		// Must NOT include guilds, tt, pond, or system ledger
-		expect(paths.some((p) => p.startsWith("/api/v1/guilds"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/api/v1/tt"))).toBe(false);
+		// Must NOT include guilds, tt, pond, system ledger, or v1
+		expect(paths.some((p) => p.startsWith("/v2/guilds"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/v2/tt"))).toBe(false);
 		expect(paths.some((p) => p.startsWith("/pond"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/api/v1/system"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/v2/system"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/api/v1"))).toBe(false);
 	});
 
 	it("scopes tt-selector.blasted-labs.tech to tt endpoints only", async () => {
@@ -52,13 +59,16 @@ describe("Swagger Domain-Scoped Documentation", () => {
 		expect(paths.length).toBeGreaterThan(0);
 
 		// Must include tt, health
-		expect(paths.some((p) => p.startsWith("/api/v1/tt"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/health"))).toBe(true);
+		expect(paths.some((p) => p.startsWith("/v2/tt"))).toBe(true);
+		expect(
+			paths.some((p) => p.startsWith("/api/health") || p.startsWith("/health")),
+		).toBe(true);
 
-		// Must NOT include elims, guilds, pond, system
-		expect(paths.some((p) => p.startsWith("/api/v1/elims"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/api/v1/guilds"))).toBe(false);
+		// Must NOT include elims, guilds, pond, system, v1
+		expect(paths.some((p) => p.startsWith("/v2/elims"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/v2/guilds"))).toBe(false);
 		expect(paths.some((p) => p.startsWith("/pond"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/api/v1"))).toBe(false);
 	});
 
 	it("scopes sentinel.blasted-labs.tech to bot configuration endpoints only", async () => {
@@ -80,14 +90,33 @@ describe("Swagger Domain-Scoped Documentation", () => {
 		expect(paths.length).toBeGreaterThan(0);
 
 		// Must include guilds, auth, health
-		expect(paths.some((p) => p.startsWith("/api/v1/guilds"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/v1/auth"))).toBe(true);
-		expect(paths.some((p) => p.startsWith("/api/health"))).toBe(true);
+		expect(paths.some((p) => p.startsWith("/v2/guilds"))).toBe(true);
+		expect(paths.some((p) => p.startsWith("/v2/auth"))).toBe(true);
+		expect(
+			paths.some((p) => p.startsWith("/health") || p.startsWith("/api/health")),
+		).toBe(true);
 
-		// Must NOT include elims, tt, pond, system
-		expect(paths.some((p) => p.startsWith("/api/v1/elims"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("/api/v1/tt"))).toBe(false);
+		// Must NOT include elims, tt, pond, v1
+		expect(paths.some((p) => p.startsWith("/v2/elims"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/v2/tt"))).toBe(false);
 		expect(paths.some((p) => p.startsWith("/pond"))).toBe(false);
+		expect(paths.some((p) => p.startsWith("/api/v1"))).toBe(false);
+	});
+
+	it("scopes dashboard.blasted-labs.tech to bot configuration endpoints only", async () => {
+		const res = await app.handle(
+			new Request("https://dashboard.blasted-labs.tech/swagger/json", {
+				headers: { host: "dashboard.blasted-labs.tech" },
+			}),
+		);
+
+		expect(res.status).toBe(200);
+		const json = (await res.json()) as {
+			info: { title: string; description: string };
+			paths: Record<string, unknown>;
+		};
+
+		expect(json.info.title).toBe("Sentinel V2 — Bot Configuration API");
 	});
 
 	it("blocks sentinel.ayodejib.dev requests from accessing swagger docs", async () => {
@@ -126,10 +155,10 @@ describe("Swagger Domain-Scoped Documentation", () => {
 
 		// Should include all domains' endpoints
 		const allPaths = Object.keys(localhostJson.paths);
-		expect(allPaths.some((p) => p.startsWith("/api/v1/elims"))).toBe(true);
-		expect(allPaths.some((p) => p.startsWith("/api/v1/tt"))).toBe(true);
-		expect(allPaths.some((p) => p.startsWith("/api/v1/guilds"))).toBe(true);
-		expect(allPaths.some((p) => p.startsWith("/api/v1/system"))).toBe(true);
+		expect(allPaths.some((p) => p.startsWith("/v2/elims"))).toBe(true);
+		expect(allPaths.some((p) => p.startsWith("/v2/tt"))).toBe(true);
+		expect(allPaths.some((p) => p.startsWith("/v2/guilds"))).toBe(true);
+		expect(allPaths.some((p) => p.startsWith("/v2/system"))).toBe(true);
 		expect(allPaths.some((p) => p.startsWith("/pond"))).toBe(true);
 		expect(allPaths.length).toBeGreaterThan(50);
 	});

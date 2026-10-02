@@ -9,7 +9,7 @@ export interface SwaggerDomainConfig {
 const ELIMS_EXACT_PATHS = new Set([
 	"/users",
 	"/api/users",
-	"/api/v1/users",
+	"/v2/elims/users",
 	"/api/elims/users",
 ]);
 
@@ -21,8 +21,9 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 			"Tournament and elimination tracking endpoints for Sentinel Elims Dashboard.",
 		isPathAllowed: (path: string) =>
 			path.startsWith("/api/health") ||
-			path.startsWith("/api/v1/elims") ||
-			path.startsWith("/api/v1/auth") ||
+			path.startsWith("/health") ||
+			path.startsWith("/v2/elims") ||
+			path.startsWith("/v2/auth") ||
 			path.startsWith("/api/ws/elims-tournament") ||
 			path.startsWith("/ws/elims-tournament") ||
 			ELIMS_EXACT_PATHS.has(path),
@@ -34,20 +35,48 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 		description: "Territory war & target selector endpoints.",
 		isPathAllowed: (path: string) =>
 			path.startsWith("/api/health") ||
-			path.startsWith("/api/v1/tt") ||
-			path.startsWith("/api/v1/auth"),
+			path.startsWith("/health") ||
+			path.startsWith("/v2/tt") ||
+			path.startsWith("/v2/auth"),
 	},
 
 	// Bot Configuration Dashboard
+	"dashboard.blasted-labs.tech": {
+		title: "Sentinel V2 — Bot Configuration API",
+		description:
+			"Guild configuration, verification, reaction roles, and faction API for Sentinel Bot.",
+		isPathAllowed: (path: string) =>
+			path.startsWith("/health") ||
+			path.startsWith("/api/health") ||
+			path.startsWith("/v2/guilds") ||
+			path.startsWith("/v2/system") ||
+			path.startsWith("/v2/auth") ||
+			path.startsWith("/v2/subversive") ||
+			path.startsWith("/v2/merc"),
+	},
 	"sentinel.blasted-labs.tech": {
 		title: "Sentinel V2 — Bot Configuration API",
 		description:
-			"Guild configuration, verification, and reaction roles API for Sentinel Bot.",
+			"Guild configuration, verification, reaction roles, and faction API for Sentinel Bot.",
 		isPathAllowed: (path: string) =>
+			path.startsWith("/health") ||
 			path.startsWith("/api/health") ||
-			path.startsWith("/api/v1/guilds") ||
-			path.startsWith("/api/v1/system") ||
-			path.startsWith("/api/v1/auth"),
+			path.startsWith("/v2/guilds") ||
+			path.startsWith("/v2/system") ||
+			path.startsWith("/v2/auth") ||
+			path.startsWith("/v2/subversive") ||
+			path.startsWith("/v2/merc"),
+	},
+	"subversive.blasted-labs.tech": {
+		title: "Sentinel V2 — Subversive Faction API",
+		description: "Subversive faction operations, recruitment, and dibs API.",
+		isPathAllowed: (path: string) =>
+			path.startsWith("/health") ||
+			path.startsWith("/api/health") ||
+			path.startsWith("/v2/subversive") ||
+			path.startsWith("/v2/target-finder") ||
+			path.startsWith("/v2/auth") ||
+			path.startsWith("/api/v1/target-finder"),
 	},
 };
 
@@ -75,8 +104,9 @@ export function resolveDomainConfig(request: Request): SwaggerDomainConfig {
 		forwardedHost.split(":")[0]?.toLowerCase() ||
 		urlHostname;
 
-	// Explicit check for swagger.ayodejib.dev or localhost/127.0.0.1 -> default full API
+	// Explicit check for api.blasted-labs.tech, swagger.ayodejib.dev or localhost/127.0.0.1 -> default full API
 	if (
+		host === "api.blasted-labs.tech" ||
 		host === "swagger.ayodejib.dev" ||
 		host === "localhost" ||
 		host === "127.0.0.1" ||

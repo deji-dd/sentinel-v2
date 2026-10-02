@@ -1,0 +1,2 @@
+ALTER TABLE "merc_contract_tokens" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_merc_tokens_cleanup" ON "merc_contract_tokens" USING btree ("used","archived","expires_at");

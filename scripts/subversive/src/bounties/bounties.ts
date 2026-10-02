@@ -113,7 +113,7 @@ export async function fetchBounties(): Promise<void> {
 	if (!state.token) return;
 	try {
 		const res = await apiRequest<{ readyTargets?: BountyTarget[] }>(
-			"/api/v1/personal/bounties",
+			"/v2/personal/bounties",
 		);
 		applyBountyData(res);
 	} catch (err: unknown) {

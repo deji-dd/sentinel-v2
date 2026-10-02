@@ -335,7 +335,7 @@ export function ItemRequestsPage() {
 	const fetchStock = useCallback(async () => {
 		setLoadingStock(true);
 		try {
-			const res = await fetch("/api/v1/elims/item-requests/storage/inventory");
+			const res = await fetch("/v2/elims/item-requests/storage/inventory");
 			if (!res.ok) return null;
 			const raw = (await res.json()) as unknown;
 			const data =
@@ -378,7 +378,7 @@ export function ItemRequestsPage() {
 		if (!guild?.id) return [];
 		setLoadingChannels(true);
 		try {
-			const res = await fetch(`/api/v1/elims/guild-channels/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-channels/${guild.id}`);
 			if (!res.ok) throw new Error("Failed to load guild channels");
 			const data = (await res.json()) as unknown;
 			if (
@@ -405,7 +405,7 @@ export function ItemRequestsPage() {
 		if (!guild?.id) return [];
 		setLoadingRoles(true);
 		try {
-			const res = await fetch(`/api/v1/elims/guild-roles/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-roles/${guild.id}`);
 			if (!res.ok) throw new Error("Failed to load guild roles");
 			const data = (await res.json()) as unknown;
 			if (
@@ -435,7 +435,7 @@ export function ItemRequestsPage() {
 			try {
 				const queryParam = fresh ? "?fresh=true" : "";
 				const res = await fetch(
-					`/api/v1/elims/guild-members/${guild.id}${queryParam}`,
+					`/v2/elims/guild-members/${guild.id}${queryParam}`,
 				);
 				if (!res.ok) throw new Error("Failed to load guild members");
 				const data = (await res.json()) as unknown;
@@ -465,7 +465,7 @@ export function ItemRequestsPage() {
 		if (!guild?.id) return [];
 		setLoadingStockHolders(true);
 		try {
-			const res = await fetch("/api/v1/elims/item-requests/stock-holders");
+			const res = await fetch("/v2/elims/item-requests/stock-holders");
 			if (!res.ok) throw new Error("Failed to load stock holders");
 			const data = (await res.json()) as unknown;
 			if (
@@ -499,7 +499,7 @@ export function ItemRequestsPage() {
 	const fetchConfig = useCallback(async () => {
 		setLoadingConfig(true);
 		try {
-			const res = await fetch("/api/v1/elims/item-requests/config");
+			const res = await fetch("/v2/elims/item-requests/config");
 			if (!res.ok) throw new Error("Failed to load item request config");
 			const data = (await res.json()) as unknown;
 			if (
@@ -607,7 +607,7 @@ export function ItemRequestsPage() {
 			if (statusFilter !== "all") params.set("status", statusFilter);
 			if (search.trim()) params.set("search", search.trim());
 
-			fetch(`/api/v1/elims/item-requests/logs?${params.toString()}`, {
+			fetch(`/v2/elims/item-requests/logs?${params.toString()}`, {
 				signal: abortController.signal,
 			})
 				.then((res) => (res.ok ? res.json() : null))
@@ -678,7 +678,7 @@ export function ItemRequestsPage() {
 			});
 			if (search.trim()) params.set("search", search.trim());
 
-			fetch(`/api/v1/elims/item-requests/deposits?${params.toString()}`, {
+			fetch(`/v2/elims/item-requests/deposits?${params.toString()}`, {
 				signal: abortController.signal,
 			})
 				.then((res) => (res.ok ? res.json() : null))
@@ -734,7 +734,7 @@ export function ItemRequestsPage() {
 			}
 
 			const res = await fetch(
-				`/api/v1/elims/item-requests/logs/export?${params.toString()}`,
+				`/v2/elims/item-requests/logs/export?${params.toString()}`,
 			);
 			if (!res.ok) {
 				throw new Error(`Export request failed with status: ${res.status}`);
@@ -889,7 +889,7 @@ export function ItemRequestsPage() {
 	const handleSaveConfig = async () => {
 		setSavingConfig(true);
 		try {
-			const res = await fetch("/api/v1/elims/item-requests/config", {
+			const res = await fetch("/v2/elims/item-requests/config", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -1003,7 +1003,7 @@ export function ItemRequestsPage() {
 	const handleClearLogs = async () => {
 		setIsClearingLogs(true);
 		try {
-			const res = await fetch("/api/v1/elims/item-requests/clear-logs", {
+			const res = await fetch("/v2/elims/item-requests/clear-logs", {
 				method: "POST",
 			});
 			if (!res.ok) {

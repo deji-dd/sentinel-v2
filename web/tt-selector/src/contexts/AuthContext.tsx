@@ -62,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 				window.history.replaceState(null, "", targetClean);
 			}
 
-			const res = await api.api.v1.auth.me.get();
+			const res = await api.v2.auth.me.get();
 			if (res.data && typeof res.data === "object" && "user" in res.data) {
 				const data = res.data as {
 					authenticated: boolean;
@@ -81,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const logout = useCallback(async () => {
 		try {
-			await api.api.v1.auth.logout.post();
+			await api.v2.auth.logout.post();
 		} catch {
 			// ignore
 		}
@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const loginWithDiscord = useCallback(() => {
 		const redirectUrl = encodeURIComponent(`${window.location.origin}/#/`);
-		window.location.href = `/api/v1/auth/discord?redirect_to=${redirectUrl}`;
+		window.location.href = `/v2/auth/discord?redirect_to=${redirectUrl}`;
 	}, []);
 
 	useEffect(() => {

@@ -116,7 +116,7 @@ export function ElimsAttackMatrix() {
 		async (targetTimeframe?: AttackMatrixTimeframe) => {
 			const tf = targetTimeframe ?? timeframeRef.current;
 			try {
-				const res = await api.api.v1.elims["attack-matrix"].get({
+				const res = await api.v2.elims["attack-matrix"].get({
 					query: { timeframe: tf },
 				});
 				if (res.data && "teams" in res.data) {

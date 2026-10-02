@@ -169,6 +169,69 @@
 			"when": 1790463668834,
 			"tag": "0023_legal_senator_kelly",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1790846176796,
+			"tag": "0024_nosy_otto_octavius",
+			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1790930969825,
+			"tag": "0025_majestic_lady_deathstrike",
+			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1790934893110,
+			"tag": "0026_lazy_roland_deschain",
+			"breakpoints": true
+		},
+		{
+			"idx": 27,
+			"version": "7",
+			"when": 1790942360123,
+			"tag": "0027_slim_deathbird",
+			"breakpoints": true
+		},
+		{
+			"idx": 28,
+			"version": "7",
+			"when": 1790944508601,
+			"tag": "0028_peaceful_carnage",
+			"breakpoints": true
+		},
+		{
+			"idx": 29,
+			"version": "7",
+			"when": 1790949054146,
+			"tag": "0029_amusing_black_bird",
+			"breakpoints": true
+		},
+		{
+			"idx": 30,
+			"version": "7",
+			"when": 1790951857859,
+			"tag": "0030_slow_colleen_wing",
+			"breakpoints": true
+		},
+		{
+			"idx": 31,
+			"version": "7",
+			"when": 1790952903623,
+			"tag": "0031_smooth_strong_guy",
+			"breakpoints": true
+		},
+		{
+			"idx": 32,
+			"version": "7",
+			"when": 1790954868307,
+			"tag": "0032_busy_master_chief",
+			"breakpoints": true
 		}
 	]
 }

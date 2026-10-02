@@ -1,8 +1,22 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { app } from "../src/app";
 import { subversiveTargetCache } from "../src/lib/subversive-target-cache";
 
 describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
+	let fetchSpy: ReturnType<typeof spyOn>;
+
+	beforeEach(() => {
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+			return new Response(JSON.stringify([]), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch);
+	});
+
+	afterEach(() => {
+		fetchSpy?.mockRestore();
+	});
 	it("GET /api/v1/target-finder/script serves production userscript by default", async () => {
 		const response = await app.handle(
 			new Request("http://localhost/api/v1/target-finder/script"),

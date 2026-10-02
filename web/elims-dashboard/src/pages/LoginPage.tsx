@@ -17,10 +17,10 @@ export function LoginPage() {
 		try {
 			if (role === "owner") {
 				// Reset any configured elims guild so owner always enters the guild setup/init page
-				await fetch("/api/v1/elims/reset", { method: "POST" });
+				await fetch("/v2/elims/reset", { method: "POST" });
 			}
 
-			const res = await fetch("/api/v1/auth/demo-login", {
+			const res = await fetch("/v2/auth/demo-login", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ username, role }),

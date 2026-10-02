@@ -326,18 +326,24 @@ class SubversiveDibsManager {
 				const elapsed = nowMs - dibs.exitHospAt;
 				if (elapsed >= timeoutMs) {
 					if (dibs.status === "claimed") {
-						// 20s lock expired! Release claim
+						// 20s lock expired! Release claim and repost message
+						const oldMessageId = dibs.discordMessageId;
+						const channelId = dibs.discordChannelId;
 						dibs.status = "open";
 						dibs.claimedBy = undefined;
 						dibs.claimedAt = undefined;
 						dibs.exitHospAt = undefined;
+						dibs.discordMessageId = undefined;
 						stateChanged = true;
 
-						if (dibs.discordChannelId && dibs.discordMessageId) {
-							void notifyBotAction("edit_dibs_alert", {
-								channelId: dibs.discordChannelId,
-								messageId: dibs.discordMessageId,
-								status: "open",
+						if (channelId && oldMessageId) {
+							void notifyBotAction("delete_dibs_alert", {
+								channelId,
+								messageId: oldMessageId,
+								targetId: dibs.targetId,
+							});
+							void notifyBotAction("post_dibs_alert", {
+								channelId,
 								dibs,
 							});
 						}

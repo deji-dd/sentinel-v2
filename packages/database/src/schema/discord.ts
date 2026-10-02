@@ -1,5 +1,6 @@
 import {
 	boolean,
+	index,
 	integer,
 	jsonb,
 	pgTable,
@@ -48,6 +49,12 @@ export const guildConfigs = pgTable("guild_configs", {
 		.default([])
 		.notNull(),
 	ttFactionIds: jsonb("tt_faction_ids").$type<number[]>().default([]).notNull(),
+	mercRoleId: text("merc_role_id"),
+	mercManagerRoleId: text("merc_manager_role_id"),
+	mercDefaultHitPrice: integer("merc_default_hit_price").default(3000000),
+	mercDefaultStrickenHitPrice: integer(
+		"merc_default_stricken_hit_price",
+	).default(4000000),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),
@@ -187,5 +194,38 @@ export const guildMonitoredFactions = pgTable(
 			table.guildId,
 			table.factionId,
 		),
+	],
+);
+
+export const guildApiKeys = pgTable(
+	"guild_api_keys",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		guildId: text("guild_id").notNull(),
+		tornId: integer("torn_id").notNull(),
+		tornName: text("torn_name").notNull(),
+		apiKeyEncrypted: text("api_key_encrypted").notNull(),
+		apiKeyHash: text("api_key_hash").notNull(),
+		isValid: boolean("is_valid").default(true).notNull(),
+		invalidCount: integer("invalid_count").default(0).notNull(),
+		lastInvalidAt: timestamp("last_invalid_at", {
+			withTimezone: true,
+			mode: "date",
+		}),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+		donatedByDiscordId: text("donated_by_discord_id"),
+		donatedByDiscordTag: text("donated_by_discord_tag"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_guild_api_keys_guild_id").on(table.guildId),
+		index("idx_guild_api_keys_hash").on(table.apiKeyHash),
 	],
 );

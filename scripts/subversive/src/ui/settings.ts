@@ -64,7 +64,7 @@ export async function handleAuth(): Promise<void> {
 	setStatus("Connecting API key...", "ok");
 	try {
 		const res = await apiRequest<{ token: string; user: UserSessionData }>(
-			"/api/v1/target-finder/auth",
+			"/v2/target-finder/auth",
 			{
 				method: "POST",
 				body: { apiKey },
@@ -353,7 +353,7 @@ export function initSettings(root: ShadowRoot | Document): void {
 		setStatus("Refreshing battle stats...", "ok");
 		try {
 			const res = await apiRequest<{ bsScore?: number }>(
-				"/api/v1/target-finder/refresh-stats",
+				"/v2/target-finder/refresh-stats",
 				{
 					method: "POST",
 				},

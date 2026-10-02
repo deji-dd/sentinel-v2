@@ -5,7 +5,7 @@ import { app } from "../src/app";
 describe("Elysia API Server - Guild Authorization Endpoints", () => {
 	it("blocks non-admin users from authorizing servers", async () => {
 		const res = await app.handle(
-			new Request("http://localhost/api/v1/guilds/authorize", {
+			new Request("http://localhost/v2/guilds/authorize", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ guildId: "123456789012345678" }),
@@ -18,7 +18,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 	it("allows admin to authorize a guild and returns valid invite URL", async () => {
 		// 1. Log in as admin
 		const loginRes = await app.handle(
-			new Request("http://localhost/api/v1/auth/demo-login", {
+			new Request("http://localhost/v2/auth/demo-login", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -34,7 +34,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// 2. Authorize guild
 		const authRes = await app.handle(
-			new Request("http://localhost/api/v1/guilds/authorize", {
+			new Request("http://localhost/v2/guilds/authorize", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -59,7 +59,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// 3. Deauthorize guild
 		const deauthRes = await app.handle(
-			new Request("http://localhost/api/v1/guilds/deauthorize", {
+			new Request("http://localhost/v2/guilds/deauthorize", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -84,7 +84,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// 1. Log in as regular admin (not bot owner)
 		const adminLogin = await app.handle(
-			new Request("http://localhost/api/v1/auth/demo-login", {
+			new Request("http://localhost/v2/auth/demo-login", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -97,7 +97,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// Admin should be blocked from toggling modules via PATCH /modules
 		const patchResAdmin = await app.handle(
-			new Request(`http://localhost/api/v1/guilds/${testGuildId}/modules`, {
+			new Request(`http://localhost/v2/guilds/${testGuildId}/modules`, {
 				method: "PATCH",
 				headers: {
 					"Content-Type": "application/json",
@@ -110,7 +110,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// Admin should also be blocked from updating modules via PUT /config
 		const putResAdmin = await app.handle(
-			new Request(`http://localhost/api/v1/guilds/${testGuildId}/config`, {
+			new Request(`http://localhost/v2/guilds/${testGuildId}/config`, {
 				method: "PUT",
 				headers: {
 					"Content-Type": "application/json",
@@ -123,7 +123,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// 2. Log in as bot owner
 		const ownerLogin = await app.handle(
-			new Request("http://localhost/api/v1/auth/demo-login", {
+			new Request("http://localhost/v2/auth/demo-login", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -136,7 +136,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// Bot owner can toggle modules
 		const patchResOwner = await app.handle(
-			new Request(`http://localhost/api/v1/guilds/${testGuildId}/modules`, {
+			new Request(`http://localhost/v2/guilds/${testGuildId}/modules`, {
 				method: "PATCH",
 				headers: {
 					"Content-Type": "application/json",
@@ -158,7 +158,7 @@ describe("Elysia API Server - Guild Authorization Endpoints", () => {
 
 		// Re-enable verification as owner
 		const restoreRes = await app.handle(
-			new Request(`http://localhost/api/v1/guilds/${testGuildId}/modules`, {
+			new Request(`http://localhost/v2/guilds/${testGuildId}/modules`, {
 				method: "PATCH",
 				headers: {
 					"Content-Type": "application/json",

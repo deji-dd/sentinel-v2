@@ -144,7 +144,7 @@ export function ElimsReportPage() {
 	// 1. REST fallback fetcher
 	const fetchData = useCallback(async () => {
 		try {
-			const res = await api.api.v1.elims["hourly-activity"].get();
+			const res = await api.v2.elims["hourly-activity"].get();
 			if (res.data) {
 				const resData = res.data as unknown as HourlyActivityResponse;
 				setData((prev) => mergeHourlyActivityData(resData, prev));

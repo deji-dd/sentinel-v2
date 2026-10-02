@@ -53,7 +53,7 @@ export const dashboardCommand = {
 				const baseUrl =
 					process.env.DASHBOARD_URL ||
 					(process.env.NODE_ENV === "production"
-						? "https://sentinel.blasted-labs.tech"
+						? "https://dashboard.blasted-labs.tech"
 						: "http://localhost:3000");
 
 				const guildDashboardUrl = guildId

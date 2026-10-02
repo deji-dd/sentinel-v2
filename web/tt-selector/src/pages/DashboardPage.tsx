@@ -98,14 +98,14 @@ export function DashboardPage() {
 	// Fetch metadata & user maps on mount
 	const fetchData = useCallback(async () => {
 		try {
-			const metaRes = await api.api.v1.tt.metadata.get();
+			const metaRes = await api.v2.tt.metadata.get();
 			if (metaRes.data && "territories" in metaRes.data) {
 				setMetadata(metaRes.data as unknown as TerritoryMetadataResponse);
 			} else {
 				toast("Failed to load territory metadata from database.", "error");
 			}
 
-			const mapsRes = await api.api.v1.tt.maps.get();
+			const mapsRes = await api.v2.tt.maps.get();
 			if (mapsRes.data && "maps" in mapsRes.data) {
 				const userMaps = mapsRes.data.maps as unknown as UserMap[];
 				setMaps(userMaps);
@@ -254,7 +254,7 @@ export function DashboardPage() {
 	const handleSaveMap = async () => {
 		setIsSaving(true);
 		try {
-			const res = await api.api.v1.tt.maps.post({
+			const res = await api.v2.tt.maps.post({
 				mapId: currentMap.id,
 				name: currentMap.name,
 				labels: currentMap.labels,
@@ -387,7 +387,7 @@ export function DashboardPage() {
 
 	const handleDeleteMap = async (mapId: string) => {
 		try {
-			await api.api.v1.tt.maps({ mapId }).delete();
+			await api.v2.tt.maps({ mapId }).delete();
 			setMaps((prev) => prev.filter((m) => m.id !== mapId));
 
 			if (currentMap.id === mapId) {

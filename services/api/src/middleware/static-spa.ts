@@ -49,21 +49,42 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 				endpoints: {
 					users: "/users",
 					usersApi: "/api/users",
-					usersV1: "/api/v1/elims/users",
+					usersV2: "/v2/elims/users",
 				},
 			};
 		}
 
-		// Bypass API, Swagger, and system routes, or api subdomains
-		if (
-			url.pathname.startsWith("/api") ||
-			url.pathname.startsWith("/swagger") ||
-			host.startsWith("api.")
-		) {
+		if (host.startsWith("sentinel.blasted-labs.tech")) {
+			if (
+				url.pathname.startsWith("/api") ||
+				url.pathname.startsWith("/v2") ||
+				url.pathname.startsWith("/v1")
+			) {
+				set.redirect = `https://api.blasted-labs.tech${url.pathname}${url.search}`;
+				set.status = 308;
+				return;
+			}
+			set.redirect = `https://dashboard.blasted-labs.tech${url.pathname}${url.search}`;
+			set.status = 308;
 			return;
 		}
 
-		let appDir = "web/bot-dashboard/dist";
+		// Bypass API, Swagger, and system routes, or api subdomains with 404
+		if (
+			url.pathname.startsWith("/api") ||
+			url.pathname.startsWith("/v2") ||
+			url.pathname.startsWith("/v1") ||
+			url.pathname.startsWith("/swagger") ||
+			host.startsWith("api.")
+		) {
+			set.status = 404;
+			return {
+				success: false,
+				error: "Resource not found",
+			};
+		}
+
+		let appDir = "web/dashboard/dist";
 
 		if (
 			host.includes("tt-selector") ||
@@ -82,7 +103,7 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 			host.includes("subversive-dashboard") ||
 			origin.includes("subversive")
 		) {
-			appDir = "web/subversive-dashboard/dist";
+			appDir = "web/dashboard/dist";
 		}
 
 		const rootDir = join(import.meta.dir, "../../../..", appDir);
@@ -134,8 +155,7 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		set.status = 404;
 		return {
 			success: false,
-			error:
-				"Static SPA build files not found. Run bun bot-dashboard:build first.",
+			error: "Static SPA build files not found. Run bun dashboard:build first.",
 		};
 	},
 );

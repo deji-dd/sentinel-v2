@@ -242,3 +242,12 @@ export async function assignElimsStatRolesViaIpc(
 ): Promise<boolean> {
 	return notifyBotAction("elims_assign_stat_roles", { guildId, roleMappings });
 }
+
+/**
+ * Dispatches an IPC signal to the Bot to synchronize the mercenary contract creation embed.
+ */
+export async function syncMercContractCreationViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_merc_contract_creation", { guildId });
+}

@@ -66,7 +66,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 		}
 
 		try {
-			const res = await fetch("/api/v1/elims/status");
+			const res = await fetch("/v2/elims/status");
 			if (!res.ok) {
 				throw new Error(`HTTP ${res.status}`);
 			}
@@ -97,7 +97,7 @@ export function ElimsProvider({ children }: { children: ReactNode }) {
 
 	const recheckAccess = useCallback(async () => {
 		try {
-			const res = await fetch("/api/v1/elims/verify-access", {
+			const res = await fetch("/v2/elims/verify-access", {
 				method: "POST",
 			});
 			if (!res.ok) {

@@ -46,7 +46,7 @@ export async function fetchWarStatus(): Promise<void> {
 		const res = await apiRequest<{
 			war?: CurrentWarInfo;
 			opponentIds?: number[];
-		}>("/api/v1/target-finder/war/status");
+		}>("/v2/target-finder/war/status");
 		if (res?.war) {
 			state.war = res.war;
 			state.warState = res.war.state;
@@ -134,7 +134,7 @@ export async function fetchNextTarget(
 			target?: WarTarget;
 			message?: string;
 			reason?: string;
-		}>(`/api/v1/target-finder/war/targets/next?${params.toString()}`);
+		}>(`/v2/target-finder/war/targets/next?${params.toString()}`);
 
 		if (res.war) {
 			state.war = res.war;
@@ -237,7 +237,7 @@ export async function executeGetTarget(): Promise<void> {
 			target?: WarTarget;
 			retryAfter?: number;
 			message?: string;
-		}>(`/api/v1/target-finder/targets/next?${params.toString()}`);
+		}>(`/v2/target-finder/targets/next?${params.toString()}`);
 
 		if (res.target?.attackUrl) {
 			state.currentTarget = res.target;
@@ -392,7 +392,7 @@ export async function runLongPollLoop(): Promise<void> {
 				hospitalQueue?: WarTarget[];
 				dibs?: Array<{ targetId: number; [key: string]: unknown }>;
 				dibsLeadTimeSeconds?: number;
-			}>(`/api/v1/target-finder/war/events?${params.toString()}`);
+			}>(`/v2/target-finder/war/events?${params.toString()}`);
 
 			if (res?.version) {
 				lastSeenWarVersion = res.version;

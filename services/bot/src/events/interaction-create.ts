@@ -3,6 +3,7 @@ import {
 	isElimsGuildAsync,
 	isTargetGuild,
 } from "@sentinel/database";
+import { Logger } from "@sentinel/utils";
 import {
 	type Collection,
 	Events,
@@ -52,7 +53,16 @@ import {
 	handleGiveawayItemSelect,
 	handleGiveawayModalSubmit,
 } from "../lib/giveaways";
-import { logger } from "../lib/logger";
+import {
+	handleMercClaimButton,
+	handleMercReleaseButton,
+} from "../lib/merc-alert-distributor";
+import {
+	handleArchiveChannelButtonClick,
+	handleContractCreationButtonClick,
+} from "../lib/merc-contract-creation";
+
+const logger = new Logger("Bot", "InteractionCreate");
 
 export const interactionCreateEvent = {
 	name: Events.InteractionCreate,
@@ -111,6 +121,14 @@ export const interactionCreateEvent = {
 					await handleDibsClaimButton(interaction);
 				} else if (interaction.customId.startsWith("dibs_release:")) {
 					await handleDibsReleaseButton(interaction);
+				} else if (interaction.customId.startsWith("merc_claim:")) {
+					await handleMercClaimButton(interaction);
+				} else if (interaction.customId.startsWith("merc_release:")) {
+					await handleMercReleaseButton(interaction);
+				} else if (interaction.customId === "merc_create_contract_btn") {
+					await handleContractCreationButtonClick(interaction);
+				} else if (interaction.customId.startsWith("merc_archive_channel:")) {
+					await handleArchiveChannelButtonClick(interaction);
 				}
 				return;
 			}

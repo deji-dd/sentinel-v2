@@ -6,6 +6,7 @@ export * from "./elims-tournament";
 export * from "./ffscouter";
 export * from "./giveaways";
 export * from "./ledger";
+export * from "./merc";
 export * from "./subversive";
 export * from "./system";
 export * from "./torn";

@@ -82,7 +82,7 @@ export function updateHospCountdowns(): void {
 					btn.textContent = "...";
 					try {
 						const res = await apiRequest<{ dibs?: DibsItem }>(
-							"/api/v1/subversive/dibs/claim",
+							"/v2/subversive/dibs/claim",
 							{
 								method: "POST",
 								body: { targetId: id },
@@ -120,7 +120,7 @@ export function updateHospCountdowns(): void {
 				newAttackBtn.addEventListener("click", (e) => {
 					e.stopPropagation();
 					window.open(
-						`https://www.torn.com/loader.php?sid=attack&user2ID=${id}`,
+						`https://www.torn.com/page.php?sid=attack&user2ID=${id}`,
 						"_blank",
 					);
 				});
@@ -291,7 +291,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 				btn.textContent = "...";
 				try {
 					const res = await apiRequest<{ dibs?: DibsItem }>(
-						"/api/v1/subversive/dibs/claim",
+						"/v2/subversive/dibs/claim",
 						{
 							method: "POST",
 							body: { targetId: id },
@@ -320,7 +320,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 				btn.disabled = true;
 				btn.textContent = "...";
 				try {
-					await apiRequest("/api/v1/subversive/dibs/release", {
+					await apiRequest("/v2/subversive/dibs/release", {
 						method: "POST",
 						body: { targetId: id },
 					});
@@ -343,7 +343,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 				const id = btn.getAttribute("data-id");
 				if (id) {
 					window.open(
-						`https://www.torn.com/loader.php?sid=attack&user2ID=${id}`,
+						`https://www.torn.com/page.php?sid=attack&user2ID=${id}`,
 						"_blank",
 					);
 				}
@@ -363,7 +363,7 @@ export async function fetchHospitalQueue(): Promise<void> {
 
 	try {
 		const res = await apiRequest<{ queue?: WarTarget[] }>(
-			"/api/v1/target-finder/war/hospital-queue?limit=25",
+			"/v2/target-finder/war/hospital-queue?limit=25",
 		);
 		renderHospitalQueue(res.queue || []);
 	} catch (err: unknown) {

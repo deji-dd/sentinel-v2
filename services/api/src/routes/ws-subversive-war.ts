@@ -5,7 +5,7 @@ import {
 	subversiveTargetCache,
 } from "../lib/subversive-target-cache";
 import { subversiveWarEventManager } from "../lib/subversive-war-events";
-import { resolveUserSession } from "./v1/subversive-target-finder";
+import { resolveUserSession } from "./v2/subversive-target-finder";
 
 interface WarSocketClient {
 	send: (msg: unknown) => void;

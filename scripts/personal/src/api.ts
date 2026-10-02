@@ -113,7 +113,7 @@ export class BlastedApiClient {
 
 	public async getCrimeLedgerState(): Promise<CrimeLedgerState> {
 		const data = await this.request<CrimeLedgerState>(
-			"/api/v1/system/crime-ledger/state",
+			"/v2/system/crime-ledger/state",
 		);
 		GM_setValue(STORAGE_KEYS.cachedState, JSON.stringify(data));
 		return data;
@@ -124,7 +124,7 @@ export class BlastedApiClient {
 	): Promise<CrimeAnalyticsResponse> {
 		const daysParam = timeframe === "all" ? "all" : timeframe.replace("d", "");
 		const data = await this.request<CrimeAnalyticsResponse>(
-			`/api/v1/system/crime-ledger/analytics?days=${daysParam}`,
+			`/v2/system/crime-ledger/analytics?days=${daysParam}`,
 		);
 		GM_setValue(STORAGE_KEYS.cachedAnalytics, JSON.stringify(data));
 		return data;
@@ -132,7 +132,7 @@ export class BlastedApiClient {
 
 	public async getBattlestatsState(): Promise<BattlestatsLedgerState> {
 		const data = await this.request<BattlestatsLedgerState>(
-			"/api/v1/system/battlestats-ledger/state",
+			"/v2/system/battlestats-ledger/state",
 		);
 		GM_setValue(STORAGE_KEYS.cachedBattlestatsState, JSON.stringify(data));
 		return data;
@@ -143,7 +143,7 @@ export class BlastedApiClient {
 	): Promise<BattlestatsAnalyticsResponse> {
 		const daysParam = timeframe === "all" ? "all" : timeframe.replace("d", "");
 		const data = await this.request<BattlestatsAnalyticsResponse>(
-			`/api/v1/system/battlestats-ledger/analytics?days=${daysParam}`,
+			`/v2/system/battlestats-ledger/analytics?days=${daysParam}`,
 		);
 		GM_setValue(STORAGE_KEYS.cachedBattlestatsAnalytics, JSON.stringify(data));
 		return data;
@@ -151,7 +151,7 @@ export class BlastedApiClient {
 
 	public async getEfficiencyData(): Promise<EfficiencyDataPayload> {
 		const data = await this.request<EfficiencyDataPayload>(
-			"/api/v1/system/battlestats-ledger/efficiency-data",
+			"/v2/system/battlestats-ledger/efficiency-data",
 		);
 		GM_setValue(STORAGE_KEYS.cachedEfficiency, JSON.stringify(data));
 		return data;
@@ -162,7 +162,7 @@ export class BlastedApiClient {
 		mainStat: StatType;
 	}> {
 		return this.request<{ ratioType: RatioType; mainStat: StatType }>(
-			"/api/v1/system/battlestats-ledger/preferences",
+			"/v2/system/battlestats-ledger/preferences",
 		);
 	}
 
@@ -174,7 +174,7 @@ export class BlastedApiClient {
 			success: boolean;
 			ratioType: RatioType;
 			mainStat: StatType;
-		}>("/api/v1/system/battlestats-ledger/preferences", {
+		}>("/v2/system/battlestats-ledger/preferences", {
 			method: "PUT",
 			body: prefs,
 		});
@@ -235,7 +235,7 @@ export class BlastedApiClient {
 
 	public async getCompanyState(): Promise<CompanyStateResponse> {
 		const data = await this.request<CompanyStateResponse>(
-			"/api/v1/system/company/state",
+			"/v2/system/company/state",
 		);
 		GM_setValue(STORAGE_KEYS.cachedCompanyState, JSON.stringify(data));
 		return data;
@@ -245,13 +245,13 @@ export class BlastedApiClient {
 		offset = 0,
 	): Promise<CompanyWeeklyLogsResponse> {
 		return this.request<CompanyWeeklyLogsResponse>(
-			`/api/v1/system/company/weekly-logs?offset=${offset}`,
+			`/v2/system/company/weekly-logs?offset=${offset}`,
 		);
 	}
 
 	public async getCompanyHistory(days = 30): Promise<CompanyHistoryResponse> {
 		return this.request<CompanyHistoryResponse>(
-			`/api/v1/system/company/history?days=${days}`,
+			`/v2/system/company/history?days=${days}`,
 		);
 	}
 

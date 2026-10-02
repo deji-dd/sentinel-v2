@@ -26,6 +26,20 @@ import { updateFactionMapChannel } from "../faction-map-channel";
 import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
 import { logger } from "../logger";
+import {
+	deleteMercTargetAlert,
+	deleteUpcomingContractAnnouncement,
+	postMercContractAnnouncement,
+	postMercContractEndSummary,
+	postMercHitLog,
+	postMercTargetAlert,
+	updateMercTargetAlert,
+} from "../merc-alert-distributor";
+import {
+	archiveMercClientChannel,
+	processExpiredMercContractTokens,
+	updateMercContractCreationChannel,
+} from "../merc-contract-creation";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
@@ -382,6 +396,159 @@ export function setupBotIpcListeners(client: Client): void {
 			if (channelId && messageId) {
 				void deleteDibsAlert(client, channelId, messageId);
 			}
+		} else if (
+			message.action === "post_merc_contract_announcement" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const contract = message.data
+				.contract as import("@sentinel/database").MercContract;
+			const mercRoleId = message.data.mercRoleId as string | undefined | null;
+			if (guildId && channelName && contract) {
+				void postMercContractAnnouncement(
+					client,
+					guildId,
+					channelName,
+					contract,
+					mercRoleId,
+				);
+			}
+		} else if (message.action === "post_merc_target_alert" && message.data) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const contractId = message.data.contractId as string;
+			const target = message.data
+				.target as import("../merc-alert-distributor").MercTargetAlertData;
+			const mercRoleId = message.data.mercRoleId as string | undefined | null;
+			if (guildId && channelName && contractId && target) {
+				void (async () => {
+					const messageId = await postMercTargetAlert(
+						client,
+						guildId,
+						channelName,
+						contractId,
+						target,
+						mercRoleId,
+					);
+					if (messageId) {
+						workerIpcClient.send({
+							action: "merc_target_message_recorded",
+							data: {
+								contractId,
+								targetId: target.targetId,
+								messageId,
+								channelName,
+							},
+						});
+					}
+				})();
+			}
+		} else if (message.action === "update_merc_target_alert" && message.data) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const messageId = message.data.messageId as string;
+			const contractId = message.data.contractId as string;
+			const target = message.data
+				.target as import("../merc-alert-distributor").MercTargetAlertData;
+			if (guildId && channelName && messageId && contractId && target) {
+				void updateMercTargetAlert(
+					client,
+					guildId,
+					channelName,
+					messageId,
+					contractId,
+					target,
+				);
+			}
+		} else if (message.action === "delete_merc_target_alert" && message.data) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const messageId = message.data.messageId as string;
+			if (guildId && channelName && messageId) {
+				void deleteMercTargetAlert(client, guildId, channelName, messageId);
+			}
+		} else if (message.action === "post_merc_hit_log" && message.data) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const hitData = message.data.hitData as {
+				attackerName: string;
+				attackerId: number;
+				defenderName: string;
+				defenderId: number;
+				result: string;
+				isStricken: boolean;
+				payoutValue: number;
+				attackId: number;
+				attackCode?: string;
+				timestamp: string | Date;
+			};
+			if (guildId && channelName && hitData) {
+				void postMercHitLog(client, guildId, channelName, hitData);
+			}
+		} else if (
+			message.action === "post_merc_contract_end_summary" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const contract = message.data
+				.contract as import("@sentinel/database").MercContract;
+			const summary = message.data
+				.summary as import("@sentinel/database").MercContractSummaryReport;
+			if (guildId && channelName && contract && summary) {
+				void postMercContractEndSummary(
+					client,
+					guildId,
+					channelName,
+					contract,
+					summary,
+				);
+			}
+		} else if (
+			message.action === "delete_merc_upcoming_announcement" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string;
+			const contractId = message.data.contractId as string;
+			const factionId = message.data.factionId as number;
+			const messageId = message.data.messageId as string | undefined;
+			const channelName = message.data.channelName as string | undefined;
+			if (guildId && contractId) {
+				void deleteUpcomingContractAnnouncement(client, guildId, {
+					id: contractId,
+					factionId,
+					upcomingMessageId: messageId,
+					upcomingChannelId: channelName,
+				});
+			}
+		} else if (
+			message.action === "sync_merc_contract_creation" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string | undefined;
+			void updateMercContractCreationChannel(client, guildId);
+		} else if (
+			message.action === "archive_merc_client_channel" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string;
+			const channelId = message.data.channelId as string;
+			const clientDiscordId = message.data.clientDiscordId as
+				| string
+				| undefined;
+			const reason = message.data.reason as string | undefined;
+			if (guildId && channelId) {
+				void archiveMercClientChannel(
+					client,
+					guildId,
+					channelId,
+					clientDiscordId,
+					reason,
+				);
+			}
+		} else if (message.action === "check_expired_merc_tokens") {
+			void processExpiredMercContractTokens(client);
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

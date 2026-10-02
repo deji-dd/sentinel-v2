@@ -621,7 +621,22 @@ export type IpcMessage =
 	| IpcPersonalBountiesUpdatedMessage
 	| IpcPostDibsAlertMessage
 	| IpcEditDibsAlertMessage
-	| IpcDeleteDibsAlertMessage;
+	| IpcDeleteDibsAlertMessage
+	| IpcPostMercContractAnnouncementMessage
+	| IpcPostMercTargetAlertMessage
+	| IpcMercTargetMessageRecordedMessage
+	| IpcUpdateMercTargetAlertMessage
+	| IpcDeleteMercTargetAlertMessage
+	| IpcPostMercHitLogMessage
+	| IpcPostMercContractEndSummaryMessage
+	| IpcDeleteMercUpcomingAnnouncementMessage
+	| IpcSyncMercContractCreationMessage
+	| IpcArchiveMercClientChannelMessage
+	| IpcCheckExpiredMercTokensMessage
+	| IpcMercClaimTargetRequestMessage
+	| IpcMercClaimTargetResponseMessage
+	| IpcMercReleaseTargetRequestMessage
+	| IpcMercReleaseTargetResponseMessage;
 
 export type IpcPostDibsAlertMessage = {
 	action: "post_dibs_alert";
@@ -661,4 +676,149 @@ export type IpcSubversiveWarUpdatedMessage = {
 export type IpcPersonalBountiesUpdatedMessage = {
 	action: "personal_bounties_updated";
 	data: unknown;
+};
+
+export type IpcPostMercContractAnnouncementMessage = {
+	action: "post_merc_contract_announcement";
+	data: {
+		guildId: string;
+		channelName: string;
+		contract: unknown;
+		mercRoleId?: string | null;
+	};
+};
+
+export type IpcPostMercTargetAlertMessage = {
+	action: "post_merc_target_alert";
+	data: {
+		guildId: string;
+		channelName: string;
+		contractId: string;
+		target: unknown;
+		mercRoleId?: string | null;
+	};
+};
+
+export type IpcMercTargetMessageRecordedMessage = {
+	action: "merc_target_message_recorded";
+	data: {
+		contractId: string;
+		targetId: number;
+		messageId: string;
+		channelName: string;
+	};
+};
+
+export type IpcUpdateMercTargetAlertMessage = {
+	action: "update_merc_target_alert";
+	data: {
+		guildId: string;
+		channelName: string;
+		messageId: string;
+		contractId: string;
+		target: unknown;
+	};
+};
+
+export type IpcDeleteMercTargetAlertMessage = {
+	action: "delete_merc_target_alert";
+	data: {
+		guildId: string;
+		channelName: string;
+		messageId: string;
+	};
+};
+
+export type IpcPostMercHitLogMessage = {
+	action: "post_merc_hit_log";
+	data: {
+		guildId: string;
+		channelName: string;
+		hitData: unknown;
+	};
+};
+
+export type IpcPostMercContractEndSummaryMessage = {
+	action: "post_merc_contract_end_summary";
+	data: {
+		guildId: string;
+		channelName: string;
+		contract: unknown;
+		summary: unknown;
+	};
+};
+
+export type IpcDeleteMercUpcomingAnnouncementMessage = {
+	action: "delete_merc_upcoming_announcement";
+	data: {
+		guildId: string;
+		contractId: string;
+		factionId: number;
+		channelName?: string;
+		messageId?: string;
+	};
+};
+
+export type IpcSyncMercContractCreationMessage = {
+	action: "sync_merc_contract_creation";
+	data: {
+		guildId?: string;
+	};
+};
+
+export type IpcArchiveMercClientChannelMessage = {
+	action: "archive_merc_client_channel";
+	data: {
+		guildId: string;
+		channelId: string;
+		clientDiscordId?: string;
+		reason?: string;
+	};
+};
+
+export type IpcCheckExpiredMercTokensMessage = {
+	action: "check_expired_merc_tokens";
+};
+
+export type IpcMercClaimTargetRequestMessage = {
+	action: "merc_claim_target_request";
+	requestId?: string;
+	data: {
+		contractId: string;
+		targetId: number;
+		claimant: unknown;
+	};
+};
+
+export type IpcMercClaimTargetResponseMessage = {
+	action: "merc_claim_target_response";
+	requestId?: string;
+	data: {
+		success: boolean;
+		targetId?: number;
+		error?: string;
+		reason?: string;
+		claimant?: unknown;
+	};
+};
+
+export type IpcMercReleaseTargetRequestMessage = {
+	action: "merc_release_target_request";
+	requestId?: string;
+	data: {
+		contractId: string;
+		targetId: number;
+		discordUserId?: string;
+	};
+};
+
+export type IpcMercReleaseTargetResponseMessage = {
+	action: "merc_release_target_response";
+	requestId?: string;
+	data: {
+		success: boolean;
+		targetId?: number;
+		error?: string;
+		reason?: string;
+	};
 };

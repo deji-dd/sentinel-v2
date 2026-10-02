@@ -22,6 +22,10 @@ import {
 	updateGiveawayChannel,
 } from "../lib/giveaways";
 import { logger } from "../lib/logger";
+import {
+	startMercExpiredTokenArchiver,
+	updateMercContractCreationChannel,
+} from "../lib/merc-contract-creation";
 import { startReactionRoleSyncLoop } from "../lib/reaction-roles";
 
 export const readyEvent = {
@@ -101,6 +105,11 @@ export const readyEvent = {
 			logger.warn("Failed to sync Elims Live Data embed on boot:", err);
 		});
 
+		// Synchronize Merc Contract Creation Embed if configured
+		await updateMercContractCreationChannel(client).catch((err) => {
+			logger.warn("Failed to sync Merc Contract Creation embed on boot:", err);
+		});
+
 		// Start background loop for Elims Live Data standings (every 10s)
 		startLiveDataSyncLoop(client, 10000);
 
@@ -109,5 +118,8 @@ export const readyEvent = {
 
 		// Start background 1-minute verification reminder loop for approvers
 		startVerificationReminderScheduler(client);
+
+		// Start background loop for auto-archiving channels whose contract link expired without submission (30s cadence)
+		startMercExpiredTokenArchiver(client, 30000);
 	},
 };

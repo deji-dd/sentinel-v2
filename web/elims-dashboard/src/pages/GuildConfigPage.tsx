@@ -137,7 +137,7 @@ export function GuildConfigPage() {
 	const fetchApiKeys = useCallback(async () => {
 		setLoadingKeys(true);
 		try {
-			const res = await fetch("/api/v1/elims/api-keys");
+			const res = await fetch("/v2/elims/api-keys");
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const data = (await res.json()) as {
 				keys?: ElimsApiKey[];
@@ -161,7 +161,7 @@ export function GuildConfigPage() {
 	// Fetch configured live data standings channel
 	const fetchLiveDataChannel = useCallback(async () => {
 		try {
-			const res = await fetch("/api/v1/elims/live-data/channel");
+			const res = await fetch("/v2/elims/live-data/channel");
 			if (!res.ok) return;
 			const data = (await res.json()) as { channelId?: string | null };
 			if (data?.channelId !== undefined) {
@@ -178,7 +178,7 @@ export function GuildConfigPage() {
 		if (!guild?.id) return;
 		setLoadingChannels(true);
 		try {
-			const res = await fetch(`/api/v1/elims/guild-channels/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-channels/${guild.id}`);
 			if (!res.ok) throw new Error("Failed to load guild channels");
 			const data = (await res.json()) as { channels?: DiscordChannel[] };
 			if (data?.channels && Array.isArray(data.channels)) {
@@ -204,7 +204,7 @@ export function GuildConfigPage() {
 		}
 		setStoppingWorkers(true);
 		try {
-			const res = await fetch("/api/v1/elims/worker/stop", {
+			const res = await fetch("/v2/elims/worker/stop", {
 				method: "POST",
 			});
 			if (!res.ok) {
@@ -228,7 +228,7 @@ export function GuildConfigPage() {
 	const handleStartWorkers = async () => {
 		setStartingWorkers(true);
 		try {
-			const res = await fetch("/api/v1/elims/worker/start", {
+			const res = await fetch("/v2/elims/worker/start", {
 				method: "POST",
 			});
 			if (!res.ok) {
@@ -249,7 +249,7 @@ export function GuildConfigPage() {
 	const handleSaveDonationChannel = async (): Promise<boolean> => {
 		setSavingChannel(true);
 		try {
-			const res = await fetch("/api/v1/elims/api-keys/channel", {
+			const res = await fetch("/v2/elims/api-keys/channel", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ channelId: donationChannelId }),
@@ -278,7 +278,7 @@ export function GuildConfigPage() {
 	const handleSaveLiveDataChannel = async (): Promise<boolean> => {
 		setSavingLiveDataChannel(true);
 		try {
-			const res = await fetch("/api/v1/elims/live-data/channel", {
+			const res = await fetch("/v2/elims/live-data/channel", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ channelId: liveDataChannelId }),
@@ -307,7 +307,7 @@ export function GuildConfigPage() {
 	const handleSyncLiveDataEmbed = async () => {
 		setSyncingLiveDataEmbed(true);
 		try {
-			const res = await fetch("/api/v1/elims/live-data/channel/sync", {
+			const res = await fetch("/v2/elims/live-data/channel/sync", {
 				method: "POST",
 			});
 			if (!res.ok) {
@@ -338,7 +338,7 @@ export function GuildConfigPage() {
 
 		setAddingKey(true);
 		try {
-			const res = await fetch("/api/v1/elims/api-keys", {
+			const res = await fetch("/v2/elims/api-keys", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ apiKey: trimmed }),
@@ -369,7 +369,7 @@ export function GuildConfigPage() {
 	const handleDeleteApiKey = async (keyId: string) => {
 		setDeletingKeyId(keyId);
 		try {
-			const res = await fetch(`/api/v1/elims/api-keys/${keyId}`, {
+			const res = await fetch(`/v2/elims/api-keys/${keyId}`, {
 				method: "DELETE",
 			});
 
@@ -398,7 +398,7 @@ export function GuildConfigPage() {
 		if (!guild?.id) return;
 
 		setLoadingRoles(true);
-		fetch(`/api/v1/elims/guild-roles/${guild.id}`)
+		fetch(`/v2/elims/guild-roles/${guild.id}`)
 			.then((res) => {
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				return res.json();
@@ -435,7 +435,7 @@ export function GuildConfigPage() {
 	const handleSaveRoles = async (): Promise<boolean> => {
 		setSavingSettings(true);
 		try {
-			const res = await fetch("/api/v1/elims/settings", {
+			const res = await fetch("/v2/elims/settings", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({

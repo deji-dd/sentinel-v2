@@ -282,7 +282,7 @@ export function TeamBreakdownPage() {
 
 	const fetchRoles = useCallback(async () => {
 		try {
-			const res = await api.api.v1.elims["guild-roles"].get();
+			const res = await api.v2.elims["guild-roles"].get();
 			if (res.data && "roles" in res.data) {
 				setRoles(res.data.roles as DiscordRoleItem[]);
 			}
@@ -291,7 +291,7 @@ export function TeamBreakdownPage() {
 
 	const fetchStatRoles = useCallback(async () => {
 		try {
-			const res = await api.api.v1.elims["team-stats"]["stat-roles"].get();
+			const res = await api.v2.elims["team-stats"]["stat-roles"].get();
 			if (res.data && "mappings" in res.data && res.data.mappings) {
 				setStatRoleMappings(res.data.mappings as Record<string, string>);
 			}
@@ -303,7 +303,7 @@ export function TeamBreakdownPage() {
 			const query: Record<string, string> = {};
 			if (selectedRoleId !== "all") query.roleId = selectedRoleId;
 
-			const res = await api.api.v1.elims["team-stats"].get({
+			const res = await api.v2.elims["team-stats"].get({
 				query,
 			});
 
@@ -328,7 +328,7 @@ export function TeamBreakdownPage() {
 
 	const fetchTeamStatsConfig = useCallback(async () => {
 		try {
-			const res = await api.api.v1.elims["team-stats"].config.get();
+			const res = await api.v2.elims["team-stats"].config.get();
 			if (res.data && "teamRoleId" in res.data) {
 				const saved = res.data.teamRoleId;
 				setConfiguredTeamRoleId(saved ?? null);
@@ -343,7 +343,7 @@ export function TeamBreakdownPage() {
 		setSavingTeamRole(true);
 		try {
 			const nextRole = selectedRoleId === "all" ? null : selectedRoleId;
-			const res = await api.api.v1.elims["team-stats"].config.put({
+			const res = await api.v2.elims["team-stats"].config.put({
 				teamRoleId: nextRole,
 				autoSyncTeamStats: true,
 			});
@@ -386,7 +386,7 @@ export function TeamBreakdownPage() {
 			const body: { roleId?: string; forceRefresh?: boolean } = {};
 			if (selectedRoleId !== "all") body.roleId = selectedRoleId;
 			if (forceRefresh) body.forceRefresh = true;
-			const res = await api.api.v1.elims["team-stats"].fetch.post(body);
+			const res = await api.v2.elims["team-stats"].fetch.post(body);
 
 			if (res.data) {
 				const result = res.data as {
@@ -416,7 +416,7 @@ export function TeamBreakdownPage() {
 	const handleSaveAndAssignStatRoles = async () => {
 		setSavingStatRoles(true);
 		try {
-			const res = await api.api.v1.elims["team-stats"]["assign-roles"].post({
+			const res = await api.v2.elims["team-stats"]["assign-roles"].post({
 				roleMappings: statRoleMappings,
 			});
 
@@ -444,7 +444,7 @@ export function TeamBreakdownPage() {
 	const handleResetMembers = async () => {
 		setResettingMembers(true);
 		try {
-			const res = await api.api.v1.elims["team-stats"].reset.post({
+			const res = await api.v2.elims["team-stats"].reset.post({
 				roleId: selectedRoleId !== "all" ? selectedRoleId : undefined,
 			});
 

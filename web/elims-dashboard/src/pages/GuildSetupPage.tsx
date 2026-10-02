@@ -82,8 +82,8 @@ export function GuildSetupPage() {
 		setError(null);
 		try {
 			const url = forceFresh
-				? "/api/v1/elims/available-guilds?fresh=true"
-				: "/api/v1/elims/available-guilds";
+				? "/v2/elims/available-guilds?fresh=true"
+				: "/v2/elims/available-guilds";
 			const res = await fetch(url);
 			if (!res.ok) {
 				throw new Error(`HTTP ${res.status}`);
@@ -108,7 +108,7 @@ export function GuildSetupPage() {
 			setLoadingGuilds(true);
 			setError(null);
 			try {
-				const res = await fetch("/api/v1/elims/available-guilds");
+				const res = await fetch("/v2/elims/available-guilds");
 				if (!res.ok) {
 					throw new Error(`HTTP ${res.status}`);
 				}
@@ -150,7 +150,7 @@ export function GuildSetupPage() {
 		setError(null);
 
 		try {
-			const res = await fetch(`/api/v1/elims/guild-roles/${guild.id}`);
+			const res = await fetch(`/v2/elims/guild-roles/${guild.id}`);
 			if (!res.ok) {
 				throw new Error(`HTTP ${res.status}`);
 			}
@@ -186,7 +186,7 @@ export function GuildSetupPage() {
 		setError(null);
 
 		try {
-			const res = await fetch("/api/v1/elims/setup", {
+			const res = await fetch("/v2/elims/setup", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({

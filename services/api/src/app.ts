@@ -8,9 +8,9 @@ import { swaggerDomainFilterPlugin } from "./middleware/swagger-domain-filter";
 import { healthRoutes } from "./routes/health";
 import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
-import { fetchElimsUsers } from "./routes/v1/elims";
+import { v2Routes } from "./routes/v2";
+import { fetchElimsUsers } from "./routes/v2/elims";
 import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
-import { wsPersonalBountiesRoutes } from "./routes/ws-personal-bounties";
 import { wsSubversiveWarRoutes } from "./routes/ws-subversive-war";
 
 export const app = new Elysia()
@@ -33,8 +33,8 @@ export const app = new Elysia()
 	.use(healthRoutes)
 	.use(wsElimsTournamentRoutes)
 	.use(wsSubversiveWarRoutes)
-	.use(wsPersonalBountiesRoutes)
 	.use(pondRoutes)
+	.use(v2Routes)
 	.use(v1Routes)
 	.get("/users", async ({ query, set }) => {
 		set.headers["access-control-allow-origin"] = "*";
@@ -48,7 +48,7 @@ export const app = new Elysia()
 		set.headers["access-control-allow-headers"] = "*";
 		return await fetchElimsUsers(query as Record<string, string | undefined>);
 	})
-	.get("/api/v1/users", async ({ query, set }) => {
+	.get("/v2/elims/users", async ({ query, set }) => {
 		set.headers["access-control-allow-origin"] = "*";
 		set.headers["access-control-allow-methods"] = "GET, OPTIONS";
 		set.headers["access-control-allow-headers"] = "*";

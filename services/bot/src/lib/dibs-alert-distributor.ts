@@ -60,7 +60,7 @@ function buildDibsActionRow(
 		new ButtonBuilder()
 			.setStyle(ButtonStyle.Link)
 			.setLabel("Attack")
-			.setURL(`https://www.torn.com/loader.php?sid=attack&user2ID=${targetId}`),
+			.setURL(`https://www.torn.com/page.php?sid=attack&user2ID=${targetId}`),
 	);
 
 	return row;
@@ -107,7 +107,7 @@ export async function postDibsAlert(
 		const msg = await channel.send({ embeds: [embed], components: [row] });
 
 		// Notify API of messageId so future edits/deletes know the exact Discord message
-		await fetch(`${API_BASE_URL}/api/v1/subversive/dibs/record-message`, {
+		await fetch(`${API_BASE_URL}/v2/subversive/dibs/record-message`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -218,7 +218,7 @@ export async function handleDibsClaimButton(
 		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
 		const res = await fetch(
-			`${API_BASE_URL}/api/v1/subversive/dibs/claim-discord`,
+			`${API_BASE_URL}/v2/subversive/dibs/claim-discord`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -289,7 +289,7 @@ export async function handleDibsReleaseButton(
 		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
 		const res = await fetch(
-			`${API_BASE_URL}/api/v1/subversive/dibs/release-discord`,
+			`${API_BASE_URL}/v2/subversive/dibs/release-discord`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },

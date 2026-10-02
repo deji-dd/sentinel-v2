@@ -3,9 +3,9 @@ import { app } from "../src/app";
 import * as schedulerIpc from "../src/lib/scheduler-ipc";
 
 describe("Elysia API Server - Battlestats Ledger Routes", () => {
-	it("GET /api/v1/system/battlestats-ledger/state returns state object", async () => {
+	it("GET /v2/system/battlestats-ledger/state returns state object", async () => {
 		const response = await app.handle(
-			new Request("http://localhost/api/v1/system/battlestats-ledger/state"),
+			new Request("http://localhost/v2/system/battlestats-ledger/state"),
 		);
 
 		expect(response.status).toBe(200);
@@ -14,10 +14,10 @@ describe("Elysia API Server - Battlestats Ledger Routes", () => {
 		expect(typeof data.totalIndexedLogs).toBe("number");
 	});
 
-	it("GET /api/v1/system/battlestats-ledger/logs returns paginated records", async () => {
+	it("GET /v2/system/battlestats-ledger/logs returns paginated records", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/battlestats-ledger/logs?page=1&pageSize=10",
+				"http://localhost/v2/system/battlestats-ledger/logs?page=1&pageSize=10",
 			),
 		);
 
@@ -37,10 +37,10 @@ describe("Elysia API Server - Battlestats Ledger Routes", () => {
 		expect(data.pagination.pageSize).toBe(10);
 	});
 
-	it("GET /api/v1/system/battlestats-ledger/logs supports from and to date range parameters", async () => {
+	it("GET /v2/system/battlestats-ledger/logs supports from and to date range parameters", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/battlestats-ledger/logs?from=2026-01-01&to=2026-12-31&page=1&pageSize=5",
+				"http://localhost/v2/system/battlestats-ledger/logs?from=2026-01-01&to=2026-12-31&page=1&pageSize=5",
 			),
 		);
 
@@ -55,10 +55,10 @@ describe("Elysia API Server - Battlestats Ledger Routes", () => {
 		expect(typeof data.pagination.total).toBe("number");
 	});
 
-	it("GET /api/v1/system/battlestats-ledger/analytics returns KPIs, timeline, stat breakdown, hourly distribution", async () => {
+	it("GET /v2/system/battlestats-ledger/analytics returns KPIs, timeline, stat breakdown, hourly distribution", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/battlestats-ledger/analytics?days=30",
+				"http://localhost/v2/system/battlestats-ledger/analytics?days=30",
 			),
 		);
 
@@ -103,19 +103,16 @@ describe("Elysia API Server - Battlestats Ledger Routes", () => {
 		expect(data.hourly.length).toBe(24);
 	});
 
-	it("POST /api/v1/system/battlestats-ledger/reconcile dispatches re-initialization to scheduler", async () => {
+	it("POST /v2/system/battlestats-ledger/reconcile dispatches re-initialization to scheduler", async () => {
 		const spy = spyOn(
 			schedulerIpc,
 			"requestBattlestatsLedgerReinitialize",
 		).mockResolvedValue(true);
 
 		const response = await app.handle(
-			new Request(
-				"http://localhost/api/v1/system/battlestats-ledger/reconcile",
-				{
-					method: "POST",
-				},
-			),
+			new Request("http://localhost/v2/system/battlestats-ledger/reconcile", {
+				method: "POST",
+			}),
 		);
 
 		expect(response.status).toBe(200);

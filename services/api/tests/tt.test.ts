@@ -27,9 +27,9 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 			.onConflictDoNothing();
 	});
 
-	it("GET /api/v1/tt/metadata returns territory blueprints and price data", async () => {
+	it("GET /v2/tt/metadata returns territory blueprints and price data", async () => {
 		const res = await app.handle(
-			new Request("http://localhost:3000/api/v1/tt/metadata"),
+			new Request("http://localhost:3000/v2/tt/metadata"),
 		);
 
 		expect(res.status).toBe(200);
@@ -45,9 +45,9 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 		expect(data).toHaveProperty("itemNames");
 	});
 
-	it("GET /api/v1/tt/maps returns 401 Unauthorized for unauthenticated requests", async () => {
+	it("GET /v2/tt/maps returns 401 Unauthorized for unauthenticated requests", async () => {
 		const res = await app.handle(
-			new Request("http://localhost:3000/api/v1/tt/maps"),
+			new Request("http://localhost:3000/v2/tt/maps"),
 		);
 
 		expect(res.status).toBe(401);
@@ -56,7 +56,7 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 	it("Performs complete map CRUD cycle with demo session login", async () => {
 		// 1. Log in via demo-login
 		const loginRes = await app.handle(
-			new Request("http://localhost:3000/api/v1/auth/demo-login", {
+			new Request("http://localhost:3000/v2/auth/demo-login", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ username: "tt_test_commander" }),
@@ -71,7 +71,7 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 
 		// 2. Create map
 		const createRes = await app.handle(
-			new Request("http://localhost:3000/api/v1/tt/maps", {
+			new Request("http://localhost:3000/v2/tt/maps", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -107,7 +107,7 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 
 		// 3. Fetch maps list
 		const listRes = await app.handle(
-			new Request("http://localhost:3000/api/v1/tt/maps", {
+			new Request("http://localhost:3000/v2/tt/maps", {
 				headers: { Cookie: sessionCookie },
 			}),
 		);
@@ -118,7 +118,7 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 
 		// 4. Update map
 		const updateRes = await app.handle(
-			new Request("http://localhost:3000/api/v1/tt/maps", {
+			new Request("http://localhost:3000/v2/tt/maps", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -141,7 +141,7 @@ describe("Elysia API Server - TT-Selector Routes", () => {
 
 		// 5. Delete map
 		const deleteRes = await app.handle(
-			new Request(`http://localhost:3000/api/v1/tt/maps/${mapId}`, {
+			new Request(`http://localhost:3000/v2/tt/maps/${mapId}`, {
 				method: "DELETE",
 				headers: { Cookie: sessionCookie },
 			}),

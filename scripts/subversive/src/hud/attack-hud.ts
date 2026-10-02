@@ -88,7 +88,7 @@ export async function loadNextTargetDirectly(
 			target?: WarTarget;
 			retryAfter?: number;
 			message?: string;
-		}>(`/api/v1/target-finder/targets/next?${params.toString()}`);
+		}>(`/v2/target-finder/targets/next?${params.toString()}`);
 		if (res.target?.attackUrl) {
 			state.currentTarget = res.target;
 			GM_setValue(STORAGE.currentTarget, res.target);
@@ -333,7 +333,7 @@ export function handleBountyTargetDefeated(
 		}
 	}
 
-	apiRequest("/api/v1/personal/bounties/defeat", {
+	apiRequest("/v2/personal/bounties/defeat", {
 		method: "POST",
 		body: { targetId, outcome: outcomeText },
 	}).catch(() => {});
@@ -372,7 +372,7 @@ export function handleWarTargetOutcome(
 	}
 
 	if (isVictory || isHospital) {
-		apiRequest(`/api/v1/target-finder/targets/${targetId}/hit`, {
+		apiRequest(`/v2/target-finder/targets/${targetId}/hit`, {
 			method: "POST",
 		}).catch(() => {});
 	}
@@ -762,7 +762,7 @@ export function initAttackPageHud(): void {
 	) {
 		warTargetVerificationInProgress = true;
 		apiRequest<{ isWarTarget?: boolean; target?: WarTarget }>(
-			`/api/v1/target-finder/war/targets/${user2Id}`,
+			`/v2/target-finder/war/targets/${user2Id}`,
 		)
 			.then((res) => {
 				warTargetVerificationInProgress = false;

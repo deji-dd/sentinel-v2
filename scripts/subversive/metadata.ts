@@ -14,8 +14,8 @@ export function getMetadataHeader(version: string): string {
 // @connect      subversive.blasted-labs.tech
 // @connect      localhost
 // @connect      *
-// @downloadURL  https://subversive.blasted-labs.tech/api/v1/target-finder/script.user.js
-// @updateURL    https://subversive.blasted-labs.tech/api/v1/target-finder/script.user.js
+// @downloadURL  https://subversive.blasted-labs.tech/v2/target-finder/script.user.js
+// @updateURL    https://subversive.blasted-labs.tech/v2/target-finder/script.user.js
 // @run-at       document-idle
 // ==/UserScript==`;
 }

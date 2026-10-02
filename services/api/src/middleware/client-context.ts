@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 
 export type ClientAppType =
 	| "tt-selector"
+	| "dashboard"
 	| "bot-dashboard"
 	| "elims-dashboard"
 	| "subversive-dashboard"
@@ -54,11 +55,14 @@ export const clientContextPlugin = new Elysia({
 		) {
 			clientApp = "tt-selector";
 		} else if (
+			clientHeader === "dashboard" ||
 			clientHeader === "bot-dashboard" ||
+			host.startsWith("dashboard.blasted-labs.tech") ||
+			origin.startsWith("https://dashboard.blasted-labs.tech") ||
 			host.startsWith("sentinel.blasted-labs.tech") ||
 			origin.startsWith("https://sentinel.blasted-labs.tech")
 		) {
-			clientApp = "bot-dashboard";
+			clientApp = "dashboard";
 		} else if (
 			clientHeader === "elims-dashboard" ||
 			host.startsWith("elims.blasted-labs.tech") ||

@@ -4,9 +4,9 @@ import { app } from "../src/app";
 import * as schedulerIpc from "../src/lib/scheduler-ipc";
 
 describe("Elysia API Server - Crime Ledger Routes", () => {
-	it("GET /api/v1/system/crime-ledger/state returns state object", async () => {
+	it("GET /v2/system/crime-ledger/state returns state object", async () => {
 		const response = await app.handle(
-			new Request("http://localhost/api/v1/system/crime-ledger/state"),
+			new Request("http://localhost/v2/system/crime-ledger/state"),
 		);
 
 		expect(response.status).toBe(200);
@@ -19,9 +19,9 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(typeof data.distinctCrimesCount).toBe("number");
 	});
 
-	it("GET /api/v1/system/crime-ledger/definitions returns list of definitions", async () => {
+	it("GET /v2/system/crime-ledger/definitions returns list of definitions", async () => {
 		const response = await app.handle(
-			new Request("http://localhost/api/v1/system/crime-ledger/definitions"),
+			new Request("http://localhost/v2/system/crime-ledger/definitions"),
 		);
 
 		expect(response.status).toBe(200);
@@ -34,10 +34,10 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(data.definitions[0]?.name).toBeDefined();
 	});
 
-	it("GET /api/v1/system/crime-ledger/logs returns paginated records", async () => {
+	it("GET /v2/system/crime-ledger/logs returns paginated records", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/crime-ledger/logs?page=1&limit=10",
+				"http://localhost/v2/system/crime-ledger/logs?page=1&limit=10",
 			),
 		);
 
@@ -55,10 +55,10 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(data.limit).toBe(10);
 	});
 
-	it("GET /api/v1/system/crime-ledger/logs supports from and to date range parameters", async () => {
+	it("GET /v2/system/crime-ledger/logs supports from and to date range parameters", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/crime-ledger/logs?from=2026-01-01&to=2026-12-31&page=1&limit=5",
+				"http://localhost/v2/system/crime-ledger/logs?from=2026-01-01&to=2026-12-31&page=1&limit=5",
 			),
 		);
 
@@ -71,11 +71,9 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(typeof data.total).toBe("number");
 	});
 
-	it("GET /api/v1/system/crime-ledger/analytics returns KPIs, timeline, categories, hourly distribution", async () => {
+	it("GET /v2/system/crime-ledger/analytics returns KPIs, timeline, categories, hourly distribution", async () => {
 		const response = await app.handle(
-			new Request(
-				"http://localhost/api/v1/system/crime-ledger/analytics?days=30",
-			),
+			new Request("http://localhost/v2/system/crime-ledger/analytics?days=30"),
 		);
 
 		expect(response.status).toBe(200);
@@ -127,10 +125,10 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(Array.isArray(data.topLootEvents)).toBe(true);
 	});
 
-	it("GET /api/v1/system/crime-ledger/analytics supports from and to date range parameters", async () => {
+	it("GET /v2/system/crime-ledger/analytics supports from and to date range parameters", async () => {
 		const response = await app.handle(
 			new Request(
-				"http://localhost/api/v1/system/crime-ledger/analytics?from=2026-01-01&to=2026-12-31",
+				"http://localhost/v2/system/crime-ledger/analytics?from=2026-01-01&to=2026-12-31",
 			),
 		);
 
@@ -148,10 +146,10 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(Array.isArray(data.timeline)).toBe(true);
 	});
 
-	it("POST and GET /api/v1/system/crime-ledger/mappings manages custom action mappings", async () => {
+	it("POST and GET /v2/system/crime-ledger/mappings manages custom action mappings", async () => {
 		const testAction = `test_custom_action_${Date.now()}`;
 		const postRes = await app.handle(
-			new Request("http://localhost/api/v1/system/crime-ledger/mappings", {
+			new Request("http://localhost/v2/system/crime-ledger/mappings", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -171,7 +169,7 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 		expect(postData.mapping.crimeId).toBe(7);
 
 		const getRes = await app.handle(
-			new Request("http://localhost/api/v1/system/crime-ledger/mappings"),
+			new Request("http://localhost/v2/system/crime-ledger/mappings"),
 		);
 		expect(getRes.status).toBe(200);
 		const getData = (await getRes.json()) as {
@@ -186,7 +184,7 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 			.where(eq(crimeActionMappings.id, testAction));
 	});
 
-	it("POST /api/v1/system/crime-ledger/reconcile dispatches re-initialization to scheduler", async () => {
+	it("POST /v2/system/crime-ledger/reconcile dispatches re-initialization to scheduler", async () => {
 		const ipcSpy = spyOn(
 			schedulerIpc,
 			"requestCrimeLedgerReinitialize",
@@ -194,7 +192,7 @@ describe("Elysia API Server - Crime Ledger Routes", () => {
 
 		try {
 			const response = await app.handle(
-				new Request("http://localhost/api/v1/system/crime-ledger/reconcile", {
+				new Request("http://localhost/v2/system/crime-ledger/reconcile", {
 					method: "POST",
 				}),
 			);

@@ -47,7 +47,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			expect(embed).toBeDefined();
 			expect(embed?.title).toContain("Target Finder");
 			expect(embed?.description).toContain(
-				"https://subversive.blasted-labs.tech/api/v1/target-finder/script",
+				"https://subversive.blasted-labs.tech/v2/target-finder/script",
 			);
 			expect(embed?.description).not.toContain("localhost:3000");
 
@@ -57,7 +57,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			const components = componentsRows?.[0]?.components;
 			expect(components?.length).toBe(1);
 			expect(components?.[0]?.data.url).toBe(
-				"https://subversive.blasted-labs.tech/api/v1/target-finder/script.user.js",
+				"https://subversive.blasted-labs.tech/v2/target-finder/script.user.js",
 			);
 			expect(components?.[0]?.data.label).toBe("Install Script");
 		} finally {
@@ -96,7 +96,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			const embed = embeds?.[0]?.data;
 			expect(embed).toBeDefined();
 			expect(embed?.description).toContain(
-				"http://localhost:3000/api/v1/target-finder/script.user.js?env=dev",
+				"http://localhost:3000/v2/target-finder/script.user.js?env=dev",
 			);
 
 			const componentsRows = replyPayload.components as Array<{
@@ -105,7 +105,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			const components = componentsRows?.[0]?.components;
 			expect(components?.length).toBe(1);
 			expect(components?.[0]?.data.url).toBe(
-				"http://localhost:3000/api/v1/target-finder/script.user.js?env=dev",
+				"http://localhost:3000/v2/target-finder/script.user.js?env=dev",
 			);
 		} finally {
 			process.env.NODE_ENV = originalEnv;

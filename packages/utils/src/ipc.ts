@@ -305,3 +305,43 @@ export class IpcClient<T = unknown> {
 		this.cleanup();
 	}
 }
+
+/**
+ * Sends a fire-and-forget IPC message to the Discord Bot over its Unix domain socket.
+ * Resolves `true` if the message was delivered, `false` if the bot is offline.
+ */
+export function notifyBotAction(
+	action: string,
+	data?: Record<string, unknown>,
+	timeoutMs = 1500,
+): Promise<boolean> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const client = net.createConnection(IPC_SOCKET_PATHS.bot);
+
+		const finish = (delivered: boolean) => {
+			if (settled) return;
+			settled = true;
+			client.destroy();
+			resolve(delivered);
+		};
+
+		const timeout = setTimeout(() => finish(false), timeoutMs);
+
+		client.on("connect", () => {
+			client.write(
+				`${JSON.stringify({ action, ...(data ? { data } : {}) })}\n`,
+				() => {
+					clearTimeout(timeout);
+					finish(true);
+				},
+			);
+		});
+
+		client.on("error", (err) => {
+			clearTimeout(timeout);
+			logger.warn(`Could not reach bot via IPC (${action}):`, err.message);
+			finish(false);
+		});
+	});
+}

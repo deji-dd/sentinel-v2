@@ -15,6 +15,11 @@ import {
 	handleElimsVerifyKey,
 } from "./handlers/elimination";
 import {
+	handleMercClaimTarget,
+	handleMercReleaseTarget,
+	handleMercTargetMessageRecorded,
+} from "./handlers/merc";
+import {
 	handleBulkVerificationRequest,
 	handleVerificationRequest,
 } from "./handlers/verification";
@@ -65,6 +70,11 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 	force_run_worker: handleForceRunWorker,
 	reset_subversive_recruitment: handleResetSubversiveRecruitment,
 	personal_bounty_defeated: handlePersonalBountyDefeated,
+
+	// Mercenary RPCs & Alert Lifecycle
+	merc_target_message_recorded: handleMercTargetMessageRecorded,
+	merc_claim_target_request: handleMercClaimTarget,
+	merc_release_target_request: handleMercReleaseTarget,
 };
 
 /**

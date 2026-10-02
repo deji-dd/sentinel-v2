@@ -50,8 +50,8 @@ function getMetadataBanner(version: string): string {
 // @connect      sentinel.blasted-labs.tech
 // @connect      localhost
 // @connect      *
-// @downloadURL  https://sentinel.blasted-labs.tech/api/v1/system/crime-ledger/script.user.js
-// @updateURL    https://sentinel.blasted-labs.tech/api/v1/system/crime-ledger/script.user.js
+// @downloadURL  https://sentinel.blasted-labs.tech/v2/system/crime-ledger/script.user.js
+// @updateURL    https://sentinel.blasted-labs.tech/v2/system/crime-ledger/script.user.js
 // @run-at       document-idle
 // ==/UserScript==
 

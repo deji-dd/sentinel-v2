@@ -28,6 +28,54 @@ export async function fetchDiscordApi<T>(
 	}
 }
 
+// In-memory cache for Discord bot guilds (60s TTL)
+let cachedBotGuilds: {
+	guilds: DiscordGuildSummary[];
+	expiresAt: number;
+} | null = null;
+let inFlightBotGuildsPromise: Promise<DiscordGuildSummary[] | null> | null =
+	null;
+
+export async function getBotGuilds(
+	botToken: string,
+	forceFresh = false,
+): Promise<DiscordGuildSummary[]> {
+	if (
+		!forceFresh &&
+		cachedBotGuilds &&
+		cachedBotGuilds.expiresAt > Date.now()
+	) {
+		return cachedBotGuilds.guilds;
+	}
+
+	if (inFlightBotGuildsPromise) {
+		const res = await inFlightBotGuildsPromise;
+		if (res && res.length > 0) return res;
+	}
+
+	inFlightBotGuildsPromise = fetchDiscordApi<DiscordGuildSummary[]>(
+		"/users/@me/guilds",
+		`Bot ${botToken}`,
+	);
+
+	try {
+		const guilds = await inFlightBotGuildsPromise;
+		if (guilds && Array.isArray(guilds) && guilds.length > 0) {
+			cachedBotGuilds = {
+				guilds,
+				expiresAt: Date.now() + 60 * 1000,
+			};
+			return guilds;
+		}
+		if (cachedBotGuilds) {
+			return cachedBotGuilds.guilds;
+		}
+		return guilds ?? [];
+	} finally {
+		inFlightBotGuildsPromise = null;
+	}
+}
+
 /**
  * Checks whether the user shares at least one Discord server where Sentinel is installed.
  * Bot owners and administrators automatically pass this validation.
@@ -56,10 +104,7 @@ export async function verifyUserSharesGuildWithBot(
 			"/users/@me/guilds",
 			`Bearer ${userAccessToken}`,
 		),
-		fetchDiscordApi<DiscordGuildSummary[]>(
-			"/users/@me/guilds",
-			`Bot ${botToken}`,
-		),
+		getBotGuilds(botToken),
 	]);
 
 	if (!userGuilds || !botGuilds) {

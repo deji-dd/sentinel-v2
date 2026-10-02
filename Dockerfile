@@ -16,9 +16,8 @@ COPY packages/utils/package.json ./packages/utils/
 COPY services/api/package.json ./services/api/
 COPY services/bot/package.json ./services/bot/
 COPY services/scheduler/package.json ./services/scheduler/
-COPY web/bot-dashboard/package.json ./web/bot-dashboard/
+COPY web/dashboard/package.json ./web/dashboard/
 COPY web/elims-dashboard/package.json ./web/elims-dashboard/
-COPY web/subversive-dashboard/package.json ./web/subversive-dashboard/
 COPY web/tt-selector/package.json ./web/tt-selector/
 
 RUN bun install --frozen-lockfile || bun install
