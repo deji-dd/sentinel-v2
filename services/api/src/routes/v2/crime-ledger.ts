@@ -218,48 +218,9 @@ export async function authenticateCrimeLedgerRequest(
 	return false;
 }
 
-export async function serveBlastedUserscript(
-	query: { env?: string },
-	set: {
-		status?: number | string;
-		headers: Record<string, string | number | undefined>;
-	},
-) {
-	const candidatePaths = [
-		`${process.cwd()}/scripts/blasted-script.user.js`,
-		`${process.cwd()}/../../scripts/blasted-script.user.js`,
-	];
-	let file = Bun.file(candidatePaths[0] ?? "");
-	for (const p of candidatePaths) {
-		const candidate = Bun.file(p);
-		if (await candidate.exists()) {
-			file = candidate;
-			break;
-		}
-	}
-	if (!(await file.exists())) {
-		set.status = 404;
-		return "Userscript file not found.";
-	}
-	let content = await file.text();
-	if (query.env === "dev") {
-		content = content
-			.replace(
-				/apiUrl:\s*"https:\/\/sentinel\.blasted-labs\.tech"/g,
-				'apiUrl: "http://localhost:3000"',
-			)
-			.replace(
-				/@downloadURL\s+https:\/\/sentinel\.blasted-labs\.tech\/api\/v1\/system\/crime-ledger\/script\.user\.js/g,
-				"@downloadURL  http://localhost:3000/v2/system/crime-ledger/script.user.js?env=dev",
-			)
-			.replace(
-				/@updateURL\s+https:\/\/sentinel\.blasted-labs\.tech\/api\/v1\/system\/crime-ledger\/script\.user\.js/g,
-				"@updateURL    http://localhost:3000/v2/system/crime-ledger/script.user.js?env=dev",
-			);
-	}
-	set.headers["content-type"] = "application/javascript; charset=utf-8";
-	return content;
-}
+import { serveBlastedUserscript } from "./personal";
+
+export { serveBlastedUserscript };
 
 export const crimeLedgerRoutes = new Elysia({ prefix: "/crime-ledger" })
 	.onBeforeHandle(async ({ headers, set, path }) => {

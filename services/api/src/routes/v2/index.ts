@@ -4,6 +4,7 @@ import { elimsRoutes } from "./elims";
 import { giveawayRoutes } from "./giveaways";
 import { guildRoutes } from "./guilds";
 import { mercRoutes } from "./merc";
+import { personalRoutes } from "./personal";
 import { personalBountiesRoutes } from "./personal-bounties";
 import { subversiveRoutes } from "./subversive";
 import { subversiveTargetFinderRoutes } from "./subversive-target-finder";
@@ -17,6 +18,7 @@ export {
 	guildRoutes,
 	mercRoutes,
 	personalBountiesRoutes,
+	personalRoutes,
 	subversiveRoutes,
 	subversiveTargetFinderRoutes,
 	systemRoutes,
@@ -29,6 +31,7 @@ export const v2Routes = new Elysia({ prefix: "/v2" })
 	.use(giveawayRoutes)
 	.use(guildRoutes)
 	.use(mercRoutes)
+	.use(personalRoutes)
 	.use(personalBountiesRoutes)
 	.use(subversiveRoutes)
 	.use(subversiveTargetFinderRoutes)

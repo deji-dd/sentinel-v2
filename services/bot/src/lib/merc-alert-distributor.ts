@@ -16,12 +16,7 @@ import {
 	MessageFlags,
 	type TextChannel,
 } from "discord.js";
-import {
-	buildStrickenBanner,
-	createBaseEmbed,
-	EMBED_COLORS,
-	EMBED_HEX_DANGER,
-} from "./embeds";
+import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import { formatTctTimestamp } from "./torn-log-parser";
 
@@ -467,12 +462,12 @@ export async function postMercTargetAlert(
 		let desc = `Target: [${target.targetName} [${target.targetId}]](${targetProfileUrl})\nLevel ${target.targetLevel} | Estimated BS: ${formatStats(target.estimatedBs)}`;
 
 		if (target.isStrickenEligible) {
-			desc = `${buildStrickenBanner()}\n${desc}\n\n${EMBED_HEX_DANGER}**STRICKEN HIT ELIGIBLE**`;
+			desc += "\n\n**STRICKEN HIT ELIGIBLE**";
 		}
 
 		const embed = createBaseEmbed(
 			target.isStrickenEligible
-				? `${EMBED_HEX_DANGER}**[STRICKEN TARGET]** ${target.targetName} [${target.targetId}]`
+				? `[STRICKEN TARGET] ${target.targetName} [${target.targetId}]`
 				: `Target: ${target.targetName} [${target.targetId}]`,
 			desc,
 			target.isStrickenEligible
@@ -561,12 +556,12 @@ export async function updateMercTargetAlert(
 		let desc = `Target: [${target.targetName} [${target.targetId}]](${targetProfileUrl})\nLevel ${target.targetLevel} | Estimated BS: ${formatStats(target.estimatedBs)}`;
 
 		if (target.isStrickenEligible) {
-			desc = `${buildStrickenBanner()}\n${desc}\n\n${EMBED_HEX_DANGER}**STRICKEN HIT ELIGIBLE**`;
+			desc += "\n\n**STRICKEN HIT ELIGIBLE**";
 		}
 
 		const embed = createBaseEmbed(
 			target.isStrickenEligible
-				? `${EMBED_HEX_DANGER}**[STRICKEN TARGET]** ${target.targetName} [${target.targetId}]`
+				? `[STRICKEN TARGET] ${target.targetName} [${target.targetId}]`
 				: `Target: ${target.targetName} [${target.targetId}]`,
 			desc,
 			target.isStrickenEligible
@@ -709,17 +704,14 @@ export async function postMercHitLog(
 		const logId = hitData.attackCode || hitData.attackId;
 		const attackUrl = `https://www.torn.com/page.php?sid=attackLog&ID=${logId}`;
 
-		// Stricken hits render in full red: red embed border, red-tinted title,
-		// a solid red banner, and the STRICKEN HIT marker line.
 		let payoutDesc = `Payout: $${hitData.payoutValue.toLocaleString()}`;
-		let desc = `${hitData.attackerName} [${hitData.attackerId}] ${hitData.result.toLowerCase()} ${hitData.defenderName} [${hitData.defenderId}]\n${payoutDesc}`;
-
-		if (hitData.isStricken) {
-			payoutDesc = `${EMBED_HEX_DANGER}**Payout: $${hitData.payoutValue.toLocaleString()}**`;
-			desc = `${buildStrickenBanner()}\n${hitData.attackerName} [${hitData.attackerId}] ${hitData.result.toLowerCase()} ${hitData.defenderName} [${hitData.defenderId}]\n${payoutDesc}`;
+		if (hitData.isStricken && hitData.payoutValue > 0) {
+			payoutDesc = `Payout: $${hitData.payoutValue.toLocaleString()} [STRICKEN HIT]`;
 		} else if (hitData.payoutValue === 0) {
-			desc = `${hitData.attackerName} [${hitData.attackerId}] ${hitData.result.toLowerCase()} ${hitData.defenderName} [${hitData.defenderId}]\n${payoutDesc} (No payout - not a hospitalization)`;
+			payoutDesc = "Payout: $0 (No payout - not a hospitalization)";
 		}
+
+		const desc = `${hitData.attackerName} [${hitData.attackerId}] ${hitData.result.toLowerCase()} ${hitData.defenderName} [${hitData.defenderId}]\n${payoutDesc}`;
 
 		const embedColor = hitData.isStricken
 			? EMBED_COLORS.DANGER
@@ -728,7 +720,7 @@ export async function postMercHitLog(
 				: EMBED_COLORS.PRIMARY;
 
 		const embedTitle = hitData.isStricken
-			? `${EMBED_HEX_DANGER}**[STRICKEN HIT]** ${hitData.attackerName} [${hitData.attackerId}]`
+			? `[STRICKEN HIT] ${hitData.attackerName} [${hitData.attackerId}]`
 			: hitData.payoutValue > 0
 				? `[VALIDATED HIT] ${hitData.attackerName} [${hitData.attackerId}]`
 				: `[HIT REPORTED] ${hitData.attackerName} [${hitData.attackerId}]`;
