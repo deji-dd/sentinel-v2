@@ -204,14 +204,14 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 			],
 		};
 
-		// CSV 1 format
+		// CSV 1 format (Combined Merc Payouts)
 		let csv1 =
 			"Mercenary Name,Torn ID,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
 		for (const m of summary.mercPayouts) {
 			csv1 += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
 		}
 
-		// CSV 2 format
+		// CSV 2 format (Target breakdown)
 		let csv2 =
 			"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
 		for (const t of summary.targetBreakdown) {
@@ -221,6 +221,72 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		expect(csv1).toContain('"TestMerc",999,3,1,2,4000000');
 		expect(csv2).toContain('"VictimOne",888,2,1,1');
 		expect(csv2).toContain('"VictimTwo",777,1,0,1');
+	});
+
+	it("generates 3 merc receipts when mercenaries belong to 2 different factions (combined + 2 factions)", () => {
+		const mercs = [
+			{
+				attackerId: 101,
+				attackerName: "MercAlpha",
+				attackerFactionId: 501,
+				attackerFactionName: "Subversive",
+				totalHits: 4,
+				standardHits: 3,
+				strickenHits: 1,
+				totalPayout: 5_000_000,
+			},
+			{
+				attackerId: 102,
+				attackerName: "MercBeta",
+				attackerFactionId: 502,
+				attackerFactionName: "Subversive II",
+				totalHits: 2,
+				standardHits: 2,
+				strickenHits: 0,
+				totalPayout: 2_000_000,
+			},
+		];
+
+		// 1. Combined receipt
+		let combinedCsv =
+			"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+		for (const m of mercs) {
+			combinedCsv += `"${m.attackerName}",${m.attackerId},"${m.attackerFactionName}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+		}
+
+		// Group by faction
+		const factionMap = new Map<number, typeof mercs>();
+		for (const m of mercs) {
+			const list = factionMap.get(m.attackerFactionId) ?? [];
+			list.push(m);
+			factionMap.set(m.attackerFactionId, list);
+		}
+
+		const factionReceipts: Array<{ factionName: string; csv: string }> = [];
+		for (const [factionId, fMercs] of factionMap.entries()) {
+			const factionName =
+				fMercs[0]?.attackerFactionName ?? `Faction #${factionId}`;
+			let fCsv =
+				"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+			for (const m of fMercs) {
+				fCsv += `"${m.attackerName}",${m.attackerId},"${m.attackerFactionName}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+			}
+			factionReceipts.push({ factionName, csv: fCsv });
+		}
+
+		// Total merc receipts = 1 combined + 2 factions = 3 receipts
+		const allMercReceipts = [
+			{ name: "combined", csv: combinedCsv },
+			...factionReceipts,
+		];
+
+		expect(allMercReceipts.length).toBe(3);
+		expect(allMercReceipts[0]?.csv).toContain('"MercAlpha",101,"Subversive"');
+		expect(allMercReceipts[0]?.csv).toContain('"MercBeta",102,"Subversive II"');
+		expect(allMercReceipts[1]?.csv).toContain('"MercAlpha",101,"Subversive"');
+		expect(allMercReceipts[1]?.csv).not.toContain('"MercBeta"');
+		expect(allMercReceipts[2]?.csv).toContain('"MercBeta",102,"Subversive II"');
+		expect(allMercReceipts[2]?.csv).not.toContain('"MercAlpha"');
 	});
 
 	it("blocks new contract creation if an active or upcoming contract already exists for the faction", () => {

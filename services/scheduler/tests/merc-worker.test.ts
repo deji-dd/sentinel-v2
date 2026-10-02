@@ -166,18 +166,18 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 		expect(manager.getAlert(mockContract.id, 1003)).toBeUndefined();
 	});
 
-	it("disqualifies member whose Idle duration exceeds contract idleDurationMinutes", async () => {
+	it("disqualifies member whose Idle duration is below contract min idleDurationMinutes and qualifies when meeting min", async () => {
 		const manager = new MercTargetManager();
 		const nowSec = Math.floor(Date.now() / 1000);
 		const nowMs = Date.now();
 
-		// 30 minutes idle vs 15 minutes max
-		const idleMember = createMockMember({
+		// 5 minutes idle vs 15 minutes minimum required -> disqualified
+		const underIdleMember = createMockMember({
 			id: 1004,
 			last_action: {
 				status: "Idle",
-				timestamp: nowSec - 1800,
-				relative: "30 minutes ago",
+				timestamp: nowSec - 300,
+				relative: "5 minutes ago",
 			},
 		});
 		await manager.processMember(
@@ -185,12 +185,33 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 			"guild-1",
 			"targets",
 			"role-merc-123",
-			idleMember,
+			underIdleMember,
 			nowSec,
 			nowMs,
 		);
 
 		expect(manager.getAlert(mockContract.id, 1004)).toBeUndefined();
+
+		// 20 minutes idle vs 15 minutes minimum required -> qualifies
+		const validIdleMember = createMockMember({
+			id: 1004,
+			last_action: {
+				status: "Idle",
+				timestamp: nowSec - 1200,
+				relative: "20 minutes ago",
+			},
+		});
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			validIdleMember,
+			nowSec,
+			nowMs,
+		);
+
+		expect(manager.getAlert(mockContract.id, 1004)).toBeDefined();
 	});
 
 	it("includes member in hospital with <= 60 seconds remaining as hospital lead", async () => {

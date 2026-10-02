@@ -37,6 +37,7 @@ import {
 } from "../merc-alert-distributor";
 import {
 	archiveMercClientChannel,
+	cleanupOldArchivedMercChannels,
 	processExpiredMercContractTokens,
 	updateMercContractCreationChannel,
 } from "../merc-contract-creation";
@@ -549,6 +550,10 @@ export function setupBotIpcListeners(client: Client): void {
 			}
 		} else if (message.action === "check_expired_merc_tokens") {
 			void processExpiredMercContractTokens(client);
+		} else if (message.action === "cleanup_archived_merc_channels") {
+			const maxAge = (message.data as { maxAgeDays?: number } | undefined)
+				?.maxAgeDays;
+			void cleanupOldArchivedMercChannels(client, maxAge ?? 7);
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

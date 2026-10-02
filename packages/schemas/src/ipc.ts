@@ -633,6 +633,7 @@ export type IpcMessage =
 	| IpcSyncMercContractCreationMessage
 	| IpcArchiveMercClientChannelMessage
 	| IpcCheckExpiredMercTokensMessage
+	| IpcCleanupArchivedMercChannelsMessage
 	| IpcMercClaimTargetRequestMessage
 	| IpcMercClaimTargetResponseMessage
 	| IpcMercReleaseTargetRequestMessage
@@ -778,6 +779,13 @@ export type IpcArchiveMercClientChannelMessage = {
 
 export type IpcCheckExpiredMercTokensMessage = {
 	action: "check_expired_merc_tokens";
+};
+
+export type IpcCleanupArchivedMercChannelsMessage = {
+	action: "cleanup_archived_merc_channels";
+	data?: {
+		maxAgeDays?: number;
+	};
 };
 
 export type IpcMercClaimTargetRequestMessage = {

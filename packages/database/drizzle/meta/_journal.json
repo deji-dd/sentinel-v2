@@ -239,6 +239,13 @@
 			"when": 1790962312921,
 			"tag": "0033_chief_fantastic_four",
 			"breakpoints": true
+		},
+		{
+			"idx": 34,
+			"version": "7",
+			"when": 1790965000000,
+			"tag": "0034_merc_hit_attacker_faction",
+			"breakpoints": true
 		}
 	]
 }

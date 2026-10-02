@@ -99,6 +99,8 @@ export const mercContractHits = pgTable(
 		attackId: integer("attack_id").notNull().unique(),
 		attackerId: integer("attacker_id").notNull(),
 		attackerName: text("attacker_name").notNull(),
+		attackerFactionId: integer("attacker_faction_id"),
+		attackerFactionName: text("attacker_faction_name"),
 		defenderId: integer("defender_id").notNull(),
 		defenderName: text("defender_name").notNull(),
 		result: text("result").notNull(),

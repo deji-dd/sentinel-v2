@@ -302,8 +302,8 @@ export class MercTargetManager {
 				0,
 				Math.floor((nowSec - (m.last_action?.timestamp ?? nowSec)) / 60),
 			);
-			const maxIdle = effectiveTerms?.idleDurationMinutes ?? 15;
-			if (idleMinutes <= maxIdle) {
+			const minIdle = effectiveTerms?.idleDurationMinutes ?? 15;
+			if (idleMinutes >= minIdle) {
 				isActivityAllowed = true;
 			}
 		} else if (statusState === "Offline" && termsStatuses.offline) {

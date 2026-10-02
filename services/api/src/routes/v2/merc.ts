@@ -610,6 +610,8 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					participatingMercsCount: summary.mercPayouts.length,
 					targetsHitCount: summary.targetBreakdown.length,
 					targetBreakdown: targetsWithCost,
+					mercPayouts: summary.mercPayouts,
+					factionPayouts: summary.factionPayouts,
 				},
 			};
 		},

@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { and, desc, eq, gt, inArray, lte } from "drizzle-orm";
 import { db } from "../../index";
-import { guildConfigs, guildMonitoredFactions } from "../schema/discord";
+import {
+	guildConfigs,
+	guildMonitoredFactions,
+	verifiedUsers,
+} from "../schema/discord";
 import {
 	mercChannelConfigs,
 	mercContractHits,
@@ -1072,6 +1076,8 @@ export async function recordMercContractHit(data: {
 	attackId: number;
 	attackerId: number;
 	attackerName: string;
+	attackerFactionId?: number | null;
+	attackerFactionName?: string | null;
 	defenderId: number;
 	defenderName: string;
 	result: string;
@@ -1088,6 +1094,8 @@ export async function recordMercContractHit(data: {
 				attackId: data.attackId,
 				attackerId: data.attackerId,
 				attackerName: data.attackerName,
+				attackerFactionId: data.attackerFactionId ?? null,
+				attackerFactionName: data.attackerFactionName ?? null,
 				defenderId: data.defenderId,
 				defenderName: data.defenderName,
 				result: data.result,
@@ -1130,10 +1138,20 @@ export async function getMercContractHits(contractId: string) {
 export interface MercPayoutSummary {
 	attackerId: number;
 	attackerName: string;
+	attackerFactionId: number | null;
+	attackerFactionName: string | null;
 	totalHits: number;
 	standardHits: number;
 	strickenHits: number;
 	totalPayout: number;
+}
+
+export interface FactionMercPayoutSummary {
+	factionId: number | null;
+	factionName: string;
+	totalHits: number;
+	totalPayout: number;
+	mercs: MercPayoutSummary[];
 }
 
 export interface MercTargetSummary {
@@ -1149,6 +1167,7 @@ export interface MercContractSummaryReport {
 	totalHits: number;
 	totalPayout: number;
 	mercPayouts: MercPayoutSummary[];
+	factionPayouts: FactionMercPayoutSummary[];
 	targetBreakdown: MercTargetSummary[];
 }
 
@@ -1160,6 +1179,44 @@ export async function getMercContractSummary(
 ): Promise<MercContractSummaryReport> {
 	const hits = await getMercContractHits(contractId);
 
+	// Collect any attacker IDs that lack faction info to resolve via verifiedUsers
+	const missingFactionAttackerIds = new Set<number>();
+	for (const hit of hits) {
+		if (!hit.attackerFactionId && !hit.attackerFactionName) {
+			missingFactionAttackerIds.add(hit.attackerId);
+		}
+	}
+
+	const fallbackFactionMap = new Map<
+		number,
+		{ factionId: number | null; factionName: string }
+	>();
+	if (missingFactionAttackerIds.size > 0) {
+		try {
+			const verifiedRows = await db
+				.select({
+					tornId: verifiedUsers.tornId,
+					factionId: verifiedUsers.factionId,
+					factionTag: verifiedUsers.factionTag,
+				})
+				.from(verifiedUsers)
+				.where(
+					inArray(verifiedUsers.tornId, Array.from(missingFactionAttackerIds)),
+				);
+
+			for (const v of verifiedRows) {
+				if (v.factionId) {
+					fallbackFactionMap.set(v.tornId, {
+						factionId: v.factionId,
+						factionName: v.factionTag || `Faction #${v.factionId}`,
+					});
+				}
+			}
+		} catch {
+			// Gracefully ignore fallback lookup errors
+		}
+	}
+
 	const mercMap = new Map<number, MercPayoutSummary>();
 	const targetMap = new Map<number, MercTargetSummary>();
 	let grandTotalPayout = 0;
@@ -1167,19 +1224,35 @@ export async function getMercContractSummary(
 	for (const hit of hits) {
 		grandTotalPayout += hit.payoutValue;
 
+		const fallback = fallbackFactionMap.get(hit.attackerId);
+		const factionId = hit.attackerFactionId ?? fallback?.factionId ?? null;
+		const factionName =
+			hit.attackerFactionName ??
+			fallback?.factionName ??
+			(factionId ? `Faction #${factionId}` : "Independent");
+
 		// Attacker (Mercenary)
 		let merc = mercMap.get(hit.attackerId);
 		if (!merc) {
 			merc = {
 				attackerId: hit.attackerId,
 				attackerName: hit.attackerName,
+				attackerFactionId: factionId,
+				attackerFactionName: factionName,
 				totalHits: 0,
 				standardHits: 0,
 				strickenHits: 0,
 				totalPayout: 0,
 			};
 			mercMap.set(hit.attackerId, merc);
+		} else if (
+			!merc.attackerFactionId &&
+			(factionId || factionName !== "Independent")
+		) {
+			merc.attackerFactionId = factionId;
+			merc.attackerFactionName = factionName;
 		}
+
 		merc.totalHits += 1;
 		if (hit.isStricken) {
 			merc.strickenHits += 1;
@@ -1215,11 +1288,43 @@ export async function getMercContractSummary(
 		(a, b) => b.totalHits - a.totalHits,
 	);
 
+	// Group mercs by faction
+	const factionGroupMap = new Map<string, FactionMercPayoutSummary>();
+	for (const merc of mercPayouts) {
+		const key = merc.attackerFactionId
+			? String(merc.attackerFactionId)
+			: (merc.attackerFactionName ?? "Independent");
+		let group = factionGroupMap.get(key);
+		if (!group) {
+			group = {
+				factionId: merc.attackerFactionId ?? null,
+				factionName: merc.attackerFactionName ?? "Independent",
+				totalHits: 0,
+				totalPayout: 0,
+				mercs: [],
+			};
+			factionGroupMap.set(key, group);
+		}
+		group.totalHits += merc.totalHits;
+		group.totalPayout += merc.totalPayout;
+		group.mercs.push(merc);
+	}
+
+	// Sort mercs within each faction by payout descending
+	for (const group of factionGroupMap.values()) {
+		group.mercs.sort((a, b) => b.totalPayout - a.totalPayout);
+	}
+
+	const factionPayouts = Array.from(factionGroupMap.values()).sort(
+		(a, b) => b.totalPayout - a.totalPayout,
+	);
+
 	return {
 		contractId,
 		totalHits: hits.length,
 		totalPayout: grandTotalPayout,
 		mercPayouts,
+		factionPayouts,
 		targetBreakdown,
 	};
 }

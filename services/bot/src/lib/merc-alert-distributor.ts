@@ -204,7 +204,7 @@ export async function postMercContractAnnouncement(
 				value: [
 					contract.terms.statuses.online ? "Online" : null,
 					contract.terms.statuses.idle
-						? `Idle (${contract.terms.idleDurationMinutes ?? 15}m max)`
+						? `Idle (${contract.terms.idleDurationMinutes ?? 15}m min)`
 						: null,
 					contract.terms.statuses.offline ? "Offline" : null,
 				]
@@ -710,25 +710,49 @@ export async function postMercContractEndSummary(
 		const channel = await resolveChannelByName(client, guildId, channelName);
 		if (!channel) return;
 
-		// CSV 1: Merc Payouts & Hit Breakdown
-		let csv1 =
-			"Mercenary Name,Torn ID,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+		// CSV 1: Merc Payouts & Hit Breakdown (Combined)
+		let csvCombined =
+			"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
 		for (const m of summary.mercPayouts) {
-			csv1 += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+			const fName =
+				m.attackerFactionName ??
+				(m.attackerFactionId ? `Faction #${m.attackerFactionId}` : "N/A");
+			csvCombined += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
 		}
 
-		// CSV 2: Target Hit Breakdown
-		let csv2 =
+		// CSV Per-Faction Merc Payouts (e.g. 2 different factions split)
+		const mercAttachments: AttachmentBuilder[] = [
+			new AttachmentBuilder(Buffer.from(csvCombined, "utf-8"), {
+				name: `merc_payouts_combined_${contract.id}.csv`,
+			}),
+		];
+
+		if (summary.factionPayouts && summary.factionPayouts.length > 0) {
+			for (const fp of summary.factionPayouts) {
+				const safeFaction = fp.factionName
+					.replace(/[^a-zA-Z0-9_-]/g, "_")
+					.toLowerCase();
+				let csvFaction =
+					"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+				for (const m of fp.mercs) {
+					csvFaction += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fp.factionName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+				}
+				mercAttachments.push(
+					new AttachmentBuilder(Buffer.from(csvFaction, "utf-8"), {
+						name: `merc_payouts_${safeFaction}_${contract.id}.csv`,
+					}),
+				);
+			}
+		}
+
+		// CSV Target Hit Breakdown (Client receipt)
+		let csvTarget =
 			"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
 		for (const t of summary.targetBreakdown) {
-			csv2 += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
+			csvTarget += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
 		}
 
-		const file1 = new AttachmentBuilder(Buffer.from(csv1, "utf-8"), {
-			name: `merc_payouts_and_hits_${contract.id}.csv`,
-		});
-
-		const file2 = new AttachmentBuilder(Buffer.from(csv2, "utf-8"), {
+		const targetFile = new AttachmentBuilder(Buffer.from(csvTarget, "utf-8"), {
 			name: `target_hit_breakdown_${contract.id}.csv`,
 		});
 
@@ -751,9 +775,19 @@ export async function postMercContractEndSummary(
 			},
 		);
 
+		if (summary.factionPayouts && summary.factionPayouts.length > 0) {
+			for (const fp of summary.factionPayouts) {
+				embed.addFields({
+					name: `${fp.factionName} Payout`,
+					value: `${fp.mercs.length} mercs • ${fp.totalHits} hits • $${fp.totalPayout.toLocaleString()}`,
+					inline: true,
+				});
+			}
+		}
+
 		await channel.send({
 			embeds: [embed],
-			files: [file1, file2],
+			files: [...mercAttachments, targetFile],
 		});
 
 		// If contract has a designated client private channel, post conclusion summary + target CSV + archive button
@@ -765,9 +799,12 @@ export async function postMercContractEndSummary(
 					contract.clientChannelId,
 				);
 				if (clientChan) {
-					const clientFile = new AttachmentBuilder(Buffer.from(csv2, "utf-8"), {
-						name: `target_hit_breakdown_${contract.id}.csv`,
-					});
+					const clientFile = new AttachmentBuilder(
+						Buffer.from(csvTarget, "utf-8"),
+						{
+							name: `target_hit_breakdown_${contract.id}.csv`,
+						},
+					);
 
 					const clientEmbed = createBaseEmbed(
 						`[CONTRACT CONCLUDED] ${contract.factionName} [${contract.factionId}]`,

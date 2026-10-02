@@ -480,6 +480,9 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							attackId: attack.id,
 							attackerId: attack.attacker.id,
 							attackerName: attack.attacker.name,
+							attackerFactionId:
+								attack.attacker.faction?.id ?? keyInfo.factionId ?? null,
+							attackerFactionName: attack.attacker.faction?.name ?? null,
 							defenderId: attack.defender.id,
 							defenderName: attack.defender.name,
 							result: attack.result,

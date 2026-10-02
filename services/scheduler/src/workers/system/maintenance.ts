@@ -11,6 +11,7 @@ import {
 	warLedgers,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+import { notifyBotAction } from "@sentinel/utils/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import { reconcileHistoricalBattlestatsLogs } from "../personal/battlestats";
 import { reconcileHistoricalCrimeLogs } from "../personal/crimes";
@@ -181,6 +182,18 @@ export async function executeMaintenance(): Promise<void> {
 			logger.error(
 				"Error reconciling guild configurations during maintenance:",
 				err,
+			);
+		}
+
+		// 5. Trigger bot to clean up 1-week-old archived mercenary channels
+		try {
+			void notifyBotAction("cleanup_archived_merc_channels", {
+				maxAgeDays: 7,
+			});
+		} catch (mercErr) {
+			logger.warn(
+				"Error notifying bot to cleanup archived merc channels:",
+				mercErr,
 			);
 		}
 

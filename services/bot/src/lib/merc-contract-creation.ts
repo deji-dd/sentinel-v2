@@ -665,6 +665,34 @@ export async function archiveMercClientChannel(
 			);
 			if (archiveCat && archiveCat.type === ChannelType.GuildCategory) {
 				if (textChannel.parentId !== archiveCat.id) {
+					// Guard against name clashing in archive category:
+					// Check if another channel in the archive category already has this name
+					const nameClash = Array.from(guild.channels.cache.values()).some(
+						(ch) =>
+							ch.parentId === archiveCat.id &&
+							ch.id !== textChannel.id &&
+							ch.name.toLowerCase() === textChannel.name.toLowerCase(),
+					);
+
+					if (nameClash && typeof textChannel.setName === "function") {
+						const dateSuffix = new Date()
+							.toISOString()
+							.slice(5, 10)
+							.replace("-", ""); // e.g. "1002"
+						const randSuffix = Math.random().toString(36).slice(2, 6);
+						const suffix = `-${dateSuffix}-${randSuffix}`;
+						const baseName = textChannel.name
+							.slice(0, 32 - suffix.length)
+							.replace(/-+$/, "");
+						const uniqueName = `${baseName}${suffix}`;
+						await textChannel.setName(uniqueName).catch((err) => {
+							logger.warn(
+								`Failed to rename clashing archived channel #${textChannel.name} to #${uniqueName}:`,
+								err,
+							);
+						});
+					}
+
 					await textChannel
 						.setParent(archiveCat.id, { lockPermissions: false })
 						.catch((err) => {
@@ -677,7 +705,15 @@ export async function archiveMercClientChannel(
 			}
 		}
 
-		// 3. Post notification in the channel
+		// 3. Set channel topic with archive timestamp for automated 1-week retention tracking
+		const archivedIso = new Date().toISOString();
+		if (typeof textChannel.setTopic === "function") {
+			await textChannel
+				.setTopic(`Archived on ${archivedIso} | Mercenary Client Channel`)
+				.catch(() => {});
+		}
+
+		// 4. Post notification in the channel
 		const message =
 			reasonMessage ||
 			"Channel automatically archived because the contract creation link expired without submission. Client access has been revoked.";
@@ -688,6 +724,106 @@ export async function archiveMercClientChannel(
 		logger.error(`Error archiving mercenary client channel ${channelId}:`, err);
 		return false;
 	}
+}
+
+/**
+ * Scans the archive category across all guilds and permanently deletes channels
+ * that have been archived for >= 7 days (1 week).
+ */
+export async function cleanupOldArchivedMercChannels(
+	client: Client,
+	maxAgeDays = 7,
+): Promise<number> {
+	const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+	const now = Date.now();
+	let cleanedCount = 0;
+
+	for (const guild of client.guilds.cache.values()) {
+		try {
+			const mercConfig = await getMercChannelConfig(guild.id);
+			if (!mercConfig.archiveCategory) continue;
+
+			const archiveCat = resolveGuildChannel(
+				guild,
+				mercConfig.archiveCategory,
+				ChannelType.GuildCategory,
+			);
+			if (!archiveCat || archiveCat.type !== ChannelType.GuildCategory) {
+				continue;
+			}
+
+			// Ensure channels cache is populated
+			if (guild.channels.cache.size <= 1) {
+				await guild.channels.fetch().catch(() => null);
+			}
+
+			const archivedChannels = Array.from(guild.channels.cache.values()).filter(
+				(ch): ch is TextChannel =>
+					ch.parentId === archiveCat.id && ch.type === ChannelType.GuildText,
+			);
+
+			for (const ch of archivedChannels) {
+				try {
+					let isEligible = false;
+
+					// 1. Check topic for explicit archive ISO date
+					if (ch.topic) {
+						const match = ch.topic.match(/Archived on ([\d-T:.Z]+)/i);
+						if (match?.[1]) {
+							const archiveDate = new Date(match[1]);
+							if (
+								!Number.isNaN(archiveDate.getTime()) &&
+								now - archiveDate.getTime() >= maxAgeMs
+							) {
+								isEligible = true;
+							}
+						}
+					}
+
+					// 2. Fallback: check creation date and last message timestamp
+					if (!isEligible && ch.createdAt) {
+						const createdTime = ch.createdAt.getTime();
+						if (now - createdTime >= maxAgeMs) {
+							// If channel is >= 7 days old, verify no recent messages exist
+							if (ch.messages && typeof ch.messages.fetch === "function") {
+								const messages = await ch.messages
+									.fetch({ limit: 1 })
+									.catch(() => null);
+								const lastMsg = messages?.first?.();
+								if (!lastMsg || now - lastMsg.createdTimestamp >= maxAgeMs) {
+									isEligible = true;
+								}
+							} else {
+								isEligible = true;
+							}
+						}
+					}
+
+					if (isEligible) {
+						await ch.delete(
+							`Mercenary archive retention policy: auto-cleaning channel older than ${maxAgeDays} days.`,
+						);
+						logger.info(
+							`Cleaned up ${maxAgeDays}-day-old archived channel #${ch.name} (${ch.id}) in guild ${guild.name}.`,
+						);
+						cleanedCount++;
+					}
+				} catch (chErr) {
+					logger.warn(
+						`Failed to evaluate/delete archived channel #${ch.name} (${ch.id}):`,
+						chErr,
+					);
+				}
+			}
+		} catch (gErr) {
+			logger.warn(
+				`Error processing archive channel cleanup for guild ${guild.name} (${guild.id}):`,
+				gErr,
+			);
+		}
+	}
+
+	return cleanedCount;
 }
 
 /**
@@ -781,6 +917,26 @@ export function startMercExpiredTokenArchiver(
 			logger.warn("Error running initial expired token archiver pass:", err);
 		});
 	}, 5_000);
+
+	// Run initial 1-week archived channel retention cleanup pass after 10s
+	setTimeout(() => {
+		void cleanupOldArchivedMercChannels(client).catch((err) => {
+			logger.warn("Error running initial archived channel cleanup pass:", err);
+		});
+	}, 10_000);
+
+	// Hourly archived channel retention cleanup (pruning channels >= 1 week old)
+	setInterval(
+		() => {
+			void cleanupOldArchivedMercChannels(client).catch((err) => {
+				logger.warn(
+					"Error running periodic archived channel cleanup pass:",
+					err,
+				);
+			});
+		},
+		60 * 60 * 1000,
+	);
 
 	return setInterval(async () => {
 		try {

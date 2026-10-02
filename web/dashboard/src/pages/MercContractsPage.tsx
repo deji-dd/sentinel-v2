@@ -904,7 +904,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															variant="secondary"
 															className="text-[11px] font-mono px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30"
 														>
-															Idle ≤ {contract.terms.idleDurationMinutes ?? 15}m
+															Idle ≥ {contract.terms.idleDurationMinutes ?? 15}m
 														</Badge>
 													)}
 													{contract.terms.statuses.offline && (
@@ -952,7 +952,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																	variant="secondary"
 																	className="text-[11px] font-mono px-2 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30"
 																>
-																	Idle ≤{" "}
+																	Idle ≥{" "}
 																	{contract.warStartTerms.idleDurationMinutes ??
 																		15}
 																	m
@@ -1589,7 +1589,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														htmlFor="term-idle-minutes"
 														className="text-xs text-muted-foreground block mb-1"
 													>
-														Max Idle Duration (minutes)
+														Min Idle Duration (minutes)
 													</label>
 													<Input
 														id="term-idle-minutes"
@@ -1783,7 +1783,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																	htmlFor="war-term-idle-minutes"
 																	className="text-xs text-muted-foreground block mb-1"
 																>
-																	Max Idle Duration (minutes)
+																	Min Idle Duration (minutes)
 																</label>
 																<Input
 																	id="war-term-idle-minutes"
