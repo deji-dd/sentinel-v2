@@ -1998,41 +1998,30 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				body.warStartStrickenHitPrice === undefined &&
 				body.excludedMembers === undefined;
 
-			// Hit terms and exclusion targets may be changed freely once a contract
-			// is live — mercs need to pull a target mid-contract without cancelling.
-			// Timing and pricing may not.
-			const onlyLiveEditableFields =
-				body.startTime === undefined &&
-				body.startImmediately === undefined &&
-				body.startMinutesBeforeWar === undefined &&
-				body.endTime === undefined &&
-				body.endOnWarEnd === undefined &&
-				body.hitPrice === undefined &&
-				body.strickenHitPrice === undefined &&
-				body.changeTermsOnWarStart === undefined &&
-				body.warStartTerms === undefined &&
-				body.warStartHitPrice === undefined &&
-				body.warStartStrickenHitPrice === undefined;
+			// Payout rates cannot be changed once a contract has started.
+			// Hit terms, target exclusions, and duration/timing can be freely adjusted.
+			const hasStarted =
+				current.status === "active" ||
+				current.status === "paused" ||
+				current.status === "completed" ||
+				current.status === "cancelled";
 
-			const isLiveSafeChange =
-				!isStatusOnlyChange &&
-				onlyLiveEditableFields &&
-				(body.excludedMembers !== undefined || body.terms !== undefined);
+			if (hasStarted && !isStatusOnlyChange) {
+				const isRateModified =
+					(body.hitPrice !== undefined && body.hitPrice !== current.hitPrice) ||
+					(body.strickenHitPrice !== undefined &&
+						body.strickenHitPrice !== (current.strickenHitPrice ?? null)) ||
+					(body.warStartHitPrice !== undefined &&
+						body.warStartHitPrice !== (current.warStartHitPrice ?? null)) ||
+					(body.warStartStrickenHitPrice !== undefined &&
+						body.warStartStrickenHitPrice !==
+							(current.warStartStrickenHitPrice ?? null));
 
-			// Timing and pricing cannot be changed after a contract starts.
-			if (!isStatusOnlyChange && !isLiveSafeChange) {
-				const hasStarted =
-					current.status === "active" ||
-					current.status === "paused" ||
-					current.status === "completed" ||
-					current.status === "cancelled" ||
-					new Date(current.startTime).getTime() <= Date.now();
-
-				if (hasStarted) {
+				if (isRateModified) {
 					set.status = 400;
 					return {
 						error:
-							"Cannot edit timing, faction or pricing of a contract that has already started. You may still adjust hit terms and exclusion targets on active contracts.",
+							"Cannot edit hit payout rates on an active or ongoing contract. You may still adjust hit terms, exclusion targets, and duration.",
 					};
 				}
 			}

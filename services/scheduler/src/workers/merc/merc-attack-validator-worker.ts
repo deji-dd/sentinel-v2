@@ -218,25 +218,6 @@ export function isWithinPausedWindow(
 	return false;
 }
 
-// In-memory set for zero-overhead attack deduplication
-const processedAttackIds = new Set<number>();
-
-// Maximum size for in-memory attack ID cache before pruning old entries
-const MAX_PROCESSED_CACHE_SIZE = 10_000;
-
-function rememberAttackId(id: number): void {
-	if (processedAttackIds.size >= MAX_PROCESSED_CACHE_SIZE) {
-		const iter = processedAttackIds.values();
-		for (let i = 0; i < 2_000; i++) {
-			const val = iter.next().value;
-			if (val !== undefined) {
-				processedAttackIds.delete(val);
-			}
-		}
-	}
-	processedAttackIds.add(id);
-}
-
 /**
  * Retrieves usable master API keys for a guild with active merc contracts.
  */

@@ -384,6 +384,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [editingContract, setEditingContract] = useState<MercContract | null>(
 		null,
 	);
+	const isLiveEdit =
+		editingContract?.status === "active" ||
+		editingContract?.status === "paused";
 	const [editStartImmediately, setEditStartImmediately] = useState(true);
 	const [editCustomStartTime, setEditCustomStartTime] = useState(() =>
 		toTctDateTimeInput(new Date()),
@@ -1001,7 +1004,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 			let finalStartTime: string;
 			let calculatedMinutesBeforeWar: number | null = null;
 
-			if (editingContract.warStatusAtCreation === "upcoming") {
+			if (isLiveEdit) {
+				finalStartTime = new Date(editingContract.startTime).toISOString();
+				calculatedMinutesBeforeWar =
+					editingContract.startMinutesBeforeWar ?? null;
+			} else if (editingContract.warStatusAtCreation === "upcoming") {
 				calculatedMinutesBeforeWar = editStartMinutesBeforeWar;
 				if (editingContract.warStart) {
 					// Start time is anchored to war start; the "minutes before war"
@@ -1033,9 +1040,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 
 			const payload = {
 				startTime: finalStartTime,
-				startImmediately:
-					editingContract.warStatusAtCreation !== "upcoming" &&
-					editStartImmediately,
+				startImmediately: isLiveEdit
+					? false
+					: editingContract.warStatusAtCreation !== "upcoming" &&
+						editStartImmediately,
 				startMinutesBeforeWar: calculatedMinutesBeforeWar,
 				endTime: finalEndTime,
 				endOnWarEnd:
@@ -1052,10 +1060,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					strickenHits: editStrickenHits,
 					levelRange: editLevelRange,
 				},
-				hitPrice: Math.max(0, Number(editHitPrice) || 0),
-				strickenHitPrice: editStrickenHits
-					? Math.max(0, Number(editStrickenHitPrice) || 0)
-					: null,
+				hitPrice: isLiveEdit
+					? editingContract.hitPrice
+					: Math.max(0, Number(editHitPrice) || 0),
+				strickenHitPrice: isLiveEdit
+					? editingContract.strickenHitPrice
+					: editStrickenHits
+						? Math.max(0, Number(editStrickenHitPrice) || 0)
+						: null,
 				changeTermsOnWarStart:
 					editingContract.warStatusAtCreation === "upcoming" &&
 					calculatedMinutesBeforeWar !== null &&
@@ -1308,11 +1320,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 							const isUpcoming = contract.status === "upcoming";
 							const isPaused = contract.status === "paused";
 							const canEdit =
-								isUpcoming ||
-								isPaused ||
-								new Date(contract.startTime).getTime() > Date.now();
-							// Active contracts expose terms + exclusion targets only; timing
-							// and pricing stay locked once a contract has gone live.
+								contract.status === "upcoming" ||
+								contract.status === "active" ||
+								contract.status === "paused";
+							// Active and paused contracts allow editing terms, exclusions, and timing,
+							// while payout rates stay locked once a contract has gone live.
 							const isLiveContract = isActive || isPaused;
 
 							return (
@@ -2537,7 +2549,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					<DialogHeader>
 						<DialogTitle className="text-lg font-bold flex items-center gap-2 text-foreground">
 							<Edit className="size-4 text-primary" />
-							<span>Edit Upcoming Contract</span>
+							<span>
+								{isLiveEdit
+									? "Edit Ongoing Contract"
+									: "Edit Upcoming Contract"}
+							</span>
 							{editingContract && (
 								<span className="text-xs font-mono font-normal text-muted-foreground">
 									({editingContract.factionName} [{editingContract.factionId}])
@@ -2549,16 +2565,32 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					{editingContract && (
 						<div className="space-y-6 py-2">
 							{/* Notice */}
-							<div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start gap-2.5">
+							<div
+								className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+									isLiveEdit
+										? "bg-blue-500/10 border-blue-500/20 text-blue-300"
+										: "bg-amber-500/10 border-amber-500/20 text-amber-300"
+								}`}
+							>
 								<Clock className="size-4 shrink-0 mt-0.5" />
 								<div>
-									<p className="font-semibold text-amber-200">
-										Contract Not Started Yet
+									<p
+										className={`font-semibold ${
+											isLiveEdit ? "text-blue-200" : "text-amber-200"
+										}`}
+									>
+										{isLiveEdit
+											? "Ongoing Contract"
+											: "Contract Not Started Yet"}
 									</p>
-									<p className="text-[11px] text-amber-300/90 mt-0.5">
-										You can modify start timing, target filtering criteria,
-										payout values, and target exclusions before the contract
-										begins.
+									<p
+										className={`text-[11px] mt-0.5 ${
+											isLiveEdit ? "text-blue-300/90" : "text-amber-300/90"
+										}`}
+									>
+										{isLiveEdit
+											? "You can modify target filtering criteria, target exclusions, and duration. Hit payout rates cannot be modified on an ongoing contract."
+											: "You can modify start timing, target filtering criteria, payout values, and target exclusions before the contract begins."}
 									</p>
 								</div>
 							</div>
@@ -2814,6 +2846,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											className="text-xs font-semibold text-foreground block mb-1"
 										>
 											Value of 1 hit ($)
+											{isLiveEdit && (
+												<span className="text-[10px] text-muted-foreground font-normal ml-1">
+													(Locked)
+												</span>
+											)}
 										</label>
 										<Input
 											id="edit-term-hit-price"
@@ -2821,8 +2858,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											min={0}
 											step={1000}
 											value={editHitPrice}
+											disabled={isLiveEdit}
 											onChange={(e) => setEditHitPrice(e.target.value)}
-											className="h-9 text-xs rounded-xl font-mono"
+											className="h-9 text-xs rounded-xl font-mono disabled:opacity-60 disabled:cursor-not-allowed"
 											placeholder="3000000"
 										/>
 									</div>
@@ -2834,6 +2872,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												className="text-xs font-semibold text-blue-400 block mb-1"
 											>
 												Value of Stricken hit ($)
+												{isLiveEdit && (
+													<span className="text-[10px] text-muted-foreground font-normal ml-1">
+														(Locked)
+													</span>
+												)}
 											</label>
 											<Input
 												id="edit-term-stricken-price"
@@ -2841,10 +2884,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												min={0}
 												step={1000}
 												value={editStrickenHitPrice}
+												disabled={isLiveEdit}
 												onChange={(e) =>
 													setEditStrickenHitPrice(e.target.value)
 												}
-												className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
+												className="h-9 text-xs rounded-xl font-mono border-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
 												placeholder="4000000"
 											/>
 										</div>
@@ -3007,6 +3051,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															className="text-xs font-semibold text-foreground block mb-1"
 														>
 															War-Start Hit Price ($)
+															{isLiveEdit && (
+																<span className="text-[10px] text-muted-foreground font-normal ml-1">
+																	(Locked)
+																</span>
+															)}
 														</label>
 														<Input
 															id="edit-war-hit-price"
@@ -3014,10 +3063,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															min={0}
 															step={1000}
 															value={editWarStartHitPrice}
+															disabled={isLiveEdit}
 															onChange={(e) =>
 																setEditWarStartHitPrice(e.target.value)
 															}
-															className="h-9 text-xs rounded-xl font-mono"
+															className="h-9 text-xs rounded-xl font-mono disabled:opacity-60 disabled:cursor-not-allowed"
 															placeholder="3000000"
 														/>
 													</div>
@@ -3029,6 +3079,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																className="text-xs font-semibold text-blue-400 block mb-1"
 															>
 																War-Start Stricken Price ($)
+																{isLiveEdit && (
+																	<span className="text-[10px] text-muted-foreground font-normal ml-1">
+																		(Locked)
+																	</span>
+																)}
 															</label>
 															<Input
 																id="edit-war-stricken-price"
@@ -3036,12 +3091,13 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																min={0}
 																step={1000}
 																value={editWarStartStrickenHitPrice}
+																disabled={isLiveEdit}
 																onChange={(e) =>
 																	setEditWarStartStrickenHitPrice(
 																		e.target.value,
 																	)
 																}
-																className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
+																className="h-9 text-xs rounded-xl font-mono border-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
 																placeholder="4000000"
 															/>
 														</div>
