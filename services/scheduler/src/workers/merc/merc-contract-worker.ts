@@ -107,6 +107,30 @@ export class MercTargetManager {
 			};
 		}
 
+		// Guard: Mercenaries can only have 1 active dibs at a time across all active targets
+		for (const existingAlert of this.alerts.values()) {
+			if (
+				existingAlert !== alert &&
+				existingAlert.status === "claimed" &&
+				existingAlert.claimedBy
+			) {
+				const matchDiscord =
+					claimant.discordId !== "" &&
+					existingAlert.claimedBy.discordId === claimant.discordId;
+				const matchTorn =
+					claimant.tornId !== undefined &&
+					existingAlert.claimedBy.tornId !== undefined &&
+					existingAlert.claimedBy.tornId === claimant.tornId;
+
+				if (matchDiscord || matchTorn) {
+					return {
+						success: false,
+						reason: `You already have an active claim on ${existingAlert.targetName} [${existingAlert.targetId}]. There can only be 1 active dibs per merc.`,
+					};
+				}
+			}
+		}
+
 		const nowMs = Date.now();
 		const nowSec = Math.floor(nowMs / 1000);
 

@@ -379,6 +379,117 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 		expect(dupRes.reason).toContain("already claimed");
 	});
 
+	it("prevents a mercenary from claiming multiple dibs when they already hold an active claim", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		const memberA = createMockMember({ id: 2101, name: "TargetAlpha" });
+		const memberB = createMockMember({ id: 2102, name: "TargetBeta" });
+
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberA,
+			nowSec,
+			nowMs,
+		);
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberB,
+			nowSec,
+			nowMs,
+		);
+
+		// Mercenary claims Target Alpha
+		const claimResA = await manager.claimTarget(mockContract.id, 2101, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+			tornId: 99999,
+			tornName: "SuperMerc",
+		});
+		expect(claimResA.success).toBe(true);
+
+		// Same mercenary attempts to claim Target Beta via discordId
+		const claimResB = await manager.claimTarget(mockContract.id, 2102, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+		});
+		expect(claimResB.success).toBe(false);
+		expect(claimResB.reason).toContain("already have an active claim");
+		expect(claimResB.reason).toContain("TargetAlpha [2101]");
+
+		// Same mercenary attempts to claim Target Beta via tornId match
+		const claimResBTorn = await manager.claimTarget(mockContract.id, 2102, {
+			discordId: "user-different-session",
+			discordTag: "Merc#9999",
+			tornId: 99999,
+		});
+		expect(claimResBTorn.success).toBe(false);
+		expect(claimResBTorn.reason).toContain("already have an active claim");
+
+		// Another mercenary CAN claim Target Beta
+		const claimResOther = await manager.claimTarget(mockContract.id, 2102, {
+			discordId: "user-2",
+			discordTag: "OtherMerc#0002",
+			tornId: 88888,
+		});
+		expect(claimResOther.success).toBe(true);
+	});
+
+	it("allows claiming another target after releasing active claim", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		const memberA = createMockMember({ id: 2103, name: "TargetAlpha" });
+		const memberB = createMockMember({ id: 2104, name: "TargetBeta" });
+
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberA,
+			nowSec,
+			nowMs,
+		);
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberB,
+			nowSec,
+			nowMs,
+		);
+
+		await manager.claimTarget(mockContract.id, 2103, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+		});
+
+		// Release claim on Target Alpha
+		const releaseRes = await manager.releaseTarget(
+			mockContract.id,
+			2103,
+			"user-1",
+		);
+		expect(releaseRes.success).toBe(true);
+
+		// Merc can now claim Target Beta
+		const claimResB = await manager.claimTarget(mockContract.id, 2104, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+		});
+		expect(claimResB.success).toBe(true);
+	});
+
 	it("expires claim after 20 seconds without attack and resets to open", async () => {
 		const manager = new MercTargetManager();
 		const nowSec = Math.floor(Date.now() / 1000);
