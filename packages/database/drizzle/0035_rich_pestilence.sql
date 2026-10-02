@@ -1,0 +1,1 @@
+ALTER TABLE "merc_contracts" ADD COLUMN "auto_stop_price" bigint;
