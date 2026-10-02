@@ -1,6 +1,11 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import * as database from "@sentinel/database";
-import { ChannelType, type Client } from "discord.js";
+import {
+	ChannelType,
+	type Client,
+	OverwriteType,
+	PermissionFlagsBits,
+} from "discord.js";
 import {
 	archiveMercClientChannel,
 	cleanupOldArchivedMercChannels,
@@ -417,5 +422,153 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 		expect(channelSendCalled).toBe(false);
 		// Tokens were marked archived so they don't get checked again
 		expect(markedTokens).toEqual(["token-exp-contract", "token-exp-renewed"]);
+	});
+
+	it("archiveMercClientChannel removes all non-admin users and preserves administrators and bot", async () => {
+		const guildId = "guild-users-removal-test";
+		const channelId = "chan-removal-test";
+		const botId = "bot-app-id";
+		const adminUserId = "user-admin";
+		const regularUserId1 = "user-regular-1";
+		const regularUserId2 = "user-regular-2";
+		const managerRoleId = "role-manager";
+
+		spyOn(database, "getMercChannelConfig").mockResolvedValue({
+			contractCreation: null,
+			upcomingContracts: null,
+			targets: null,
+			mercLog: null,
+			clientCategory: null,
+			archiveCategory: null,
+		});
+
+		const deletedOverwrites: string[] = [];
+		const editedOverwrites: Record<string, Record<string, boolean>> = {};
+
+		const mockChannel = {
+			id: channelId,
+			name: "faction-cleanup",
+			type: ChannelType.GuildText,
+			isTextBased: () => true,
+			permissionOverwrites: {
+				cache: new Map([
+					[
+						botId,
+						{
+							id: botId,
+							type: OverwriteType.Member,
+						},
+					],
+					[
+						adminUserId,
+						{
+							id: adminUserId,
+							type: OverwriteType.Member,
+						},
+					],
+					[
+						regularUserId1,
+						{
+							id: regularUserId1,
+							type: OverwriteType.Member,
+						},
+					],
+					[
+						regularUserId2,
+						{
+							id: regularUserId2,
+							type: OverwriteType.Member,
+						},
+					],
+					[
+						managerRoleId,
+						{
+							id: managerRoleId,
+							type: OverwriteType.Role,
+						},
+					],
+				]),
+				delete: mock(async (id: string) => {
+					deletedOverwrites.push(id);
+				}),
+				edit: mock(async (id: string, opts: Record<string, boolean>) => {
+					editedOverwrites[id] = opts;
+				}),
+			},
+			send: mock(async () => ({})),
+		};
+
+		const mockGuild = {
+			id: guildId,
+			name: "Test Guild",
+			roles: {
+				everyone: { id: "role-everyone" },
+			},
+			members: {
+				cache: new Map([
+					[
+						adminUserId,
+						{
+							id: adminUserId,
+							permissions: {
+								has: (flag: bigint) =>
+									flag === PermissionFlagsBits.Administrator,
+							},
+						},
+					],
+					[
+						regularUserId1,
+						{
+							id: regularUserId1,
+							permissions: {
+								has: () => false,
+							},
+						},
+					],
+					[
+						regularUserId2,
+						{
+							id: regularUserId2,
+							permissions: {
+								has: () => false,
+							},
+						},
+					],
+				]),
+				fetch: mock(async () => null),
+			},
+			channels: {
+				cache: new Map([[channelId, mockChannel]]),
+				fetch: mock(async () => mockChannel),
+			},
+		};
+
+		const mockClient = {
+			user: { id: botId },
+			guilds: {
+				cache: new Map([[guildId, mockGuild]]),
+				fetch: mock(async () => mockGuild),
+			},
+		} as unknown as Client;
+
+		const success = await archiveMercClientChannel(
+			mockClient,
+			guildId,
+			channelId,
+			regularUserId1,
+			"Channel archived due to expiry",
+		);
+
+		expect(success).toBe(true);
+		// Both regular users should be deleted from channel overwrites
+		expect(deletedOverwrites).toContain(regularUserId1);
+		expect(deletedOverwrites).toContain(regularUserId2);
+		// Bot and server admin must NOT be deleted
+		expect(deletedOverwrites).not.toContain(botId);
+		expect(deletedOverwrites).not.toContain(adminUserId);
+		// Role overwrites must NOT be deleted
+		expect(deletedOverwrites).not.toContain(managerRoleId);
+		// @everyone must have ViewChannel set to false
+		expect(editedOverwrites["role-everyone"]?.ViewChannel).toBe(false);
 	});
 });

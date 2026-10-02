@@ -757,6 +757,7 @@ export interface MercContract {
 	terms: MercContractHitTerms;
 	hitPrice: number;
 	strickenHitPrice?: number | null;
+	autoStopPrice?: number | null;
 	changeTermsOnWarStart?: boolean;
 	warStartTerms?: MercContractHitTerms | null;
 	warStartHitPrice?: number | null;
@@ -849,6 +850,7 @@ export function mapRowToMercContract(
 		},
 		hitPrice: row.hitPrice ?? 0,
 		strickenHitPrice: row.strickenHitPrice ?? null,
+		autoStopPrice: row.autoStopPrice ?? null,
 		changeTermsOnWarStart: row.changeTermsOnWarStart,
 		warStartTerms: row.changeTermsOnWarStart
 			? {
@@ -938,6 +940,11 @@ export async function createMercContract(
 
 			hitPrice: contractData.hitPrice ?? 0,
 			strickenHitPrice: contractData.strickenHitPrice ?? null,
+			autoStopPrice:
+				contractData.autoStopPrice !== null &&
+				contractData.autoStopPrice !== undefined
+					? Math.max(0, Number(contractData.autoStopPrice))
+					: null,
 
 			changeTermsOnWarStart: contractData.changeTermsOnWarStart ?? false,
 			warStartAllowOnline: contractData.warStartTerms?.statuses.online ?? null,
@@ -1085,14 +1092,22 @@ export async function updateMercContract(
 	const pausedWindowsChanged =
 		updates.status !== undefined && updates.status !== existingRow.status;
 
-	// ── startImmediately guard ──────────────────────────────────────────────
-	// An immediately-started contract must never carry a start time in the past;
-	// back-dating it would let target population begin before the contract exists.
+	// ── start time guard ────────────────────────────────────────────────────
+	// When editing an already started contract, start time must not be editable.
+	const isAlreadyStarted =
+		existingRow.status === "active" ||
+		existingRow.status === "paused" ||
+		existingRow.status === "completed" ||
+		existingRow.status === "cancelled" ||
+		existingRow.startTime.getTime() <= Date.now();
+
 	let resolvedStartTime: Date | undefined;
-	if (updates.startImmediately === true) {
-		resolvedStartTime = new Date();
-	} else if (updates.startTime !== undefined) {
-		resolvedStartTime = new Date(updates.startTime);
+	if (!isAlreadyStarted) {
+		if (updates.startImmediately === true) {
+			resolvedStartTime = new Date();
+		} else if (updates.startTime !== undefined) {
+			resolvedStartTime = new Date(updates.startTime);
+		}
 	}
 
 	const [updated] = await db
@@ -1108,10 +1123,10 @@ export async function updateMercContract(
 					pausedWindowsChanged
 					? { pausedWindows: nextPausedWindows }
 					: {}),
-			...(updates.startImmediately !== undefined
+			...(!isAlreadyStarted && updates.startImmediately !== undefined
 				? { startImmediately: updates.startImmediately }
 				: {}),
-			...(updates.startMinutesBeforeWar !== undefined
+			...(!isAlreadyStarted && updates.startMinutesBeforeWar !== undefined
 				? { startMinutesBeforeWar: updates.startMinutesBeforeWar }
 				: {}),
 			...(updates.endTime !== undefined
@@ -1134,6 +1149,15 @@ export async function updateMercContract(
 			...(updates.hitPrice !== undefined ? { hitPrice: updates.hitPrice } : {}),
 			...(updates.strickenHitPrice !== undefined
 				? { strickenHitPrice: updates.strickenHitPrice }
+				: {}),
+			...(updates.autoStopPrice !== undefined
+				? {
+						autoStopPrice:
+							updates.autoStopPrice !== null &&
+							updates.autoStopPrice !== undefined
+								? Math.max(0, Number(updates.autoStopPrice))
+								: null,
+					}
 				: {}),
 			...(updates.changeTermsOnWarStart !== undefined
 				? { changeTermsOnWarStart: updates.changeTermsOnWarStart }

@@ -323,7 +323,13 @@ class SubversiveDibsManager {
 				}
 
 				// Check if > postHospTimeoutSeconds has passed after hospital exit and any active RW hit cooldown
-				const rwCooldownMs = war.state === "active" ? 60_000 : 0;
+				const isWarActive =
+					war.state === "active" ||
+					(war.state === "scheduled" &&
+						Boolean(war.start) &&
+						Math.floor(nowMs / 1000) >= (war.start ?? 0) &&
+						war.winner === null);
+				const rwCooldownMs = isWarActive ? 60_000 : 0;
 				const elapsed = nowMs - (dibs.exitHospAt + rwCooldownMs);
 				if (elapsed >= timeoutMs) {
 					if (dibs.status === "claimed") {

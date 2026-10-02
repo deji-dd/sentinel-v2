@@ -80,6 +80,7 @@ export interface MercContract {
 	terms: MercContractHitTerms;
 	hitPrice: number;
 	strickenHitPrice?: number | null;
+	autoStopPrice?: number | null;
 	changeTermsOnWarStart?: boolean;
 	warStartTerms?: MercContractHitTerms | null;
 	warStartHitPrice?: number | null;
@@ -369,6 +370,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	// Form: Hit Payouts
 	const [hitPrice, setHitPrice] = useState<string>("3000000");
 	const [strickenHitPrice, setStrickenHitPrice] = useState<string>("4000000");
+	const [autoStopPrice, setAutoStopPrice] = useState<string>("");
 	const [warStartHitPrice, setWarStartHitPrice] = useState<string>("3000000");
 	const [warStartStrickenHitPrice, setWarStartStrickenHitPrice] =
 		useState<string>("4000000");
@@ -387,6 +389,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const isLiveEdit =
 		editingContract?.status === "active" ||
 		editingContract?.status === "paused";
+	const isContractStarted = Boolean(
+		editingContract &&
+			(editingContract.status === "active" ||
+				editingContract.status === "paused" ||
+				editingContract.status === "completed" ||
+				editingContract.status === "cancelled" ||
+				new Date(editingContract.startTime).getTime() <= Date.now()),
+	);
 	const [editStartImmediately, setEditStartImmediately] = useState(true);
 	const [editCustomStartTime, setEditCustomStartTime] = useState(() =>
 		toTctDateTimeInput(new Date()),
@@ -410,6 +420,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [editHitPrice, setEditHitPrice] = useState<string>("3000000");
 	const [editStrickenHitPrice, setEditStrickenHitPrice] =
 		useState<string>("4000000");
+	const [editAutoStopPrice, setEditAutoStopPrice] = useState<string>("");
 	const [editChangeTermsOnWarStart, setEditChangeTermsOnWarStart] =
 		useState(false);
 	const [editWarStartOnline, setEditWarStartOnline] = useState(true);
@@ -484,6 +495,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 
 		setHitPrice("3000000");
 		setStrickenHitPrice("4000000");
+		setAutoStopPrice("");
 		setWarStartHitPrice("3000000");
 		setWarStartStrickenHitPrice("4000000");
 
@@ -685,6 +697,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 				hitPrice: Math.max(0, Number(hitPrice) || 0),
 				strickenHitPrice: strickenHits
 					? Math.max(0, Number(strickenHitPrice) || 0)
+					: null,
+				autoStopPrice: autoStopPrice
+					? Math.max(0, Number(autoStopPrice))
 					: null,
 				changeTermsOnWarStart:
 					validatedFaction.warStatus === "upcoming" &&
@@ -911,6 +926,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setEditStrickenHitPrice(
 			contract.strickenHitPrice ? String(contract.strickenHitPrice) : "4000000",
 		);
+		setEditAutoStopPrice(
+			contract.autoStopPrice ? String(contract.autoStopPrice) : "",
+		);
 
 		setEditChangeTermsOnWarStart(Boolean(contract.changeTermsOnWarStart));
 		setEditWarStartOnline(
@@ -1106,20 +1124,23 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					editWarStartStricken
 						? Math.max(0, Number(editWarStartStrickenHitPrice) || 0)
 						: null,
+				autoStopPrice: editAutoStopPrice
+					? Math.max(0, Number(editAutoStopPrice))
+					: null,
 				excludedMembers: editExcludedMembers,
 			};
 
-			// Once a contract is live the API locks timing and pricing, so only the
-			// live-safe subset is sent. Terms and exclusions remain editable.
-			const isContractLive =
-				editingContract.status === "active" ||
-				editingContract.status === "paused" ||
-				new Date(editingContract.startTime).getTime() <= Date.now();
+			// Once a contract is live the API locks start time and hit payout rates,
+			// while terms, exclusions, end time, and auto-stop budget remain editable.
+			const isContractLive = isContractStarted;
 
 			const finalPayload = isContractLive
 				? {
 						terms: payload.terms,
 						excludedMembers: payload.excludedMembers,
+						endTime: payload.endTime,
+						endOnWarEnd: payload.endOnWarEnd,
+						autoStopPrice: payload.autoStopPrice,
 					}
 				: payload;
 
@@ -1615,6 +1636,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												>
 													${contract.strickenHitPrice.toLocaleString()} /
 													Stricken
+												</Badge>
+											)}
+											{contract.autoStopPrice && contract.autoStopPrice > 0 && (
+												<Badge
+													variant="outline"
+													className="text-[11px] font-mono px-2 py-0.5 border-purple-500/30 text-purple-400 bg-purple-500/10 inline-flex items-center gap-1"
+												>
+													Auto-Stop: ${contract.autoStopPrice.toLocaleString()}
 												</Badge>
 											)}
 											{contract.excludedMembers &&
@@ -2301,6 +2330,33 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											)}
 										</div>
 
+										{/* Auto-Stop Price Limit */}
+										<div className="pt-3 border-t border-border/40">
+											<label
+												htmlFor="term-auto-stop-price"
+												className="text-xs font-semibold text-foreground block mb-1"
+											>
+												Auto-Stop Price ($)
+												<span className="text-[10px] text-muted-foreground font-normal ml-1.5">
+													(Optional spending limit)
+												</span>
+											</label>
+											<Input
+												id="term-auto-stop-price"
+												type="number"
+												min={0}
+												step={1000000}
+												value={autoStopPrice}
+												onChange={(e) => setAutoStopPrice(e.target.value)}
+												className="h-9 text-xs rounded-xl font-mono"
+												placeholder="e.g. 50000000 (No limit if blank)"
+											/>
+											<p className="text-[10px] text-muted-foreground mt-1">
+												Contract automatically stops when total hit payouts
+												reach or exceed this amount.
+											</p>
+										</div>
+
 										{/* Level Range Slider */}
 										<div className="pt-2 border-t border-border/40 space-y-2">
 											<div className="flex items-center justify-between text-xs">
@@ -2567,7 +2623,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 							{/* Notice */}
 							<div
 								className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
-									isLiveEdit
+									isContractStarted
 										? "bg-blue-500/10 border-blue-500/20 text-blue-300"
 										: "bg-amber-500/10 border-amber-500/20 text-amber-300"
 								}`}
@@ -2576,21 +2632,23 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 								<div>
 									<p
 										className={`font-semibold ${
-											isLiveEdit ? "text-blue-200" : "text-amber-200"
+											isContractStarted ? "text-blue-200" : "text-amber-200"
 										}`}
 									>
-										{isLiveEdit
-											? "Ongoing Contract"
+										{isContractStarted
+											? "Ongoing / Started Contract"
 											: "Contract Not Started Yet"}
 									</p>
 									<p
 										className={`text-[11px] mt-0.5 ${
-											isLiveEdit ? "text-blue-300/90" : "text-amber-300/90"
+											isContractStarted
+												? "text-blue-300/90"
+												: "text-amber-300/90"
 										}`}
 									>
-										{isLiveEdit
-											? "You can modify target filtering criteria, target exclusions, and duration. Hit payout rates cannot be modified on an ongoing contract."
-											: "You can modify start timing, target filtering criteria, payout values, and target exclusions before the contract begins."}
+										{isContractStarted
+											? "Start time and hit payout rates are locked on an ongoing contract. You can modify duration, target filtering criteria, auto-stop price limit, and target exclusions."
+											: "You can modify start timing, target filtering criteria, payout values, auto-stop price limit, and target exclusions before the contract begins."}
 									</p>
 								</div>
 							</div>
@@ -2601,7 +2659,64 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 									1. Contract Timing (TCT / UTC)
 								</h3>
 
-								{editingContract.warStatusAtCreation === "upcoming" ? (
+								{isContractStarted ? (
+									<div className="space-y-4">
+										<div className="p-3 rounded-xl bg-muted/40 border border-border/60 text-xs space-y-1">
+											<div className="flex items-center justify-between">
+												<span className="text-muted-foreground font-medium">
+													Start Time
+												</span>
+												<span className="font-mono text-foreground font-semibold">
+													{formatTctDateTime(editingContract.startTime)}
+												</span>
+											</div>
+											<p className="text-[11px] text-amber-400/90 font-medium">
+												This contract has already started. Start time cannot be
+												modified.
+											</p>
+										</div>
+
+										<div className="space-y-2 pt-2 border-t border-border/40">
+											{editingContract.warStatusAtCreation !== "no_war" && (
+												<div className="flex items-center gap-2 mb-2">
+													<Checkbox
+														id="edit-live-end-war"
+														checked={editEndOnWarEnd}
+														onCheckedChange={(checked) =>
+															setEditEndOnWarEnd(Boolean(checked))
+														}
+													/>
+													<label
+														htmlFor="edit-live-end-war"
+														className="text-xs font-medium text-foreground cursor-pointer"
+													>
+														End contract automatically when ranked war finishes
+													</label>
+												</div>
+											)}
+											{(!editEndOnWarEnd ||
+												editingContract.warStatusAtCreation === "no_war") && (
+												<div className="pt-1 max-w-xs">
+													<label
+														htmlFor="edit-live-custom-end"
+														className="text-xs text-muted-foreground block mb-1"
+													>
+														End Time (TCT)
+													</label>
+													<Input
+														id="edit-live-custom-end"
+														type="datetime-local"
+														value={editCustomEndTime}
+														onChange={(e) =>
+															setEditCustomEndTime(e.target.value)
+														}
+														className="h-9 text-xs rounded-xl"
+													/>
+												</div>
+											)}
+										</div>
+									</div>
+								) : editingContract.warStatusAtCreation === "upcoming" ? (
 									<div className="space-y-4">
 										<div>
 											<div className="flex items-center justify-between text-xs mb-2">
@@ -2893,6 +3008,33 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											/>
 										</div>
 									)}
+								</div>
+
+								{/* Auto-Stop Price Limit */}
+								<div className="pt-3 border-t border-border/40">
+									<label
+										htmlFor="edit-term-auto-stop-price"
+										className="text-xs font-semibold text-foreground block mb-1"
+									>
+										Auto-Stop Price ($)
+										<span className="text-[10px] text-muted-foreground font-normal ml-1.5">
+											(Optional spending limit)
+										</span>
+									</label>
+									<Input
+										id="edit-term-auto-stop-price"
+										type="number"
+										min={0}
+										step={1000000}
+										value={editAutoStopPrice}
+										onChange={(e) => setEditAutoStopPrice(e.target.value)}
+										className="h-9 text-xs rounded-xl font-mono"
+										placeholder="e.g. 50000000 (No limit if blank)"
+									/>
+									<p className="text-[10px] text-muted-foreground mt-1">
+										Contract automatically stops when total hit payouts reach or
+										exceed this amount.
+									</p>
 								</div>
 
 								{/* Level Range Slider */}

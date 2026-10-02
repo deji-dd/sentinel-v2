@@ -22,6 +22,7 @@ import {
 	ChannelType,
 	type Client,
 	MessageFlags,
+	OverwriteType,
 	PermissionFlagsBits,
 	type TextChannel,
 } from "discord.js";
@@ -640,19 +641,96 @@ export async function archiveMercClientChannel(
 
 		const textChannel = channel as TextChannel;
 
-		// 1. Strip client permissions
-		if (clientDiscordId) {
+		// 1. Remove all non-admin members from the channel (revoking client/user access)
+		const overwrites = textChannel.permissionOverwrites?.cache
+			? Array.from(textChannel.permissionOverwrites.cache.values())
+			: [];
+
+		for (const overwrite of overwrites) {
+			if (overwrite.type === OverwriteType.Member) {
+				// Never remove the bot itself
+				if (client.user && overwrite.id === client.user.id) continue;
+
+				// Server administrators cannot (and should not) be removed
+				const member =
+					guild.members?.cache?.get(overwrite.id) ||
+					(guild.members?.fetch
+						? await guild.members.fetch(overwrite.id).catch(() => null)
+						: null);
+				if (member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+					continue;
+				}
+
+				if (typeof textChannel.permissionOverwrites.delete === "function") {
+					await textChannel.permissionOverwrites
+						.delete(overwrite.id)
+						.catch(async () => {
+							if (typeof textChannel.permissionOverwrites.edit === "function") {
+								await textChannel.permissionOverwrites
+									.edit(overwrite.id, {
+										ViewChannel: false,
+										SendMessages: false,
+									})
+									.catch(() => {});
+							}
+						});
+				} else if (
+					typeof textChannel.permissionOverwrites.edit === "function"
+				) {
+					await textChannel.permissionOverwrites
+						.edit(overwrite.id, {
+							ViewChannel: false,
+							SendMessages: false,
+						})
+						.catch(() => {});
+				}
+			}
+		}
+
+		// Also explicitly handle clientDiscordId if specified and not already removed
+		if (clientDiscordId && clientDiscordId !== client.user?.id) {
+			const clientMember =
+				guild.members?.cache?.get(clientDiscordId) ||
+				(guild.members?.fetch
+					? await guild.members.fetch(clientDiscordId).catch(() => null)
+					: null);
+			if (!clientMember?.permissions?.has(PermissionFlagsBits.Administrator)) {
+				if (typeof textChannel.permissionOverwrites.delete === "function") {
+					await textChannel.permissionOverwrites
+						.delete(clientDiscordId)
+						.catch(async () => {
+							if (typeof textChannel.permissionOverwrites.edit === "function") {
+								await textChannel.permissionOverwrites
+									.edit(clientDiscordId, {
+										ViewChannel: false,
+										SendMessages: false,
+									})
+									.catch(() => {});
+							}
+						});
+				} else if (
+					typeof textChannel.permissionOverwrites.edit === "function"
+				) {
+					await textChannel.permissionOverwrites
+						.edit(clientDiscordId, {
+							ViewChannel: false,
+							SendMessages: false,
+						})
+						.catch(() => {});
+				}
+			}
+		}
+
+		// Ensure @everyone explicitly denies ViewChannel on the archived channel
+		if (
+			guild.roles?.everyone?.id &&
+			typeof textChannel.permissionOverwrites.edit === "function"
+		) {
 			await textChannel.permissionOverwrites
-				.edit(clientDiscordId, {
+				.edit(guild.roles.everyone.id, {
 					ViewChannel: false,
-					SendMessages: false,
 				})
-				.catch((err) => {
-					logger.warn(
-						`Failed to strip permissions for <@${clientDiscordId}> in #${textChannel.name}:`,
-						err,
-					);
-				});
+				.catch(() => {});
 		}
 
 		// 2. Move to archive category if configured

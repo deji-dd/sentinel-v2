@@ -1,4 +1,5 @@
 import {
+	bigint,
 	boolean,
 	index,
 	integer,
@@ -48,6 +49,7 @@ export const mercContracts = pgTable(
 		// Pricing & Payouts
 		hitPrice: integer("hit_price").default(0).notNull(),
 		strickenHitPrice: integer("stricken_hit_price"),
+		autoStopPrice: bigint("auto_stop_price", { mode: "number" }),
 		excludedMembers: jsonb("excluded_members")
 			.$type<number[]>()
 			.default([])

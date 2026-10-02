@@ -209,4 +209,83 @@ describe("Merc Attack Validator - Pagination & Progress Persistence", () => {
 			expect(getAttackEndedTimestamp(base)).toBe(0);
 		});
 	});
+
+	describe("auto-stop price condition", () => {
+		function shouldAutoStop(
+			totalPayout: number,
+			autoStopPrice?: number | null,
+		): boolean {
+			if (!autoStopPrice || autoStopPrice <= 0) return false;
+			return totalPayout >= autoStopPrice;
+		}
+
+		it("does not auto-stop when autoStopPrice is undefined or null", () => {
+			expect(shouldAutoStop(10_000_000, undefined)).toBe(false);
+			expect(shouldAutoStop(10_000_000, null)).toBe(false);
+			expect(shouldAutoStop(10_000_000, 0)).toBe(false);
+		});
+
+		it("does not auto-stop when totalPayout is below autoStopPrice", () => {
+			expect(shouldAutoStop(9_000_000, 10_000_000)).toBe(false);
+		});
+
+		it("auto-stops when totalPayout reaches autoStopPrice exactly", () => {
+			expect(shouldAutoStop(10_000_000, 10_000_000)).toBe(true);
+		});
+
+		it("auto-stops when totalPayout exceeds autoStopPrice", () => {
+			expect(shouldAutoStop(12_000_000, 10_000_000)).toBe(true);
+		});
+	});
+
+	describe("start-time edit guard on started contracts", () => {
+		function isStartTimeEditable(
+			contract: { status: string; startTime: string },
+			nowMs: number,
+		): boolean {
+			const hasStarted =
+				contract.status === "active" ||
+				contract.status === "paused" ||
+				contract.status === "completed" ||
+				contract.status === "cancelled" ||
+				new Date(contract.startTime).getTime() <= nowMs;
+			return !hasStarted;
+		}
+
+		it("allows editing start time when contract is upcoming and start time is in future", () => {
+			const now = Date.now();
+			const contract = {
+				status: "upcoming",
+				startTime: new Date(now + 60_000).toISOString(),
+			};
+			expect(isStartTimeEditable(contract, now)).toBe(true);
+		});
+
+		it("prevents editing start time when contract is active", () => {
+			const now = Date.now();
+			const contract = {
+				status: "active",
+				startTime: new Date(now - 60_000).toISOString(),
+			};
+			expect(isStartTimeEditable(contract, now)).toBe(false);
+		});
+
+		it("prevents editing start time when contract status is upcoming but start time has passed", () => {
+			const now = Date.now();
+			const contract = {
+				status: "upcoming",
+				startTime: new Date(now - 1_000).toISOString(),
+			};
+			expect(isStartTimeEditable(contract, now)).toBe(false);
+		});
+
+		it("prevents editing start time when contract is paused", () => {
+			const now = Date.now();
+			const contract = {
+				status: "paused",
+				startTime: new Date(now - 60_000).toISOString(),
+			};
+			expect(isStartTimeEditable(contract, now)).toBe(false);
+		});
+	});
 });

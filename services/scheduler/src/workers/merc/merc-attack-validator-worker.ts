@@ -3,6 +3,7 @@ import {
 	db,
 	eq,
 	getMercChannelConfig,
+	getMercContractSummary,
 	guildApiKeys,
 	inArray,
 	isAttackProcessed,
@@ -613,6 +614,50 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							highestAttackIdSeen,
 							highestAttackTimestampSeen,
 						);
+					}
+
+					// Check if auto-stop price is configured and reached
+					if (contract.autoStopPrice && contract.autoStopPrice > 0) {
+						const summary = await getMercContractSummary(contract.id);
+						if (summary.totalPayout >= contract.autoStopPrice) {
+							logger.info(
+								`Mercenary contract ${contract.id} (${contract.factionName}) reached auto-stop price ($${contract.autoStopPrice.toLocaleString()} - total payout: $${summary.totalPayout.toLocaleString()}). Concluding contract.`,
+							);
+
+							await db
+								.update(mercContracts)
+								.set({
+									status: "completed",
+									endTime: new Date(),
+									updatedAt: new Date(),
+								})
+								.where(eq(mercContracts.id, contract.id));
+
+							const channelConfig = await getMercChannelConfig(
+								contract.guildId,
+							);
+							const logChannel = channelConfig.mercLog || "merc-logs";
+
+							void notifyBotAction("post_merc_contract_end_summary", {
+								guildId: contract.guildId,
+								channelName: logChannel,
+								contract: {
+									...contract,
+									status: "completed",
+									endTime: new Date().toISOString(),
+								},
+								summary,
+							});
+
+							void notifyBotAction("delete_merc_upcoming_announcement", {
+								guildId: contract.guildId,
+								contractId: contract.id,
+								factionId: contract.factionId,
+								messageId: contract.upcomingMessageId ?? undefined,
+							});
+
+							mercTargetManager.cleanContractTargets(contract.id);
+						}
 					}
 				} catch (err) {
 					if (err instanceof TornError) {

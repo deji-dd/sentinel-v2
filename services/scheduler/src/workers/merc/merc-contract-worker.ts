@@ -55,6 +55,15 @@ export interface MercActiveTargetAlert {
 export class MercTargetManager {
 	private alerts = new Map<string, MercActiveTargetAlert>();
 	private statsCache = new Map<number, number>();
+	private hospitalTracker = new Map<
+		string,
+		{
+			wasInHospital: boolean;
+			hospitalUntil: number | null;
+			hospitalExitTime?: number;
+			lastSeenHospSec: number;
+		}
+	>();
 
 	private getAlertKey(contractId: string, targetId: number): string {
 		return `${contractId}:${targetId}`;
@@ -89,6 +98,7 @@ export class MercTargetManager {
 		contractId: string,
 		targetId: number,
 		claimant: MercClaimant,
+		overrideNowMs?: number,
 	): Promise<{
 		success: boolean;
 		reason?: string;
@@ -131,7 +141,7 @@ export class MercTargetManager {
 			}
 		}
 
-		const nowMs = Date.now();
+		const nowMs = overrideNowMs ?? Date.now();
 		const nowSec = Math.floor(nowMs / 1000);
 
 		alert.status = "claimed";
@@ -251,6 +261,11 @@ export class MercTargetManager {
 					});
 				}
 				this.alerts.delete(key);
+			}
+		}
+		for (const key of this.hospitalTracker.keys()) {
+			if (key.startsWith(`${contractId}:`)) {
+				this.hospitalTracker.delete(key);
 			}
 		}
 	}
@@ -377,17 +392,64 @@ export class MercTargetManager {
 			targetState === "Hospital" && secondsInHosp <= 60 && secondsInHosp > 0;
 		const isOkay = targetState === "Okay";
 
-		// Ranked War 60-second cooldown rule:
-		// If target was previously in hospital and now is Okay, and faction is in active Ranked War
-		let rwCooldownUntil: number | null = null;
-		if (isOkay && contract.warStatusAtCreation === "active") {
-			if (existingAlert?.wasInHospital) {
-				const exitTime = existingAlert.hospitalExitTime ?? nowSec;
-				if (!existingAlert.hospitalExitTime) {
-					existingAlert.hospitalExitTime = exitTime;
+		// Track hospital state persistently across polling ticks even if alert is unposted/deleted
+		const hospRecord = this.hospitalTracker.get(key);
+		if (targetState === "Hospital") {
+			if (!hospRecord) {
+				this.hospitalTracker.set(key, {
+					wasInHospital: true,
+					hospitalUntil: hospUntil,
+					lastSeenHospSec: nowSec,
+				});
+			} else {
+				hospRecord.wasInHospital = true;
+				if (hospUntil !== null) {
+					hospRecord.hospitalUntil = hospUntil;
 				}
-				if (nowSec < exitTime + 60) {
-					rwCooldownUntil = exitTime + 60;
+				hospRecord.lastSeenHospSec = nowSec;
+			}
+		}
+
+		// Ranked War 60-second cooldown rule:
+		// Dynamic check for active Ranked War (covers contracts created as 'active' OR 'upcoming' that are now active)
+		const isWarActive =
+			contract.warStatusAtCreation === "active" ||
+			(contract.warStart !== null &&
+				contract.warStart !== undefined &&
+				nowSec >= contract.warStart &&
+				(!contract.warEnd || nowSec < contract.warEnd));
+
+		let rwCooldownUntil: number | null = null;
+		const wasInHospital = Boolean(
+			existingAlert?.wasInHospital || hospRecord?.wasInHospital,
+		);
+
+		if (isOkay && isWarActive && wasInHospital) {
+			let exitTime =
+				hospRecord?.hospitalExitTime ?? existingAlert?.hospitalExitTime;
+
+			if (!exitTime) {
+				const scheduledUntil =
+					hospRecord?.hospitalUntil ?? existingAlert?.hospitalUntil;
+				if (scheduledUntil && scheduledUntil <= nowSec) {
+					exitTime = scheduledUntil;
+				} else {
+					exitTime = nowSec;
+				}
+				if (hospRecord) hospRecord.hospitalExitTime = exitTime;
+				if (existingAlert) existingAlert.hospitalExitTime = exitTime;
+			}
+
+			if (nowSec < exitTime + 60) {
+				rwCooldownUntil = exitTime + 60;
+			} else {
+				// Cooldown period expired
+				if (hospRecord) {
+					this.hospitalTracker.delete(key);
+				}
+				if (existingAlert) {
+					existingAlert.wasInHospital = false;
+					existingAlert.hospitalExitTime = undefined;
 				}
 			}
 		}
@@ -427,8 +489,13 @@ export class MercTargetManager {
 				isStrickenEligible,
 				hospitalUntil: isHospitalLead ? hospUntil : null,
 				rwCooldownUntil,
-				wasInHospital: targetState === "Hospital",
-				hospitalExitTime: isOkay ? nowSec : undefined,
+				wasInHospital:
+					targetState === "Hospital" ||
+					Boolean(rwCooldownUntil && nowSec < rwCooldownUntil),
+				hospitalExitTime:
+					isOkay && rwCooldownUntil
+						? (hospRecord?.hospitalExitTime ?? nowSec)
+						: undefined,
 			};
 
 			this.alerts.set(key, newAlert);
@@ -460,6 +527,8 @@ export class MercTargetManager {
 		const prevRwCooldown = existingAlert.rwCooldownUntil;
 
 		if (targetState === "Hospital") {
+			existingAlert.wasInHospital = true;
+		} else if (rwCooldownUntil && nowSec < rwCooldownUntil) {
 			existingAlert.wasInHospital = true;
 		}
 		existingAlert.hospitalUntil = isHospitalLead ? hospUntil : null;
@@ -670,6 +739,53 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 		const endMs = contract.endTime
 			? new Date(contract.endTime).getTime()
 			: null;
+
+		// Check if active contract has reached autoStopPrice
+		if (
+			contract.status === "active" &&
+			contract.autoStopPrice &&
+			contract.autoStopPrice > 0
+		) {
+			const summary = await getMercContractSummary(contract.id);
+			if (summary.totalPayout >= contract.autoStopPrice) {
+				logger.info(
+					`Mercenary contract ${contract.id} (${contract.factionName}) reached auto-stop price ($${contract.autoStopPrice.toLocaleString()} - total payout: $${summary.totalPayout.toLocaleString()}). Concluding contract.`,
+				);
+
+				await db
+					.update(mercContracts)
+					.set({
+						status: "completed",
+						endTime: new Date(),
+						updatedAt: new Date(),
+					})
+					.where(eq(mercContracts.id, contract.id));
+
+				const channelConfig = await getMercChannelConfig(contract.guildId);
+				const logChannel = channelConfig.mercLog || "merc-logs";
+
+				void notifyBotAction("post_merc_contract_end_summary", {
+					guildId: contract.guildId,
+					channelName: logChannel,
+					contract: {
+						...contract,
+						status: "completed",
+						endTime: new Date().toISOString(),
+					},
+					summary,
+				});
+
+				void notifyBotAction("delete_merc_upcoming_announcement", {
+					guildId: contract.guildId,
+					contractId: contract.id,
+					factionId: contract.factionId,
+					messageId: contract.upcomingMessageId ?? undefined,
+				});
+
+				mercTargetManager.cleanContractTargets(contract.id);
+				continue;
+			}
+		}
 
 		// Check if active contract has reached endTime
 		if (

@@ -1865,6 +1865,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: null,
 					warStartHitPrice: body.warStartHitPrice ?? null,
 					warStartStrickenHitPrice: body.warStartStrickenHitPrice ?? null,
+					autoStopPrice: body.autoStopPrice ?? null,
 					excludedMembers: body.excludedMembers ?? [],
 				},
 				user?.username ?? "admin",
@@ -1956,6 +1957,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				),
 				warStartHitPrice: t.Optional(t.Nullable(t.Number())),
 				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				autoStopPrice: t.Optional(t.Nullable(t.Number())),
 				excludedMembers: t.Optional(t.Array(t.Number())),
 			}),
 			detail: {
@@ -1992,21 +1994,39 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				body.terms === undefined &&
 				body.hitPrice === undefined &&
 				body.strickenHitPrice === undefined &&
+				body.autoStopPrice === undefined &&
 				body.changeTermsOnWarStart === undefined &&
 				body.warStartTerms === undefined &&
 				body.warStartHitPrice === undefined &&
 				body.warStartStrickenHitPrice === undefined &&
 				body.excludedMembers === undefined;
 
-			// Payout rates cannot be changed once a contract has started.
-			// Hit terms, target exclusions, and duration/timing can be freely adjusted.
+			// Payout rates and start time cannot be changed once a contract has started.
+			// Hit terms, target exclusions, auto-stop price, and duration/timing can be adjusted.
 			const hasStarted =
 				current.status === "active" ||
 				current.status === "paused" ||
 				current.status === "completed" ||
-				current.status === "cancelled";
+				current.status === "cancelled" ||
+				new Date(current.startTime).getTime() <= Date.now();
 
 			if (hasStarted && !isStatusOnlyChange) {
+				const isStartTimeModified =
+					(body.startTime !== undefined &&
+						new Date(body.startTime).getTime() !==
+							new Date(current.startTime).getTime()) ||
+					(body.startImmediately !== undefined &&
+						body.startImmediately !== current.startImmediately) ||
+					(body.startMinutesBeforeWar !== undefined &&
+						body.startMinutesBeforeWar !== current.startMinutesBeforeWar);
+
+				if (isStartTimeModified) {
+					set.status = 400;
+					return {
+						error: "Cannot edit start time on an already started contract.",
+					};
+				}
+
 				const isRateModified =
 					(body.hitPrice !== undefined && body.hitPrice !== current.hitPrice) ||
 					(body.strickenHitPrice !== undefined &&
@@ -2170,6 +2190,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				),
 				warStartHitPrice: t.Optional(t.Nullable(t.Number())),
 				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				autoStopPrice: t.Optional(t.Nullable(t.Number())),
 				excludedMembers: t.Optional(t.Array(t.Number())),
 			}),
 			detail: {

@@ -851,4 +851,153 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 		);
 		expect(manager.getAlert(offlineContract.id, 3002)).toBeDefined();
 	});
+
+	it("applies 60s RW cooldown when contract was created as upcoming but war is now active", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = 1700000000;
+		const nowMs = nowSec * 1000;
+
+		const upcomingContract: MercContract = {
+			...mockContract,
+			id: "contract-upcoming-to-active",
+			warStatusAtCreation: "upcoming",
+			warStart: nowSec - 300, // war started 5 minutes ago!
+			warEnd: nowSec + 3600,
+		};
+
+		// 1. Target in hospital with 30s remaining
+		const member = createMockMember({
+			id: 4001,
+			status: {
+				description: "In hospital for 30 secs",
+				details: null,
+				state: "Hospital",
+				color: "red",
+				until: nowSec + 30,
+			},
+		});
+
+		await manager.processMember(
+			upcomingContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			member,
+			nowSec,
+			nowMs,
+		);
+
+		const alert1 = manager.getAlert(upcomingContract.id, 4001);
+		expect(alert1).toBeDefined();
+		expect(alert1?.hospitalUntil).toBe(nowSec + 30);
+
+		// 2. Target exits hospital (status -> Okay) at nowSec + 31
+		const exitSec = nowSec + 31;
+		const exitMs = exitSec * 1000;
+		const memberExited = createMockMember({
+			id: 4001,
+			status: {
+				description: "Okay",
+				details: null,
+				state: "Okay",
+				color: "green",
+				until: null,
+			},
+		});
+
+		await manager.processMember(
+			upcomingContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberExited,
+			exitSec,
+			exitMs,
+		);
+
+		const alert2 = manager.getAlert(upcomingContract.id, 4001);
+		expect(alert2).toBeDefined();
+		// RW cooldown MUST be applied even though warStatusAtCreation was 'upcoming'
+		expect(alert2?.rwCooldownUntil).toBe(nowSec + 30 + 60);
+	});
+
+	it("applies 60s RW cooldown when target medded out after being in hospital for > 60s", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = 1700000000;
+		const nowMs = nowSec * 1000;
+
+		const activeWarContract: MercContract = {
+			...mockContract,
+			id: "contract-medout-test",
+			warStatusAtCreation: "active",
+		};
+
+		// 1. Target in hospital for 15 minutes (900 seconds) -> invalid for active alert (> 60s)
+		const memberInHosp = createMockMember({
+			id: 5001,
+			status: {
+				description: "In hospital for 15 mins",
+				details: null,
+				state: "Hospital",
+				color: "red",
+				until: nowSec + 900,
+			},
+		});
+
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberInHosp,
+			nowSec,
+			nowMs,
+		);
+
+		// Alert should NOT be posted yet because hospital > 60s
+		expect(manager.getAlert(activeWarContract.id, 5001)).toBeUndefined();
+
+		// 2. Target meds out early 10 seconds later! (status -> Okay)
+		const medOutSec = nowSec + 10;
+		const medOutMs = medOutSec * 1000;
+		const memberMeddedOut = createMockMember({
+			id: 5001,
+			status: {
+				description: "Okay",
+				details: null,
+				state: "Okay",
+				color: "green",
+				until: null,
+			},
+		});
+
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			memberMeddedOut,
+			medOutSec,
+			medOutMs,
+		);
+
+		// Now alert is created, AND rwCooldownUntil must be set to medOutSec + 60!
+		const alert = manager.getAlert(activeWarContract.id, 5001);
+		expect(alert).toBeDefined();
+		expect(alert?.rwCooldownUntil).toBe(medOutSec + 60);
+
+		// 3. Merc claims target while under RW cooldown
+		const claimRes = await manager.claimTarget(
+			activeWarContract.id,
+			5001,
+			{
+				discordId: "merc-user-1",
+				discordTag: "Merc#0001",
+			},
+			medOutMs,
+		);
+		expect(claimRes.success).toBe(true);
+		// 20s lock timer must NOT start while under RW cooldown
+		expect(claimRes.alert?.lockStartedAt).toBeUndefined();
+	});
 });

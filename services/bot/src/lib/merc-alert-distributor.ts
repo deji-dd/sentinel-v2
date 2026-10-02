@@ -219,6 +219,14 @@ export async function postMercContractAnnouncement(
 			},
 		);
 
+		if (contract.autoStopPrice && contract.autoStopPrice > 0) {
+			embed.addFields({
+				name: "Auto-Stop Budget",
+				value: `$${contract.autoStopPrice.toLocaleString()}`,
+				inline: true,
+			});
+		}
+
 		embed.setFooter({ text: `Contract ID: ${contract.id}` });
 
 		const mentionContent = mercRoleId ? `<@&${mercRoleId}>` : undefined;
