@@ -2,9 +2,11 @@ import {
 	boolean,
 	index,
 	integer,
+	jsonb,
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const mercContracts = pgTable(
@@ -46,6 +48,18 @@ export const mercContracts = pgTable(
 		// Pricing & Payouts
 		hitPrice: integer("hit_price").default(0).notNull(),
 		strickenHitPrice: integer("stricken_hit_price"),
+		excludedMembers: jsonb("excluded_members")
+			.$type<number[]>()
+			.default([])
+			.notNull(),
+
+		// Pause Windows: [{ pausedAt: string, resumedAt: string | null }]
+		// Hits whose attack timestamp falls inside an open or closed window are
+		// excluded from payout. Used to keep paused contracts from accruing earnings.
+		pausedWindows: jsonb("paused_windows")
+			.$type<Array<{ pausedAt: string; resumedAt: string | null }>>()
+			.default([])
+			.notNull(),
 
 		// War-Start Dynamic Terms (For upcoming wars)
 		changeTermsOnWarStart: boolean("change_terms_on_war_start")
@@ -96,7 +110,12 @@ export const mercContractHits = pgTable(
 			.notNull()
 			.references(() => mercContracts.id, { onDelete: "cascade" }),
 		guildId: text("guild_id").notNull(),
-		attackId: integer("attack_id").notNull().unique(),
+		// NOTE: intentionally NOT globally unique. The same Torn attack can be
+		// credited against more than one contract (e.g. overlapping contracts for
+		// the same faction). Uniqueness is enforced per-contract by the composite
+		// index below — a global unique constraint silently swallowed inserts via
+		// the validator's catch block, starving the newest contract of logs.
+		attackId: integer("attack_id").notNull(),
 		attackerId: integer("attacker_id").notNull(),
 		attackerName: text("attacker_name").notNull(),
 		attackerFactionId: integer("attacker_faction_id"),
@@ -122,6 +141,10 @@ export const mercContractHits = pgTable(
 		index("idx_merc_hits_guild_id").on(table.guildId),
 		index("idx_merc_hits_attacker_id").on(table.attackerId),
 		index("idx_merc_hits_defender_id").on(table.defenderId),
+		uniqueIndex("uq_merc_hits_contract_attack").on(
+			table.contractId,
+			table.attackId,
+		),
 	],
 );
 

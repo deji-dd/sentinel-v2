@@ -3,6 +3,7 @@ import {
 	db,
 	eq,
 	getMercChannelConfig,
+	getMercContractHits,
 	getMercContractSummary,
 	getMercContracts,
 	getMercContractToken,
@@ -317,12 +318,43 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					}
 				}
 
+				// Pre-fetch faction members for target exclusion list
+				let members: Array<{ id: number; name: string; level: number }> = [];
+				try {
+					const memUrl = new URL(
+						`https://api.torn.com/v2/faction/${factionIdNum}/members`,
+					);
+					memUrl.searchParams.set("key", apiKey);
+					memUrl.searchParams.set("comment", "SentinelMerc");
+					const memRes = await fetch(memUrl.toString(), {
+						headers: { Authorization: `ApiKey ${apiKey}` },
+						signal: AbortSignal.timeout(10_000),
+					});
+					if (memRes.ok) {
+						const memData = (await memRes.json()) as Record<string, unknown>;
+						if (Array.isArray(memData.members)) {
+							members = memData.members.map((m: unknown) => {
+								const mem = m as Record<string, unknown>;
+								return {
+									id: Number(mem.id ?? 0),
+									name: String(mem.name ?? `Member ${mem.id}`),
+									level: Number(mem.level ?? 1),
+								};
+							});
+						}
+					}
+				} catch {
+					// Gracefully fall back if member pre-fetch fails
+				}
+				members.sort((a, b) => a.name.localeCompare(b.name));
+
 				return {
 					valid: true,
 					id: factionIdNum,
 					name: factionName,
 					tag,
 					warStatus,
+					members,
 					war: chosenWar
 						? {
 								id: chosenWar.id,
@@ -351,7 +383,99 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 			detail: {
 				summary: "Validate Faction & Detect War Status (Client & Admin)",
 				description:
-					"Validates a Torn faction ID and detects live or upcoming ranked wars.",
+					"Validates a Torn faction ID, pre-fetches member list for exclusions, and detects live or upcoming ranked wars.",
+			},
+		},
+	)
+
+	// ─── GET /v2/merc/factions/:factionId/members ──────────────────────────────
+	.get(
+		"/factions/:factionId/members",
+		async ({ params, query, set }) => {
+			const factionIdNum = Number.parseInt(params.factionId ?? "", 10);
+			if (Number.isNaN(factionIdNum) || factionIdNum <= 0) {
+				set.status = 400;
+				return {
+					members: [],
+					error: "Please provide a valid numeric Faction ID.",
+				};
+			}
+
+			const tokenStr = query.token?.trim();
+			if (tokenStr) {
+				const tokenRow = await getMercContractToken(tokenStr);
+				if (
+					!tokenRow ||
+					tokenRow.used ||
+					new Date() > new Date(tokenRow.expiresAt)
+				) {
+					set.status = 401;
+					return {
+						members: [],
+						error: "Invalid or expired contract session token.",
+					};
+				}
+			}
+
+			const keyObj = await getNextSubversiveUserKey();
+			const apiKey = keyObj?.apiKey ?? process.env.TORN_API_KEY;
+
+			if (!apiKey) {
+				set.status = 503;
+				return { members: [], error: "No active Torn API key available." };
+			}
+
+			try {
+				const memUrl = new URL(
+					`https://api.torn.com/v2/faction/${factionIdNum}/members`,
+				);
+				memUrl.searchParams.set("key", apiKey);
+				memUrl.searchParams.set("comment", "SentinelMerc");
+				const memRes = await fetch(memUrl.toString(), {
+					headers: { Authorization: `ApiKey ${apiKey}` },
+					signal: AbortSignal.timeout(10_000),
+				});
+
+				if (!memRes.ok) {
+					return {
+						members: [],
+						error: `Failed to fetch members: ${memRes.status}`,
+					};
+				}
+
+				const memData = (await memRes.json()) as Record<string, unknown>;
+				let members: Array<{ id: number; name: string; level: number }> = [];
+				if (Array.isArray(memData.members)) {
+					members = memData.members.map((m: unknown) => {
+						const mem = m as Record<string, unknown>;
+						return {
+							id: Number(mem.id ?? 0),
+							name: String(mem.name ?? `Member ${mem.id}`),
+							level: Number(mem.level ?? 1),
+						};
+					});
+				}
+				members.sort((a, b) => a.name.localeCompare(b.name));
+				return { members };
+			} catch (err) {
+				return {
+					members: [],
+					error:
+						err instanceof Error ? err.message : "Failed to fetch members.",
+				};
+			}
+		},
+		{
+			params: t.Object({
+				factionId: t.String(),
+			}),
+			query: t.Object({
+				token: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Get Faction Members (For Target Exclusion)",
+				description:
+					"Fetches full faction member list for pre-contract target exclusion.",
 			},
 		},
 	)
@@ -449,6 +573,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 						: null,
 					warStartHitPrice: body.warStartHitPrice ?? null,
 					warStartStrickenHitPrice: body.warStartStrickenHitPrice ?? null,
+					excludedMembers: body.excludedMembers ?? [],
 					clientChannelId: tokenRow.channelId ?? null,
 					clientDiscordId: tokenRow.discordUserId,
 				},
@@ -548,6 +673,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 				),
 				warStartHitPrice: t.Optional(t.Nullable(t.Number())),
 				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				excludedMembers: t.Optional(t.Array(t.Number())),
 			}),
 			detail: {
 				summary: "Create Mercenary Contract (Client Tokenized Submission)",
@@ -573,6 +699,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 
 			const contract = mapRowToMercContract(row);
 			const summary = await getMercContractSummary(params.contractId);
+			const rawHits = await getMercContractHits(params.contractId);
 
 			// Enrich target breakdown with hit prices for client transparent accounting
 			const targetsWithCost = summary.targetBreakdown.map((target) => {
@@ -589,6 +716,18 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 				};
 			});
 
+			// Format individual hits history for client (strictly zero mercenary identities exposed)
+			const formattedHits = rawHits.map((h) => ({
+				id: h.id,
+				attackId: h.attackId,
+				targetId: h.defenderId,
+				targetName: h.defenderName,
+				result: h.result,
+				isStricken: h.isStricken,
+				cost: h.payoutValue,
+				timestamp: h.timestamp.toISOString(),
+			}));
+
 			return {
 				contract: {
 					id: contract.id,
@@ -602,16 +741,15 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					status: contract.status,
 					hitPrice: contract.hitPrice,
 					strickenHitPrice: contract.strickenHitPrice,
+					excludedMembers: contract.excludedMembers ?? [],
 					createdAt: contract.createdAt,
 				},
 				summary: {
 					totalHits: summary.totalHits,
 					totalPayout: summary.totalPayout,
-					participatingMercsCount: summary.mercPayouts.length,
 					targetsHitCount: summary.targetBreakdown.length,
 					targetBreakdown: targetsWithCost,
-					mercPayouts: summary.mercPayouts,
-					factionPayouts: summary.factionPayouts,
+					hits: formattedHits,
 				},
 			};
 		},

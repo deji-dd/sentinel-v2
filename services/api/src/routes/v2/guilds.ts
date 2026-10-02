@@ -1865,6 +1865,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						: null,
 					warStartHitPrice: body.warStartHitPrice ?? null,
 					warStartStrickenHitPrice: body.warStartStrickenHitPrice ?? null,
+					excludedMembers: body.excludedMembers ?? [],
 				},
 				user?.username ?? "admin",
 			);
@@ -1955,6 +1956,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				),
 				warStartHitPrice: t.Optional(t.Nullable(t.Number())),
 				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				excludedMembers: t.Optional(t.Array(t.Number())),
 			}),
 			detail: {
 				summary: "Create Mercenary Contract",
@@ -1973,8 +1975,73 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				return { error: "Forbidden: Administrator access required." };
 			}
 
+			const existing = await getMercContracts(params.guildId);
+			const current = existing.find((c) => c.id === params.contractId);
+			if (!current) {
+				set.status = 404;
+				return { error: "Contract not found." };
+			}
+
+			const isStatusOnlyChange =
+				body.status !== undefined &&
+				body.startTime === undefined &&
+				body.startImmediately === undefined &&
+				body.startMinutesBeforeWar === undefined &&
+				body.endTime === undefined &&
+				body.endOnWarEnd === undefined &&
+				body.terms === undefined &&
+				body.hitPrice === undefined &&
+				body.strickenHitPrice === undefined &&
+				body.changeTermsOnWarStart === undefined &&
+				body.warStartTerms === undefined &&
+				body.warStartHitPrice === undefined &&
+				body.warStartStrickenHitPrice === undefined &&
+				body.excludedMembers === undefined;
+
+			// Hit terms and exclusion targets may be changed freely once a contract
+			// is live — mercs need to pull a target mid-contract without cancelling.
+			// Timing and pricing may not.
+			const onlyLiveEditableFields =
+				body.startTime === undefined &&
+				body.startImmediately === undefined &&
+				body.startMinutesBeforeWar === undefined &&
+				body.endTime === undefined &&
+				body.endOnWarEnd === undefined &&
+				body.hitPrice === undefined &&
+				body.strickenHitPrice === undefined &&
+				body.changeTermsOnWarStart === undefined &&
+				body.warStartTerms === undefined &&
+				body.warStartHitPrice === undefined &&
+				body.warStartStrickenHitPrice === undefined;
+
+			const isLiveSafeChange =
+				!isStatusOnlyChange &&
+				onlyLiveEditableFields &&
+				(body.excludedMembers !== undefined || body.terms !== undefined);
+
+			// Timing and pricing cannot be changed after a contract starts.
+			if (!isStatusOnlyChange && !isLiveSafeChange) {
+				const hasStarted =
+					current.status === "active" ||
+					current.status === "paused" ||
+					current.status === "completed" ||
+					current.status === "cancelled" ||
+					new Date(current.startTime).getTime() <= Date.now();
+
+				if (hasStarted) {
+					set.status = 400;
+					return {
+						error:
+							"Cannot edit timing, faction or pricing of a contract that has already started. You may still adjust hit terms and exclusion targets on active contracts.",
+					};
+				}
+			}
+
 			const isEnding =
 				body.status === "completed" || body.status === "cancelled";
+			const isPausing = body.status === "paused";
+			const isResuming =
+				current.status === "paused" && body.status === "active";
 			const updated = await updateMercContract(
 				params.guildId,
 				params.contractId,
@@ -2009,6 +2076,56 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					factionId: updated.factionId,
 					messageId: updated.upcomingMessageId ?? undefined,
 				});
+			} else if (isPausing) {
+				// Pausing: pull every live target embed down so no merc can claim
+				// while the contract is halted.
+				const channelConfig = await getMercChannelConfig(params.guildId);
+				void notifyBotAction("delete_all_merc_target_alerts", {
+					guildId: params.guildId,
+					channelName: channelConfig.targets || "targets",
+					contractId: params.contractId,
+				});
+
+				if (channelConfig.upcomingContracts) {
+					void notifyBotAction("post_merc_contract_announcement", {
+						guildId: params.guildId,
+						channelName: channelConfig.upcomingContracts,
+						contract: updated,
+						mercRoleId: null,
+					});
+				}
+			} else if (isResuming) {
+				// Resuming: re-announce so the embed reflects the active state.
+				const channelConfig = await getMercChannelConfig(params.guildId);
+				if (channelConfig.upcomingContracts) {
+					const [gConfig] = await db
+						.select({ mercRoleId: guildConfigs.mercRoleId })
+						.from(guildConfigs)
+						.where(eq(guildConfigs.guildId, params.guildId));
+
+					void notifyBotAction("post_merc_contract_announcement", {
+						guildId: params.guildId,
+						channelName: channelConfig.upcomingContracts,
+						contract: updated,
+						mercRoleId: gConfig?.mercRoleId ?? null,
+					});
+				}
+			} else if (!isStatusOnlyChange) {
+				// Contract was edited while upcoming: refresh announcement embed if configured
+				const channelConfig = await getMercChannelConfig(params.guildId);
+				if (channelConfig.upcomingContracts) {
+					const [gConfig] = await db
+						.select({ mercRoleId: guildConfigs.mercRoleId })
+						.from(guildConfigs)
+						.where(eq(guildConfigs.guildId, params.guildId));
+
+					void notifyBotAction("post_merc_contract_announcement", {
+						guildId: params.guildId,
+						channelName: channelConfig.upcomingContracts,
+						contract: updated,
+						mercRoleId: gConfig?.mercRoleId ?? null,
+					});
+				}
 			}
 
 			return { success: true, contract: updated };
@@ -2023,15 +2140,53 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					t.Union([
 						t.Literal("active"),
 						t.Literal("upcoming"),
+						t.Literal("paused"),
 						t.Literal("completed"),
 						t.Literal("cancelled"),
 					]),
 				),
+				startTime: t.Optional(t.String()),
+				startImmediately: t.Optional(t.Boolean()),
+				startMinutesBeforeWar: t.Optional(t.Nullable(t.Number())),
+				endTime: t.Optional(t.Nullable(t.String())),
+				endOnWarEnd: t.Optional(t.Boolean()),
+				terms: t.Optional(
+					t.Object({
+						statuses: t.Object({
+							online: t.Boolean(),
+							idle: t.Boolean(),
+							offline: t.Boolean(),
+						}),
+						idleDurationMinutes: t.Nullable(t.Number()),
+						strickenHits: t.Boolean(),
+						levelRange: t.Tuple([t.Number(), t.Number()]),
+					}),
+				),
+				hitPrice: t.Optional(t.Number()),
+				strickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				changeTermsOnWarStart: t.Optional(t.Boolean()),
+				warStartTerms: t.Optional(
+					t.Nullable(
+						t.Object({
+							statuses: t.Object({
+								online: t.Boolean(),
+								idle: t.Boolean(),
+								offline: t.Boolean(),
+							}),
+							idleDurationMinutes: t.Nullable(t.Number()),
+							strickenHits: t.Boolean(),
+							levelRange: t.Tuple([t.Number(), t.Number()]),
+						}),
+					),
+				),
+				warStartHitPrice: t.Optional(t.Nullable(t.Number())),
+				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
+				excludedMembers: t.Optional(t.Array(t.Number())),
 			}),
 			detail: {
 				summary: "Update Mercenary Contract",
 				description:
-					"Updates an existing mercenary contract's status or details.",
+					"Updates an existing mercenary contract's status or details (only contracts that haven't started can edit terms/timing).",
 			},
 		},
 	)
@@ -2281,6 +2436,36 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					}
 				}
 
+				// Pre-fetch faction members for target exclusion list
+				let members: Array<{ id: number; name: string; level: number }> = [];
+				try {
+					const memUrl = new URL(
+						`https://api.torn.com/v2/faction/${factionIdNum}/members`,
+					);
+					memUrl.searchParams.set("key", apiKey);
+					memUrl.searchParams.set("comment", "SentinelMerc");
+					const memRes = await fetch(memUrl.toString(), {
+						headers: { Authorization: `ApiKey ${apiKey}` },
+						signal: AbortSignal.timeout(10_000),
+					});
+					if (memRes.ok) {
+						const memData = (await memRes.json()) as Record<string, unknown>;
+						if (Array.isArray(memData.members)) {
+							members = memData.members.map((m: unknown) => {
+								const mem = m as Record<string, unknown>;
+								return {
+									id: Number(mem.id ?? 0),
+									name: String(mem.name ?? `Member ${mem.id}`),
+									level: Number(mem.level ?? 1),
+								};
+							});
+						}
+					}
+				} catch {
+					// Fall back gracefully if members fetch fails
+				}
+				members.sort((a, b) => a.name.localeCompare(b.name));
+
 				return {
 					valid: true,
 					faction: {
@@ -2289,6 +2474,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						tag,
 					},
 					warStatus,
+					members,
 					war: selectedWar
 						? {
 								id: selectedWar.id,
@@ -2317,7 +2503,89 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			detail: {
 				summary: "Validate Faction for Mercenary Contract",
 				description:
-					"Validates faction ID via Torn API basic & rankedwars selections, detecting active or upcoming war status.",
+					"Validates faction ID via Torn API basic & rankedwars selections, detecting active or upcoming war status, and pre-fetching member list.",
+			},
+		},
+	)
+	// GET /v2/guilds/:guildId/merc/factions/:factionId/members — fetch faction members for target exclusion
+	.get(
+		"/:guildId/merc/factions/:factionId/members",
+		async ({ params, user, set }) => {
+			const canManage = await verifyGuildAdmin(user, params.guildId);
+			if (!canManage) {
+				set.status = 403;
+				return {
+					members: [],
+					error: "Forbidden: Administrator access required.",
+				};
+			}
+
+			const factionIdNum = Number.parseInt(params.factionId ?? "", 10);
+			if (Number.isNaN(factionIdNum) || factionIdNum <= 0) {
+				set.status = 400;
+				return {
+					members: [],
+					error: "Please provide a valid numeric Faction ID.",
+				};
+			}
+
+			const keyObj = await getNextSubversiveUserKey();
+			const apiKey = keyObj?.apiKey ?? process.env.TORN_API_KEY;
+
+			if (!apiKey) {
+				set.status = 503;
+				return { members: [], error: "No active Torn API key available." };
+			}
+
+			try {
+				const memUrl = new URL(
+					`https://api.torn.com/v2/faction/${factionIdNum}/members`,
+				);
+				memUrl.searchParams.set("key", apiKey);
+				memUrl.searchParams.set("comment", "SentinelMerc");
+				const memRes = await fetch(memUrl.toString(), {
+					headers: { Authorization: `ApiKey ${apiKey}` },
+					signal: AbortSignal.timeout(10_000),
+				});
+
+				if (!memRes.ok) {
+					return {
+						members: [],
+						error: `Failed to fetch members: ${memRes.status}`,
+					};
+				}
+
+				const memData = (await memRes.json()) as Record<string, unknown>;
+				let members: Array<{ id: number; name: string; level: number }> = [];
+				if (Array.isArray(memData.members)) {
+					members = memData.members.map((m: unknown) => {
+						const mem = m as Record<string, unknown>;
+						return {
+							id: Number(mem.id ?? 0),
+							name: String(mem.name ?? `Member ${mem.id}`),
+							level: Number(mem.level ?? 1),
+						};
+					});
+				}
+				members.sort((a, b) => a.name.localeCompare(b.name));
+				return { members };
+			} catch (err) {
+				return {
+					members: [],
+					error:
+						err instanceof Error ? err.message : "Failed to fetch members.",
+				};
+			}
+		},
+		{
+			params: t.Object({
+				guildId: t.String(),
+				factionId: t.String(),
+			}),
+			detail: {
+				summary: "Get Faction Members (For Target Exclusion)",
+				description:
+					"Fetches full faction member list for pre-contract target exclusion.",
 			},
 		},
 	)

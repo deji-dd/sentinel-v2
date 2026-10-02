@@ -726,6 +726,15 @@ export interface MercContractHitTerms {
 	levelRange: [number, number];
 }
 
+/**
+ * A window during which a contract was paused. Hits landing inside a window are
+ * excluded from payout. An open window (resumedAt === null) extends to the present.
+ */
+export interface MercContractPauseWindow {
+	pausedAt: string;
+	resumedAt: string | null;
+}
+
 export interface MercContract {
 	id: string;
 	guildId: string;
@@ -752,7 +761,9 @@ export interface MercContract {
 	warStartTerms?: MercContractHitTerms | null;
 	warStartHitPrice?: number | null;
 	warStartStrickenHitPrice?: number | null;
-	status: "active" | "upcoming" | "completed" | "cancelled";
+	excludedMembers?: number[];
+	pausedWindows?: MercContractPauseWindow[];
+	status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
 	clientChannelId?: string | null;
 	clientDiscordId?: string | null;
 	upcomingMessageId?: string | null;
@@ -855,6 +866,12 @@ export function mapRowToMercContract(
 			: null,
 		warStartHitPrice: row.warStartHitPrice ?? null,
 		warStartStrickenHitPrice: row.warStartStrickenHitPrice ?? null,
+		excludedMembers: Array.isArray(row.excludedMembers)
+			? (row.excludedMembers as number[])
+			: [],
+		pausedWindows: Array.isArray(row.pausedWindows)
+			? (row.pausedWindows as MercContractPauseWindow[])
+			: [],
 		status,
 		clientChannelId: row.clientChannelId ?? null,
 		clientDiscordId: row.clientDiscordId ?? null,
@@ -935,6 +952,7 @@ export async function createMercContract(
 			warStartMaxLevel: contractData.warStartTerms?.levelRange[1] ?? null,
 			warStartHitPrice: contractData.warStartHitPrice ?? null,
 			warStartStrickenHitPrice: contractData.warStartStrickenHitPrice ?? null,
+			excludedMembers: contractData.excludedMembers ?? [],
 
 			status,
 			clientChannelId: contractData.clientChannelId ?? null,
@@ -1005,6 +1023,9 @@ export async function createMercContract(
 			: null,
 		warStartHitPrice: created.warStartHitPrice ?? null,
 		warStartStrickenHitPrice: created.warStartStrickenHitPrice ?? null,
+		excludedMembers: Array.isArray(created.excludedMembers)
+			? (created.excludedMembers as number[])
+			: [],
 		status,
 		clientChannelId: created.clientChannelId ?? null,
 		clientDiscordId: created.clientDiscordId ?? null,
@@ -1024,12 +1045,121 @@ export async function updateMercContract(
 	contractId: string,
 	updates: Partial<MercContract>,
 ): Promise<MercContract | null> {
+	const [existingRow] = await db
+		.select()
+		.from(mercContracts)
+		.where(
+			and(eq(mercContracts.guildId, guildId), eq(mercContracts.id, contractId)),
+		)
+		.limit(1);
+
+	if (!existingRow) return null;
+
+	// ── Pause window bookkeeping ────────────────────────────────────────────
+	// Entering "paused" opens a window; leaving "paused" closes the open one.
+	// Hits landing inside a window are excluded from payout by the validator.
+	let nextPausedWindows: MercContractPauseWindow[] = Array.isArray(
+		existingRow.pausedWindows,
+	)
+		? (existingRow.pausedWindows as MercContractPauseWindow[])
+		: [];
+
+	if (updates.status !== undefined && updates.status !== existingRow.status) {
+		const nowIso = new Date().toISOString();
+
+		if (updates.status === "paused") {
+			const alreadyOpen = nextPausedWindows.some((w) => w.resumedAt === null);
+			if (!alreadyOpen) {
+				nextPausedWindows = [
+					...nextPausedWindows,
+					{ pausedAt: nowIso, resumedAt: null },
+				];
+			}
+		} else if (existingRow.status === "paused") {
+			nextPausedWindows = nextPausedWindows.map((w) =>
+				w.resumedAt === null ? { ...w, resumedAt: nowIso } : w,
+			);
+		}
+	}
+
+	const pausedWindowsChanged =
+		updates.status !== undefined && updates.status !== existingRow.status;
+
+	// ── startImmediately guard ──────────────────────────────────────────────
+	// An immediately-started contract must never carry a start time in the past;
+	// back-dating it would let target population begin before the contract exists.
+	let resolvedStartTime: Date | undefined;
+	if (updates.startImmediately === true) {
+		resolvedStartTime = new Date();
+	} else if (updates.startTime !== undefined) {
+		resolvedStartTime = new Date(updates.startTime);
+	}
+
 	const [updated] = await db
 		.update(mercContracts)
 		.set({
 			...(updates.status !== undefined ? { status: updates.status } : {}),
+			...(resolvedStartTime !== undefined
+				? { startTime: resolvedStartTime }
+				: {}),
+			...(updates.pausedWindows !== undefined
+				? { pausedWindows: updates.pausedWindows }
+				: // Only persist when a status transition actually opened/closed a window.
+					pausedWindowsChanged
+					? { pausedWindows: nextPausedWindows }
+					: {}),
+			...(updates.startImmediately !== undefined
+				? { startImmediately: updates.startImmediately }
+				: {}),
+			...(updates.startMinutesBeforeWar !== undefined
+				? { startMinutesBeforeWar: updates.startMinutesBeforeWar }
+				: {}),
 			...(updates.endTime !== undefined
 				? { endTime: updates.endTime ? new Date(updates.endTime) : null }
+				: {}),
+			...(updates.endOnWarEnd !== undefined
+				? { endOnWarEnd: updates.endOnWarEnd }
+				: {}),
+			...(updates.terms !== undefined
+				? {
+						allowOnline: updates.terms.statuses.online,
+						allowIdle: updates.terms.statuses.idle,
+						allowOffline: updates.terms.statuses.offline,
+						maxIdleMinutes: updates.terms.idleDurationMinutes ?? 15,
+						allowStrickenHits: updates.terms.strickenHits,
+						minLevel: updates.terms.levelRange[0],
+						maxLevel: updates.terms.levelRange[1],
+					}
+				: {}),
+			...(updates.hitPrice !== undefined ? { hitPrice: updates.hitPrice } : {}),
+			...(updates.strickenHitPrice !== undefined
+				? { strickenHitPrice: updates.strickenHitPrice }
+				: {}),
+			...(updates.changeTermsOnWarStart !== undefined
+				? { changeTermsOnWarStart: updates.changeTermsOnWarStart }
+				: {}),
+			...(updates.warStartTerms !== undefined
+				? {
+						warStartAllowOnline: updates.warStartTerms?.statuses.online ?? null,
+						warStartAllowIdle: updates.warStartTerms?.statuses.idle ?? null,
+						warStartAllowOffline:
+							updates.warStartTerms?.statuses.offline ?? null,
+						warStartMaxIdleMinutes:
+							updates.warStartTerms?.idleDurationMinutes ?? null,
+						warStartAllowStrickenHits:
+							updates.warStartTerms?.strickenHits ?? null,
+						warStartMinLevel: updates.warStartTerms?.levelRange[0] ?? null,
+						warStartMaxLevel: updates.warStartTerms?.levelRange[1] ?? null,
+					}
+				: {}),
+			...(updates.warStartHitPrice !== undefined
+				? { warStartHitPrice: updates.warStartHitPrice }
+				: {}),
+			...(updates.warStartStrickenHitPrice !== undefined
+				? { warStartStrickenHitPrice: updates.warStartStrickenHitPrice }
+				: {}),
+			...(updates.excludedMembers !== undefined
+				? { excludedMembers: updates.excludedMembers }
 				: {}),
 			...(updates.upcomingMessageId !== undefined
 				? { upcomingMessageId: updates.upcomingMessageId }
@@ -1107,7 +1237,8 @@ export async function recordMercContractHit(data: {
 			.returning({ id: mercContractHits.id });
 
 		return Boolean(inserted);
-	} catch {
+	} catch (err) {
+		console.error("Failed to record merc contract hit:", err);
 		return false;
 	}
 }
@@ -1115,11 +1246,18 @@ export async function recordMercContractHit(data: {
 /**
  * Checks if a specific Torn attack ID has already been processed and credited.
  */
-export async function isAttackProcessed(attackId: number): Promise<boolean> {
+export async function isAttackProcessed(
+	attackId: number,
+	contractId?: string,
+): Promise<boolean> {
+	const conditions = [eq(mercContractHits.attackId, attackId)];
+	if (contractId) {
+		conditions.push(eq(mercContractHits.contractId, contractId));
+	}
 	const [row] = await db
 		.select({ id: mercContractHits.id })
 		.from(mercContractHits)
-		.where(eq(mercContractHits.attackId, attackId));
+		.where(and(...conditions));
 
 	return Boolean(row);
 }

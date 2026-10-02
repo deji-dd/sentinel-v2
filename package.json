@@ -9,6 +9,7 @@
 	"scripts": {
 		"db:generate": "bun --filter @sentinel/database db:generate",
 		"db:migrate": "bun --filter @sentinel/database db:migrate",
+		"merc:recover": "bun run scripts/merc-prod-recovery.ts",
 		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
 		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
 		"bot:start": "NODE_ENV=production bun run services/bot/index.ts",

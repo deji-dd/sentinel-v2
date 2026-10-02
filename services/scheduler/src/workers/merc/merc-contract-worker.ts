@@ -260,6 +260,25 @@ export class MercTargetManager {
 		const key = this.getAlertKey(contract.id, m.id);
 		const existingAlert = this.alerts.get(key);
 
+		// 0. Excluded Members check: completely skip and remove alert if member is excluded
+		if (
+			contract.excludedMembers &&
+			contract.excludedMembers.length > 0 &&
+			contract.excludedMembers.includes(m.id)
+		) {
+			if (existingAlert) {
+				if (existingAlert.messageId) {
+					void notifyBotAction("delete_merc_target_alert", {
+						guildId,
+						channelName,
+						messageId: existingAlert.messageId,
+					});
+				}
+				this.alerts.delete(key);
+			}
+			return;
+		}
+
 		// Determine effective terms (handling dynamic change upon war start)
 		const effectiveTerms =
 			contract.changeTermsOnWarStart &&
@@ -593,7 +612,6 @@ let lastExpiredTokenCheck = 0;
 export async function runMercContractTrackingCycle(): Promise<number> {
 	const nowMs = Date.now();
 	const nowSec = Math.floor(nowMs / 1000);
-	const imminentThreshold = new Date(nowMs + 5 * 60_000);
 
 	// Periodically trigger bot to auto-archive channels for expired contract creation links
 	if (nowMs >= lastExpiredTokenCheck + 30_000) {
@@ -601,11 +619,13 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 		void notifyBotAction("check_expired_merc_tokens");
 	}
 
-	// 1. Fetch active and upcoming contracts
+	// 1. Fetch active, upcoming, and paused contracts
 	const rows = await db
 		.select()
 		.from(mercContracts)
-		.where(and(inArray(mercContracts.status, ["active", "upcoming"])));
+		.where(
+			and(inArray(mercContracts.status, ["active", "upcoming", "paused"])),
+		);
 
 	if (rows.length === 0) {
 		return Date.now() + 15_000;
@@ -616,6 +636,12 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 	const relevantContracts: MercContract[] = [];
 
 	for (const contract of contracts) {
+		// If contract is paused, ensure any active targets are removed and skip processing
+		if (contract.status === "paused") {
+			mercTargetManager.cleanContractTargets(contract.id);
+			continue;
+		}
+
 		const startMs = new Date(contract.startTime).getTime();
 		const endMs = contract.endTime
 			? new Date(contract.endTime).getTime()
@@ -675,11 +701,8 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 			continue;
 		}
 
-		// Check if contract is starting within 5 minutes (lead-in) or active
-		if (
-			contract.status === "active" ||
-			startMs <= imminentThreshold.getTime()
-		) {
+		// Strictly only populate targets once the contract is active and has started
+		if (contract.status === "active" && nowMs >= startMs) {
 			relevantContracts.push(contract);
 		}
 	}

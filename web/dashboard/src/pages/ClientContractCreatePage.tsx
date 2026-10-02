@@ -5,8 +5,12 @@ import {
 	Copy,
 	ExternalLink,
 	Loader2,
+	Search,
+	UserX,
+	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,6 +19,12 @@ import { Slider } from "@/components/ui/slider";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
+
+export interface FactionMember {
+	id: number;
+	name: string;
+	level: number;
+}
 
 interface ContractSession {
 	valid: boolean;
@@ -45,6 +55,7 @@ interface ValidatedFactionData {
 			name: string;
 		} | null;
 	} | null;
+	members?: FactionMember[];
 }
 
 const toTctDateTimeInput = (date: Date): string => {
@@ -115,6 +126,11 @@ export function ClientContractCreatePage() {
 	const [idleDuration, setIdleDuration] = useState<number>(15);
 	const [strickenHits, setStrickenHits] = useState(false);
 	const [levelRange, setLevelRange] = useState<[number, number]>([1, 100]);
+
+	// Target Exclusions
+	const [factionMembers, setFactionMembers] = useState<FactionMember[]>([]);
+	const [excludedMembers, setExcludedMembers] = useState<number[]>([]);
+	const [memberSearchQuery, setMemberSearchQuery] = useState("");
 
 	// Step 1: Validate Session Token
 	useEffect(() => {
@@ -216,6 +232,9 @@ export function ClientContractCreatePage() {
 			if (res.data && "valid" in res.data && res.data.valid) {
 				const data = res.data as ValidatedFactionData;
 				setFactionData(data);
+				if (data.members && Array.isArray(data.members)) {
+					setFactionMembers(data.members);
+				}
 
 				if (data.warStatus === "active") {
 					setStartImmediately(true);
@@ -251,9 +270,10 @@ export function ClientContractCreatePage() {
 			!startImmediately &&
 			factionData.war?.start
 		) {
-			const warStartMs = factionData.war.start * 1000;
+			// Anchored to war start so targets never populate before the contract begins.
+			// startMinutesBeforeWar is metadata for the pre-war terms-change banner.
 			calculatedStartTime = new Date(
-				warStartMs - startMinutesBeforeWar * 60 * 1000,
+				factionData.war.start * 1000,
 			).toISOString();
 		} else if (!startImmediately) {
 			calculatedStartTime = parseTctInputToIso(customStartTime);
@@ -307,6 +327,7 @@ export function ClientContractCreatePage() {
 			warStartTerms: null,
 			warStartHitPrice: null,
 			warStartStrickenHitPrice: null,
+			excludedMembers,
 		};
 
 		setIsSubmitting(true);
@@ -756,12 +777,166 @@ export function ClientContractCreatePage() {
 						</CardContent>
 					</Card>
 
-					{/* 4. Pricing & Rates (Fixed Service Rates) */}
+					{/* 4. Target Exclusions (Optional) */}
+					{factionMembers.length > 0 && (
+						<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
+							<CardHeader className="border-b border-border/40 pb-4">
+								<div className="flex items-center justify-between flex-wrap gap-2">
+									<div className="flex items-center gap-2">
+										<UserX className="size-4 text-rose-400" />
+										<CardTitle className="text-base font-semibold">
+											4. Excluded Members from Target List (Optional)
+										</CardTitle>
+									</div>
+									<Badge
+										variant="outline"
+										className={
+											excludedMembers.length > 0
+												? "border-rose-500/30 text-rose-400 bg-rose-500/10 font-mono text-xs"
+												: "text-muted-foreground font-mono text-xs"
+										}
+									>
+										{excludedMembers.length} / {factionMembers.length} Excluded
+									</Badge>
+								</div>
+								<p className="text-xs text-muted-foreground mt-1">
+									Selected members will be completely omitted from mercenary hit
+									alerts and targets.
+								</p>
+							</CardHeader>
+							<CardContent className="pt-4 space-y-3">
+								<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+									<div className="relative flex-1">
+										<Search className="size-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+										<Input
+											placeholder="Filter members by name or ID..."
+											value={memberSearchQuery}
+											onChange={(e) => setMemberSearchQuery(e.target.value)}
+											className="h-9 pl-8 text-xs rounded-xl bg-background"
+										/>
+									</div>
+									<div className="flex items-center gap-2 shrink-0">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={() =>
+												setExcludedMembers(factionMembers.map((m) => m.id))
+											}
+											className="h-8 text-xs rounded-lg"
+										>
+											Exclude All
+										</Button>
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											onClick={() => setExcludedMembers([])}
+											disabled={excludedMembers.length === 0}
+											className="h-8 text-xs rounded-lg text-muted-foreground hover:text-foreground"
+										>
+											Clear
+										</Button>
+									</div>
+								</div>
+
+								{/* Excluded chips */}
+								{excludedMembers.length > 0 && (
+									<div className="flex flex-wrap items-center gap-1.5 p-2 rounded-xl bg-rose-500/5 border border-rose-500/15 max-h-24 overflow-y-auto">
+										{excludedMembers.map((id) => {
+											const member = factionMembers.find((m) => m.id === id);
+											return (
+												<span
+													key={id}
+													className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono bg-rose-500/15 text-rose-300 border border-rose-500/30"
+												>
+													<span>{member ? member.name : id}</span>
+													<button
+														type="button"
+														onClick={() =>
+															setExcludedMembers((prev) =>
+																prev.filter((x) => x !== id),
+															)
+														}
+														className="hover:text-rose-100 cursor-pointer ml-0.5"
+													>
+														<X className="size-3" />
+													</button>
+												</span>
+											);
+										})}
+									</div>
+								)}
+
+								{/* Member list */}
+								<div className="max-h-60 overflow-y-auto rounded-xl border border-border/60 bg-muted/20 divide-y divide-border/30">
+									{factionMembers
+										.filter((m) => {
+											if (!memberSearchQuery.trim()) return true;
+											const q = memberSearchQuery.toLowerCase();
+											return (
+												m.name.toLowerCase().includes(q) ||
+												String(m.id).includes(q)
+											);
+										})
+										.map((m) => {
+											const isExcluded = excludedMembers.includes(m.id);
+											const inputId = `client-exclude-member-${m.id}`;
+											return (
+												<label
+													key={m.id}
+													htmlFor={inputId}
+													className={`flex items-center justify-between p-2.5 px-3 text-xs cursor-pointer transition-colors ${
+														isExcluded
+															? "bg-rose-500/10 hover:bg-rose-500/15"
+															: "hover:bg-muted/40"
+													}`}
+												>
+													<div className="flex items-center gap-2.5">
+														<Checkbox
+															id={inputId}
+															checked={isExcluded}
+															onCheckedChange={() => {
+																setExcludedMembers((prev) =>
+																	prev.includes(m.id)
+																		? prev.filter((x) => x !== m.id)
+																		: [...prev, m.id],
+																);
+															}}
+														/>
+														<span
+															className={`font-medium ${
+																isExcluded
+																	? "text-rose-300 line-through opacity-80"
+																	: "text-foreground"
+															}`}
+														>
+															{m.name}
+														</span>
+														<span className="text-[11px] font-mono text-muted-foreground">
+															[{m.id}]
+														</span>
+													</div>
+													<Badge
+														variant="secondary"
+														className="text-[10px] font-mono"
+													>
+														Lvl {m.level}
+													</Badge>
+												</label>
+											);
+										})}
+								</div>
+							</CardContent>
+						</Card>
+					)}
+
+					{/* 5. Pricing & Rates (Fixed Service Rates) */}
 					<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
 						<CardHeader className="border-b border-border/40 pb-4">
 							<div className="flex items-center justify-between">
 								<CardTitle className="text-base font-semibold">
-									4. Pricing & Payout Rates
+									5. Pricing & Payout Rates
 								</CardTitle>
 							</div>
 						</CardHeader>

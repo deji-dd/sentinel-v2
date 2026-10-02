@@ -3,17 +3,23 @@ import {
 	CheckCircle2,
 	Clock,
 	Copy,
+	Edit,
 	ExternalLink,
 	Filter,
 	History,
 	Loader2,
+	PauseCircle,
+	PlayCircle,
 	Plus,
 	Receipt,
 	RefreshCw,
+	Search,
 	ShieldAlert,
 	Sliders,
 	Swords,
 	Trash2,
+	UserX,
+	X,
 	XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -34,6 +40,12 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
+
+export interface FactionMember {
+	id: number;
+	name: string;
+	level: number;
+}
 
 export interface MercContractHitTerms {
 	statuses: {
@@ -72,7 +84,9 @@ export interface MercContract {
 	warStartTerms?: MercContractHitTerms | null;
 	warStartHitPrice?: number | null;
 	warStartStrickenHitPrice?: number | null;
-	status: "active" | "upcoming" | "completed" | "cancelled";
+	excludedMembers?: number[];
+	pausedWindows?: Array<{ pausedAt: string; resumedAt: string | null }>;
+	status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
 	createdAt: string;
 	updatedAt?: string | null;
 	createdBy?: string | null;
@@ -93,6 +107,7 @@ interface ValidatedFactionData {
 			name: string;
 		} | null;
 	} | null;
+	members?: FactionMember[];
 }
 
 interface MercContractsPageProps {
@@ -126,6 +141,173 @@ export function formatTctDateTime(date: Date | string): string {
 	const month = pad(d.getUTCMonth() + 1);
 	const year = d.getUTCFullYear();
 	return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} TCT`;
+}
+
+interface ExcludedTargetsSectionProps {
+	members: FactionMember[];
+	excludedMembers: number[];
+	onToggleMember: (id: number) => void;
+	onExcludeAll: () => void;
+	onClearAll: () => void;
+	searchQuery: string;
+	onSearchChange: (q: string) => void;
+	isLoading?: boolean;
+}
+
+function ExcludedTargetsSection({
+	members,
+	excludedMembers,
+	onToggleMember,
+	onExcludeAll,
+	onClearAll,
+	searchQuery,
+	onSearchChange,
+	isLoading,
+}: ExcludedTargetsSectionProps) {
+	const filteredMembers = members.filter((m) => {
+		if (!searchQuery.trim()) return true;
+		const q = searchQuery.toLowerCase();
+		return m.name.toLowerCase().includes(q) || String(m.id).includes(q);
+	});
+
+	return (
+		<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
+			<div className="flex items-center justify-between flex-wrap gap-2">
+				<div className="flex items-center gap-2">
+					<UserX className="size-4 text-rose-400" />
+					<span className="text-xs font-semibold text-foreground uppercase font-mono tracking-wider">
+						Target Exclusions (Optional)
+					</span>
+				</div>
+				<Badge
+					variant="outline"
+					className={
+						excludedMembers.length > 0
+							? "border-rose-500/30 text-rose-400 bg-rose-500/10 font-mono text-xs"
+							: "text-muted-foreground font-mono text-xs"
+					}
+				>
+					{excludedMembers.length} / {members.length} Excluded
+				</Badge>
+			</div>
+			<p className="text-[11px] text-muted-foreground">
+				Excluded members will be completely ignored and not credited under this
+				contract.
+			</p>
+
+			{isLoading ? (
+				<div className="flex items-center justify-center p-6 text-muted-foreground text-xs gap-2">
+					<Loader2 className="size-4 animate-spin text-primary" />
+					Loading faction member list...
+				</div>
+			) : members.length === 0 ? (
+				<p className="text-xs text-muted-foreground italic py-1">
+					No faction members found.
+				</p>
+			) : (
+				<div className="space-y-3">
+					<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+						<div className="relative flex-1">
+							<Search className="size-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								placeholder="Filter members by name or ID..."
+								value={searchQuery}
+								onChange={(e) => onSearchChange(e.target.value)}
+								className="h-8 pl-8 text-xs rounded-lg bg-background"
+							/>
+						</div>
+						<div className="flex items-center gap-1.5 shrink-0">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={onExcludeAll}
+								className="h-8 text-xs rounded-lg cursor-pointer"
+							>
+								Exclude All
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onClick={onClearAll}
+								disabled={excludedMembers.length === 0}
+								className="h-8 text-xs rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
+							>
+								Clear
+							</Button>
+						</div>
+					</div>
+
+					{/* Chips */}
+					{excludedMembers.length > 0 && (
+						<div className="flex flex-wrap items-center gap-1.5 p-2 rounded-xl bg-rose-500/5 border border-rose-500/15 max-h-24 overflow-y-auto">
+							{excludedMembers.map((id) => {
+								const member = members.find((m) => m.id === id);
+								return (
+									<span
+										key={id}
+										className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono bg-rose-500/15 text-rose-300 border border-rose-500/30"
+									>
+										<span>{member ? member.name : id}</span>
+										<button
+											type="button"
+											onClick={() => onToggleMember(id)}
+											className="hover:text-rose-100 cursor-pointer ml-0.5"
+										>
+											<X className="size-3" />
+										</button>
+									</span>
+								);
+							})}
+						</div>
+					)}
+
+					{/* Scrollable list */}
+					<div className="max-h-52 overflow-y-auto rounded-xl border border-border/60 bg-background/50 divide-y divide-border/30">
+						{filteredMembers.map((m) => {
+							const isExcluded = excludedMembers.includes(m.id);
+							const inputId = `merc-exclude-member-${m.id}`;
+							return (
+								<label
+									key={m.id}
+									htmlFor={inputId}
+									className={`flex items-center justify-between p-2 px-3 text-xs cursor-pointer transition-colors ${
+										isExcluded
+											? "bg-rose-500/10 hover:bg-rose-500/15"
+											: "hover:bg-muted/40"
+									}`}
+								>
+									<div className="flex items-center gap-2.5">
+										<Checkbox
+											id={inputId}
+											checked={isExcluded}
+											onCheckedChange={() => onToggleMember(m.id)}
+										/>
+										<span
+											className={`font-medium ${
+												isExcluded
+													? "text-rose-300 line-through opacity-80"
+													: "text-foreground"
+											}`}
+										>
+											{m.name}
+										</span>
+										<span className="text-[11px] font-mono text-muted-foreground">
+											[{m.id}]
+										</span>
+									</div>
+									<Badge variant="secondary" className="text-[10px] font-mono">
+										Lvl {m.level}
+									</Badge>
+								</label>
+							);
+						})}
+					</div>
+				</div>
+			)}
+		</div>
+	);
 }
 
 export function MercContractsPage({ guildId }: MercContractsPageProps) {
@@ -191,6 +373,62 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [warStartStrickenHitPrice, setWarStartStrickenHitPrice] =
 		useState<string>("4000000");
 
+	// Target Exclusions (Add Modal)
+	const [factionMembers, setFactionMembers] = useState<FactionMember[]>([]);
+	const [excludedMembers, setExcludedMembers] = useState<number[]>([]);
+	const [memberSearchQuery, setMemberSearchQuery] = useState("");
+
+	// Edit Modal States
+	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+	const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+	const [editingContract, setEditingContract] = useState<MercContract | null>(
+		null,
+	);
+	const [editStartImmediately, setEditStartImmediately] = useState(true);
+	const [editCustomStartTime, setEditCustomStartTime] = useState(() =>
+		toTctDateTimeInput(new Date()),
+	);
+	const [editStartMinutesBeforeWar, setEditStartMinutesBeforeWar] =
+		useState(30);
+	const [editEndOnWarEnd, setEditEndOnWarEnd] = useState(true);
+	const [editCustomEndTime, setEditCustomEndTime] = useState(() => {
+		const tomorrow = new Date();
+		tomorrow.setHours(tomorrow.getHours() + 24);
+		return toTctDateTimeInput(tomorrow);
+	});
+	const [editOnlineStatus, setEditOnlineStatus] = useState(true);
+	const [editIdleStatus, setEditIdleStatus] = useState(true);
+	const [editOfflineStatus, setEditOfflineStatus] = useState(false);
+	const [editIdleDuration, setEditIdleDuration] = useState<number>(15);
+	const [editStrickenHits, setEditStrickenHits] = useState(false);
+	const [editLevelRange, setEditLevelRange] = useState<[number, number]>([
+		1, 100,
+	]);
+	const [editHitPrice, setEditHitPrice] = useState<string>("3000000");
+	const [editStrickenHitPrice, setEditStrickenHitPrice] =
+		useState<string>("4000000");
+	const [editChangeTermsOnWarStart, setEditChangeTermsOnWarStart] =
+		useState(false);
+	const [editWarStartOnline, setEditWarStartOnline] = useState(true);
+	const [editWarStartIdle, setEditWarStartIdle] = useState(false);
+	const [editWarStartOffline, setEditWarStartOffline] = useState(false);
+	const [editWarStartIdleDuration, setEditWarStartIdleDuration] =
+		useState<number>(15);
+	const [editWarStartStricken, setEditWarStartStricken] = useState(false);
+	const [editWarStartLevelRange, setEditWarStartLevelRange] = useState<
+		[number, number]
+	>([1, 100]);
+	const [editWarStartHitPrice, setEditWarStartHitPrice] =
+		useState<string>("3000000");
+	const [editWarStartStrickenHitPrice, setEditWarStartStrickenHitPrice] =
+		useState<string>("4000000");
+	const [editFactionMembers, setEditFactionMembers] = useState<FactionMember[]>(
+		[],
+	);
+	const [editExcludedMembers, setEditExcludedMembers] = useState<number[]>([]);
+	const [editMemberSearchQuery, setEditMemberSearchQuery] = useState("");
+	const [isLoadingEditMembers, setIsLoadingEditMembers] = useState(false);
+
 	const fetchContracts = async () => {
 		try {
 			const guildRoute = api.v2.guilds({ guildId });
@@ -253,6 +491,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setWarStartIdleDuration(15);
 		setWarStartStricken(false);
 		setWarStartLevelRange([1, 100]);
+
+		setFactionMembers([]);
+		setExcludedMembers([]);
+		setMemberSearchQuery("");
 	};
 
 	const handleOpenModal = () => {
@@ -307,6 +549,15 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						: null,
 				};
 				setValidatedFaction(validated);
+
+				if (
+					"members" in data &&
+					Array.isArray((data as Record<string, unknown>).members)
+				) {
+					setFactionMembers(
+						(data as Record<string, unknown>).members as FactionMember[],
+					);
+				}
 
 				// Auto-adjust default state based on detected war
 				if (validated.warStatus === "upcoming") {
@@ -464,6 +715,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					warStartStricken
 						? Math.max(0, Number(warStartStrickenHitPrice) || 0)
 						: null,
+				excludedMembers,
 			};
 
 			const res = await guildRoute.merc.contracts.post(payload as never);
@@ -510,6 +762,57 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 			);
 		} finally {
 			setIsSubmitting(false);
+		}
+	};
+
+	const handlePauseContract = async (contractId: string) => {
+		try {
+			const guildRoute = api.v2.guilds({ guildId });
+			if (!guildRoute) return;
+
+			const res = await guildRoute.merc.contracts({ contractId }).put({
+				status: "paused",
+			});
+
+			if (res.error) {
+				toast("Failed to pause contract.", "error");
+				return;
+			}
+
+			toast(
+				"Contract paused. Target alerts cleared and hits during the pause will not be credited.",
+				"success",
+			);
+			fetchContracts();
+		} catch (err) {
+			toast(
+				err instanceof Error ? err.message : "Error pausing contract.",
+				"error",
+			);
+		}
+	};
+
+	const handleResumeContract = async (contractId: string) => {
+		try {
+			const guildRoute = api.v2.guilds({ guildId });
+			if (!guildRoute) return;
+
+			const res = await guildRoute.merc.contracts({ contractId }).put({
+				status: "active",
+			});
+
+			if (res.error) {
+				toast("Failed to resume contract.", "error");
+				return;
+			}
+
+			toast("Contract resumed.", "success");
+			fetchContracts();
+		} catch (err) {
+			toast(
+				err instanceof Error ? err.message : "Error resuming contract.",
+				"error",
+			);
 		}
 	};
 
@@ -582,8 +885,261 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		}
 	};
 
+	const handleOpenEditModal = async (contract: MercContract) => {
+		setEditingContract(contract);
+		setEditStartImmediately(Boolean(contract.startImmediately));
+		setEditCustomStartTime(toTctDateTimeInput(new Date(contract.startTime)));
+		setEditStartMinutesBeforeWar(contract.startMinutesBeforeWar ?? 30);
+		setEditEndOnWarEnd(Boolean(contract.endOnWarEnd));
+		setEditCustomEndTime(
+			contract.endTime
+				? toTctDateTimeInput(new Date(contract.endTime))
+				: toTctDateTimeInput(new Date(Date.now() + 24 * 60 * 60 * 1000)),
+		);
+
+		setEditOnlineStatus(Boolean(contract.terms.statuses.online));
+		setEditIdleStatus(Boolean(contract.terms.statuses.idle));
+		setEditOfflineStatus(Boolean(contract.terms.statuses.offline));
+		setEditIdleDuration(contract.terms.idleDurationMinutes ?? 15);
+		setEditStrickenHits(Boolean(contract.terms.strickenHits));
+		setEditLevelRange(contract.terms.levelRange ?? [1, 100]);
+
+		setEditHitPrice(String(contract.hitPrice));
+		setEditStrickenHitPrice(
+			contract.strickenHitPrice ? String(contract.strickenHitPrice) : "4000000",
+		);
+
+		setEditChangeTermsOnWarStart(Boolean(contract.changeTermsOnWarStart));
+		setEditWarStartOnline(
+			Boolean(contract.warStartTerms?.statuses?.online ?? true),
+		);
+		setEditWarStartIdle(
+			Boolean(contract.warStartTerms?.statuses?.idle ?? false),
+		);
+		setEditWarStartOffline(
+			Boolean(contract.warStartTerms?.statuses?.offline ?? false),
+		);
+		setEditWarStartIdleDuration(
+			contract.warStartTerms?.idleDurationMinutes ?? 15,
+		);
+		setEditWarStartStricken(
+			Boolean(contract.warStartTerms?.strickenHits ?? false),
+		);
+		setEditWarStartLevelRange(contract.warStartTerms?.levelRange ?? [1, 100]);
+		setEditWarStartHitPrice(
+			contract.warStartHitPrice ? String(contract.warStartHitPrice) : "3000000",
+		);
+		setEditWarStartStrickenHitPrice(
+			contract.warStartStrickenHitPrice
+				? String(contract.warStartStrickenHitPrice)
+				: "4000000",
+		);
+
+		setEditExcludedMembers(
+			contract.excludedMembers ? [...contract.excludedMembers] : [],
+		);
+		setEditMemberSearchQuery("");
+		setIsEditModalOpen(true);
+
+		// Fetch faction members for exclusion editing
+		setIsLoadingEditMembers(true);
+		try {
+			const guildRoute = api.v2.guilds({ guildId });
+			if (guildRoute) {
+				const res = await guildRoute.merc.factions.validate.get({
+					query: { factionId: String(contract.factionId) },
+				});
+				if (
+					res.data &&
+					"members" in res.data &&
+					Array.isArray((res.data as Record<string, unknown>).members)
+				) {
+					setEditFactionMembers(
+						(res.data as Record<string, unknown>).members as FactionMember[],
+					);
+				}
+			}
+		} catch (err) {
+			console.error(
+				"Failed to load faction members for contract editing:",
+				err,
+			);
+		} finally {
+			setIsLoadingEditMembers(false);
+		}
+	};
+
+	const handleSaveEditContract = async () => {
+		if (!editingContract) return;
+
+		if (!editOnlineStatus && !editIdleStatus && !editOfflineStatus) {
+			toast(
+				"Please select at least one status (Online, Idle, or Offline).",
+				"error",
+			);
+			return;
+		}
+
+		if (
+			editChangeTermsOnWarStart &&
+			!editWarStartOnline &&
+			!editWarStartIdle &&
+			!editWarStartOffline
+		) {
+			toast(
+				"Please select at least one war-start status (Online, Idle, or Offline).",
+				"error",
+			);
+			return;
+		}
+
+		setIsEditSubmitting(true);
+		try {
+			const guildRoute = api.v2.guilds({ guildId });
+			if (!guildRoute) return;
+
+			let finalStartTime: string;
+			let calculatedMinutesBeforeWar: number | null = null;
+
+			if (editingContract.warStatusAtCreation === "upcoming") {
+				calculatedMinutesBeforeWar = editStartMinutesBeforeWar;
+				if (editingContract.warStart) {
+					// Start time is anchored to war start; the "minutes before war"
+					// setting is metadata for the pre-war terms-change banner only.
+					finalStartTime = new Date(
+						editingContract.warStart * 1000,
+					).toISOString();
+				} else {
+					finalStartTime = parseTctInputToIso(editCustomStartTime);
+				}
+			} else if (editStartImmediately) {
+				finalStartTime = new Date().toISOString();
+			} else {
+				finalStartTime = parseTctInputToIso(editCustomStartTime);
+			}
+
+			let finalEndTime: string | null = null;
+			if (editingContract.warStatusAtCreation === "no_war") {
+				finalEndTime = parseTctInputToIso(editCustomEndTime);
+			} else if (editEndOnWarEnd) {
+				if (editingContract.warEnd) {
+					finalEndTime = new Date(editingContract.warEnd * 1000).toISOString();
+				} else {
+					finalEndTime = null;
+				}
+			} else {
+				finalEndTime = parseTctInputToIso(editCustomEndTime);
+			}
+
+			const payload = {
+				startTime: finalStartTime,
+				startImmediately:
+					editingContract.warStatusAtCreation !== "upcoming" &&
+					editStartImmediately,
+				startMinutesBeforeWar: calculatedMinutesBeforeWar,
+				endTime: finalEndTime,
+				endOnWarEnd:
+					editingContract.warStatusAtCreation !== "no_war"
+						? editEndOnWarEnd
+						: false,
+				terms: {
+					statuses: {
+						online: editOnlineStatus,
+						idle: editIdleStatus,
+						offline: editOfflineStatus,
+					},
+					idleDurationMinutes: editIdleStatus ? editIdleDuration : null,
+					strickenHits: editStrickenHits,
+					levelRange: editLevelRange,
+				},
+				hitPrice: Math.max(0, Number(editHitPrice) || 0),
+				strickenHitPrice: editStrickenHits
+					? Math.max(0, Number(editStrickenHitPrice) || 0)
+					: null,
+				changeTermsOnWarStart:
+					editingContract.warStatusAtCreation === "upcoming" &&
+					calculatedMinutesBeforeWar !== null &&
+					calculatedMinutesBeforeWar > 0 &&
+					editChangeTermsOnWarStart,
+				warStartTerms:
+					editingContract.warStatusAtCreation === "upcoming" &&
+					calculatedMinutesBeforeWar !== null &&
+					calculatedMinutesBeforeWar > 0 &&
+					editChangeTermsOnWarStart
+						? {
+								statuses: {
+									online: editWarStartOnline,
+									idle: editWarStartIdle,
+									offline: editWarStartOffline,
+								},
+								idleDurationMinutes: editWarStartIdle
+									? editWarStartIdleDuration
+									: null,
+								strickenHits: editWarStartStricken,
+								levelRange: editWarStartLevelRange,
+							}
+						: null,
+				warStartHitPrice:
+					editingContract.warStatusAtCreation === "upcoming" &&
+					calculatedMinutesBeforeWar !== null &&
+					calculatedMinutesBeforeWar > 0 &&
+					editChangeTermsOnWarStart
+						? Math.max(0, Number(editWarStartHitPrice) || 0)
+						: null,
+				warStartStrickenHitPrice:
+					editingContract.warStatusAtCreation === "upcoming" &&
+					calculatedMinutesBeforeWar !== null &&
+					calculatedMinutesBeforeWar > 0 &&
+					editChangeTermsOnWarStart &&
+					editWarStartStricken
+						? Math.max(0, Number(editWarStartStrickenHitPrice) || 0)
+						: null,
+				excludedMembers: editExcludedMembers,
+			};
+
+			// Once a contract is live the API locks timing and pricing, so only the
+			// live-safe subset is sent. Terms and exclusions remain editable.
+			const isContractLive =
+				editingContract.status === "active" ||
+				editingContract.status === "paused" ||
+				new Date(editingContract.startTime).getTime() <= Date.now();
+
+			const finalPayload = isContractLive
+				? {
+						terms: payload.terms,
+						excludedMembers: payload.excludedMembers,
+					}
+				: payload;
+
+			const res = await guildRoute.merc
+				.contracts({ contractId: editingContract.id })
+				.put(finalPayload as never);
+			if (res.error) {
+				const errMsg =
+					typeof res.error.value === "string"
+						? res.error.value
+						: ((res.error.value as { error?: string })?.error ??
+							"Failed to update contract.");
+				toast(errMsg, "error");
+				return;
+			}
+
+			toast("Contract updated successfully.", "success");
+			setIsEditModalOpen(false);
+			fetchContracts();
+		} catch (err) {
+			toast(
+				err instanceof Error ? err.message : "Failed to update contract.",
+				"error",
+			);
+		} finally {
+			setIsEditSubmitting(false);
+		}
+	};
+
 	const currentContracts = contracts.filter(
-		(c) => c.status === "active" || c.status === "upcoming",
+		(c) =>
+			c.status === "active" || c.status === "upcoming" || c.status === "paused",
 	);
 	const pastContracts = contracts.filter(
 		(c) => c.status === "completed" || c.status === "cancelled",
@@ -750,6 +1306,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						{displayedContracts.map((contract) => {
 							const isActive = contract.status === "active";
 							const isUpcoming = contract.status === "upcoming";
+							const isPaused = contract.status === "paused";
+							const canEdit =
+								isUpcoming ||
+								isPaused ||
+								new Date(contract.startTime).getTime() > Date.now();
+							// Active contracts expose terms + exclusion targets only; timing
+							// and pricing stay locked once a contract has gone live.
+							const isLiveContract = isActive || isPaused;
 
 							return (
 								<Card
@@ -762,6 +1326,15 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												<CardTitle className="text-base font-bold text-foreground font-sans">
 													{contract.factionName}
 												</CardTitle>
+												{isPaused && (
+													<Badge
+														variant="outline"
+														className="border-amber-500/40 bg-amber-500/10 text-amber-500 gap-1 font-mono text-[10px]"
+													>
+														<PauseCircle className="size-3" />
+														PAUSED
+													</Badge>
+												)}
 												<a
 													href={`https://www.torn.com/factions.php?step=profile&ID=${contract.factionId}`}
 													target="_blank"
@@ -807,7 +1380,43 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											>
 												<Copy className="size-3.5" />
 											</Button>
+											{canEdit && (
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() => handleOpenEditModal(contract)}
+													className="h-8 px-2.5 text-xs font-semibold border-border/80 hover:bg-muted cursor-pointer"
+													title="Edit Upcoming Contract Terms & Exclusions"
+												>
+													<Edit className="size-3.5 mr-1" />
+													Edit
+												</Button>
+											)}
 											{isActive && (
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() => handlePauseContract(contract.id)}
+													className="h-8 px-2.5 text-xs font-semibold text-amber-400 border-amber-500/30 hover:bg-amber-500/10 cursor-pointer"
+													title="Pause Contract — stops target alerts and hit crediting"
+												>
+													<PauseCircle className="size-3.5 mr-1" />
+													Pause
+												</Button>
+											)}
+											{isPaused && (
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() => handleResumeContract(contract.id)}
+													className="h-8 px-2.5 text-xs font-semibold text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 cursor-pointer"
+													title="Resume Contract"
+												>
+													<PlayCircle className="size-3.5 mr-1" />
+													Resume
+												</Button>
+											)}
+											{isLiveContract && (
 												<Button
 													variant="outline"
 													size="sm"
@@ -996,6 +1605,16 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 													Stricken
 												</Badge>
 											)}
+											{contract.excludedMembers &&
+												contract.excludedMembers.length > 0 && (
+													<Badge
+														variant="outline"
+														className="text-[11px] font-mono px-2 py-0.5 border-rose-500/30 text-rose-400 bg-rose-500/10 inline-flex items-center gap-1"
+													>
+														<UserX className="size-3" />
+														{contract.excludedMembers.length} Excluded Targets
+													</Badge>
+												)}
 										</div>
 
 										<div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground/70 font-mono pt-1">
@@ -1849,6 +2468,27 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												)}
 											</div>
 										)}
+
+									{/* Target Exclusions (Add Modal) */}
+									{validatedFaction && (
+										<ExcludedTargetsSection
+											members={factionMembers}
+											excludedMembers={excludedMembers}
+											onToggleMember={(id) =>
+												setExcludedMembers((prev) =>
+													prev.includes(id)
+														? prev.filter((x) => x !== id)
+														: [...prev, id],
+												)
+											}
+											onExcludeAll={() =>
+												setExcludedMembers(factionMembers.map((m) => m.id))
+											}
+											onClearAll={() => setExcludedMembers([])}
+											searchQuery={memberSearchQuery}
+											onSearchChange={setMemberSearchQuery}
+										/>
+									)}
 								</div>
 							</div>
 
@@ -1880,6 +2520,613 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 							</DialogFooter>
 						</>
 					)}
+				</DialogContent>
+			</Dialog>
+
+			{/* Edit Contract Dialog (For contracts that have not started yet) */}
+			<Dialog
+				open={isEditModalOpen}
+				onOpenChange={(open) => {
+					setIsEditModalOpen(open);
+					if (!open) {
+						setEditingContract(null);
+					}
+				}}
+			>
+				<DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-card border-border/80">
+					<DialogHeader>
+						<DialogTitle className="text-lg font-bold flex items-center gap-2 text-foreground">
+							<Edit className="size-4 text-primary" />
+							<span>Edit Upcoming Contract</span>
+							{editingContract && (
+								<span className="text-xs font-mono font-normal text-muted-foreground">
+									({editingContract.factionName} [{editingContract.factionId}])
+								</span>
+							)}
+						</DialogTitle>
+					</DialogHeader>
+
+					{editingContract && (
+						<div className="space-y-6 py-2">
+							{/* Notice */}
+							<div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start gap-2.5">
+								<Clock className="size-4 shrink-0 mt-0.5" />
+								<div>
+									<p className="font-semibold text-amber-200">
+										Contract Not Started Yet
+									</p>
+									<p className="text-[11px] text-amber-300/90 mt-0.5">
+										You can modify start timing, target filtering criteria,
+										payout values, and target exclusions before the contract
+										begins.
+									</p>
+								</div>
+							</div>
+
+							{/* 1. Timing Configuration */}
+							<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
+								<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
+									1. Contract Timing (TCT / UTC)
+								</h3>
+
+								{editingContract.warStatusAtCreation === "upcoming" ? (
+									<div className="space-y-4">
+										<div>
+											<div className="flex items-center justify-between text-xs mb-2">
+												<label
+													htmlFor="edit-start-time-slider"
+													className="font-semibold text-foreground"
+												>
+													Start Time Relative to War Start
+												</label>
+												<span className="font-mono text-amber-400 font-bold">
+													{editStartMinutesBeforeWar === 0
+														? "At War Start (0 min)"
+														: `${editStartMinutesBeforeWar} minutes before war`}
+												</span>
+											</div>
+											<Slider
+												id="edit-start-time-slider"
+												min={0}
+												max={60}
+												step={5}
+												value={[editStartMinutesBeforeWar]}
+												onValueChange={(val) => {
+													const v = val[0] ?? 0;
+													setEditStartMinutesBeforeWar(v);
+													if (v === 0) {
+														setEditChangeTermsOnWarStart(false);
+													}
+												}}
+												className="py-2"
+											/>
+											<div className="flex justify-between text-[10px] font-mono text-muted-foreground mt-1">
+												<span>0 min (War Start)</span>
+												<span>30 mins before</span>
+												<span>60 mins before</span>
+											</div>
+										</div>
+
+										<div className="space-y-2 pt-2 border-t border-border/40">
+											<div className="flex items-center gap-2">
+												<Checkbox
+													id="edit-upcoming-end-war"
+													checked={editEndOnWarEnd}
+													onCheckedChange={(checked) =>
+														setEditEndOnWarEnd(Boolean(checked))
+													}
+												/>
+												<label
+													htmlFor="edit-upcoming-end-war"
+													className="text-xs font-medium text-foreground cursor-pointer"
+												>
+													End contract automatically when ranked war finishes
+												</label>
+											</div>
+											{!editEndOnWarEnd && (
+												<div className="pt-2 max-w-xs">
+													<label
+														htmlFor="edit-upcoming-custom-end"
+														className="text-xs text-muted-foreground block mb-1"
+													>
+														Custom End Time (TCT)
+													</label>
+													<Input
+														id="edit-upcoming-custom-end"
+														type="datetime-local"
+														value={editCustomEndTime}
+														onChange={(e) =>
+															setEditCustomEndTime(e.target.value)
+														}
+														className="h-9 text-xs rounded-xl"
+													/>
+												</div>
+											)}
+										</div>
+									</div>
+								) : (
+									<div className="space-y-4">
+										<div className="space-y-2">
+											<div className="flex items-center gap-2">
+												<Checkbox
+													id="edit-start-immediately"
+													checked={editStartImmediately}
+													onCheckedChange={(c) =>
+														setEditStartImmediately(Boolean(c))
+													}
+												/>
+												<label
+													htmlFor="edit-start-immediately"
+													className="text-xs font-semibold text-foreground cursor-pointer"
+												>
+													Start immediately upon activation
+												</label>
+											</div>
+
+											{!editStartImmediately && (
+												<div className="pt-2 max-w-xs">
+													<label
+														htmlFor="edit-custom-start"
+														className="text-xs text-muted-foreground block mb-1"
+													>
+														Start Time (TCT)
+													</label>
+													<Input
+														id="edit-custom-start"
+														type="datetime-local"
+														value={editCustomStartTime}
+														onChange={(e) =>
+															setEditCustomStartTime(e.target.value)
+														}
+														className="h-9 text-xs rounded-xl"
+													/>
+												</div>
+											)}
+										</div>
+
+										<div className="space-y-2 pt-2 border-t border-border/40">
+											<label
+												htmlFor="edit-custom-end"
+												className="text-xs text-muted-foreground block mb-1"
+											>
+												End Time (TCT)
+											</label>
+											<Input
+												id="edit-custom-end"
+												type="datetime-local"
+												value={editCustomEndTime}
+												onChange={(e) => setEditCustomEndTime(e.target.value)}
+												className="h-9 text-xs rounded-xl"
+											/>
+										</div>
+									</div>
+								)}
+							</div>
+
+							{/* 2. Target Hit Terms */}
+							<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
+								<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
+									2. Target Hit Terms{" "}
+									{editingContract.warStatusAtCreation === "upcoming" &&
+									editStartMinutesBeforeWar > 0
+										? "(Pre-War)"
+										: ""}
+								</h3>
+
+								{/* Status Checkboxes */}
+								<div className="space-y-3">
+									<span className="text-xs font-medium text-foreground block">
+										Allowed Target Statuses:
+									</span>
+									<div className="flex flex-wrap items-center gap-6">
+										<div className="flex items-center gap-2">
+											<Checkbox
+												id="edit-term-online"
+												checked={editOnlineStatus}
+												onCheckedChange={(c) => setEditOnlineStatus(Boolean(c))}
+											/>
+											<label
+												htmlFor="edit-term-online"
+												className="text-xs text-foreground cursor-pointer font-medium"
+											>
+												Online
+											</label>
+										</div>
+
+										<div className="flex items-center gap-2">
+											<Checkbox
+												id="edit-term-idle"
+												checked={editIdleStatus}
+												onCheckedChange={(c) => setEditIdleStatus(Boolean(c))}
+											/>
+											<label
+												htmlFor="edit-term-idle"
+												className="text-xs text-foreground cursor-pointer font-medium"
+											>
+												Idle
+											</label>
+										</div>
+
+										<div className="flex items-center gap-2">
+											<Checkbox
+												id="edit-term-offline"
+												checked={editOfflineStatus}
+												onCheckedChange={(c) =>
+													setEditOfflineStatus(Boolean(c))
+												}
+											/>
+											<label
+												htmlFor="edit-term-offline"
+												className="text-xs text-foreground cursor-pointer font-medium"
+											>
+												Offline
+											</label>
+										</div>
+									</div>
+
+									{editIdleStatus && (
+										<div className="pt-2 max-w-xs">
+											<label
+												htmlFor="edit-term-idle-minutes"
+												className="text-xs text-muted-foreground block mb-1"
+											>
+												Min Idle Duration (minutes)
+											</label>
+											<Input
+												id="edit-term-idle-minutes"
+												type="number"
+												min={1}
+												max={1440}
+												value={editIdleDuration}
+												onChange={(e) => {
+													const next = Number(e.target.value) || 15;
+													setEditIdleDuration(next);
+												}}
+												className="h-9 text-xs rounded-xl font-mono"
+												placeholder="15"
+											/>
+										</div>
+									)}
+								</div>
+
+								{/* Stricken Hits Checkbox */}
+								<div className="pt-2 border-t border-border/40">
+									<div className="flex items-center gap-2">
+										<Checkbox
+											id="edit-term-stricken"
+											checked={editStrickenHits}
+											onCheckedChange={(c) => setEditStrickenHits(Boolean(c))}
+										/>
+										<label
+											htmlFor="edit-term-stricken"
+											className="text-xs text-foreground cursor-pointer font-medium"
+										>
+											Stricken hits
+										</label>
+									</div>
+								</div>
+
+								{/* Hit Payout Values */}
+								<div className="pt-3 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-4">
+									<div>
+										<label
+											htmlFor="edit-term-hit-price"
+											className="text-xs font-semibold text-foreground block mb-1"
+										>
+											Value of 1 hit ($)
+										</label>
+										<Input
+											id="edit-term-hit-price"
+											type="number"
+											min={0}
+											step={1000}
+											value={editHitPrice}
+											onChange={(e) => setEditHitPrice(e.target.value)}
+											className="h-9 text-xs rounded-xl font-mono"
+											placeholder="3000000"
+										/>
+									</div>
+
+									{editStrickenHits && (
+										<div>
+											<label
+												htmlFor="edit-term-stricken-price"
+												className="text-xs font-semibold text-blue-400 block mb-1"
+											>
+												Value of Stricken hit ($)
+											</label>
+											<Input
+												id="edit-term-stricken-price"
+												type="number"
+												min={0}
+												step={1000}
+												value={editStrickenHitPrice}
+												onChange={(e) =>
+													setEditStrickenHitPrice(e.target.value)
+												}
+												className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
+												placeholder="4000000"
+											/>
+										</div>
+									)}
+								</div>
+
+								{/* Level Range Slider */}
+								<div className="pt-2 border-t border-border/40 space-y-2">
+									<div className="flex items-center justify-between text-xs">
+										<span className="font-medium text-foreground">
+											Target Level Range
+										</span>
+										<span className="font-mono text-primary font-bold">
+											Levels {editLevelRange[0]} – {editLevelRange[1]}
+										</span>
+									</div>
+									<Slider
+										min={1}
+										max={100}
+										step={1}
+										value={[editLevelRange[0], editLevelRange[1]]}
+										onValueChange={(val) => {
+											const minVal = val[0] ?? 1;
+											const maxVal = val[1] ?? 100;
+											setEditLevelRange([minVal, maxVal]);
+										}}
+										className="py-2"
+									/>
+									<div className="flex justify-between text-[10px] font-mono text-muted-foreground">
+										<span>Level 1</span>
+										<span>Level 50</span>
+										<span>Level 100</span>
+									</div>
+								</div>
+							</div>
+
+							{/* 3. Upcoming War Special: Change Terms on War Start */}
+							{editingContract.warStatusAtCreation === "upcoming" &&
+								editStartMinutesBeforeWar > 0 && (
+									<div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-4">
+										<div className="flex items-center gap-2">
+											<Checkbox
+												id="edit-change-terms-war-start"
+												checked={editChangeTermsOnWarStart}
+												onCheckedChange={(c) =>
+													setEditChangeTermsOnWarStart(Boolean(c))
+												}
+											/>
+											<label
+												htmlFor="edit-change-terms-war-start"
+												className="text-xs font-semibold text-amber-700 dark:text-amber-300 cursor-pointer flex items-center gap-1.5"
+											>
+												<Sliders className="size-3.5" />
+												Change terms on war start
+											</label>
+										</div>
+
+										{editChangeTermsOnWarStart && (
+											<div className="space-y-4 pt-3 border-t border-amber-500/20">
+												<span className="text-xs font-semibold text-foreground block">
+													War-Start Terms:
+												</span>
+
+												<div className="flex flex-wrap items-center gap-6">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="edit-war-term-online"
+															checked={editWarStartOnline}
+															onCheckedChange={(c) =>
+																setEditWarStartOnline(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="edit-war-term-online"
+															className="text-xs text-foreground cursor-pointer font-medium"
+														>
+															Online
+														</label>
+													</div>
+
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="edit-war-term-idle"
+															checked={editWarStartIdle}
+															onCheckedChange={(c) =>
+																setEditWarStartIdle(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="edit-war-term-idle"
+															className="text-xs text-foreground cursor-pointer font-medium"
+														>
+															Idle
+														</label>
+													</div>
+
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="edit-war-term-offline"
+															checked={editWarStartOffline}
+															onCheckedChange={(c) =>
+																setEditWarStartOffline(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="edit-war-term-offline"
+															className="text-xs text-foreground cursor-pointer font-medium"
+														>
+															Offline
+														</label>
+													</div>
+												</div>
+
+												{editWarStartIdle && (
+													<div className="pt-1 max-w-xs">
+														<label
+															htmlFor="edit-war-term-idle-minutes"
+															className="text-xs text-muted-foreground block mb-1"
+														>
+															Min Idle Duration (minutes)
+														</label>
+														<Input
+															id="edit-war-term-idle-minutes"
+															type="number"
+															min={1}
+															max={1440}
+															value={editWarStartIdleDuration}
+															onChange={(e) => {
+																const next = Number(e.target.value) || 15;
+																setEditWarStartIdleDuration(next);
+															}}
+															className="h-9 text-xs rounded-xl font-mono"
+															placeholder="15"
+														/>
+													</div>
+												)}
+
+												<div className="pt-2 border-t border-amber-500/20">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="edit-war-term-stricken"
+															checked={editWarStartStricken}
+															onCheckedChange={(c) =>
+																setEditWarStartStricken(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="edit-war-term-stricken"
+															className="text-xs text-foreground cursor-pointer font-medium"
+														>
+															Stricken hits
+														</label>
+													</div>
+												</div>
+
+												<div className="pt-3 border-t border-amber-500/20 grid grid-cols-1 sm:grid-cols-2 gap-4">
+													<div>
+														<label
+															htmlFor="edit-war-hit-price"
+															className="text-xs font-semibold text-foreground block mb-1"
+														>
+															War-Start Hit Price ($)
+														</label>
+														<Input
+															id="edit-war-hit-price"
+															type="number"
+															min={0}
+															step={1000}
+															value={editWarStartHitPrice}
+															onChange={(e) =>
+																setEditWarStartHitPrice(e.target.value)
+															}
+															className="h-9 text-xs rounded-xl font-mono"
+															placeholder="3000000"
+														/>
+													</div>
+
+													{editWarStartStricken && (
+														<div>
+															<label
+																htmlFor="edit-war-stricken-price"
+																className="text-xs font-semibold text-blue-400 block mb-1"
+															>
+																War-Start Stricken Price ($)
+															</label>
+															<Input
+																id="edit-war-stricken-price"
+																type="number"
+																min={0}
+																step={1000}
+																value={editWarStartStrickenHitPrice}
+																onChange={(e) =>
+																	setEditWarStartStrickenHitPrice(
+																		e.target.value,
+																	)
+																}
+																className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
+																placeholder="4000000"
+															/>
+														</div>
+													)}
+												</div>
+
+												<div className="pt-2 border-t border-amber-500/20 space-y-2">
+													<div className="flex items-center justify-between text-xs">
+														<span className="font-medium text-foreground">
+															War-Start Level Range
+														</span>
+														<span className="font-mono text-amber-400 font-bold">
+															Levels {editWarStartLevelRange[0]} –{" "}
+															{editWarStartLevelRange[1]}
+														</span>
+													</div>
+													<Slider
+														min={1}
+														max={100}
+														step={1}
+														value={[
+															editWarStartLevelRange[0],
+															editWarStartLevelRange[1],
+														]}
+														onValueChange={(val) => {
+															const minVal = val[0] ?? 1;
+															const maxVal = val[1] ?? 100;
+															setEditWarStartLevelRange([minVal, maxVal]);
+														}}
+														className="py-2"
+													/>
+												</div>
+											</div>
+										)}
+									</div>
+								)}
+
+							{/* 4. Target Exclusions (Edit Modal) */}
+							<ExcludedTargetsSection
+								members={editFactionMembers}
+								excludedMembers={editExcludedMembers}
+								onToggleMember={(id) =>
+									setEditExcludedMembers((prev) =>
+										prev.includes(id)
+											? prev.filter((x) => x !== id)
+											: [...prev, id],
+									)
+								}
+								onExcludeAll={() =>
+									setEditExcludedMembers(editFactionMembers.map((m) => m.id))
+								}
+								onClearAll={() => setEditExcludedMembers([])}
+								searchQuery={editMemberSearchQuery}
+								onSearchChange={setEditMemberSearchQuery}
+								isLoading={isLoadingEditMembers}
+							/>
+						</div>
+					)}
+
+					<DialogFooter className="pt-4 border-t border-border/60 flex items-center justify-end gap-3">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => setIsEditModalOpen(false)}
+							disabled={isEditSubmitting}
+							className="rounded-xl h-10 px-4 text-xs font-semibold cursor-pointer"
+						>
+							Cancel
+						</Button>
+						<Button
+							type="button"
+							onClick={handleSaveEditContract}
+							disabled={isEditSubmitting}
+							className="rounded-xl h-10 px-6 text-xs font-semibold cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90"
+						>
+							{isEditSubmitting ? (
+								<>
+									<Loader2 className="size-4 animate-spin mr-1.5" />
+									Saving Changes...
+								</>
+							) : (
+								"Save Changes"
+							)}
+						</Button>
+					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 		</div>

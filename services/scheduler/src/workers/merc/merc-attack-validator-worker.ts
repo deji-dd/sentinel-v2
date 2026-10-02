@@ -31,26 +31,39 @@ interface FinishingHitEffect {
 interface OutgoingAttack {
 	id: number;
 	code?: string;
-	timestamp_started: number;
-	timestamp_ended: number;
+	started?: number;
+	ended?: number;
+	timestamp_started?: number;
+	timestamp_ended?: number;
 	attacker: {
 		id: number;
 		name: string;
 		faction?: {
 			id: number;
 			name: string;
-		};
-	};
+		} | null;
+	} | null;
 	defender: {
 		id: number;
 		name: string;
 		faction?: {
 			id: number;
 			name: string;
-		};
+		} | null;
+		faction_id?: number | null;
 	};
 	result: string;
 	finishing_hit_effects?: FinishingHitEffect[];
+}
+
+export function getAttackEndedTimestamp(attack: OutgoingAttack): number {
+	return Number(
+		attack.ended ??
+			attack.timestamp_ended ??
+			attack.started ??
+			attack.timestamp_started ??
+			0,
+	);
 }
 
 interface TornFactionAttacksResponse {
@@ -73,19 +86,21 @@ const inMemoryProgress = new Map<string, AttackValidatorProgress>();
 
 export function getProgressStateId(
 	guildId: string,
+	contractId: string,
 	keyInfo: { factionId?: number; apiKey: string },
 ): string {
 	const keyIdentifier = keyInfo.factionId
 		? `faction_${keyInfo.factionId}`
 		: `key_${createHash("sha256").update(keyInfo.apiKey).digest("hex").slice(0, 12)}`;
-	return `merc:attack_validator:${guildId}:${keyIdentifier}`;
+	return `merc:attack_validator:${guildId}:${contractId}:${keyIdentifier}`;
 }
 
 export async function getAttackValidatorProgress(
 	guildId: string,
+	contractId: string,
 	keyInfo: { factionId?: number; apiKey: string },
 ): Promise<AttackValidatorProgress | null> {
-	const stateId = getProgressStateId(guildId, keyInfo);
+	const stateId = getProgressStateId(guildId, contractId, keyInfo);
 
 	const cached = inMemoryProgress.get(stateId);
 	if (cached) return cached;
@@ -120,11 +135,12 @@ export async function getAttackValidatorProgress(
 
 export async function saveAttackValidatorProgress(
 	guildId: string,
+	contractId: string,
 	keyInfo: { factionId?: number; apiKey: string },
 	lastAttackId: number,
 	lastAttackTimestamp: number,
 ): Promise<void> {
-	const stateId = getProgressStateId(guildId, keyInfo);
+	const stateId = getProgressStateId(guildId, contractId, keyInfo);
 
 	const progress: AttackValidatorProgress = {
 		lastAttackId,
@@ -176,6 +192,30 @@ export function parseNextLinkParams(nextLink: string): Record<string, unknown> {
 		}
 	}
 	return params;
+}
+
+/**
+ * Determines whether an attack timestamp falls inside a pause window for the contract.
+ * An open window (resumedAt === null) extends to the present, so hits landing while
+ * the contract was paused are excluded from payout.
+ */
+export function isWithinPausedWindow(
+	pausedWindows: MercContract["pausedWindows"] | undefined | null,
+	attackEndedSec: number,
+): boolean {
+	if (!pausedWindows || pausedWindows.length === 0) return false;
+	if (attackEndedSec <= 0) return false;
+
+	for (const w of pausedWindows) {
+		const startSec = Math.floor(new Date(w.pausedAt).getTime() / 1000);
+		const endSec = w.resumedAt
+			? Math.floor(new Date(w.resumedAt).getTime() / 1000)
+			: Number.POSITIVE_INFINITY;
+		if (attackEndedSec >= startSec && attackEndedSec <= endSec) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // In-memory set for zero-overhead attack deduplication
@@ -269,17 +309,52 @@ const DISQUALIFYING_RESULTS = new Set([
  * Queries /faction/attacks?filters=outgoing periodically using family master keys.
  */
 export async function runMercAttackValidationCycle(): Promise<number> {
-	// 1. Fetch active contracts
+	const nowMs = Date.now();
+
+	// 1. Fetch active, upcoming and paused contracts. Paused contracts are
+	//    selected so we can close any window opened while they were paused, but
+	//    they are never eligible for validation (see below).
 	const rows = await db
 		.select()
 		.from(mercContracts)
-		.where(eq(mercContracts.status, "active"));
+		.where(inArray(mercContracts.status, ["active", "upcoming", "paused"]));
 
 	if (rows.length === 0) {
 		return Date.now() + 30_000;
 	}
 
-	const activeContracts = rows.map(mapRowToMercContract);
+	const allContracts = rows.map(mapRowToMercContract);
+	const activeContracts: MercContract[] = [];
+
+	for (const contract of allContracts) {
+		const startMs = new Date(contract.startTime).getTime();
+
+		// Paused contracts are excluded from validation entirely: no target
+		// posting and no hit crediting while paused.
+		if (contract.status === "paused") {
+			continue;
+		}
+
+		// If any contract in DB was marked 'upcoming' but has reached start time, transition to active
+		if (contract.status === "upcoming" && nowMs >= startMs) {
+			logger.info(
+				`Upcoming contract ${contract.id} (${contract.factionName}) start time reached. Transitioning to active.`,
+			);
+			await db
+				.update(mercContracts)
+				.set({ status: "active", updatedAt: new Date() })
+				.where(eq(mercContracts.id, contract.id));
+
+			contract.status = "active";
+			activeContracts.push(contract);
+		} else if (contract.status === "active" && nowMs >= startMs) {
+			activeContracts.push(contract);
+		}
+	}
+
+	if (activeContracts.length === 0) {
+		return Date.now() + 30_000;
+	}
 
 	// Group contracts by guildId
 	const contractsByGuild = new Map<string, MercContract[]>();
@@ -301,151 +376,175 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 			continue;
 		}
 
-		const earliestContractStartTime = Math.min(
-			...contracts.map((c) =>
-				Math.floor(new Date(c.startTime).getTime() / 1000),
-			),
-		);
+		for (const contract of contracts) {
+			const contractStartSec = Math.floor(
+				new Date(contract.startTime).getTime() / 1000,
+			);
+			const contractEndSec = contract.endTime
+				? Math.floor(new Date(contract.endTime).getTime() / 1000)
+				: null;
 
-		for (const keyInfo of masterKeys) {
-			try {
-				const progress = await getAttackValidatorProgress(guildId, keyInfo);
-				let lastAttackId = progress?.lastAttackId ?? null;
+			for (const keyInfo of masterKeys) {
+				try {
+					const progress = await getAttackValidatorProgress(
+						guildId,
+						contract.id,
+						keyInfo,
+					);
+					let lastAttackId = progress?.lastAttackId ?? null;
 
-				if (lastAttackId === null) {
-					// Fallback to checking the highest credited hit in DB for this guild
-					const [maxHitRow] = await db
-						.select({
-							maxAttackId: sql<number>`MAX(${mercContractHits.attackId})`,
-						})
-						.from(mercContractHits)
-						.where(eq(mercContractHits.guildId, guildId));
-					if (maxHitRow?.maxAttackId) {
-						lastAttackId = Number(maxHitRow.maxAttackId);
-					}
-				}
-
-				let currentQueryParams: Record<string, unknown> = {
-					filters: "outgoing",
-					sort: "DESC",
-					limit: 100,
-				};
-
-				const collectedAttacks: OutgoingAttack[] = [];
-				const seenAttackIds = new Set<number>();
-				let reachedStopPoint = false;
-				let page = 1;
-				const MAX_PAGES = 30; // Supports up to 3,000 attacks during high-volume periods
-				let highestAttackIdSeen = lastAttackId ?? 0;
-				let highestAttackTimestampSeen = progress?.lastAttackTimestamp ?? 0;
-
-				while (page <= MAX_PAGES && !reachedStopPoint) {
-					const attacksRes = (await apiClient.get("/faction/attacks", {
-						apiKey: keyInfo.apiKey,
-						queryParams: currentQueryParams,
-					})) as TornFactionAttacksResponse;
-
-					const attacks = attacksRes.attacks ?? [];
-					if (attacks.length === 0) break;
-
-					for (const attack of attacks) {
-						if (seenAttackIds.has(attack.id)) continue;
-						seenAttackIds.add(attack.id);
-
-						if (attack.id > highestAttackIdSeen) {
-							highestAttackIdSeen = attack.id;
-							highestAttackTimestampSeen = attack.timestamp_ended;
+					if (lastAttackId === null) {
+						// Fallback to checking the highest credited hit in DB for this specific contract
+						const [maxHitRow] = await db
+							.select({
+								maxAttackId: sql<number>`MAX(${mercContractHits.attackId})`,
+							})
+							.from(mercContractHits)
+							.where(eq(mercContractHits.contractId, contract.id));
+						if (maxHitRow?.maxAttackId) {
+							lastAttackId = Number(maxHitRow.maxAttackId);
 						}
-
-						// 1. Reached where we last stopped:
-						if (
-							lastAttackId !== null &&
-							lastAttackId > 0 &&
-							attack.id <= lastAttackId
-						) {
-							reachedStopPoint = true;
-							break;
-						}
-
-						// 2. Attack occurred before the earliest active contract start time:
-						if (attack.timestamp_ended < earliestContractStartTime) {
-							reachedStopPoint = true;
-							break;
-						}
-
-						collectedAttacks.push(attack);
 					}
 
-					if (reachedStopPoint) break;
+					let currentQueryParams: Record<string, unknown> = {
+						filters: "outgoing",
+						sort: "DESC",
+						limit: 100,
+					};
 
-					const nextLink = attacksRes._metadata?.links?.next;
-					if (nextLink) {
-						currentQueryParams = parseNextLinkParams(nextLink);
-						page++;
-					} else if (attacks.length >= 100) {
-						const oldestAttack = attacks[attacks.length - 1];
-						if (oldestAttack) {
-							currentQueryParams = {
-								filters: "outgoing",
-								sort: "DESC",
-								limit: 100,
-								to: oldestAttack.timestamp_ended,
-							};
+					const collectedAttacks: OutgoingAttack[] = [];
+					const seenAttackIds = new Set<number>();
+					let reachedStopPoint = false;
+					let page = 1;
+					const MAX_PAGES = 30; // Supports up to 3,000 attacks during high-volume periods
+					let highestAttackIdSeen = lastAttackId ?? 0;
+					let highestAttackTimestampSeen = progress?.lastAttackTimestamp ?? 0;
+
+					while (page <= MAX_PAGES && !reachedStopPoint) {
+						const attacksRes = (await apiClient.get("/faction/attacks", {
+							apiKey: keyInfo.apiKey,
+							queryParams: currentQueryParams,
+						})) as TornFactionAttacksResponse;
+
+						const attacks = attacksRes.attacks ?? [];
+						if (attacks.length === 0) break;
+
+						for (const attack of attacks) {
+							if (seenAttackIds.has(attack.id)) continue;
+							seenAttackIds.add(attack.id);
+
+							const attackEnded = getAttackEndedTimestamp(attack);
+
+							// 1. Reached where this specific contract last stopped:
+							if (
+								lastAttackId !== null &&
+								lastAttackId > 0 &&
+								attack.id <= lastAttackId
+							) {
+								reachedStopPoint = true;
+								break;
+							}
+
+							// 2. Attack occurred before this contract's start time:
+							if (attackEnded > 0 && attackEnded < contractStartSec) {
+								reachedStopPoint = true;
+								break;
+							}
+
+							// Watermark is advanced only for attacks that survive the
+							// stop-point and timeframe gates above. Advancing it for
+							// discarded attacks previously skipped past attacks that
+							// should have been credited on the next run.
+							if (attack.id > highestAttackIdSeen) {
+								highestAttackIdSeen = attack.id;
+								highestAttackTimestampSeen = attackEnded;
+							}
+
+							collectedAttacks.push(attack);
+						}
+
+						if (reachedStopPoint) break;
+
+						const nextLink = attacksRes._metadata?.links?.next;
+						if (nextLink) {
+							currentQueryParams = parseNextLinkParams(nextLink);
 							page++;
+						} else if (attacks.length >= 100) {
+							const oldestAttack = attacks[attacks.length - 1];
+							const oldestEnded = oldestAttack
+								? getAttackEndedTimestamp(oldestAttack)
+								: 0;
+							if (oldestEnded > 0) {
+								currentQueryParams = {
+									filters: "outgoing",
+									sort: "DESC",
+									limit: 100,
+									to: oldestEnded,
+								};
+								page++;
+							} else {
+								break;
+							}
 						} else {
 							break;
 						}
-					} else {
-						break;
-					}
-				}
-
-				if (page > 1) {
-					logger.info(
-						`Paginated ${page} pages (${collectedAttacks.length} new attacks collected) for guild ${guildId} up to last stopped point (${lastAttackId ?? "none"}).`,
-					);
-				}
-
-				// Process collected attacks in chronological order (oldest to newest)
-				collectedAttacks.reverse();
-
-				for (const attack of collectedAttacks) {
-					// Disqualify non-offensive or non-winning results
-					if (DISQUALIFYING_RESULTS.has(attack.result)) {
-						continue;
 					}
 
-					// Fast in-memory deduplication check
-					if (processedAttackIds.has(attack.id)) {
-						continue;
+					if (page > 1) {
+						logger.info(
+							`Paginated ${page} pages (${collectedAttacks.length} new attacks collected) for contract ${contract.id} (${contract.factionName}) up to last stopped point (${lastAttackId ?? "none"}).`,
+						);
 					}
 
-					// Match attack against contracts
-					for (const contract of contracts) {
-						// Check target faction match
-						if (attack.defender.faction?.id !== contract.factionId) {
+					// Process collected attacks in chronological order (oldest to newest)
+					collectedAttacks.reverse();
+
+					for (const attack of collectedAttacks) {
+						// Disqualify non-offensive or non-winning results
+						if (DISQUALIFYING_RESULTS.has(attack.result)) {
 							continue;
 						}
 
-						const startSec = Math.floor(
-							new Date(contract.startTime).getTime() / 1000,
-						);
-						const endSec = contract.endTime
-							? Math.floor(new Date(contract.endTime).getTime() / 1000)
-							: null;
+						const defenderFactionId =
+							attack.defender.faction?.id ?? attack.defender.faction_id ?? null;
+
+						// Check target faction match
+						if (defenderFactionId !== contract.factionId) {
+							continue;
+						}
+
+						// Check excluded members: skip if defender was excluded from contract
+						if (
+							contract.excludedMembers &&
+							contract.excludedMembers.length > 0 &&
+							contract.excludedMembers.includes(attack.defender.id)
+						) {
+							continue;
+						}
+
+						const attackEnded = getAttackEndedTimestamp(attack);
 
 						// Check timeframe
-						if (attack.timestamp_ended < startSec) {
-							continue;
+						if (attackEnded > 0) {
+							if (attackEnded < contractStartSec) {
+								continue;
+							}
+							if (contractEndSec && attackEnded > contractEndSec) {
+								continue;
+							}
 						}
-						if (endSec && attack.timestamp_ended > endSec) {
+
+						// Exclude hits that landed while the contract was paused
+						if (isWithinPausedWindow(contract.pausedWindows, attackEnded)) {
+							logger.info(
+								`Skipped merc attack ${attack.id}: occurred during a paused window for contract ${contract.id}.`,
+							);
 							continue;
 						}
 
-						// Check database deduplication
-						const alreadyInDb = await isAttackProcessed(attack.id);
+						// Check database deduplication for this contract
+						const alreadyInDb = await isAttackProcessed(attack.id, contract.id);
 						if (alreadyInDb) {
-							rememberAttackId(attack.id);
 							continue;
 						}
 
@@ -468,21 +567,28 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 						}
 
 						const hitTimestampMs =
-							attack.timestamp_ended < 1e11
-								? attack.timestamp_ended * 1000
-								: attack.timestamp_ended;
+							attackEnded > 0
+								? attackEnded < 1e11
+									? attackEnded * 1000
+									: attackEnded
+								: Date.now();
 						const hitDate = new Date(hitTimestampMs);
+
+						const attackerId = attack.attacker?.id ?? 0;
+						const attackerName = attack.attacker?.name ?? "Unknown Mercenary";
+						const attackerFactionId =
+							attack.attacker?.faction?.id ?? keyInfo.factionId ?? null;
+						const attackerFactionName = attack.attacker?.faction?.name ?? null;
 
 						// Record hit in database
 						await recordMercContractHit({
 							contractId: contract.id,
 							guildId: contract.guildId,
 							attackId: attack.id,
-							attackerId: attack.attacker.id,
-							attackerName: attack.attacker.name,
-							attackerFactionId:
-								attack.attacker.faction?.id ?? keyInfo.factionId ?? null,
-							attackerFactionName: attack.attacker.faction?.name ?? null,
+							attackerId,
+							attackerName,
+							attackerFactionId,
+							attackerFactionName,
 							defenderId: attack.defender.id,
 							defenderName: attack.defender.name,
 							result: attack.result,
@@ -491,10 +597,8 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							timestamp: hitDate,
 						});
 
-						rememberAttackId(attack.id);
-
 						logger.info(
-							`Validated merc hit: ${attack.attacker.name} [${attack.attacker.id}] ${attack.result} ${attack.defender.name} [${attack.defender.id}] ($${payoutValue.toLocaleString()}${isStricken ? " STRICKEN" : ""}${!isHospitalized ? " [NO PAYOUT - NOT HOSP]" : ""})`,
+							`Validated merc hit: ${attackerName} [${attackerId}] ${attack.result} ${attack.defender.name} [${attack.defender.id}] ($${payoutValue.toLocaleString()}${isStricken ? " STRICKEN" : ""}${!isHospitalized ? " [NO PAYOUT - NOT HOSP]" : ""})`,
 						);
 
 						// Post validated hit log to #merc-log (strictly zero emojis)
@@ -502,8 +606,8 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							guildId: contract.guildId,
 							channelName: logChannel,
 							hitData: {
-								attackerName: attack.attacker.name,
-								attackerId: attack.attacker.id,
+								attackerName: attackerName,
+								attackerId: attackerId,
 								defenderName: attack.defender.name,
 								defenderId: attack.defender.id,
 								result: attack.result,
@@ -518,26 +622,27 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 						// Target was hit -> down target embed from #targets immediately
 						await mercTargetManager.downTarget(contract.id, attack.defender.id);
 					}
-				}
 
-				// Persist progress to systemStates so it survives restarts
-				if (highestAttackIdSeen > (lastAttackId ?? 0)) {
-					await saveAttackValidatorProgress(
-						guildId,
-						keyInfo,
-						highestAttackIdSeen,
-						highestAttackTimestampSeen,
-					);
-				}
-			} catch (err) {
-				if (err instanceof TornError) {
-					logger.warn(
-						`Torn API error during merc attack validation (${err.code}): ${err.message}`,
-					);
-				} else {
-					logger.warn(
-						`Error checking merc attacks for guild ${guildId}: ${err instanceof Error ? err.message : String(err)}`,
-					);
+					// Persist progress to systemStates per contract
+					if (highestAttackIdSeen > (lastAttackId ?? 0)) {
+						await saveAttackValidatorProgress(
+							guildId,
+							contract.id,
+							keyInfo,
+							highestAttackIdSeen,
+							highestAttackTimestampSeen,
+						);
+					}
+				} catch (err) {
+					if (err instanceof TornError) {
+						logger.warn(
+							`Torn API error during merc attack validation (${err.code}): ${err.message}`,
+						);
+					} else {
+						logger.warn(
+							`Error checking merc attacks for contract ${contract.id}: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					}
 				}
 			}
 		}

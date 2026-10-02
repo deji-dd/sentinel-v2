@@ -627,6 +627,7 @@ export type IpcMessage =
 	| IpcMercTargetMessageRecordedMessage
 	| IpcUpdateMercTargetAlertMessage
 	| IpcDeleteMercTargetAlertMessage
+	| IpcDeleteAllMercTargetAlertsMessage
 	| IpcPostMercHitLogMessage
 	| IpcPostMercContractEndSummaryMessage
 	| IpcDeleteMercUpcomingAnnouncementMessage
@@ -727,6 +728,15 @@ export type IpcDeleteMercTargetAlertMessage = {
 		guildId: string;
 		channelName: string;
 		messageId: string;
+	};
+};
+
+export type IpcDeleteAllMercTargetAlertsMessage = {
+	action: "delete_all_merc_target_alerts";
+	data: {
+		guildId: string;
+		channelName: string;
+		contractId: string;
 	};
 };
 

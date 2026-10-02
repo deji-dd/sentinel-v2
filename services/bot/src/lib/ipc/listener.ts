@@ -27,6 +27,7 @@ import { updateFactionRevivesChannel } from "../faction-monitoring-channel";
 import { updateGiveawayChannel } from "../giveaways";
 import { logger } from "../logger";
 import {
+	deleteAllMercTargetAlerts,
 	deleteMercTargetAlert,
 	deleteUpcomingContractAnnouncement,
 	postMercContractAnnouncement,
@@ -468,6 +469,21 @@ export function setupBotIpcListeners(client: Client): void {
 			const messageId = message.data.messageId as string;
 			if (guildId && channelName && messageId) {
 				void deleteMercTargetAlert(client, guildId, channelName, messageId);
+			}
+		} else if (
+			message.action === "delete_all_merc_target_alerts" &&
+			message.data
+		) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const contractId = message.data.contractId as string;
+			if (guildId && channelName && contractId) {
+				void deleteAllMercTargetAlerts(
+					client,
+					guildId,
+					channelName,
+					contractId,
+				);
 			}
 		} else if (message.action === "post_merc_hit_log" && message.data) {
 			const guildId = message.data.guildId as string;
