@@ -139,12 +139,11 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		const isStricken = (effects?: Array<{ name: string; value: number }>) =>
 			Boolean(
 				effects?.some((e) => {
-					const lower = e.name.toLowerCase();
-					return lower === "warlord" || lower === "stricken";
+					return e.name.toLowerCase() === "stricken";
 				}),
 			);
 
-		expect(isStricken(attackWithWarlord.finishing_hit_effects)).toBe(true);
+		expect(isStricken(attackWithWarlord.finishing_hit_effects)).toBe(false);
 		expect(isStricken(attackWithStricken.finishing_hit_effects)).toBe(true);
 		expect(isStricken(attackStandard.finishing_hit_effects)).toBe(false);
 		expect(isStricken(attackOther.finishing_hit_effects)).toBe(false);

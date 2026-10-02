@@ -328,9 +328,13 @@ export function ClientContractCreatePage() {
 			}
 
 			toast("Mercenary contract created successfully!", "success");
+			const receiptUrl =
+				typeof window !== "undefined" && window.location?.origin
+					? `${window.location.origin}/#/merc/receipt/${res.data.contractId}`
+					: res.data.receiptUrl;
 			setSubmittedContract({
 				id: res.data.contractId,
-				receiptUrl: res.data.receiptUrl,
+				receiptUrl,
 			});
 		} catch (err) {
 			toast(

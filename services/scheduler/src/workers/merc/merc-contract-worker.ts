@@ -49,6 +49,7 @@ export interface MercActiveTargetAlert {
 	rwCooldownUntil?: number | null;
 	wasInHospital?: boolean;
 	hospitalExitTime?: number;
+	lockStartedAt?: number;
 }
 
 export class MercTargetManager {
@@ -106,9 +107,25 @@ export class MercTargetManager {
 			};
 		}
 
+		const nowMs = Date.now();
+		const nowSec = Math.floor(nowMs / 1000);
+
 		alert.status = "claimed";
 		alert.claimedBy = claimant;
-		alert.claimedAt = Date.now();
+		alert.claimedAt = nowMs;
+
+		const inHospital = Boolean(
+			alert.hospitalUntil && alert.hospitalUntil > nowSec,
+		);
+		const inRwCooldown = Boolean(
+			alert.rwCooldownUntil && alert.rwCooldownUntil > nowSec,
+		);
+
+		if (!inHospital && !inRwCooldown) {
+			alert.lockStartedAt = nowMs;
+		} else {
+			alert.lockStartedAt = undefined;
+		}
 
 		if (alert.messageId) {
 			void notifyBotAction("update_merc_target_alert", {
@@ -159,6 +176,7 @@ export class MercTargetManager {
 		alert.status = "open";
 		alert.claimedBy = undefined;
 		alert.claimedAt = undefined;
+		alert.lockStartedAt = undefined;
 
 		if (alert.messageId) {
 			void notifyBotAction("update_merc_target_alert", {
@@ -395,11 +413,57 @@ export class MercTargetManager {
 		}
 
 		// Update state tracking on existing alert
+		const prevHospUntil = existingAlert.hospitalUntil;
+		const prevRwCooldown = existingAlert.rwCooldownUntil;
+
 		if (targetState === "Hospital") {
 			existingAlert.wasInHospital = true;
 		}
 		existingAlert.hospitalUntil = isHospitalLead ? hospUntil : null;
 		existingAlert.rwCooldownUntil = rwCooldownUntil;
+
+		if (
+			existingAlert.messageId &&
+			(prevHospUntil !== existingAlert.hospitalUntil ||
+				prevRwCooldown !== existingAlert.rwCooldownUntil)
+		) {
+			void notifyBotAction("update_merc_target_alert", {
+				guildId,
+				channelName,
+				messageId: existingAlert.messageId,
+				contractId: contract.id,
+				target: {
+					targetId: existingAlert.targetId,
+					targetName: existingAlert.targetName,
+					targetLevel: existingAlert.targetLevel,
+					estimatedBs: existingAlert.estimatedBs,
+					hospitalUntil: existingAlert.hospitalUntil,
+					status: existingAlert.status,
+					claimedBy: existingAlert.claimedBy,
+					claimedAt: existingAlert.claimedAt,
+					isStrickenEligible: existingAlert.isStrickenEligible,
+					rwCooldownUntil: existingAlert.rwCooldownUntil,
+				},
+			});
+		}
+
+		// Track whether the target is currently attackable (out of hospital and past any RW cooldown)
+		const isTargetAttackable =
+			isOkay && (!rwCooldownUntil || nowSec >= rwCooldownUntil);
+
+		if (existingAlert.status === "claimed") {
+			if (isTargetAttackable) {
+				if (!existingAlert.lockStartedAt) {
+					existingAlert.lockStartedAt = nowMs;
+					logger.info(
+						`Target ${existingAlert.targetName} [${existingAlert.targetId}] is attackable (hosp & RW cooldown cleared). 20s claim lock started counting.`,
+					);
+				}
+			} else {
+				// Target is still in hospital or on RW hit cooldown: 20s lock timer must not run
+				existingAlert.lockStartedAt = undefined;
+			}
+		}
 
 		// 5. Unrecorded alert retry: if open alert was dispatched but messageId never recorded after 10s, retry posting
 		if (
@@ -468,11 +532,11 @@ export class MercTargetManager {
 			return;
 		}
 
-		// 7. Claim expiration check: if claimed for > 20s without attack -> delete old & repost open alert with role ping
+		// 7. Claim expiration check: 20s lock release should only start counting AFTER RW hit cooldown is over and target is out of hospital
 		if (
 			existingAlert.status === "claimed" &&
-			existingAlert.claimedAt &&
-			nowMs >= existingAlert.claimedAt + 20_000
+			existingAlert.lockStartedAt &&
+			nowMs >= existingAlert.lockStartedAt + 20_000
 		) {
 			if (existingAlert.messageId) {
 				void notifyBotAction("delete_merc_target_alert", {
@@ -486,6 +550,7 @@ export class MercTargetManager {
 			existingAlert.status = "open";
 			existingAlert.claimedBy = undefined;
 			existingAlert.claimedAt = undefined;
+			existingAlert.lockStartedAt = undefined;
 			existingAlert.lastAlertAt = nowMs;
 
 			void notifyBotAction("post_merc_target_alert", {
@@ -505,7 +570,7 @@ export class MercTargetManager {
 				},
 			});
 			logger.info(
-				`Claim expired (20s) for ${existingAlert.targetName} [${existingAlert.targetId}], reposting to #${channelName}`,
+				`Claim expired (20s post-cooldown) for ${existingAlert.targetName} [${existingAlert.targetId}], reposting to #${channelName}`,
 			);
 		}
 	}

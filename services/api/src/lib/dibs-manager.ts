@@ -322,8 +322,9 @@ class SubversiveDibsManager {
 					dibs.exitHospAt = nowMs;
 				}
 
-				// Check if > postHospTimeoutSeconds has passed
-				const elapsed = nowMs - dibs.exitHospAt;
+				// Check if > postHospTimeoutSeconds has passed after hospital exit and any active RW hit cooldown
+				const rwCooldownMs = war.state === "active" ? 60_000 : 0;
+				const elapsed = nowMs - (dibs.exitHospAt + rwCooldownMs);
 				if (elapsed >= timeoutMs) {
 					if (dibs.status === "claimed") {
 						// 20s lock expired! Release claim and repost message

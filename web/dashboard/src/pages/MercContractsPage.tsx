@@ -2,11 +2,13 @@ import {
 	AlertTriangle,
 	CheckCircle2,
 	Clock,
+	Copy,
 	ExternalLink,
 	Filter,
 	History,
 	Loader2,
 	Plus,
+	Receipt,
 	RefreshCw,
 	ShieldAlert,
 	Sliders,
@@ -138,6 +140,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [isModalOpen, setIsModalOpen] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [isValidatingFaction, setIsValidatingFaction] = useState(false);
+	const [createdContractResult, setCreatedContractResult] = useState<{
+		id: string;
+		factionName: string;
+		receiptUrl: string;
+	} | null>(null);
 
 	// Form: Step 1 (Faction ID Validation)
 	const [inputFactionId, setInputFactionId] = useState("");
@@ -215,6 +222,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	};
 
 	const resetModalForm = () => {
+		setCreatedContractResult(null);
 		setInputFactionId("");
 		setValidatedFaction(null);
 		setValidationError(null);
@@ -469,11 +477,31 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 				return;
 			}
 
+			const createdContract =
+				res.data && "contract" in res.data
+					? (res.data.contract as MercContract)
+					: null;
+			const newContractId = createdContract?.id ?? "";
+			const receiptUrl =
+				(res.data &&
+				"receiptUrl" in res.data &&
+				typeof res.data.receiptUrl === "string"
+					? res.data.receiptUrl
+					: null) ||
+				(typeof window !== "undefined" && window.location?.origin
+					? `${window.location.origin}/#/merc/receipt/${newContractId}`
+					: `/#/merc/receipt/${newContractId}`);
+
+			setCreatedContractResult({
+				id: newContractId,
+				factionName: validatedFaction.name,
+				receiptUrl,
+			});
+
 			toast(
 				`Contract for ${validatedFaction.name} created successfully.`,
 				"success",
 			);
-			setIsModalOpen(false);
 			fetchContracts();
 		} catch (err) {
 			toast(
@@ -748,6 +776,37 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 
 										{/* Top Actions */}
 										<div className="flex items-center gap-2">
+											<Button
+												variant="outline"
+												size="sm"
+												asChild
+												className="h-8 px-2.5 text-xs font-semibold border-border/80 hover:bg-muted cursor-pointer"
+												title="Open Live Receipt Viewer"
+											>
+												<a
+													href={`/#/merc/receipt/${contract.id}`}
+													target="_blank"
+													rel="noreferrer"
+													className="inline-flex items-center gap-1.5 text-foreground"
+												>
+													<Receipt className="size-3.5 text-primary" />
+													<span>Receipt</span>
+													<ExternalLink className="size-3 text-muted-foreground" />
+												</a>
+											</Button>
+											<Button
+												variant="ghost"
+												size="icon"
+												onClick={() => {
+													const receiptUrl = `${window.location.origin}/#/merc/receipt/${contract.id}`;
+													navigator.clipboard.writeText(receiptUrl);
+													toast("Receipt link copied to clipboard!", "success");
+												}}
+												className="size-8 text-muted-foreground hover:text-foreground cursor-pointer"
+												title="Copy Receipt Link"
+											>
+												<Copy className="size-3.5" />
+											</Button>
 											{isActive && (
 												<Button
 													variant="outline"
@@ -939,9 +998,25 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											)}
 										</div>
 
-										<div className="text-[10px] text-muted-foreground/70 font-mono pt-1">
-											Created: {new Date(contract.createdAt).toLocaleString()}
-											{contract.createdBy && ` by ${contract.createdBy}`}
+										<div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground/70 font-mono pt-1">
+											<div>
+												Created: {new Date(contract.createdAt).toLocaleString()}
+												{contract.createdBy && ` by ${contract.createdBy}`}
+											</div>
+											<div className="flex items-center gap-2">
+												<span>ID: {contract.id}</span>
+												<span>•</span>
+												<a
+													href={`/#/merc/receipt/${contract.id}`}
+													target="_blank"
+													rel="noreferrer"
+													className="text-primary hover:underline inline-flex items-center gap-1 font-medium"
+												>
+													<Receipt className="size-3" />
+													Receipt Viewer
+													<ExternalLink className="size-2.5" />
+												</a>
+											</div>
 										</div>
 									</CardContent>
 								</Card>
@@ -952,742 +1027,859 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 			</div>
 
 			{/* Add New Contract Dialog */}
-			<Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+			<Dialog
+				open={isModalOpen}
+				onOpenChange={(open) => {
+					setIsModalOpen(open);
+					if (!open) {
+						setCreatedContractResult(null);
+					}
+				}}
+			>
 				<DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-card border-border/80">
 					<DialogHeader>
 						<DialogTitle className="text-lg font-bold flex items-center gap-2 text-foreground">
-							Create Mercenary Contract
+							{createdContractResult
+								? "Mercenary Contract Created"
+								: "Create Mercenary Contract"}
 						</DialogTitle>
 					</DialogHeader>
 
-					<div className="space-y-6 py-2">
-						{/* STEP 1: Faction ID Input & Validation */}
-						<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
-							<label
-								htmlFor="faction-id-input"
-								className="text-xs font-semibold text-foreground block uppercase font-mono tracking-wider"
-							>
-								1. Faction ID
-							</label>
-
-							<div className="flex items-center gap-2.5">
-								<Input
-									id="faction-id-input"
-									placeholder="e.g. 27312"
-									value={inputFactionId}
-									onChange={(e) => {
-										setInputFactionId(e.target.value);
-										if (validatedFaction) {
-											setValidatedFaction(null);
-										}
-										if (validationError) {
-											setValidationError(null);
-										}
-									}}
-									className="rounded-xl h-10 font-mono text-sm bg-background"
-								/>
-								<Button
-									type="button"
-									onClick={handleValidateFaction}
-									disabled={isValidatingFaction || !inputFactionId.trim()}
-									className="rounded-xl h-10 px-5 text-xs font-semibold shrink-0 cursor-pointer"
-								>
-									{isValidatingFaction ? (
-										<>
-											<Loader2 className="size-3.5 animate-spin mr-1.5" />
-											Validating...
-										</>
-									) : (
-										"Validate"
-									)}
-								</Button>
+					{createdContractResult ? (
+						<div className="space-y-5 py-3">
+							<div className="size-14 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/20">
+								<CheckCircle2 className="size-7" />
+							</div>
+							<div className="text-center space-y-1">
+								<h2 className="text-lg font-bold tracking-tight text-foreground">
+									Contract Created Successfully!
+								</h2>
+								<p className="text-xs text-muted-foreground">
+									Mercenary contract for{" "}
+									<span className="text-foreground font-semibold">
+										{createdContractResult.factionName}
+									</span>{" "}
+									is now registered and active.
+								</p>
 							</div>
 
-							{validationError && (
-								<div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
-									<AlertTriangle className="size-4 shrink-0" />
-									<span>{validationError}</span>
+							<div className="p-3.5 rounded-xl bg-muted/30 border border-border/80 space-y-2 font-mono text-xs">
+								<div className="flex items-center justify-between text-muted-foreground">
+									<span>CONTRACT ID</span>
+									<span className="text-foreground font-bold">
+										{createdContractResult.id}
+									</span>
 								</div>
-							)}
+								<div className="flex items-center justify-between text-muted-foreground">
+									<span>TARGET FACTION</span>
+									<span className="text-foreground">
+										{createdContractResult.factionName}
+									</span>
+								</div>
+							</div>
 
-							{validatedFaction && (
-								<div className="p-3.5 rounded-xl bg-background border border-border space-y-2">
-									<div className="flex items-center justify-between">
-										<div className="flex items-center gap-2">
-											<CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
-											<span className="text-sm font-bold text-foreground">
-												{validatedFaction.name}
-											</span>
-										</div>
+							{/* Permanent Receipt Viewer Link */}
+							<div className="space-y-2.5 p-3.5 rounded-xl bg-muted/20 border border-border/60">
+								<div className="text-xs font-semibold text-foreground uppercase tracking-wider block font-mono">
+									Permanent Live Receipt Viewer
+								</div>
+								<p className="text-xs text-muted-foreground">
+									Share this link with your client or faction leadership to
+									track hits, targets hit, and live costs:
+								</p>
+								<div className="flex items-center gap-2">
+									<Input
+										readOnly
+										value={createdContractResult.receiptUrl}
+										className="font-mono text-xs h-10 bg-background"
+									/>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={() => {
+											navigator.clipboard.writeText(
+												createdContractResult.receiptUrl,
+											);
+											toast("Receipt link copied to clipboard!", "success");
+										}}
+										className="h-10 px-3 cursor-pointer shrink-0"
+										title="Copy Receipt Link"
+									>
+										<Copy className="size-4" />
+									</Button>
+								</div>
+							</div>
 
-										{validatedFaction.warStatus === "active" ? (
-											<Badge
-												variant="outline"
-												className="bg-rose-500/10 text-rose-400 border-rose-500/30 text-[10px] font-mono font-semibold"
-											>
-												<span className="size-1.5 rounded-full bg-rose-400 animate-pulse mr-1" />
-												Active War Detected
-											</Badge>
-										) : validatedFaction.warStatus === "upcoming" ? (
-											<Badge
-												variant="outline"
-												className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-mono font-semibold"
-											>
-												Upcoming War Detected
-											</Badge>
-										) : (
-											<Badge
-												variant="outline"
-												className="text-[10px] font-mono text-muted-foreground"
-											>
-												No War Detected
-											</Badge>
-										)}
+							<div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+								<Button
+									type="button"
+									className="flex-1 h-10 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center justify-center gap-2 cursor-pointer"
+									onClick={() => {
+										window.open(createdContractResult.receiptUrl, "_blank");
+									}}
+								>
+									<ExternalLink className="size-4" />
+									Open Live Receipt Viewer
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									className="h-10 rounded-xl px-5 text-xs font-semibold cursor-pointer"
+									onClick={() => {
+										setIsModalOpen(false);
+										setCreatedContractResult(null);
+									}}
+								>
+									Done
+								</Button>
+							</div>
+						</div>
+					) : (
+						<>
+							<div className="space-y-6 py-2">
+								{/* STEP 1: Faction ID Input & Validation */}
+								<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
+									<label
+										htmlFor="faction-id-input"
+										className="text-xs font-semibold text-foreground block uppercase font-mono tracking-wider"
+									>
+										1. Faction ID
+									</label>
+
+									<div className="flex items-center gap-2.5">
+										<Input
+											id="faction-id-input"
+											placeholder="e.g. 27312"
+											value={inputFactionId}
+											onChange={(e) => {
+												setInputFactionId(e.target.value);
+												if (validatedFaction) {
+													setValidatedFaction(null);
+												}
+												if (validationError) {
+													setValidationError(null);
+												}
+											}}
+											className="rounded-xl h-10 font-mono text-sm bg-background"
+										/>
+										<Button
+											type="button"
+											onClick={handleValidateFaction}
+											disabled={isValidatingFaction || !inputFactionId.trim()}
+											className="rounded-xl h-10 px-5 text-xs font-semibold shrink-0 cursor-pointer"
+										>
+											{isValidatingFaction ? (
+												<>
+													<Loader2 className="size-3.5 animate-spin mr-1.5" />
+													Validating...
+												</>
+											) : (
+												"Validate"
+											)}
+										</Button>
 									</div>
 
-									{validatedFaction.war && (
-										<div className="text-xs text-muted-foreground pt-1 border-t border-border/40 flex flex-wrap items-center gap-x-4 gap-y-1">
-											{validatedFaction.war.opponent && (
-												<span>
-													Opponent:{" "}
-													<strong className="text-foreground">
-														{validatedFaction.war.opponent.name}
-													</strong>{" "}
-													[{validatedFaction.war.opponent.id}]
-												</span>
-											)}
-											{validatedFaction.war.start && (
-												<span>
-													War Start:{" "}
-													<strong className="text-foreground">
-														{formatTctDateTime(
-															new Date(validatedFaction.war.start * 1000),
-														)}
-													</strong>
-												</span>
+									{validationError && (
+										<div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+											<AlertTriangle className="size-4 shrink-0" />
+											<span>{validationError}</span>
+										</div>
+									)}
+
+									{validatedFaction && (
+										<div className="p-3.5 rounded-xl bg-background border border-border space-y-2">
+											<div className="flex items-center justify-between">
+												<div className="flex items-center gap-2">
+													<CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
+													<span className="text-sm font-bold text-foreground">
+														{validatedFaction.name}
+													</span>
+												</div>
+
+												{validatedFaction.warStatus === "active" ? (
+													<Badge
+														variant="outline"
+														className="bg-rose-500/10 text-rose-400 border-rose-500/30 text-[10px] font-mono font-semibold"
+													>
+														<span className="size-1.5 rounded-full bg-rose-400 animate-pulse mr-1" />
+														Active War Detected
+													</Badge>
+												) : validatedFaction.warStatus === "upcoming" ? (
+													<Badge
+														variant="outline"
+														className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-mono font-semibold"
+													>
+														Upcoming War Detected
+													</Badge>
+												) : (
+													<Badge
+														variant="outline"
+														className="text-[10px] font-mono text-muted-foreground"
+													>
+														No War Detected
+													</Badge>
+												)}
+											</div>
+
+											{validatedFaction.war && (
+												<div className="text-xs text-muted-foreground pt-1 border-t border-border/40 flex flex-wrap items-center gap-x-4 gap-y-1">
+													{validatedFaction.war.opponent && (
+														<span>
+															Opponent:{" "}
+															<strong className="text-foreground">
+																{validatedFaction.war.opponent.name}
+															</strong>{" "}
+															[{validatedFaction.war.opponent.id}]
+														</span>
+													)}
+													{validatedFaction.war.start && (
+														<span>
+															War Start:{" "}
+															<strong className="text-foreground">
+																{formatTctDateTime(
+																	new Date(validatedFaction.war.start * 1000),
+																)}
+															</strong>
+														</span>
+													)}
+												</div>
 											)}
 										</div>
 									)}
 								</div>
-							)}
-						</div>
 
-						{/* STEP 2: Timing & Terms (Disabled until Faction is Validated) */}
-						<div
-							className={`space-y-6 transition-all duration-200 ${
-								!validatedFaction
-									? "opacity-40 pointer-events-none select-none grayscale"
-									: ""
-							}`}
-						>
-							{/* War Detection Notice Banner */}
-							{validatedFaction && (
+								{/* STEP 2: Timing & Terms (Disabled until Faction is Validated) */}
 								<div
-									className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
-										validatedFaction.warStatus === "active"
-											? "bg-rose-500/10 border-rose-500/30 text-rose-900 dark:text-rose-200"
-											: validatedFaction.warStatus === "upcoming"
-												? "bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200"
-												: "bg-blue-500/10 border-blue-500/30 text-blue-900 dark:text-blue-200"
+									className={`space-y-6 transition-all duration-200 ${
+										!validatedFaction
+											? "opacity-40 pointer-events-none select-none grayscale"
+											: ""
 									}`}
 								>
-									{validatedFaction.warStatus === "active" ? (
-										<Swords className="size-5 text-rose-500 dark:text-rose-400 shrink-0 mt-0.5" />
-									) : validatedFaction.warStatus === "upcoming" ? (
-										<Clock className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-									) : (
-										<ShieldAlert className="size-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+									{/* War Detection Notice Banner */}
+									{validatedFaction && (
+										<div
+											className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
+												validatedFaction.warStatus === "active"
+													? "bg-rose-500/10 border-rose-500/30 text-rose-900 dark:text-rose-200"
+													: validatedFaction.warStatus === "upcoming"
+														? "bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200"
+														: "bg-blue-500/10 border-blue-500/30 text-blue-900 dark:text-blue-200"
+											}`}
+										>
+											{validatedFaction.warStatus === "active" ? (
+												<Swords className="size-5 text-rose-500 dark:text-rose-400 shrink-0 mt-0.5" />
+											) : validatedFaction.warStatus === "upcoming" ? (
+												<Clock className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+											) : (
+												<ShieldAlert className="size-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+											)}
+											<div>
+												<h4 className="font-semibold text-sm">
+													{validatedFaction.warStatus === "active"
+														? "Active Ranked War Detected"
+														: validatedFaction.warStatus === "upcoming"
+															? "Upcoming Ranked War Detected"
+															: "Standard Contract (No Wars Detected)"}
+												</h4>
+												<p className="text-xs opacity-90 mt-0.5">
+													{validatedFaction.warStatus === "active"
+														? "War is live! You can start the contract immediately and link expiration to war conclusion."
+														: validatedFaction.warStatus === "upcoming"
+															? "Upcoming war found. Use the slider below to trigger contract start relative to war time."
+															: "Configure standard contract timeframe and target filtering rules."}
+												</p>
+											</div>
+										</div>
 									)}
-									<div>
-										<h4 className="font-semibold text-sm">
-											{validatedFaction.warStatus === "active"
-												? "Active Ranked War Detected"
-												: validatedFaction.warStatus === "upcoming"
-													? "Upcoming Ranked War Detected"
-													: "Standard Contract (No Wars Detected)"}
-										</h4>
-										<p className="text-xs opacity-90 mt-0.5">
-											{validatedFaction.warStatus === "active"
-												? "War is live! You can start the contract immediately and link expiration to war conclusion."
-												: validatedFaction.warStatus === "upcoming"
-													? "Upcoming war found. Use the slider below to trigger contract start relative to war time."
-													: "Configure standard contract timeframe and target filtering rules."}
-										</p>
-									</div>
-								</div>
-							)}
 
-							{/* Timing Configuration Section */}
-							<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
-								<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
-									2. Contract Duration & Timing (TCT / UTC)
-								</h3>
+									{/* Timing Configuration Section */}
+									<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
+										<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
+											2. Contract Duration & Timing (TCT / UTC)
+										</h3>
 
-								{/* Case A: UPCOMING WAR */}
-								{validatedFaction?.warStatus === "upcoming" && (
-									<div className="space-y-4">
-										<div>
-											<div className="flex items-center justify-between text-xs mb-2">
-												<label
-													htmlFor="start-time-slider"
-													className="font-semibold text-foreground"
-												>
-													Start Time Relative to War Start
-												</label>
-												<span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
-													{startMinutesBeforeWar === 0
-														? "At War Start (0 min)"
-														: `${startMinutesBeforeWar} minutes before war`}
-												</span>
-											</div>
-											<Slider
-												id="start-time-slider"
-												min={0}
-												max={60}
-												step={5}
-												value={[startMinutesBeforeWar]}
-												onValueChange={(val) => {
-													const v = val[0] ?? 0;
-													setStartMinutesBeforeWar(v);
-													if (v === 0) {
-														setChangeTermsOnWarStart(false);
-													}
-												}}
-												className="py-2"
-											/>
-											<div className="flex justify-between text-[10px] font-mono text-muted-foreground mt-1">
-												<span>0 min (War Start)</span>
-												<span>30 mins before</span>
-												<span>60 mins before</span>
-											</div>
-										</div>
-
-										<div className="space-y-2 pt-2 border-t border-border/40">
-											<div className="flex items-center gap-2">
-												<Checkbox
-													id="upcoming-end-war"
-													checked={endOnWarEnd}
-													onCheckedChange={(checked) =>
-														setEndOnWarEnd(Boolean(checked))
-													}
-												/>
-												<label
-													htmlFor="upcoming-end-war"
-													className="text-xs font-medium text-foreground cursor-pointer"
-												>
-													End contract on war end (Recommended)
-												</label>
-											</div>
-
-											{!endOnWarEnd && (
-												<div className="pt-2">
-													<label
-														htmlFor="upcoming-custom-end"
-														className="text-xs text-muted-foreground block mb-1"
-													>
-														Custom End Time (TCT)
-													</label>
-													<Input
-														id="upcoming-custom-end"
-														type="datetime-local"
-														value={customEndTime}
-														onChange={(e) => setCustomEndTime(e.target.value)}
-														className="h-9 text-xs rounded-xl"
+										{/* Case A: UPCOMING WAR */}
+										{validatedFaction?.warStatus === "upcoming" && (
+											<div className="space-y-4">
+												<div>
+													<div className="flex items-center justify-between text-xs mb-2">
+														<label
+															htmlFor="start-time-slider"
+															className="font-semibold text-foreground"
+														>
+															Start Time Relative to War Start
+														</label>
+														<span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
+															{startMinutesBeforeWar === 0
+																? "At War Start (0 min)"
+																: `${startMinutesBeforeWar} minutes before war`}
+														</span>
+													</div>
+													<Slider
+														id="start-time-slider"
+														min={0}
+														max={60}
+														step={5}
+														value={[startMinutesBeforeWar]}
+														onValueChange={(val) => {
+															const v = val[0] ?? 0;
+															setStartMinutesBeforeWar(v);
+															if (v === 0) {
+																setChangeTermsOnWarStart(false);
+															}
+														}}
+														className="py-2"
 													/>
+													<div className="flex justify-between text-[10px] font-mono text-muted-foreground mt-1">
+														<span>0 min (War Start)</span>
+														<span>30 mins before</span>
+														<span>60 mins before</span>
+													</div>
 												</div>
-											)}
-										</div>
-									</div>
-								)}
 
-								{/* Case B: ACTIVE WAR */}
-								{validatedFaction?.warStatus === "active" && (
-									<div className="space-y-4">
-										<div className="space-y-2">
-											<div className="flex items-center gap-2">
-												<Checkbox
-													id="active-start-imm"
-													checked={startImmediately}
-													onCheckedChange={(c) =>
-														setStartImmediately(Boolean(c))
-													}
-												/>
-												<label
-													htmlFor="active-start-imm"
-													className="text-xs font-medium text-foreground cursor-pointer"
-												>
-													Start immediately
-												</label>
-											</div>
+												<div className="space-y-2 pt-2 border-t border-border/40">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="upcoming-end-war"
+															checked={endOnWarEnd}
+															onCheckedChange={(checked) =>
+																setEndOnWarEnd(Boolean(checked))
+															}
+														/>
+														<label
+															htmlFor="upcoming-end-war"
+															className="text-xs font-medium text-foreground cursor-pointer"
+														>
+															End contract on war end (Recommended)
+														</label>
+													</div>
 
-											{!startImmediately && (
-												<div className="pt-1">
-													<label
-														htmlFor="active-custom-start"
-														className="text-xs text-muted-foreground block mb-1"
-													>
-														Start Time (TCT)
-													</label>
-													<Input
-														id="active-custom-start"
-														type="datetime-local"
-														value={customStartTime}
-														onChange={(e) => setCustomStartTime(e.target.value)}
-														className="h-9 text-xs rounded-xl"
-													/>
+													{!endOnWarEnd && (
+														<div className="pt-2">
+															<label
+																htmlFor="upcoming-custom-end"
+																className="text-xs text-muted-foreground block mb-1"
+															>
+																Custom End Time (TCT)
+															</label>
+															<Input
+																id="upcoming-custom-end"
+																type="datetime-local"
+																value={customEndTime}
+																onChange={(e) =>
+																	setCustomEndTime(e.target.value)
+																}
+																className="h-9 text-xs rounded-xl"
+															/>
+														</div>
+													)}
 												</div>
-											)}
-										</div>
-
-										<div className="space-y-2 pt-2 border-t border-border/40">
-											<div className="flex items-center gap-2">
-												<Checkbox
-													id="active-end-war"
-													checked={endOnWarEnd}
-													onCheckedChange={(c) => setEndOnWarEnd(Boolean(c))}
-												/>
-												<label
-													htmlFor="active-end-war"
-													className="text-xs font-medium text-foreground cursor-pointer"
-												>
-													End contract on war end
-												</label>
 											</div>
+										)}
 
-											{!endOnWarEnd && (
-												<div className="pt-1">
+										{/* Case B: ACTIVE WAR */}
+										{validatedFaction?.warStatus === "active" && (
+											<div className="space-y-4">
+												<div className="space-y-2">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="active-start-imm"
+															checked={startImmediately}
+															onCheckedChange={(c) =>
+																setStartImmediately(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="active-start-imm"
+															className="text-xs font-medium text-foreground cursor-pointer"
+														>
+															Start immediately
+														</label>
+													</div>
+
+													{!startImmediately && (
+														<div className="pt-1">
+															<label
+																htmlFor="active-custom-start"
+																className="text-xs text-muted-foreground block mb-1"
+															>
+																Start Time (TCT)
+															</label>
+															<Input
+																id="active-custom-start"
+																type="datetime-local"
+																value={customStartTime}
+																onChange={(e) =>
+																	setCustomStartTime(e.target.value)
+																}
+																className="h-9 text-xs rounded-xl"
+															/>
+														</div>
+													)}
+												</div>
+
+												<div className="space-y-2 pt-2 border-t border-border/40">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="active-end-war"
+															checked={endOnWarEnd}
+															onCheckedChange={(c) =>
+																setEndOnWarEnd(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="active-end-war"
+															className="text-xs font-medium text-foreground cursor-pointer"
+														>
+															End contract on war end
+														</label>
+													</div>
+
+													{!endOnWarEnd && (
+														<div className="pt-1">
+															<label
+																htmlFor="active-custom-end"
+																className="text-xs text-muted-foreground block mb-1"
+															>
+																End Time (TCT)
+															</label>
+															<Input
+																id="active-custom-end"
+																type="datetime-local"
+																value={customEndTime}
+																onChange={(e) =>
+																	setCustomEndTime(e.target.value)
+																}
+																className="h-9 text-xs rounded-xl"
+															/>
+														</div>
+													)}
+												</div>
+											</div>
+										)}
+
+										{/* Case C: NO WAR */}
+										{validatedFaction?.warStatus === "no_war" && (
+											<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+												<div className="space-y-2">
+													<div className="flex items-center gap-2 mb-1">
+														<Checkbox
+															id="nowar-start-imm"
+															checked={startImmediately}
+															onCheckedChange={(c) =>
+																setStartImmediately(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="nowar-start-imm"
+															className="text-xs font-medium text-foreground cursor-pointer"
+														>
+															Start immediately
+														</label>
+													</div>
+
+													{!startImmediately && (
+														<div>
+															<label
+																htmlFor="nowar-custom-start"
+																className="text-xs text-muted-foreground block mb-1"
+															>
+																Start Time (TCT)
+															</label>
+															<Input
+																id="nowar-custom-start"
+																type="datetime-local"
+																value={customStartTime}
+																onChange={(e) =>
+																	setCustomStartTime(e.target.value)
+																}
+																className="h-9 text-xs rounded-xl"
+															/>
+														</div>
+													)}
+												</div>
+
+												<div className="space-y-2">
 													<label
-														htmlFor="active-custom-end"
+														htmlFor="nowar-custom-end"
 														className="text-xs text-muted-foreground block mb-1"
 													>
 														End Time (TCT)
 													</label>
 													<Input
-														id="active-custom-end"
+														id="nowar-custom-end"
 														type="datetime-local"
 														value={customEndTime}
 														onChange={(e) => setCustomEndTime(e.target.value)}
 														className="h-9 text-xs rounded-xl"
 													/>
 												</div>
-											)}
-										</div>
-									</div>
-								)}
-
-								{/* Case C: NO WAR */}
-								{validatedFaction?.warStatus === "no_war" && (
-									<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-										<div className="space-y-2">
-											<div className="flex items-center gap-2 mb-1">
-												<Checkbox
-													id="nowar-start-imm"
-													checked={startImmediately}
-													onCheckedChange={(c) =>
-														setStartImmediately(Boolean(c))
-													}
-												/>
-												<label
-													htmlFor="nowar-start-imm"
-													className="text-xs font-medium text-foreground cursor-pointer"
-												>
-													Start immediately
-												</label>
-											</div>
-
-											{!startImmediately && (
-												<div>
-													<label
-														htmlFor="nowar-custom-start"
-														className="text-xs text-muted-foreground block mb-1"
-													>
-														Start Time (TCT)
-													</label>
-													<Input
-														id="nowar-custom-start"
-														type="datetime-local"
-														value={customStartTime}
-														onChange={(e) => setCustomStartTime(e.target.value)}
-														className="h-9 text-xs rounded-xl"
-													/>
-												</div>
-											)}
-										</div>
-
-										<div className="space-y-2">
-											<label
-												htmlFor="nowar-custom-end"
-												className="text-xs text-muted-foreground block mb-1"
-											>
-												End Time (TCT)
-											</label>
-											<Input
-												id="nowar-custom-end"
-												type="datetime-local"
-												value={customEndTime}
-												onChange={(e) => setCustomEndTime(e.target.value)}
-												className="h-9 text-xs rounded-xl"
-											/>
-										</div>
-									</div>
-								)}
-							</div>
-
-							{/* Primary Target Filtering Terms */}
-							<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
-								<div className="flex items-center justify-between">
-									<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
-										3. Target Hit Terms{" "}
-										{validatedFaction?.warStatus === "upcoming" &&
-										startMinutesBeforeWar > 0
-											? "(Pre-War)"
-											: ""}
-									</h3>
-								</div>
-
-								{/* Status Checkboxes */}
-								<div className="space-y-3">
-									<span className="text-xs font-medium text-foreground block">
-										Allowed Target Statuses:
-									</span>
-									<div className="flex flex-wrap items-center gap-6">
-										<div className="flex items-center gap-2">
-											<Checkbox
-												id="term-online"
-												checked={onlineStatus}
-												onCheckedChange={(c) => setOnlineStatus(Boolean(c))}
-											/>
-											<label
-												htmlFor="term-online"
-												className="text-xs text-foreground cursor-pointer font-medium"
-											>
-												Online
-											</label>
-										</div>
-
-										<div className="flex items-center gap-2">
-											<Checkbox
-												id="term-idle"
-												checked={idleStatus}
-												onCheckedChange={(c) => setIdleStatus(Boolean(c))}
-											/>
-											<label
-												htmlFor="term-idle"
-												className="text-xs text-foreground cursor-pointer font-medium"
-											>
-												Idle
-											</label>
-										</div>
-
-										<div className="flex items-center gap-2">
-											<Checkbox
-												id="term-offline"
-												checked={offlineStatus}
-												onCheckedChange={(c) => setOfflineStatus(Boolean(c))}
-											/>
-											<label
-												htmlFor="term-offline"
-												className="text-xs text-foreground cursor-pointer font-medium"
-											>
-												Offline
-											</label>
-										</div>
-									</div>
-
-									{/* Idle Minutes Input */}
-									{idleStatus && (
-										<div className="pt-2 max-w-xs">
-											<label
-												htmlFor="term-idle-minutes"
-												className="text-xs text-muted-foreground block mb-1"
-											>
-												Max Idle Duration (minutes)
-											</label>
-											<Input
-												id="term-idle-minutes"
-												type="number"
-												min={1}
-												max={1440}
-												value={idleDuration}
-												onChange={(e) => {
-													const next = Number(e.target.value) || 15;
-													setIdleDuration(next);
-												}}
-												className="h-9 text-xs rounded-xl font-mono"
-												placeholder="15"
-											/>
-										</div>
-									)}
-								</div>
-
-								{/* Stricken Hits Checkbox */}
-								<div className="pt-2 border-t border-border/40">
-									<div className="flex items-center gap-2">
-										<Checkbox
-											id="term-stricken"
-											checked={strickenHits}
-											onCheckedChange={(c) => setStrickenHits(Boolean(c))}
-										/>
-										<label
-											htmlFor="term-stricken"
-											className="text-xs text-foreground cursor-pointer font-medium"
-										>
-											Stricken hits
-										</label>
-									</div>
-								</div>
-
-								{/* Hit Payout Values */}
-								<div className="pt-3 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-4">
-									<div>
-										<label
-											htmlFor="term-hit-price"
-											className="text-xs font-semibold text-foreground block mb-1"
-										>
-											Value of 1 hit ($)
-										</label>
-										<Input
-											id="term-hit-price"
-											type="number"
-											min={0}
-											step={1000}
-											value={hitPrice}
-											onChange={(e) => setHitPrice(e.target.value)}
-											className="h-9 text-xs rounded-xl font-mono"
-											placeholder="3000000"
-										/>
-									</div>
-
-									{strickenHits && (
-										<div>
-											<label
-												htmlFor="term-stricken-price"
-												className="text-xs font-semibold text-blue-400 block mb-1"
-											>
-												Value of Stricken hit ($)
-											</label>
-											<Input
-												id="term-stricken-price"
-												type="number"
-												min={0}
-												step={1000}
-												value={strickenHitPrice}
-												onChange={(e) => setStrickenHitPrice(e.target.value)}
-												className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
-												placeholder="4000000"
-											/>
-										</div>
-									)}
-								</div>
-
-								{/* Level Range Slider */}
-								<div className="pt-2 border-t border-border/40 space-y-2">
-									<div className="flex items-center justify-between text-xs">
-										<span className="font-medium text-foreground">
-											Target Level Range
-										</span>
-										<span className="font-mono text-primary font-bold">
-											Levels {levelRange[0]} – {levelRange[1]}
-										</span>
-									</div>
-									<Slider
-										min={1}
-										max={100}
-										step={1}
-										value={[levelRange[0], levelRange[1]]}
-										onValueChange={(val) => {
-											const minVal = val[0] ?? 1;
-											const maxVal = val[1] ?? 100;
-											setLevelRange([minVal, maxVal]);
-										}}
-										className="py-2"
-									/>
-									<div className="flex justify-between text-[10px] font-mono text-muted-foreground">
-										<span>Level 1</span>
-										<span>Level 50</span>
-										<span>Level 100</span>
-									</div>
-								</div>
-							</div>
-
-							{/* Upcoming War Special: Change Terms on War Start */}
-							{validatedFaction?.warStatus === "upcoming" &&
-								startMinutesBeforeWar > 0 && (
-									<div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-4">
-										<div className="flex items-center gap-2">
-											<Checkbox
-												id="change-terms-war-start"
-												checked={changeTermsOnWarStart}
-												onCheckedChange={(c) =>
-													setChangeTermsOnWarStart(Boolean(c))
-												}
-											/>
-											<label
-												htmlFor="change-terms-war-start"
-												className="text-xs font-semibold text-amber-700 dark:text-amber-300 cursor-pointer flex items-center gap-1.5"
-											>
-												<Sliders className="size-3.5" />
-												Change terms on war start
-											</label>
-										</div>
-
-										{changeTermsOnWarStart && (
-											<div className="space-y-4 pt-3 border-t border-amber-500/20">
-												<span className="text-xs font-semibold text-foreground block">
-													War-Start Terms:
-												</span>
-
-												<div className="flex flex-wrap items-center gap-6">
-													<div className="flex items-center gap-2">
-														<Checkbox
-															id="war-term-online"
-															checked={warStartOnline}
-															onCheckedChange={(c) =>
-																setWarStartOnline(Boolean(c))
-															}
-														/>
-														<label
-															htmlFor="war-term-online"
-															className="text-xs text-foreground cursor-pointer font-medium"
-														>
-															Online
-														</label>
-													</div>
-
-													<div className="flex items-center gap-2">
-														<Checkbox
-															id="war-term-idle"
-															checked={warStartIdle}
-															onCheckedChange={(c) =>
-																setWarStartIdle(Boolean(c))
-															}
-														/>
-														<label
-															htmlFor="war-term-idle"
-															className="text-xs text-foreground cursor-pointer font-medium"
-														>
-															Idle
-														</label>
-													</div>
-
-													<div className="flex items-center gap-2">
-														<Checkbox
-															id="war-term-offline"
-															checked={warStartOffline}
-															onCheckedChange={(c) =>
-																setWarStartOffline(Boolean(c))
-															}
-														/>
-														<label
-															htmlFor="war-term-offline"
-															className="text-xs text-foreground cursor-pointer font-medium"
-														>
-															Offline
-														</label>
-													</div>
-												</div>
-
-												{warStartIdle && (
-													<div className="pt-1 max-w-xs">
-														<label
-															htmlFor="war-term-idle-minutes"
-															className="text-xs text-muted-foreground block mb-1"
-														>
-															Max Idle Duration (minutes)
-														</label>
-														<Input
-															id="war-term-idle-minutes"
-															type="number"
-															min={1}
-															max={1440}
-															value={warStartIdleDuration}
-															onChange={(e) => {
-																const next = Number(e.target.value) || 15;
-																setWarStartIdleDuration(next);
-															}}
-															className="h-9 text-xs rounded-xl font-mono"
-															placeholder="15"
-														/>
-													</div>
-												)}
-
-												<div className="pt-2 border-t border-amber-500/20">
-													<div className="flex items-center gap-2">
-														<Checkbox
-															id="war-term-stricken"
-															checked={warStartStricken}
-															onCheckedChange={(c) =>
-																setWarStartStricken(Boolean(c))
-															}
-														/>
-														<label
-															htmlFor="war-term-stricken"
-															className="text-xs text-foreground cursor-pointer font-medium"
-														>
-															Stricken hits
-														</label>
-													</div>
-												</div>
-
-												<div className="pt-2 border-t border-amber-500/20 space-y-2">
-													<div className="flex items-center justify-between text-xs">
-														<span className="font-medium text-foreground">
-															War-Start Level Range
-														</span>
-														<span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
-															Levels {warStartLevelRange[0]} –{" "}
-															{warStartLevelRange[1]}
-														</span>
-													</div>
-													<Slider
-														min={1}
-														max={100}
-														step={1}
-														value={[
-															warStartLevelRange[0],
-															warStartLevelRange[1],
-														]}
-														onValueChange={(val) => {
-															const minVal = val[0] ?? 1;
-															const maxVal = val[1] ?? 100;
-															setWarStartLevelRange([minVal, maxVal]);
-														}}
-														className="py-2"
-													/>
-												</div>
 											</div>
 										)}
 									</div>
-								)}
-						</div>
-					</div>
 
-					<DialogFooter className="pt-4 border-t border-border/60 flex items-center justify-end gap-3">
-						<Button
-							type="button"
-							variant="outline"
-							onClick={() => setIsModalOpen(false)}
-							disabled={isSubmitting}
-							className="rounded-xl h-10 px-4 text-xs font-semibold cursor-pointer"
-						>
-							Cancel
-						</Button>
-						<Button
-							type="button"
-							onClick={handleCreateContract}
-							disabled={isSubmitting || !validatedFaction}
-							className="rounded-xl h-10 px-6 text-xs font-semibold cursor-pointer"
-						>
-							{isSubmitting ? (
-								<>
-									<Loader2 className="size-4 animate-spin mr-1.5" />
-									Creating Contract...
-								</>
-							) : (
-								"Create Contract"
-							)}
-						</Button>
-					</DialogFooter>
+									{/* Primary Target Filtering Terms */}
+									<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
+										<div className="flex items-center justify-between">
+											<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
+												3. Target Hit Terms{" "}
+												{validatedFaction?.warStatus === "upcoming" &&
+												startMinutesBeforeWar > 0
+													? "(Pre-War)"
+													: ""}
+											</h3>
+										</div>
+
+										{/* Status Checkboxes */}
+										<div className="space-y-3">
+											<span className="text-xs font-medium text-foreground block">
+												Allowed Target Statuses:
+											</span>
+											<div className="flex flex-wrap items-center gap-6">
+												<div className="flex items-center gap-2">
+													<Checkbox
+														id="term-online"
+														checked={onlineStatus}
+														onCheckedChange={(c) => setOnlineStatus(Boolean(c))}
+													/>
+													<label
+														htmlFor="term-online"
+														className="text-xs text-foreground cursor-pointer font-medium"
+													>
+														Online
+													</label>
+												</div>
+
+												<div className="flex items-center gap-2">
+													<Checkbox
+														id="term-idle"
+														checked={idleStatus}
+														onCheckedChange={(c) => setIdleStatus(Boolean(c))}
+													/>
+													<label
+														htmlFor="term-idle"
+														className="text-xs text-foreground cursor-pointer font-medium"
+													>
+														Idle
+													</label>
+												</div>
+
+												<div className="flex items-center gap-2">
+													<Checkbox
+														id="term-offline"
+														checked={offlineStatus}
+														onCheckedChange={(c) =>
+															setOfflineStatus(Boolean(c))
+														}
+													/>
+													<label
+														htmlFor="term-offline"
+														className="text-xs text-foreground cursor-pointer font-medium"
+													>
+														Offline
+													</label>
+												</div>
+											</div>
+
+											{/* Idle Minutes Input */}
+											{idleStatus && (
+												<div className="pt-2 max-w-xs">
+													<label
+														htmlFor="term-idle-minutes"
+														className="text-xs text-muted-foreground block mb-1"
+													>
+														Max Idle Duration (minutes)
+													</label>
+													<Input
+														id="term-idle-minutes"
+														type="number"
+														min={1}
+														max={1440}
+														value={idleDuration}
+														onChange={(e) => {
+															const next = Number(e.target.value) || 15;
+															setIdleDuration(next);
+														}}
+														className="h-9 text-xs rounded-xl font-mono"
+														placeholder="15"
+													/>
+												</div>
+											)}
+										</div>
+
+										{/* Stricken Hits Checkbox */}
+										<div className="pt-2 border-t border-border/40">
+											<div className="flex items-center gap-2">
+												<Checkbox
+													id="term-stricken"
+													checked={strickenHits}
+													onCheckedChange={(c) => setStrickenHits(Boolean(c))}
+												/>
+												<label
+													htmlFor="term-stricken"
+													className="text-xs text-foreground cursor-pointer font-medium"
+												>
+													Stricken hits
+												</label>
+											</div>
+										</div>
+
+										{/* Hit Payout Values */}
+										<div className="pt-3 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-4">
+											<div>
+												<label
+													htmlFor="term-hit-price"
+													className="text-xs font-semibold text-foreground block mb-1"
+												>
+													Value of 1 hit ($)
+												</label>
+												<Input
+													id="term-hit-price"
+													type="number"
+													min={0}
+													step={1000}
+													value={hitPrice}
+													onChange={(e) => setHitPrice(e.target.value)}
+													className="h-9 text-xs rounded-xl font-mono"
+													placeholder="3000000"
+												/>
+											</div>
+
+											{strickenHits && (
+												<div>
+													<label
+														htmlFor="term-stricken-price"
+														className="text-xs font-semibold text-blue-400 block mb-1"
+													>
+														Value of Stricken hit ($)
+													</label>
+													<Input
+														id="term-stricken-price"
+														type="number"
+														min={0}
+														step={1000}
+														value={strickenHitPrice}
+														onChange={(e) =>
+															setStrickenHitPrice(e.target.value)
+														}
+														className="h-9 text-xs rounded-xl font-mono border-blue-500/30"
+														placeholder="4000000"
+													/>
+												</div>
+											)}
+										</div>
+
+										{/* Level Range Slider */}
+										<div className="pt-2 border-t border-border/40 space-y-2">
+											<div className="flex items-center justify-between text-xs">
+												<span className="font-medium text-foreground">
+													Target Level Range
+												</span>
+												<span className="font-mono text-primary font-bold">
+													Levels {levelRange[0]} – {levelRange[1]}
+												</span>
+											</div>
+											<Slider
+												min={1}
+												max={100}
+												step={1}
+												value={[levelRange[0], levelRange[1]]}
+												onValueChange={(val) => {
+													const minVal = val[0] ?? 1;
+													const maxVal = val[1] ?? 100;
+													setLevelRange([minVal, maxVal]);
+												}}
+												className="py-2"
+											/>
+											<div className="flex justify-between text-[10px] font-mono text-muted-foreground">
+												<span>Level 1</span>
+												<span>Level 50</span>
+												<span>Level 100</span>
+											</div>
+										</div>
+									</div>
+
+									{/* Upcoming War Special: Change Terms on War Start */}
+									{validatedFaction?.warStatus === "upcoming" &&
+										startMinutesBeforeWar > 0 && (
+											<div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-4">
+												<div className="flex items-center gap-2">
+													<Checkbox
+														id="change-terms-war-start"
+														checked={changeTermsOnWarStart}
+														onCheckedChange={(c) =>
+															setChangeTermsOnWarStart(Boolean(c))
+														}
+													/>
+													<label
+														htmlFor="change-terms-war-start"
+														className="text-xs font-semibold text-amber-700 dark:text-amber-300 cursor-pointer flex items-center gap-1.5"
+													>
+														<Sliders className="size-3.5" />
+														Change terms on war start
+													</label>
+												</div>
+
+												{changeTermsOnWarStart && (
+													<div className="space-y-4 pt-3 border-t border-amber-500/20">
+														<span className="text-xs font-semibold text-foreground block">
+															War-Start Terms:
+														</span>
+
+														<div className="flex flex-wrap items-center gap-6">
+															<div className="flex items-center gap-2">
+																<Checkbox
+																	id="war-term-online"
+																	checked={warStartOnline}
+																	onCheckedChange={(c) =>
+																		setWarStartOnline(Boolean(c))
+																	}
+																/>
+																<label
+																	htmlFor="war-term-online"
+																	className="text-xs text-foreground cursor-pointer font-medium"
+																>
+																	Online
+																</label>
+															</div>
+
+															<div className="flex items-center gap-2">
+																<Checkbox
+																	id="war-term-idle"
+																	checked={warStartIdle}
+																	onCheckedChange={(c) =>
+																		setWarStartIdle(Boolean(c))
+																	}
+																/>
+																<label
+																	htmlFor="war-term-idle"
+																	className="text-xs text-foreground cursor-pointer font-medium"
+																>
+																	Idle
+																</label>
+															</div>
+
+															<div className="flex items-center gap-2">
+																<Checkbox
+																	id="war-term-offline"
+																	checked={warStartOffline}
+																	onCheckedChange={(c) =>
+																		setWarStartOffline(Boolean(c))
+																	}
+																/>
+																<label
+																	htmlFor="war-term-offline"
+																	className="text-xs text-foreground cursor-pointer font-medium"
+																>
+																	Offline
+																</label>
+															</div>
+														</div>
+
+														{warStartIdle && (
+															<div className="pt-1 max-w-xs">
+																<label
+																	htmlFor="war-term-idle-minutes"
+																	className="text-xs text-muted-foreground block mb-1"
+																>
+																	Max Idle Duration (minutes)
+																</label>
+																<Input
+																	id="war-term-idle-minutes"
+																	type="number"
+																	min={1}
+																	max={1440}
+																	value={warStartIdleDuration}
+																	onChange={(e) => {
+																		const next = Number(e.target.value) || 15;
+																		setWarStartIdleDuration(next);
+																	}}
+																	className="h-9 text-xs rounded-xl font-mono"
+																	placeholder="15"
+																/>
+															</div>
+														)}
+
+														<div className="pt-2 border-t border-amber-500/20">
+															<div className="flex items-center gap-2">
+																<Checkbox
+																	id="war-term-stricken"
+																	checked={warStartStricken}
+																	onCheckedChange={(c) =>
+																		setWarStartStricken(Boolean(c))
+																	}
+																/>
+																<label
+																	htmlFor="war-term-stricken"
+																	className="text-xs text-foreground cursor-pointer font-medium"
+																>
+																	Stricken hits
+																</label>
+															</div>
+														</div>
+
+														<div className="pt-2 border-t border-amber-500/20 space-y-2">
+															<div className="flex items-center justify-between text-xs">
+																<span className="font-medium text-foreground">
+																	War-Start Level Range
+																</span>
+																<span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
+																	Levels {warStartLevelRange[0]} –{" "}
+																	{warStartLevelRange[1]}
+																</span>
+															</div>
+															<Slider
+																min={1}
+																max={100}
+																step={1}
+																value={[
+																	warStartLevelRange[0],
+																	warStartLevelRange[1],
+																]}
+																onValueChange={(val) => {
+																	const minVal = val[0] ?? 1;
+																	const maxVal = val[1] ?? 100;
+																	setWarStartLevelRange([minVal, maxVal]);
+																}}
+																className="py-2"
+															/>
+														</div>
+													</div>
+												)}
+											</div>
+										)}
+								</div>
+							</div>
+
+							<DialogFooter className="pt-4 border-t border-border/60 flex items-center justify-end gap-3">
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setIsModalOpen(false)}
+									disabled={isSubmitting}
+									className="rounded-xl h-10 px-4 text-xs font-semibold cursor-pointer"
+								>
+									Cancel
+								</Button>
+								<Button
+									type="button"
+									onClick={handleCreateContract}
+									disabled={isSubmitting || !validatedFaction}
+									className="rounded-xl h-10 px-6 text-xs font-semibold cursor-pointer"
+								>
+									{isSubmitting ? (
+										<>
+											<Loader2 className="size-4 animate-spin mr-1.5" />
+											Creating Contract...
+										</>
+									) : (
+										"Create Contract"
+									)}
+								</Button>
+							</DialogFooter>
+						</>
+					)}
 				</DialogContent>
 			</Dialog>
 		</div>

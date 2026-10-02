@@ -449,11 +449,10 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							continue;
 						}
 
-						// Detect Stricken effect (named "warlord" or "stricken" in Torn API)
+						// Detect Stricken weapon bonus effect on finishing hit (only "stricken")
 						const isStricken = Boolean(
 							attack.finishing_hit_effects?.some((e) => {
-								const lower = e.name.toLowerCase();
-								return lower === "warlord" || lower === "stricken";
+								return e.name.toLowerCase() === "stricken";
 							}),
 						);
 

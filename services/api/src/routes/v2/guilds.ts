@@ -1885,9 +1885,18 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				});
 			}
 
+			const baseUrl =
+				process.env.DASHBOARD_URL ||
+				(process.env.NODE_ENV === "production"
+					? "https://dashboard.blasted-labs.tech"
+					: "http://localhost:3000");
+
+			const receiptUrl = `${baseUrl}/#/merc/receipt/${contract.id}`;
+
 			return {
 				success: true,
 				contract,
+				receiptUrl,
 			};
 		},
 		{

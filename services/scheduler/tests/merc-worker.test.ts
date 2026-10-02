@@ -401,6 +401,201 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 		expect(alertAfterExpire?.claimedBy).toBeUndefined();
 	});
 
+	it("does not expire 20s lock while target is in hospital or in RW hit cooldown, starting 20s count only after cooldown ends", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		const activeWarContract: MercContract = {
+			...mockContract,
+			id: "contract-war-1",
+			warStatusAtCreation: "active",
+		};
+
+		// 1. Target in hospital with 30s remaining
+		const hospMember = createMockMember({
+			id: 2005,
+			status: {
+				description: "In hospital for 30s",
+				details: null,
+				state: "Hospital",
+				color: "red",
+				until: nowSec + 30,
+			},
+		});
+
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			hospMember,
+			nowSec,
+			nowMs,
+		);
+
+		// Mercenary claims the hospital lead target
+		const claimRes = await manager.claimTarget(activeWarContract.id, 2005, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+		});
+		expect(claimRes.success).toBe(true);
+		expect(claimRes.alert?.lockStartedAt).toBeUndefined();
+
+		// 2. 25 seconds later (target still has 5s in hospital):
+		// Previous bug would have expired the claim here at 20s!
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "In hospital for 5s",
+					details: null,
+					state: "Hospital",
+					color: "red",
+					until: nowSec + 30,
+				},
+			}),
+			nowSec + 25,
+			nowMs + 25_000,
+		);
+
+		const alertInHosp = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertInHosp?.status).toBe("claimed");
+		expect(alertInHosp?.lockStartedAt).toBeUndefined();
+
+		// 3. Target exits hospital at nowSec + 30, entering 60s RW hit cooldown (until nowSec + 90)
+		const exitSec = nowSec + 30;
+		const exitMs = nowMs + 30_000;
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+			}),
+			exitSec,
+			exitMs,
+		);
+
+		const alertInRwCooldown = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertInRwCooldown?.status).toBe("claimed");
+		expect(alertInRwCooldown?.rwCooldownUntil).toBe(exitSec + 60);
+		expect(alertInRwCooldown?.lockStartedAt).toBeUndefined();
+
+		// 4. 40 seconds into RW hit cooldown (exitSec + 40, nowSec + 70):
+		// Target is still in RW cooldown, so 20s lock must NOT have started or expired!
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+			}),
+			exitSec + 40,
+			exitMs + 40_000,
+		);
+
+		const alertStillInRw = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertStillInRw?.status).toBe("claimed");
+		expect(alertStillInRw?.lockStartedAt).toBeUndefined();
+
+		// 5. RW cooldown ends at exitSec + 60 (nowSec + 90). Target is now attackable!
+		const cooldownEndSec = exitSec + 60;
+		const cooldownEndMs = exitMs + 60_000;
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+			}),
+			cooldownEndSec,
+			cooldownEndMs,
+		);
+
+		const alertAttackable = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertAttackable?.status).toBe("claimed");
+		expect(alertAttackable?.lockStartedAt).toBe(cooldownEndMs);
+
+		// 6. 15 seconds after RW cooldown ends (cooldownEndMs + 15_000):
+		// Still within the 20s lock window!
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+			}),
+			cooldownEndSec + 15,
+			cooldownEndMs + 15_000,
+		);
+
+		const alertWithin20s = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertWithin20s?.status).toBe("claimed");
+
+		// 7. 21 seconds after RW cooldown ends (cooldownEndMs + 21_000):
+		// 20s lock expired! Reset to open and reposted!
+		await manager.processMember(
+			activeWarContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({
+				id: 2005,
+				status: {
+					description: "Okay",
+					details: null,
+					state: "Okay",
+					color: "green",
+					until: null,
+				},
+			}),
+			cooldownEndSec + 21,
+			cooldownEndMs + 21_000,
+		);
+
+		const alertExpired = manager.getAlert(activeWarContract.id, 2005);
+		expect(alertExpired?.status).toBe("open");
+		expect(alertExpired?.claimedBy).toBeUndefined();
+		expect(alertExpired?.lockStartedAt).toBeUndefined();
+	});
+
 	it("reposts stale target after 60 seconds of inactivity", async () => {
 		const manager = new MercTargetManager();
 		const nowSec = Math.floor(Date.now() / 1000);

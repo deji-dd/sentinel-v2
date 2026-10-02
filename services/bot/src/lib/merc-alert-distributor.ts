@@ -223,9 +223,24 @@ export async function postMercContractAnnouncement(
 
 		const mentionContent = mercRoleId ? `<@&${mercRoleId}>` : undefined;
 
+		const baseUrl =
+			process.env.DASHBOARD_URL ||
+			(process.env.NODE_ENV === "production"
+				? "https://dashboard.blasted-labs.tech"
+				: "http://localhost:3000");
+		const receiptUrl = `${baseUrl}/#/merc/receipt/${contract.id}`;
+
+		const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+			new ButtonBuilder()
+				.setStyle(ButtonStyle.Link)
+				.setLabel("Live Receipt")
+				.setURL(receiptUrl),
+		);
+
 		const sentMessage = await channel.send({
 			content: mentionContent,
 			embeds: [embed],
+			components: [receiptRow],
 		});
 
 		try {
@@ -816,7 +831,7 @@ export async function handleMercClaimButton(
 		if (json.success) {
 			await interaction.reply({
 				content:
-					"Target claim confirmed. You have 20 seconds to initiate attack.",
+					"Target claim confirmed. You have 20 seconds to initiate attack once the target exits hospital and Ranked War cooldown concludes.",
 				flags: MessageFlags.Ephemeral,
 			});
 		} else {
