@@ -232,6 +232,13 @@
 			"when": 1790954868307,
 			"tag": "0032_busy_master_chief",
 			"breakpoints": true
+		},
+		{
+			"idx": 33,
+			"version": "7",
+			"when": 1790962312921,
+			"tag": "0033_chief_fantastic_four",
+			"breakpoints": true
 		}
 	]
 }

@@ -12,7 +12,7 @@ import {
 export const guildConfigs = pgTable("guild_configs", {
 	guildId: text("guild_id").primaryKey(),
 	authorized: boolean("authorized").default(true).notNull(),
-	moduleVerification: boolean("module_verification").default(false).notNull(),
+	moduleVerification: boolean("module_verification").default(true).notNull(),
 	moduleTerritory: boolean("module_territory").default(false).notNull(),
 	moduleReactionRoles: boolean("module_reaction_roles")
 		.default(false)

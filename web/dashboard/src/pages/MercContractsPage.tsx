@@ -40,7 +40,6 @@ export interface MercContractHitTerms {
 		offline: boolean;
 	};
 	idleDurationMinutes: number | null;
-	offlineDurationMinutes?: number | null;
 	strickenHits: boolean;
 	levelRange: [number, number];
 }
@@ -98,10 +97,34 @@ interface MercContractsPageProps {
 	guildId: string;
 }
 
-const toDateTimeLocal = (date: Date): string => {
+const toTctDateTimeInput = (date: Date): string => {
 	const pad = (n: number) => String(n).padStart(2, "0");
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+	return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 };
+
+const parseTctInputToIso = (tctString: string): string => {
+	if (tctString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(tctString)) {
+		return new Date(tctString).toISOString();
+	}
+	const parts = tctString.split(":");
+	if (parts.length === 2) {
+		return new Date(`${tctString}:00Z`).toISOString();
+	}
+	return new Date(`${tctString}Z`).toISOString();
+};
+
+export function formatTctDateTime(date: Date | string): string {
+	const d = typeof date === "string" ? new Date(date) : date;
+	if (Number.isNaN(d.getTime())) return String(date);
+	const pad = (n: number) => n.toString().padStart(2, "0");
+	const hours = pad(d.getUTCHours());
+	const minutes = pad(d.getUTCMinutes());
+	const seconds = pad(d.getUTCSeconds());
+	const day = pad(d.getUTCDate());
+	const month = pad(d.getUTCMonth() + 1);
+	const year = d.getUTCFullYear();
+	return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} TCT`;
+}
 
 export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const { toast } = useToast();
@@ -125,14 +148,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	// Form: Step 2 Timing & War
 	const [startImmediately, setStartImmediately] = useState(true);
 	const [customStartTime, setCustomStartTime] = useState(() =>
-		toDateTimeLocal(new Date()),
+		toTctDateTimeInput(new Date()),
 	);
 	const [startMinutesBeforeWar, setStartMinutesBeforeWar] = useState(30);
 	const [endOnWarEnd, setEndOnWarEnd] = useState(true);
 	const [customEndTime, setCustomEndTime] = useState(() => {
 		const tomorrow = new Date();
 		tomorrow.setHours(tomorrow.getHours() + 24);
-		return toDateTimeLocal(tomorrow);
+		return toTctDateTimeInput(tomorrow);
 	});
 
 	// Form: Terms
@@ -140,8 +163,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [idleStatus, setIdleStatus] = useState(true);
 	const [offlineStatus, setOfflineStatus] = useState(false);
 	const [idleDuration, setIdleDuration] = useState<number>(15);
-	const [offlineDuration, setOfflineDuration] = useState<number>(15);
-	const [sameAsIdle, setSameAsIdle] = useState(true);
 	const [strickenHits, setStrickenHits] = useState(false);
 	const [levelRange, setLevelRange] = useState<[number, number]>([1, 100]);
 
@@ -151,9 +172,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [warStartIdle, setWarStartIdle] = useState(false);
 	const [warStartOffline, setWarStartOffline] = useState(false);
 	const [warStartIdleDuration, setWarStartIdleDuration] = useState<number>(15);
-	const [warStartOfflineDuration, setWarStartOfflineDuration] =
-		useState<number>(15);
-	const [warStartSameAsIdle, setWarStartSameAsIdle] = useState(true);
 	const [warStartStricken, setWarStartStricken] = useState(false);
 	const [warStartLevelRange, setWarStartLevelRange] = useState<
 		[number, number]
@@ -201,19 +219,17 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setValidatedFaction(null);
 		setValidationError(null);
 		setStartImmediately(true);
-		setCustomStartTime(toDateTimeLocal(new Date()));
+		setCustomStartTime(toTctDateTimeInput(new Date()));
 		setStartMinutesBeforeWar(30);
 		setEndOnWarEnd(true);
 		const tomorrow = new Date();
 		tomorrow.setHours(tomorrow.getHours() + 24);
-		setCustomEndTime(toDateTimeLocal(tomorrow));
+		setCustomEndTime(toTctDateTimeInput(tomorrow));
 
 		setOnlineStatus(true);
 		setIdleStatus(true);
 		setOfflineStatus(false);
 		setIdleDuration(15);
-		setOfflineDuration(15);
-		setSameAsIdle(true);
 		setStrickenHits(false);
 		setLevelRange([1, 100]);
 
@@ -227,8 +243,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setWarStartIdle(false);
 		setWarStartOffline(false);
 		setWarStartIdleDuration(15);
-		setWarStartOfflineDuration(15);
-		setWarStartSameAsIdle(true);
 		setWarStartStricken(false);
 		setWarStartLevelRange([1, 100]);
 	};
@@ -362,12 +376,12 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 			} else if (startImmediately) {
 				finalStartTime = new Date().toISOString();
 			} else {
-				finalStartTime = new Date(customStartTime).toISOString();
+				finalStartTime = parseTctInputToIso(customStartTime);
 			}
 
 			let finalEndTime: string | null = null;
 			if (validatedFaction.warStatus === "no_war") {
-				finalEndTime = new Date(customEndTime).toISOString();
+				finalEndTime = parseTctInputToIso(customEndTime);
 			} else if (endOnWarEnd) {
 				if (validatedFaction.war?.end) {
 					finalEndTime = new Date(
@@ -377,7 +391,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					finalEndTime = null; // Open ended until ranked war finishes
 				}
 			} else {
-				finalEndTime = new Date(customEndTime).toISOString();
+				finalEndTime = parseTctInputToIso(customEndTime);
 			}
 
 			const payload = {
@@ -403,11 +417,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						offline: offlineStatus,
 					},
 					idleDurationMinutes: idleStatus ? idleDuration : null,
-					offlineDurationMinutes: offlineStatus
-						? sameAsIdle && idleStatus
-							? idleDuration
-							: offlineDuration
-						: null,
 					strickenHits,
 					levelRange,
 				},
@@ -430,11 +439,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 									offline: warStartOffline,
 								},
 								idleDurationMinutes: warStartIdle ? warStartIdleDuration : null,
-								offlineDurationMinutes: warStartOffline
-									? warStartSameAsIdle && warStartIdle
-										? warStartIdleDuration
-										: warStartOfflineDuration
-									: null,
 								strickenHits: warStartStricken,
 								levelRange: warStartLevelRange,
 							}
@@ -794,7 +798,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															: `Starts ${contract.startMinutesBeforeWar} mins before war`
 														: contract.startImmediately
 															? "Started immediately"
-															: new Date(contract.startTime).toLocaleString()}
+															: formatTctDateTime(contract.startTime)}
 												</span>
 											</div>
 
@@ -806,7 +810,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 													{contract.endOnWarEnd
 														? "Ends when war finishes"
 														: contract.endTime
-															? new Date(contract.endTime).toLocaleString()
+															? formatTctDateTime(contract.endTime)
 															: "No expiration set"}
 												</span>
 											</div>
@@ -850,9 +854,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															className="text-[11px] font-mono px-2 py-0.5 bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
 														>
 															Offline
-															{contract.terms.offlineDurationMinutes
-																? ` ≤ ${contract.terms.offlineDurationMinutes}m`
-																: ""}
 														</Badge>
 													)}
 													{contract.terms.strickenHits && (
@@ -904,9 +905,6 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																	className="text-[11px] font-mono px-2 py-0.5 bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
 																>
 																	Offline
-																	{contract.warStartTerms.offlineDurationMinutes
-																		? ` ≤ ${contract.warStartTerms.offlineDurationMinutes}m`
-																		: ""}
 																</Badge>
 															)}
 															{contract.warStartTerms.strickenHits && (
@@ -1062,9 +1060,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												<span>
 													War Start:{" "}
 													<strong className="text-foreground">
-														{new Date(
-															validatedFaction.war.start * 1000,
-														).toLocaleString()}
+														{formatTctDateTime(
+															new Date(validatedFaction.war.start * 1000),
+														)}
 													</strong>
 												</span>
 											)}
@@ -1122,7 +1120,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 							{/* Timing Configuration Section */}
 							<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
 								<h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-foreground">
-									2. Contract Duration & Timing
+									2. Contract Duration & Timing (TCT / UTC)
 								</h3>
 
 								{/* Case A: UPCOMING WAR */}
@@ -1187,7 +1185,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														htmlFor="upcoming-custom-end"
 														className="text-xs text-muted-foreground block mb-1"
 													>
-														Custom End Time
+														Custom End Time (TCT)
 													</label>
 													<Input
 														id="upcoming-custom-end"
@@ -1228,7 +1226,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														htmlFor="active-custom-start"
 														className="text-xs text-muted-foreground block mb-1"
 													>
-														Start Time
+														Start Time (TCT)
 													</label>
 													<Input
 														id="active-custom-start"
@@ -1262,7 +1260,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														htmlFor="active-custom-end"
 														className="text-xs text-muted-foreground block mb-1"
 													>
-														End Time
+														End Time (TCT)
 													</label>
 													<Input
 														id="active-custom-end"
@@ -1303,7 +1301,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														htmlFor="nowar-custom-start"
 														className="text-xs text-muted-foreground block mb-1"
 													>
-														Start Time
+														Start Time (TCT)
 													</label>
 													<Input
 														id="nowar-custom-start"
@@ -1321,7 +1319,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												htmlFor="nowar-custom-end"
 												className="text-xs text-muted-foreground block mb-1"
 											>
-												End Time
+												End Time (TCT)
 											</label>
 											<Input
 												id="nowar-custom-end"
@@ -1414,63 +1412,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												onChange={(e) => {
 													const next = Number(e.target.value) || 15;
 													setIdleDuration(next);
-													if (sameAsIdle) {
-														setOfflineDuration(next);
-													}
 												}}
 												className="h-9 text-xs rounded-xl font-mono"
-												placeholder="15"
-											/>
-										</div>
-									)}
-
-									{/* Offline Minutes Input */}
-									{offlineStatus && (
-										<div className="pt-2 max-w-xs space-y-1.5">
-											<div className="flex items-center justify-between">
-												<label
-													htmlFor="term-offline-minutes"
-													className="text-xs text-muted-foreground block"
-												>
-													Max Offline Duration (minutes)
-												</label>
-												{idleStatus && (
-													<div className="flex items-center gap-1.5">
-														<Checkbox
-															id="term-offline-same-idle"
-															checked={sameAsIdle}
-															onCheckedChange={(c) => {
-																const checked = Boolean(c);
-																setSameAsIdle(checked);
-																if (checked) {
-																	setOfflineDuration(idleDuration);
-																}
-															}}
-														/>
-														<label
-															htmlFor="term-offline-same-idle"
-															className="text-[11px] text-muted-foreground cursor-pointer select-none font-medium"
-														>
-															Same as idle
-														</label>
-													</div>
-												)}
-											</div>
-											<Input
-												id="term-offline-minutes"
-												type="number"
-												min={1}
-												max={1440}
-												value={
-													sameAsIdle && idleStatus
-														? idleDuration
-														: offlineDuration
-												}
-												disabled={sameAsIdle && idleStatus}
-												onChange={(e) =>
-													setOfflineDuration(Number(e.target.value) || 15)
-												}
-												className="h-9 text-xs rounded-xl font-mono disabled:opacity-60"
 												placeholder="15"
 											/>
 										</div>
@@ -1661,66 +1604,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															onChange={(e) => {
 																const next = Number(e.target.value) || 15;
 																setWarStartIdleDuration(next);
-																if (warStartSameAsIdle) {
-																	setWarStartOfflineDuration(next);
-																}
 															}}
 															className="h-9 text-xs rounded-xl font-mono"
-															placeholder="15"
-														/>
-													</div>
-												)}
-
-												{warStartOffline && (
-													<div className="pt-1 max-w-xs space-y-1.5">
-														<div className="flex items-center justify-between">
-															<label
-																htmlFor="war-term-offline-minutes"
-																className="text-xs text-muted-foreground block"
-															>
-																Max Offline Duration (minutes)
-															</label>
-															{warStartIdle && (
-																<div className="flex items-center gap-1.5">
-																	<Checkbox
-																		id="war-term-offline-same-idle"
-																		checked={warStartSameAsIdle}
-																		onCheckedChange={(c) => {
-																			const checked = Boolean(c);
-																			setWarStartSameAsIdle(checked);
-																			if (checked) {
-																				setWarStartOfflineDuration(
-																					warStartIdleDuration,
-																				);
-																			}
-																		}}
-																	/>
-																	<label
-																		htmlFor="war-term-offline-same-idle"
-																		className="text-[11px] text-muted-foreground cursor-pointer select-none font-medium"
-																	>
-																		Same as idle
-																	</label>
-																</div>
-															)}
-														</div>
-														<Input
-															id="war-term-offline-minutes"
-															type="number"
-															min={1}
-															max={1440}
-															value={
-																warStartSameAsIdle && warStartIdle
-																	? warStartIdleDuration
-																	: warStartOfflineDuration
-															}
-															disabled={warStartSameAsIdle && warStartIdle}
-															onChange={(e) =>
-																setWarStartOfflineDuration(
-																	Number(e.target.value) || 15,
-																)
-															}
-															className="h-9 text-xs rounded-xl font-mono disabled:opacity-60"
 															placeholder="15"
 														/>
 													</div>

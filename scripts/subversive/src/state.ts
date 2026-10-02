@@ -15,9 +15,18 @@ function getStoredBool(key: string, fallback: boolean): boolean {
 }
 
 export const state: AppState = {
-	apiUrl: (
-		GM_getValue<string>(STORAGE.apiUrl, DEFAULTS.apiUrl) || DEFAULTS.apiUrl
-	).replace(/\/+$/, ""),
+	apiUrl: (() => {
+		const stored = GM_getValue<string>(STORAGE.apiUrl, "");
+		if (stored && !stored.includes("subversive.blasted-labs.tech")) {
+			return stored.replace(/\/+$/, "");
+		}
+		if (stored?.includes("subversive.blasted-labs.tech")) {
+			try {
+				GM_setValue(STORAGE.apiUrl, DEFAULTS.apiUrl);
+			} catch {}
+		}
+		return DEFAULTS.apiUrl;
+	})(),
 	token: GM_getValue<string>(STORAGE.token, "") || "",
 	user: GM_getValue<AppState["user"]>(STORAGE.user, null),
 	panelOpen: getStoredBool(STORAGE.panelOpen, false),

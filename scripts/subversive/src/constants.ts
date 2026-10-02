@@ -35,7 +35,7 @@ export const SYNC_CONFIG = {
 } as const;
 
 export const DEFAULTS = {
-	apiUrl: "https://subversive.blasted-labs.tech",
+	apiUrl: "https://api.blasted-labs.tech",
 	minFFThreshold: 1.2,
 	maxFFThreshold: 3.0,
 	maxBSThreshold: 5e9,

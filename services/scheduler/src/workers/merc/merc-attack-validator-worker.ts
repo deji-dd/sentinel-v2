@@ -468,6 +468,12 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 									: (contract.hitPrice ?? 0);
 						}
 
+						const hitTimestampMs =
+							attack.timestamp_ended < 1e11
+								? attack.timestamp_ended * 1000
+								: attack.timestamp_ended;
+						const hitDate = new Date(hitTimestampMs);
+
 						// Record hit in database
 						await recordMercContractHit({
 							contractId: contract.id,
@@ -480,7 +486,7 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 							result: attack.result,
 							isStricken,
 							payoutValue,
-							timestamp: new Date(attack.timestamp_ended * 1000),
+							timestamp: hitDate,
 						});
 
 						rememberAttackId(attack.id);
@@ -503,7 +509,7 @@ export async function runMercAttackValidationCycle(): Promise<number> {
 								payoutValue,
 								attackId: attack.id,
 								attackCode: attack.code,
-								timestamp: new Date(attack.timestamp_ended * 1000),
+								timestamp: hitDate,
 							},
 						});
 

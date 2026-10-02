@@ -47,7 +47,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			expect(embed).toBeDefined();
 			expect(embed?.title).toContain("Target Finder");
 			expect(embed?.description).toContain(
-				"https://subversive.blasted-labs.tech/v2/target-finder/script",
+				"https://api.blasted-labs.tech/v2/target-finder/script",
 			);
 			expect(embed?.description).not.toContain("localhost:3000");
 
@@ -57,7 +57,7 @@ describe("Subversive Target Finder Discord Command", () => {
 			const components = componentsRows?.[0]?.components;
 			expect(components?.length).toBe(1);
 			expect(components?.[0]?.data.url).toBe(
-				"https://subversive.blasted-labs.tech/v2/target-finder/script.user.js",
+				"https://api.blasted-labs.tech/v2/target-finder/script.user.js",
 			);
 			expect(components?.[0]?.data.label).toBe("Install Script");
 		} finally {

@@ -441,6 +441,11 @@ export async function handleContractCreationButtonClick(
 			EMBED_COLORS.PRIMARY,
 		);
 
+		const expDate = new Date(Date.now() + 1800 * 1000);
+		const expEpoch = Math.floor(expDate.getTime() / 1000);
+		const pad = (n: number) => n.toString().padStart(2, "0");
+		const expTct = `${pad(expDate.getUTCHours())}:${pad(expDate.getUTCMinutes())}:${pad(expDate.getUTCSeconds())} TCT`;
+
 		welcomeEmbed.addFields(
 			{
 				name: "Faction",
@@ -449,7 +454,7 @@ export async function handleContractCreationButtonClick(
 			},
 			{
 				name: "Session Expiration",
-				value: `<t:${Math.floor(Date.now() / 1000) + 1800}:R>`,
+				value: `\`${expTct}\` (<t:${expEpoch}:R>)`,
 				inline: true,
 			},
 		);

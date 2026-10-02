@@ -493,6 +493,7 @@ export async function authorizeGuild(guildId: string): Promise<void> {
 		.values({
 			guildId,
 			authorized: true,
+			moduleVerification: true,
 			adminRoleIds: [],
 			verifiedRoleIds: [],
 			protectedRoleIds: [],
@@ -583,6 +584,7 @@ export async function reconcileTargetGuildsAndModules(): Promise<GuildCleanupRes
 			.values({
 				guildId,
 				authorized: true,
+				moduleVerification: true,
 				adminRoleIds: [],
 				verifiedRoleIds: [],
 				protectedRoleIds: [],

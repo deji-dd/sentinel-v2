@@ -444,7 +444,11 @@ export function RecruitmentPage({
 						className="h-7 text-xs border-destructive/40 hover:bg-destructive/20 shrink-0 cursor-pointer"
 					>
 						<a
-							href="/v2/target-finder/script.user.js"
+							href={
+								import.meta.env.PROD
+									? "https://api.blasted-labs.tech/v2/target-finder/script.user.js"
+									: "/v2/target-finder/script.user.js?env=dev"
+							}
 							target="_blank"
 							rel="noopener noreferrer"
 						>

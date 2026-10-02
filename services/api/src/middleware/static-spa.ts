@@ -69,6 +69,18 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 			return;
 		}
 
+		if (host.startsWith("subversive.blasted-labs.tech")) {
+			if (
+				url.pathname.startsWith("/api") ||
+				url.pathname.startsWith("/v2") ||
+				url.pathname.startsWith("/v1")
+			) {
+				set.redirect = `https://api.blasted-labs.tech${url.pathname}${url.search}`;
+				set.status = 308;
+				return;
+			}
+		}
+
 		// Bypass API, Swagger, and system routes, or api subdomains with 404
 		if (
 			url.pathname.startsWith("/api") ||

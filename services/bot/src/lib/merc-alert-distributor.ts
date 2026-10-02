@@ -18,12 +18,33 @@ import {
 } from "discord.js";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
+import { formatTctTimestamp } from "./torn-log-parser";
 
 const API_BASE_URL =
 	process.env.API_URL ||
 	(process.env.PORT
 		? `http://127.0.0.1:${process.env.PORT}`
 		: "http://127.0.0.1:3002");
+
+export function parseToEpochSeconds(ts: string | Date | number): number {
+	if (typeof ts === "number") {
+		return ts < 1e11 ? Math.floor(ts) : Math.floor(ts / 1000);
+	}
+	if (ts instanceof Date) {
+		return Math.floor(ts.getTime() / 1000);
+	}
+	if (typeof ts === "string") {
+		const num = Number(ts);
+		if (!Number.isNaN(num) && /^\d+$/.test(ts.trim())) {
+			return num < 1e11 ? Math.floor(num) : Math.floor(num / 1000);
+		}
+		const parsed = new Date(ts).getTime();
+		if (!Number.isNaN(parsed)) {
+			return Math.floor(parsed / 1000);
+		}
+	}
+	return Math.floor(Date.now() / 1000);
+}
 
 function formatStats(num: number | null | undefined): string {
 	if (!num || !Number.isFinite(num)) return "Unknown";
@@ -136,12 +157,13 @@ export async function postMercContractAnnouncement(
 			return;
 		}
 
-		const startEpoch = Math.floor(
-			new Date(contract.startTime).getTime() / 1000,
-		);
-		const endEpoch = contract.endTime
-			? Math.floor(new Date(contract.endTime).getTime() / 1000)
-			: null;
+		const startDate = new Date(contract.startTime);
+		const startEpoch = Math.floor(startDate.getTime() / 1000);
+		const startTct = formatTctTimestamp(startDate);
+
+		const endDate = contract.endTime ? new Date(contract.endTime) : null;
+		const endEpoch = endDate ? Math.floor(endDate.getTime() / 1000) : null;
+		const endTct = endDate ? formatTctTimestamp(endDate) : null;
 
 		const factionProfileUrl = `https://www.torn.com/factions.php?step=profile&ID=${contract.factionId}`;
 		const embed = createBaseEmbed(
@@ -153,15 +175,15 @@ export async function postMercContractAnnouncement(
 		embed.addFields(
 			{
 				name: "Start Time",
-				value: `<t:${startEpoch}:F> (<t:${startEpoch}:R>)`,
+				value: `\`${startTct} TCT\` (<t:${startEpoch}:R>)`,
 				inline: true,
 			},
 			{
 				name: "End Time",
 				value: contract.endOnWarEnd
 					? "Ends on War Conclusion"
-					: endEpoch
-						? `<t:${endEpoch}:F> (<t:${endEpoch}:R>)`
+					: endEpoch && endTct
+						? `\`${endTct} TCT\` (<t:${endEpoch}:R>)`
 						: "No Expiration",
 				inline: true,
 			},
@@ -605,7 +627,7 @@ export async function postMercHitLog(
 		payoutValue: number;
 		attackId: number;
 		attackCode?: string;
-		timestamp: string | Date;
+		timestamp: string | Date | number;
 	},
 ): Promise<void> {
 	try {
@@ -632,6 +654,11 @@ export async function postMercHitLog(
 			hitData.payoutValue > 0 ? EMBED_COLORS.SUCCESS : EMBED_COLORS.PRIMARY,
 		);
 
+		const epochSec = parseToEpochSeconds(hitData.timestamp);
+		const hitDate = new Date(epochSec * 1000);
+		const pad = (n: number) => n.toString().padStart(2, "0");
+		const tctTimeString = `${pad(hitDate.getUTCHours())}:${pad(hitDate.getUTCMinutes())}:${pad(hitDate.getUTCSeconds())} TCT`;
+
 		embed.addFields(
 			{
 				name: "Attack Log",
@@ -640,7 +667,7 @@ export async function postMercHitLog(
 			},
 			{
 				name: "Time",
-				value: `<t:${Math.floor(new Date(hitData.timestamp).getTime() / 1000)}:T>`,
+				value: `\`${tctTimeString}\` (<t:${epochSec}:R>)`,
 				inline: true,
 			},
 		);

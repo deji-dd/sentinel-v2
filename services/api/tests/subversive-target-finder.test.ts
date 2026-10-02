@@ -26,7 +26,7 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(response.headers.get("content-type")).toContain("text/javascript");
 		const text = await response.text();
 		expect(text).toContain("Subversive Alliance");
-		expect(text).toContain("https://subversive.blasted-labs.tech");
+		expect(text).toContain("https://api.blasted-labs.tech");
 		expect(text).toContain("satf_auth_token");
 	});
 

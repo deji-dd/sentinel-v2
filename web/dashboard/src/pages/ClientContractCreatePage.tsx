@@ -47,10 +47,34 @@ interface ValidatedFactionData {
 	} | null;
 }
 
-const toDateTimeLocal = (date: Date): string => {
+const toTctDateTimeInput = (date: Date): string => {
 	const pad = (n: number) => String(n).padStart(2, "0");
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+	return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 };
+
+const parseTctInputToIso = (tctString: string): string => {
+	if (tctString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(tctString)) {
+		return new Date(tctString).toISOString();
+	}
+	const parts = tctString.split(":");
+	if (parts.length === 2) {
+		return new Date(`${tctString}:00Z`).toISOString();
+	}
+	return new Date(`${tctString}Z`).toISOString();
+};
+
+export function formatTctDateTime(date: Date | string): string {
+	const d = typeof date === "string" ? new Date(date) : date;
+	if (Number.isNaN(d.getTime())) return String(date);
+	const pad = (n: number) => n.toString().padStart(2, "0");
+	const hours = pad(d.getUTCHours());
+	const minutes = pad(d.getUTCMinutes());
+	const seconds = pad(d.getUTCSeconds());
+	const day = pad(d.getUTCDate());
+	const month = pad(d.getUTCMonth() + 1);
+	const year = d.getUTCFullYear();
+	return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} TCT`;
+}
 
 export function ClientContractCreatePage() {
 	const { queryParams, navigate } = useRouter();
@@ -74,14 +98,14 @@ export function ClientContractCreatePage() {
 	// Timing States
 	const [startImmediately, setStartImmediately] = useState(true);
 	const [customStartTime, setCustomStartTime] = useState(() =>
-		toDateTimeLocal(new Date()),
+		toTctDateTimeInput(new Date()),
 	);
 	const [startMinutesBeforeWar, setStartMinutesBeforeWar] = useState(30);
 	const [endOnWarEnd, setEndOnWarEnd] = useState(true);
 	const [customEndTime, setCustomEndTime] = useState(() => {
 		const tomorrow = new Date();
 		tomorrow.setHours(tomorrow.getHours() + 24);
-		return toDateTimeLocal(tomorrow);
+		return toTctDateTimeInput(tomorrow);
 	});
 
 	// Hit Filter Terms
@@ -232,14 +256,14 @@ export function ClientContractCreatePage() {
 				warStartMs - startMinutesBeforeWar * 60 * 1000,
 			).toISOString();
 		} else if (!startImmediately) {
-			calculatedStartTime = new Date(customStartTime).toISOString();
+			calculatedStartTime = parseTctInputToIso(customStartTime);
 		}
 
 		let calculatedEndTime: string | null = null;
 		if (endOnWarEnd && factionData?.war?.end) {
 			calculatedEndTime = new Date(factionData.war.end * 1000).toISOString();
 		} else if (!endOnWarEnd) {
-			calculatedEndTime = new Date(customEndTime).toISOString();
+			calculatedEndTime = parseTctInputToIso(customEndTime);
 		}
 
 		const payload = {
@@ -471,15 +495,27 @@ export function ClientContractCreatePage() {
 					<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
 						<CardHeader className="border-b border-border/40 pb-4">
 							<CardTitle className="text-base font-semibold flex items-center gap-2">
-								2. Contract Duration & Timing
+								2. Contract Duration & Timing (TCT / UTC)
 							</CardTitle>
 						</CardHeader>
 						<CardContent className="pt-0 space-y-6">
 							{factionData?.warStatus === "upcoming" ? (
 								<div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-4">
-									<div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
-										<Clock className="size-4" />
-										Upcoming War Detected
+									<div className="flex items-center justify-between flex-wrap gap-2">
+										<div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
+											<Clock className="size-4" />
+											Upcoming War Detected
+										</div>
+										{factionData.war?.start && (
+											<div className="text-xs text-muted-foreground font-mono">
+												War Start:{" "}
+												<span className="text-foreground font-bold">
+													{formatTctDateTime(
+														new Date(factionData.war.start * 1000),
+													)}
+												</span>
+											</div>
+										)}
 									</div>
 									<div className="space-y-3">
 										<div className="flex justify-between items-center text-xs font-mono">
@@ -542,7 +578,7 @@ export function ClientContractCreatePage() {
 												htmlFor="custom-start-time"
 												className="text-xs text-muted-foreground"
 											>
-												CUSTOM START TIME
+												CUSTOM START TIME (TCT)
 											</label>
 											<Input
 												id="custom-start-time"
@@ -584,7 +620,7 @@ export function ClientContractCreatePage() {
 											htmlFor="custom-end-time"
 											className="text-xs text-muted-foreground"
 										>
-											CUSTOM END TIME
+											CUSTOM END TIME (TCT)
 										</label>
 										<Input
 											id="custom-end-time"

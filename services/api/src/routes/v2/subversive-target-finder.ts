@@ -1144,7 +1144,7 @@ async function serveUserscript(query: { env?: string }, set: Context["set"]) {
 		if (query.env === "dev") {
 			content = content
 				.replace(
-					/apiUrl:\s*"https:\/\/subversive\.blasted-labs\.tech"/g,
+					/apiUrl:\s*"https:\/\/(?:api|subversive)\.blasted-labs\.tech"/g,
 					'apiUrl: "http://localhost:3000"',
 				)
 				.replace(
