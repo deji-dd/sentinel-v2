@@ -846,6 +846,7 @@ export type IpcUpdateMercRevivablesListMessage = {
 	action: "update_merc_revivables_list";
 	data: {
 		guildId: string;
+		contractId: string;
 		channelName: string;
 		factionName: string;
 		factionId: number;

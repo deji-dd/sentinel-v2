@@ -145,7 +145,7 @@ describe("Mercenary Contract Status Mapping & Revivables Embed", () => {
 		expect(json.description).toContain(
 			"[DocHolliday [111]](https://www.torn.com/profiles.php?XID=111)",
 		);
-		expect(json.footer?.text).toContain("Total Revivable: 2");
+		expect(json.footer?.text).toContain("Total: 2");
 		// Zero emojis rule
 		expect(json.title).not.toMatch(/[\u{1F300}-\u{1F9FF}]/u);
 		expect(json.description).not.toMatch(/[\u{1F300}-\u{1F9FF}]/u);

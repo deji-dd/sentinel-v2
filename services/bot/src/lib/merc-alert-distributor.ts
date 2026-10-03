@@ -14,6 +14,7 @@ import {
 	ButtonStyle,
 	type Client,
 	type EmbedBuilder,
+	type Message,
 	MessageFlags,
 	type TextChannel,
 } from "discord.js";
@@ -167,13 +168,32 @@ export async function postMercContractAnnouncement(
 		const endTct = endDate ? formatTctTimestamp(endDate) : null;
 
 		const factionProfileUrl = `https://www.torn.com/factions.php?step=profile&ID=${contract.factionId}`;
+
+		let statusLabel = "UPCOMING CONTRACT";
+		let embedColor = EMBED_COLORS.PRIMARY;
+		if (contract.status === "active") {
+			statusLabel = "ACTIVE CONTRACT";
+			embedColor = EMBED_COLORS.SUCCESS;
+		} else if (contract.status === "paused") {
+			statusLabel = "PAUSED CONTRACT";
+			embedColor = EMBED_COLORS.WARNING;
+		} else if (contract.status === "completed") {
+			statusLabel = "COMPLETED CONTRACT";
+			embedColor = EMBED_COLORS.DARK;
+		}
+
 		const embed = createBaseEmbed(
-			`[UPCOMING CONTRACT] ${contract.factionName} [${contract.factionId}]`,
+			`[${statusLabel}] ${contract.factionName} [${contract.factionId}]`,
 			`Contract registered for [${contract.factionName} [${contract.factionId}]](${factionProfileUrl}).`,
-			EMBED_COLORS.PRIMARY,
+			embedColor,
 		);
 
 		embed.addFields(
+			{
+				name: "Status",
+				value: contract.status.toUpperCase(),
+				inline: true,
+			},
 			{
 				name: "Start Time",
 				value: `\`${startTct} TCT\` (<t:${startEpoch}:R>)`,
@@ -230,8 +250,6 @@ export async function postMercContractAnnouncement(
 
 		embed.setFooter({ text: `Contract ID: ${contract.id}` });
 
-		const mentionContent = mercRoleId ? `<@&${mercRoleId}>` : undefined;
-
 		const baseUrl =
 			process.env.DASHBOARD_URL ||
 			(process.env.NODE_ENV === "production"
@@ -246,6 +264,29 @@ export async function postMercContractAnnouncement(
 				.setURL(receiptUrl),
 		);
 
+		// If message was already posted, edit it in place rather than creating duplicate messages
+		let existingMsg: Message | null = null;
+		if (contract.upcomingMessageId) {
+			try {
+				existingMsg = await channel.messages.fetch(contract.upcomingMessageId);
+			} catch {
+				// message was deleted or not found
+			}
+		}
+
+		if (existingMsg) {
+			await existingMsg.edit({
+				embeds: [embed],
+				components: [receiptRow],
+			});
+			logger.info(
+				`Edited existing announcement message ${existingMsg.id} for contract ${contract.id} (${contract.status})`,
+			);
+			return;
+		}
+
+		// Initial post: include role mention and record message ID
+		const mentionContent = mercRoleId ? `<@&${mercRoleId}>` : undefined;
 		const sentMessage = await channel.send({
 			content: mentionContent,
 			embeds: [embed],

@@ -467,6 +467,22 @@ export async function updateMercRevivablesMessageId(
 }
 
 /**
+ * Updates the tracked message ID for the persistent revivables embed for a specific mercenary contract.
+ */
+export async function updateMercContractRevivablesMessageId(
+	contractId: string,
+	messageId: string | null,
+): Promise<void> {
+	await db
+		.update(mercContracts)
+		.set({
+			revivablesMessageId: messageId,
+			updatedAt: new Date(),
+		})
+		.where(eq(mercContracts.id, contractId));
+}
+
+/**
  * Fallback helper to retrieve target Discord guild IDs configured in environment variables (for legacy migration).
  */
 function getLegacyEnvGuildIds(): string[] {
@@ -807,6 +823,7 @@ export interface MercContract {
 	clientDiscordId?: string | null;
 	upcomingMessageId?: string | null;
 	upcomingChannelId?: string | null;
+	revivablesMessageId?: string | null;
 	createdAt: string;
 	updatedAt?: string | null;
 	createdBy?: string | null;
@@ -943,6 +960,7 @@ export function mapRowToMercContract(
 		clientDiscordId: row.clientDiscordId ?? null,
 		upcomingMessageId: row.upcomingMessageId ?? null,
 		upcomingChannelId: row.upcomingChannelId ?? null,
+		revivablesMessageId: row.revivablesMessageId ?? null,
 		createdAt: row.createdAt.toISOString(),
 		updatedAt: row.updatedAt?.toISOString() ?? null,
 		createdBy: row.createdBy ?? null,
@@ -1254,6 +1272,9 @@ export async function updateMercContract(
 				: {}),
 			...(updates.upcomingChannelId !== undefined
 				? { upcomingChannelId: updates.upcomingChannelId }
+				: {}),
+			...(updates.revivablesMessageId !== undefined
+				? { revivablesMessageId: updates.revivablesMessageId }
 				: {}),
 			updatedAt: new Date(),
 		})

@@ -6,6 +6,8 @@ import {
 	ExternalLink,
 	History,
 	Loader2,
+	PauseCircle,
+	PlayCircle,
 	RefreshCw,
 	Search,
 	Users,
@@ -53,7 +55,7 @@ interface ReceiptData {
 		} | null;
 		startTime: string;
 		endTime: string | null;
-		status: "active" | "upcoming" | "completed" | "cancelled";
+		status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
 		hitPrice: number;
 		strickenHitPrice?: number | null;
 		excludedMembers?: number[];
@@ -93,6 +95,42 @@ export function ClientContractReceiptPage({
 	const [refreshing, setRefreshing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [data, setData] = useState<ReceiptData | null>(null);
+	const [togglingPause, setTogglingPause] = useState(false);
+
+	const handleTogglePause = async () => {
+		if (!data) return;
+		setTogglingPause(true);
+		try {
+			const res = await api.v2.merc
+				.contracts({ contractId })
+				.receipt["toggle-pause"].post();
+
+			if (res.error) {
+				const errMsg =
+					res.data && "error" in res.data && typeof res.data.error === "string"
+						? res.data.error
+						: "Failed to update contract status.";
+				toast(errMsg, "error");
+				return;
+			}
+
+			const nextStatus = (res.data as { status: string }).status;
+			toast(
+				nextStatus === "paused"
+					? "Contract paused. Target alerts cleared and hits during pause will not be charged."
+					: "Contract resumed. Target alerts and hit charging active.",
+				"success",
+			);
+			await fetchReceipt(true);
+		} catch (err) {
+			toast(
+				err instanceof Error ? err.message : "Error updating contract status.",
+				"error",
+			);
+		} finally {
+			setTogglingPause(false);
+		}
+	};
 
 	// Client view tab: "targets" (breakdown) or "history" (chronological hit log)
 	const [activeTab, setActiveTab] = useState<"targets" | "history">("targets");
@@ -330,9 +368,11 @@ export function ClientContractReceiptPage({
 							className={`font-mono text-xs uppercase px-3 py-1 ${
 								contract.status === "active"
 									? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-									: contract.status === "completed"
-										? "bg-muted text-muted-foreground border border-border"
-										: "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+									: contract.status === "paused"
+										? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+										: contract.status === "completed"
+											? "bg-muted text-muted-foreground border border-border"
+											: "bg-blue-500/10 text-blue-400 border border-blue-500/30"
 							}`}
 						>
 							{contract.status === "active" && (
@@ -340,6 +380,34 @@ export function ClientContractReceiptPage({
 							)}
 							{contract.status}
 						</Badge>
+
+						{(contract.status === "active" || contract.status === "paused") && (
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={handleTogglePause}
+								disabled={togglingPause || refreshing}
+								className={`h-8 gap-1.5 text-xs font-mono font-semibold cursor-pointer ${
+									contract.status === "active"
+										? "text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+										: "text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
+								}`}
+								title={
+									contract.status === "active"
+										? "Pause contract target alerts and hit charging"
+										: "Resume contract target alerts and hit charging"
+								}
+							>
+								{togglingPause ? (
+									<Loader2 className="size-3.5 animate-spin" />
+								) : contract.status === "active" ? (
+									<PauseCircle className="size-3.5" />
+								) : (
+									<PlayCircle className="size-3.5" />
+								)}
+								<span>{contract.status === "active" ? "Pause" : "Resume"}</span>
+							</Button>
+						)}
 
 						<Button
 							variant="outline"

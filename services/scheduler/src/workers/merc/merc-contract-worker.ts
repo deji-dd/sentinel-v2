@@ -1009,6 +1009,7 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 
 					void notifyBotAction("update_merc_revivables_list", {
 						guildId: contract.guildId,
+						contractId: contract.id,
 						channelName: channelConfig.revivables,
 						factionName: contract.factionName,
 						factionId: contract.factionId,

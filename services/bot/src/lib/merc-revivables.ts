@@ -1,6 +1,6 @@
 import {
-	getMercChannelConfig,
-	updateMercRevivablesMessageId,
+	getMercContractById,
+	updateMercContractRevivablesMessageId,
 } from "@sentinel/database";
 import type { Client } from "discord.js";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
@@ -19,6 +19,7 @@ export interface RevivableMemberPayload {
 
 export interface UpdateMercRevivablesListData {
 	guildId: string;
+	contractId: string;
 	channelName: string;
 	factionName: string;
 	factionId: number;
@@ -26,13 +27,14 @@ export interface UpdateMercRevivablesListData {
 }
 
 /**
- * Builds the embed for the persistent live list of revivable members.
+ * Builds the embed for the persistent live list of revivable members for a contract.
  * Follows Sentinel standards: strictly zero emojis.
  */
 export function buildMercRevivablesEmbed(
 	factionName: string,
 	factionId: number,
 	members: RevivableMemberPayload[],
+	contractId?: string,
 ) {
 	const embed = createBaseEmbed(
 		`REVIVABLE MEMBERS - ${factionName.toUpperCase()} [${factionId}]`,
@@ -44,6 +46,9 @@ export function buildMercRevivablesEmbed(
 		embed.setDescription(
 			"No revivable members currently identified. This list refreshes automatically on every scan cycle.",
 		);
+		embed.setFooter({
+			text: `Sentinel Mercenaries${contractId ? ` • Contract: ${contractId.slice(0, 8)}` : ""} | Auto-updated`,
+		});
 		return embed;
 	}
 
@@ -72,21 +77,22 @@ export function buildMercRevivablesEmbed(
 
 	embed.setDescription(lines.join("\n"));
 	embed.setFooter({
-		text: `Sentinel Mercenaries | Total Revivable: ${members.length} | Auto-updated`,
+		text: `Sentinel Mercenaries | Total: ${members.length}${contractId ? ` • Contract: ${contractId.slice(0, 8)}` : ""} | Auto-updated`,
 	});
 
 	return embed;
 }
 
 /**
- * Updates the persistent revivables list message in the designated Discord channel.
- * If the message exists, edits it in place; otherwise creates a new message and updates DB.
+ * Updates the persistent revivables list message in the designated Discord channel for a specific contract.
+ * If the contract's message exists, edits it in place; otherwise creates a new message and saves revivablesMessageId to the contract.
  */
 export async function updateMercRevivablesList(
 	client: Client,
 	data: UpdateMercRevivablesListData,
 ): Promise<void> {
-	const { guildId, channelName, factionName, factionId, members } = data;
+	const { guildId, contractId, channelName, factionName, factionId, members } =
+		data;
 
 	const channel = await resolveChannelByName(client, guildId, channelName);
 	if (!channel) {
@@ -96,14 +102,19 @@ export async function updateMercRevivablesList(
 		return;
 	}
 
-	const config = await getMercChannelConfig(guildId);
-	const embed = buildMercRevivablesEmbed(factionName, factionId, members);
+	const contract = await getMercContractById(contractId);
+	const embed = buildMercRevivablesEmbed(
+		factionName,
+		factionId,
+		members,
+		contractId,
+	);
 
 	let messageEdited = false;
-	if (config.revivablesMessageId) {
+	if (contract?.revivablesMessageId) {
 		try {
 			const existingMessage = await channel.messages.fetch(
-				config.revivablesMessageId,
+				contract.revivablesMessageId,
 			);
 			if (existingMessage) {
 				await existingMessage.edit({ embeds: [embed] });
@@ -117,12 +128,40 @@ export async function updateMercRevivablesList(
 	if (!messageEdited) {
 		try {
 			const newMessage = await channel.send({ embeds: [embed] });
-			await updateMercRevivablesMessageId(guildId, newMessage.id);
+			await updateMercContractRevivablesMessageId(contractId, newMessage.id);
 		} catch (err) {
 			logger.error(
-				`Failed posting new revivables list message in guild ${guildId} #${channel.name}:`,
+				`Failed posting new revivables list message for contract ${contractId} in guild ${guildId} #${channel.name}:`,
 				err,
 			);
 		}
 	}
+}
+
+/**
+ * Deletes the revivables embed when a contract concludes or is cancelled.
+ */
+export async function deleteMercRevivablesEmbed(
+	client: Client,
+	guildId: string,
+	contractId: string,
+	channelName?: string,
+): Promise<void> {
+	const contract = await getMercContractById(contractId);
+	if (!contract?.revivablesMessageId) return;
+
+	const targetChannelName = channelName || "revivables";
+	const channel = await resolveChannelByName(
+		client,
+		guildId,
+		targetChannelName,
+	);
+	if (!channel) return;
+
+	try {
+		const message = await channel.messages.fetch(contract.revivablesMessageId);
+		if (message) {
+			await message.delete();
+		}
+	} catch {}
 }

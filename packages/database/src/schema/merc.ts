@@ -83,6 +83,7 @@ export const mercContracts = pgTable(
 		clientDiscordId: text("client_discord_id"),
 		upcomingMessageId: text("upcoming_message_id"),
 		upcomingChannelId: text("upcoming_channel_id"),
+		revivablesMessageId: text("revivables_message_id"),
 		createdBy: text("created_by"),
 		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 			.defaultNow()

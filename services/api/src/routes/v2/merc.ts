@@ -11,6 +11,7 @@ import {
 	mapRowToMercContract,
 	markMercContractTokenUsed,
 	mercContracts,
+	updateMercContract,
 } from "@sentinel/database";
 import { notifyBotAction } from "@sentinel/utils/ipc";
 import { Elysia, t } from "elysia";
@@ -761,6 +762,87 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 				summary: "Client Contract Receipt Viewer",
 				description:
 					"Provides unauthenticated breakdown of contract targets hit, counts, and costs for clients.",
+			},
+		},
+	)
+
+	// ─── POST /v2/merc/contracts/:contractId/receipt/toggle-pause ─────────────
+	.post(
+		"/contracts/:contractId/receipt/toggle-pause",
+		async ({ params, set }) => {
+			const [existingRow] = await db
+				.select()
+				.from(mercContracts)
+				.where(eq(mercContracts.id, params.contractId))
+				.limit(1);
+
+			if (!existingRow) {
+				set.status = 404;
+				return { error: "Contract not found." };
+			}
+
+			const current = mapRowToMercContract(existingRow);
+			if (current.status !== "active" && current.status !== "paused") {
+				set.status = 400;
+				return {
+					error: `Cannot pause or resume contract in "${current.status}" state.`,
+				};
+			}
+
+			const nextStatus = current.status === "active" ? "paused" : "active";
+			const updated = await updateMercContract(current.guildId, current.id, {
+				status: nextStatus,
+			});
+
+			if (!updated) {
+				set.status = 500;
+				return { error: "Failed to update contract status." };
+			}
+
+			const channelConfig = await getMercChannelConfig(current.guildId);
+
+			if (nextStatus === "paused") {
+				void notifyBotAction("delete_all_merc_target_alerts", {
+					guildId: current.guildId,
+					channelName: channelConfig.targets || "targets",
+					contractId: current.id,
+				});
+
+				if (channelConfig.upcomingContracts) {
+					void notifyBotAction("post_merc_contract_announcement", {
+						guildId: current.guildId,
+						channelName: channelConfig.upcomingContracts,
+						contract: updated,
+						mercRoleId: null,
+					});
+				}
+			} else {
+				if (channelConfig.upcomingContracts) {
+					const [gConfig] = await db
+						.select({ mercRoleId: guildConfigs.mercRoleId })
+						.from(guildConfigs)
+						.where(eq(guildConfigs.guildId, current.guildId));
+
+					void notifyBotAction("post_merc_contract_announcement", {
+						guildId: current.guildId,
+						channelName: channelConfig.upcomingContracts,
+						contract: updated,
+						mercRoleId: gConfig?.mercRoleId ?? null,
+					});
+				}
+			}
+
+			return {
+				success: true,
+				status: updated.status,
+			};
+		},
+		{
+			params: t.Object({ contractId: t.String() }),
+			detail: {
+				summary: "Client Receipt Toggle Pause/Resume",
+				description:
+					"Allows client to toggle pause/resume state directly from their receipt page.",
 			},
 		},
 	)
