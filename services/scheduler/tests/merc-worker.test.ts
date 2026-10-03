@@ -42,7 +42,7 @@ function createMockMember(overrides?: Partial<FactionMember>): FactionMember {
 		level: 50,
 		days_in_faction: 100,
 		position: "Member",
-		is_revivable: true,
+		is_revivable: false,
 		is_on_wall: false,
 		is_in_oc: false,
 		has_early_discharge: false,
@@ -141,6 +141,62 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 		);
 
 		expect(manager.getAlert(mockContract.id, 1002)).toBeUndefined();
+	});
+
+	it("disqualifies member whose is_revivable is true and deletes any existing alert", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		const revivableMember = createMockMember({
+			id: 1004,
+			is_revivable: true,
+		});
+
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			revivableMember,
+			nowSec,
+			nowMs,
+		);
+
+		expect(manager.getAlert(mockContract.id, 1004)).toBeUndefined();
+
+		// Also verify that if an alert previously existed, it is removed when member becomes revivable
+		const validMember = createMockMember({
+			id: 1005,
+			is_revivable: false,
+		});
+
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			validMember,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(mockContract.id, 1005)).toBeDefined();
+
+		// Now member becomes revivable
+		const nowRevivable = createMockMember({
+			id: 1005,
+			is_revivable: true,
+		});
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			nowRevivable,
+			nowSec + 1,
+			nowMs + 1000,
+		);
+		expect(manager.getAlert(mockContract.id, 1005)).toBeUndefined();
 	});
 
 	it("disqualifies member whose status is Offline when offline is disabled", async () => {

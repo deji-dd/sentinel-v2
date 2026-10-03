@@ -323,6 +323,23 @@ export class MercTargetManager {
 					});
 				}
 				this.alerts.delete(key);
+				this.offlineTracker.delete(key);
+			}
+			return;
+		}
+
+		// 0b. Revivable check: completely exclude targets who have is_revivable === true
+		if (m.is_revivable) {
+			if (existingAlert) {
+				if (existingAlert.messageId) {
+					void notifyBotAction("delete_merc_target_alert", {
+						guildId,
+						channelName,
+						messageId: existingAlert.messageId,
+					});
+				}
+				this.alerts.delete(key);
+				this.offlineTracker.delete(key);
 			}
 			return;
 		}
