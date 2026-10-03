@@ -795,6 +795,30 @@ export async function getMercContracts(
 }
 
 /**
+ * Retrieves a single mercenary contract by its ID, optionally scoped to a guild.
+ */
+export async function getMercContractById(
+	contractId: string,
+	guildId?: string,
+): Promise<MercContract | null> {
+	try {
+		const conditions = [eq(mercContracts.id, contractId)];
+		if (guildId) {
+			conditions.push(eq(mercContracts.guildId, guildId));
+		}
+		const [row] = await db
+			.select()
+			.from(mercContracts)
+			.where(and(...conditions));
+
+		if (!row) return null;
+		return mapRowToMercContract(row);
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Maps a raw database row from `merc_contracts` to the structured `MercContract` domain object.
  */
 export function mapRowToMercContract(

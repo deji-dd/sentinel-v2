@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { MercContract } from "@sentinel/database";
 import type { FactionMember } from "@sentinel/schemas";
 import * as tornApiModule from "@sentinel/torn-api";
-import { MercTargetManager } from "../src/workers/merc/merc-contract-worker";
+import {
+	MercTargetManager,
+	OFFLINE_JITTER_SECONDS,
+} from "../src/workers/merc/merc-contract-worker";
 
 const mockContract: MercContract = {
 	id: "contract-100",
@@ -999,5 +1002,157 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 		expect(claimRes.success).toBe(true);
 		// 20s lock timer must NOT start while under RW cooldown
 		expect(claimRes.alert?.lockStartedAt).toBeUndefined();
+	});
+
+	describe("Offline Jitter Buffer", () => {
+		const offlineOnlyContract: MercContract = {
+			...mockContract,
+			id: "contract-offline-only",
+			terms: {
+				...mockContract.terms,
+				statuses: {
+					online: false,
+					idle: false,
+					offline: true,
+				},
+			},
+		};
+
+		it("suppresses target alert when member status flickers to Offline for 1-3 seconds", async () => {
+			const manager = new MercTargetManager();
+			const startSec = 1700000000;
+
+			// Step 1: Member was active 2 seconds ago, flickered to Offline
+			const flickeringMember = createMockMember({
+				id: 6001,
+				last_action: {
+					status: "Offline",
+					timestamp: startSec - 2, // 2s ago
+					relative: "now",
+				},
+			});
+
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				flickeringMember,
+				startSec,
+				startSec * 1000,
+			);
+
+			// Alert should NOT be posted due to jitter buffer
+			expect(manager.getAlert(offlineOnlyContract.id, 6001)).toBeUndefined();
+
+			// Step 2: 3 seconds later, still Offline (only 5s total since active)
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				flickeringMember,
+				startSec + 3,
+				(startSec + 3) * 1000,
+			);
+			expect(manager.getAlert(offlineOnlyContract.id, 6001)).toBeUndefined();
+
+			// Step 3: Member flickers back Online
+			const backOnlineMember = createMockMember({
+				id: 6001,
+				last_action: {
+					status: "Online",
+					timestamp: startSec + 4,
+					relative: "now",
+				},
+			});
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				backOnlineMember,
+				startSec + 4,
+				(startSec + 4) * 1000,
+			);
+			expect(manager.getAlert(offlineOnlyContract.id, 6001)).toBeUndefined();
+		});
+
+		it("posts target alert once member has been continuously offline for >= 10 seconds", async () => {
+			const manager = new MercTargetManager();
+			const startSec = 1700000000;
+
+			const offlineMember = createMockMember({
+				id: 6002,
+				last_action: {
+					status: "Offline",
+					timestamp: startSec,
+					relative: "now",
+				},
+			});
+
+			// First seen offline at startSec (0 seconds elapsed)
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				offlineMember,
+				startSec,
+				startSec * 1000,
+			);
+			expect(manager.getAlert(offlineOnlyContract.id, 6002)).toBeUndefined();
+
+			// 9 seconds elapsed -> still within jitter window
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				offlineMember,
+				startSec + 9,
+				(startSec + 9) * 1000,
+			);
+			expect(manager.getAlert(offlineOnlyContract.id, 6002)).toBeUndefined();
+
+			// 10 seconds elapsed -> jitter window satisfied!
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				offlineMember,
+				startSec + OFFLINE_JITTER_SECONDS,
+				(startSec + OFFLINE_JITTER_SECONDS) * 1000,
+			);
+			expect(manager.getAlert(offlineOnlyContract.id, 6002)).toBeDefined();
+		});
+
+		it("immediately qualifies members who were already offline for >= 10 seconds prior to scanning", async () => {
+			const manager = new MercTargetManager();
+			const startSec = 1700000000;
+
+			const alreadyOfflineMember = createMockMember({
+				id: 6003,
+				last_action: {
+					status: "Offline",
+					timestamp: startSec - 120, // 2 minutes ago
+					relative: "2 minutes ago",
+				},
+			});
+
+			await manager.processMember(
+				offlineOnlyContract,
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				alreadyOfflineMember,
+				startSec,
+				startSec * 1000,
+			);
+
+			// Should be posted immediately without an extra 10s wait
+			expect(manager.getAlert(offlineOnlyContract.id, 6003)).toBeDefined();
+		});
 	});
 });

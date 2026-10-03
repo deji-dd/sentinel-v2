@@ -12,6 +12,10 @@ import {
 } from "discord.js";
 import type { BotCommand } from "../commands/index";
 import {
+	handleMercReceiptSelect,
+	MERC_RECEIPT_SELECT_ID,
+} from "../commands/receipt";
+import {
 	handleTeamBreakdownSelect,
 	TEAM_BREAKDOWN_SELECT_ID,
 } from "../commands/team-breakdown";
@@ -155,6 +159,8 @@ export const interactionCreateEvent = {
 					await handleStockHolderReclaimSelect(interaction);
 				} else if (interaction.customId === TEAM_BREAKDOWN_SELECT_ID) {
 					await handleTeamBreakdownSelect(interaction);
+				} else if (interaction.customId === MERC_RECEIPT_SELECT_ID) {
+					await handleMercReceiptSelect(interaction);
 				}
 				return;
 			}

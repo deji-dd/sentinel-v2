@@ -13,6 +13,7 @@ import {
 	type ButtonInteraction,
 	ButtonStyle,
 	type Client,
+	type EmbedBuilder,
 	MessageFlags,
 	type TextChannel,
 } from "discord.js";
@@ -759,6 +760,128 @@ export async function postMercHitLog(
 	}
 }
 
+export interface MercContractReceiptPayload {
+	embed: EmbedBuilder;
+	files: AttachmentBuilder[];
+	components: ActionRowBuilder<ButtonBuilder>[];
+	targetCsv: string;
+}
+
+/**
+ * Builds the standardized receipt embed, CSV attachments, and web receipt button for a mercenary contract.
+ * Shared across war end summary notifications and the /receipt Discord slash command.
+ */
+export function buildMercContractReceiptPayload(
+	contract: MercContract,
+	summary: MercContractSummaryReport,
+): MercContractReceiptPayload {
+	// CSV 1: Merc Payouts & Hit Breakdown (Combined)
+	let csvCombined =
+		"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+	for (const m of summary.mercPayouts) {
+		const fName =
+			m.attackerFactionName ??
+			(m.attackerFactionId ? `Faction #${m.attackerFactionId}` : "N/A");
+		csvCombined += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+	}
+
+	// CSV Per-Faction Merc Payouts (e.g. 2 different factions split)
+	const mercAttachments: AttachmentBuilder[] = [
+		new AttachmentBuilder(Buffer.from(csvCombined, "utf-8"), {
+			name: `merc_payouts_combined_${contract.id}.csv`,
+		}),
+	];
+
+	if (summary.factionPayouts && summary.factionPayouts.length > 0) {
+		for (const fp of summary.factionPayouts) {
+			const safeFaction = fp.factionName
+				.replace(/[^a-zA-Z0-9_-]/g, "_")
+				.toLowerCase();
+			let csvFaction =
+				"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+			for (const m of fp.mercs) {
+				csvFaction += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fp.factionName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
+			}
+			mercAttachments.push(
+				new AttachmentBuilder(Buffer.from(csvFaction, "utf-8"), {
+					name: `merc_payouts_${safeFaction}_${contract.id}.csv`,
+				}),
+			);
+		}
+	}
+
+	// CSV Target Hit Breakdown (Client receipt)
+	let csvTarget =
+		"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
+	for (const t of summary.targetBreakdown) {
+		csvTarget += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
+	}
+
+	const targetFile = new AttachmentBuilder(Buffer.from(csvTarget, "utf-8"), {
+		name: `target_hit_breakdown_${contract.id}.csv`,
+	});
+
+	const isCompleted = contract.status === "completed";
+	const titlePrefix = isCompleted
+		? "[CONTRACT CONCLUDED]"
+		: "[CONTRACT RECEIPT]";
+	const statusDesc = isCompleted
+		? "Contract has completed."
+		: `Status: ${contract.status.toUpperCase()}`;
+
+	const embed = createBaseEmbed(
+		`${titlePrefix} ${contract.factionName} [${contract.factionId}]`,
+		`${statusDesc}\n\nTotal Validated Hits: ${summary.totalHits}\nTotal Payout: $${summary.totalPayout.toLocaleString()}`,
+		EMBED_COLORS.PRIMARY,
+	);
+
+	embed.addFields(
+		{
+			name: "Participating Mercenaries",
+			value: `${summary.mercPayouts.length}`,
+			inline: true,
+		},
+		{
+			name: "Targets Hit",
+			value: `${summary.targetBreakdown.length}`,
+			inline: true,
+		},
+	);
+
+	if (summary.factionPayouts && summary.factionPayouts.length > 0) {
+		for (const fp of summary.factionPayouts) {
+			embed.addFields({
+				name: `${fp.factionName} Payout`,
+				value: `${fp.mercs.length} mercs • ${fp.totalHits} hits • $${fp.totalPayout.toLocaleString()}`,
+				inline: true,
+			});
+		}
+	}
+
+	embed.setFooter({ text: `Contract ID: ${contract.id}` });
+
+	const baseUrl =
+		process.env.DASHBOARD_URL ||
+		(process.env.NODE_ENV === "production"
+			? "https://dashboard.blasted-labs.tech"
+			: "http://localhost:3000");
+	const receiptUrl = `${baseUrl}/#/merc/receipt/${contract.id}`;
+
+	const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+		new ButtonBuilder()
+			.setStyle(ButtonStyle.Link)
+			.setLabel("View Web Receipt")
+			.setURL(receiptUrl),
+	);
+
+	return {
+		embed,
+		files: [...mercAttachments, targetFile],
+		components: [receiptRow],
+		targetCsv: csvTarget,
+	};
+}
+
 /**
  * Posts contract conclusion summary and attaches two CSV files to Merc Log. Zero emojis.
  */
@@ -776,84 +899,12 @@ export async function postMercContractEndSummary(
 		const channel = await resolveChannelByName(client, guildId, channelName);
 		if (!channel) return;
 
-		// CSV 1: Merc Payouts & Hit Breakdown (Combined)
-		let csvCombined =
-			"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
-		for (const m of summary.mercPayouts) {
-			const fName =
-				m.attackerFactionName ??
-				(m.attackerFactionId ? `Faction #${m.attackerFactionId}` : "N/A");
-			csvCombined += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
-		}
-
-		// CSV Per-Faction Merc Payouts (e.g. 2 different factions split)
-		const mercAttachments: AttachmentBuilder[] = [
-			new AttachmentBuilder(Buffer.from(csvCombined, "utf-8"), {
-				name: `merc_payouts_combined_${contract.id}.csv`,
-			}),
-		];
-
-		if (summary.factionPayouts && summary.factionPayouts.length > 0) {
-			for (const fp of summary.factionPayouts) {
-				const safeFaction = fp.factionName
-					.replace(/[^a-zA-Z0-9_-]/g, "_")
-					.toLowerCase();
-				let csvFaction =
-					"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
-				for (const m of fp.mercs) {
-					csvFaction += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fp.factionName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
-				}
-				mercAttachments.push(
-					new AttachmentBuilder(Buffer.from(csvFaction, "utf-8"), {
-						name: `merc_payouts_${safeFaction}_${contract.id}.csv`,
-					}),
-				);
-			}
-		}
-
-		// CSV Target Hit Breakdown (Client receipt)
-		let csvTarget =
-			"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
-		for (const t of summary.targetBreakdown) {
-			csvTarget += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
-		}
-
-		const targetFile = new AttachmentBuilder(Buffer.from(csvTarget, "utf-8"), {
-			name: `target_hit_breakdown_${contract.id}.csv`,
-		});
-
-		const embed = createBaseEmbed(
-			`[CONTRACT CONCLUDED] ${contract.factionName} [${contract.factionId}]`,
-			`Contract has completed.\n\nTotal Validated Hits: ${summary.totalHits}\nTotal Payout: $${summary.totalPayout.toLocaleString()}`,
-			EMBED_COLORS.PRIMARY,
-		);
-
-		embed.addFields(
-			{
-				name: "Participating Mercenaries",
-				value: `${summary.mercPayouts.length}`,
-				inline: true,
-			},
-			{
-				name: "Targets Hit",
-				value: `${summary.targetBreakdown.length}`,
-				inline: true,
-			},
-		);
-
-		if (summary.factionPayouts && summary.factionPayouts.length > 0) {
-			for (const fp of summary.factionPayouts) {
-				embed.addFields({
-					name: `${fp.factionName} Payout`,
-					value: `${fp.mercs.length} mercs • ${fp.totalHits} hits • $${fp.totalPayout.toLocaleString()}`,
-					inline: true,
-				});
-			}
-		}
+		const payload = buildMercContractReceiptPayload(contract, summary);
 
 		await channel.send({
-			embeds: [embed],
-			files: [...mercAttachments, targetFile],
+			embeds: [payload.embed],
+			files: payload.files,
+			components: payload.components,
 		});
 
 		// If contract has a designated client private channel, post conclusion summary + target CSV + archive button
@@ -866,7 +917,7 @@ export async function postMercContractEndSummary(
 				);
 				if (clientChan) {
 					const clientFile = new AttachmentBuilder(
-						Buffer.from(csvTarget, "utf-8"),
+						Buffer.from(payload.targetCsv, "utf-8"),
 						{
 							name: `target_hit_breakdown_${contract.id}.csv`,
 						},

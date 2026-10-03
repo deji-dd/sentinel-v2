@@ -16,13 +16,19 @@ import { itemRequestHelpCommand } from "./item-request-help";
 import { oilBriefingCommand } from "./oil-briefing";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
+import { receiptCommand } from "./receipt";
 import { targetFinderCommand } from "./target-finder";
 import { teamBreakdownCommand } from "./team-breakdown";
 import { ttSelectorCommand } from "./tt-selector";
 import { verifyCommand } from "./verify";
 import { verifyallCommand } from "./verifyall";
 
-export { assignedStockCommand, targetFinderCommand, teamBreakdownCommand };
+export {
+	assignedStockCommand,
+	receiptCommand,
+	targetFinderCommand,
+	teamBreakdownCommand,
+};
 
 export type BotModule =
 	| "verification"
@@ -51,6 +57,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...pingCommand, scope: "both" },
 	{ ...dashboardCommand, scope: "both" },
 	{ ...configCommand, scope: "normal" },
+	{ ...receiptCommand, scope: "normal" },
 	{ ...ttSelectorCommand, scope: "normal" },
 	{ ...purgeCommand, scope: "both" },
 	{ ...verifyCommand, scope: "normal" },

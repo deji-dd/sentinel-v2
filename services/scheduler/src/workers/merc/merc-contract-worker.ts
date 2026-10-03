@@ -52,6 +52,8 @@ export interface MercActiveTargetAlert {
 	lockStartedAt?: number;
 }
 
+export const OFFLINE_JITTER_SECONDS = 10;
+
 export class MercTargetManager {
 	private alerts = new Map<string, MercActiveTargetAlert>();
 	private statsCache = new Map<number, number>();
@@ -64,6 +66,7 @@ export class MercTargetManager {
 			lastSeenHospSec: number;
 		}
 	>();
+	private offlineTracker = new Map<string, number>();
 
 	private getAlertKey(contractId: string, targetId: number): string {
 		return `${contractId}:${targetId}`;
@@ -248,6 +251,7 @@ export class MercTargetManager {
 		}
 
 		this.alerts.delete(key);
+		this.offlineTracker.delete(key);
 	}
 
 	cleanContractTargets(contractId: string): void {
@@ -266,6 +270,11 @@ export class MercTargetManager {
 		for (const key of this.hospitalTracker.keys()) {
 			if (key.startsWith(`${contractId}:`)) {
 				this.hospitalTracker.delete(key);
+			}
+		}
+		for (const key of this.offlineTracker.keys()) {
+			if (key.startsWith(`${contractId}:`)) {
+				this.offlineTracker.delete(key);
 			}
 		}
 	}
@@ -353,19 +362,61 @@ export class MercTargetManager {
 			offline: false,
 		};
 		let isActivityAllowed = false;
-		if (statusState === "Online" && termsStatuses.online) {
-			isActivityAllowed = true;
-		} else if (statusState === "Idle" && termsStatuses.idle) {
-			const idleMinutes = Math.max(
-				0,
-				Math.floor((nowSec - (m.last_action?.timestamp ?? nowSec)) / 60),
-			);
-			const minIdle = effectiveTerms?.idleDurationMinutes ?? 15;
-			if (idleMinutes >= minIdle) {
+		if (statusState === "Online") {
+			this.offlineTracker.delete(key);
+			if (termsStatuses.online) {
 				isActivityAllowed = true;
 			}
-		} else if (statusState === "Offline" && termsStatuses.offline) {
-			isActivityAllowed = true;
+		} else if (statusState === "Idle") {
+			this.offlineTracker.delete(key);
+			if (termsStatuses.idle) {
+				const idleMinutes = Math.max(
+					0,
+					Math.floor((nowSec - (m.last_action?.timestamp ?? nowSec)) / 60),
+				);
+				const minIdle = effectiveTerms?.idleDurationMinutes ?? 15;
+				if (idleMinutes >= minIdle) {
+					isActivityAllowed = true;
+				}
+			}
+		} else if (statusState === "Offline") {
+			if (termsStatuses.offline) {
+				// Jitter buffer for offline status:
+				// Players' status can momentarily flicker to Offline for 1-3 seconds due to socket reconnects or page refreshes.
+				// Enforce a 10-second stability window before considering them genuinely offline.
+				if (existingAlert) {
+					// Once legitimate offline alert is already posted, keep it active
+					isActivityAllowed = true;
+				} else {
+					const lastActionSec = m.last_action?.timestamp;
+					const secondsSinceLastAction =
+						lastActionSec && lastActionSec > 0
+							? nowSec - lastActionSec
+							: undefined;
+
+					// If last_action was within the last 10 seconds, they were just active (flicker)
+					const isRecentActionFlicker =
+						secondsSinceLastAction !== undefined &&
+						secondsSinceLastAction < OFFLINE_JITTER_SECONDS;
+
+					const firstSeenOffline = this.offlineTracker.get(key);
+					if (firstSeenOffline === undefined) {
+						this.offlineTracker.set(key, nowSec);
+					}
+
+					const trackedOfflineSec =
+						nowSec - (this.offlineTracker.get(key) ?? nowSec);
+
+					const isEstablishedOffline =
+						(secondsSinceLastAction !== undefined &&
+							secondsSinceLastAction >= OFFLINE_JITTER_SECONDS) ||
+						trackedOfflineSec >= OFFLINE_JITTER_SECONDS;
+
+					if (!isRecentActionFlicker && isEstablishedOffline) {
+						isActivityAllowed = true;
+					}
+				}
+			}
 		}
 
 		if (!isActivityAllowed) {
