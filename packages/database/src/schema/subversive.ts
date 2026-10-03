@@ -7,6 +7,7 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const subversiveRankedWars = pgTable(
@@ -40,6 +41,72 @@ export const subversiveRankedWars = pgTable(
 
 export type SubversiveRankedWar = typeof subversiveRankedWars.$inferSelect;
 export type NewSubversiveRankedWar = typeof subversiveRankedWars.$inferInsert;
+
+/**
+ * Canonical, deduplicated stream of `/v2/faction/attacks` for the Subversive
+ * family factions. The attack feed worker is the only writer; the merc hit
+ * validator and the retal tracker are read-only consumers.
+ *
+ * Rows survive scheduler restarts so a restarted worker can rebuild its
+ * in-memory windows from history instead of losing them, and the unique index
+ * on (faction_id, attack_id) makes replaying a page free.
+ */
+export const factionAttackLogs = pgTable(
+	"faction_attack_logs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		// Torn attack id. Unique per faction feed rather than globally, because
+		// the same attack can legitimately appear on more than one family faction.
+		attackId: integer("attack_id").notNull(),
+		/** Family faction whose master key surfaced this attack (2013 / 27312). */
+		factionId: integer("faction_id").notNull(),
+		/** 'incoming' = faction members were attacked, 'outgoing' = they attacked. */
+		direction: text("direction").notNull(),
+		attackerId: integer("attacker_id"),
+		attackerName: text("attacker_name"),
+		attackerFactionId: integer("attacker_faction_id"),
+		attackerFactionName: text("attacker_faction_name"),
+		defenderId: integer("defender_id").notNull(),
+		defenderName: text("defender_name"),
+		defenderFactionId: integer("defender_faction_id"),
+		defenderFactionName: text("defender_faction_name"),
+		result: text("result"),
+		attackCode: text("attack_code"),
+		isRankedWar: boolean("is_ranked_war").default(false).notNull(),
+		/** Finishing hit carried the Stricken weapon bonus (merc premium price). */
+		isStricken: boolean("is_stricken").default(false).notNull(),
+		/** Unix seconds. */
+		startedAt: integer("started_at"),
+		/** Unix seconds. Null while the attack is still in progress. */
+		endedAt: integer("ended_at"),
+		/** Master key row id that ingested this attack, for per-key debugging. */
+		sourceKeyId: text("source_key_id"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("uq_faction_attack_logs_faction_attack").on(
+			table.factionId,
+			table.attackId,
+		),
+		index("idx_faction_attack_logs_faction_direction").on(
+			table.factionId,
+			table.direction,
+		),
+		index("idx_faction_attack_logs_ended_at").on(table.endedAt),
+		index("idx_faction_attack_logs_attacker_id").on(table.attackerId),
+		index("idx_faction_attack_logs_defender_faction").on(
+			table.defenderFactionId,
+			table.endedAt,
+		),
+	],
+);
+
+export type FactionAttackLogRow = typeof factionAttackLogs.$inferSelect;
+export type NewFactionAttackLogRow = typeof factionAttackLogs.$inferInsert;
 
 export const subversiveRecruitmentCandidates = pgTable(
 	"subversive_recruitment_candidates",

@@ -269,6 +269,72 @@ interface FactionWarCache {
 const warCacheByFaction = new Map<number, FactionWarCache>();
 const WARS_CACHE_TTL_MS = 10_000; // Cache war metadata for 10s during active wars
 
+/**
+ * Resolves the faction currently ranked-warred with a family faction.
+ * Returns null when no war is engaged, which callers treat as "no retal set".
+ */
+export function getWarOpponentFactionId(factionId: number): number | null {
+	const entry = warCacheByFaction.get(factionId);
+	if (!entry) return null;
+	const state = entry.war.state;
+	if (state !== "active" && state !== "scheduled") return null;
+	return entry.war.opponent?.id ?? null;
+}
+
+/**
+ * Whether a player id is on the family faction's current ranked war opponent
+ * roster. Used to keep Retal badges scoped to actual war opponents.
+ */
+export function isCurrentWarOpponent(
+	factionId: number,
+	playerId: number,
+): boolean {
+	const opponentFactionId = getWarOpponentFactionId(factionId);
+	if (opponentFactionId === null) return false;
+	const entry = warCacheByFaction.get(factionId);
+	if (!entry) return false;
+	return entry.opponents.some((opp) => opp.id === playerId);
+}
+
+/**
+ * Whether any family faction currently has an engaged ranked war. Read from the
+ * in-memory war cache, so it costs no API call. Drives the faction attack
+ * feed's adaptive cadence.
+ */
+export function isAnyFamilyRankedWarEngaged(): boolean {
+	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+		const state = warCacheByFaction.get(factionId)?.war.state;
+		if (state === "active" || state === "scheduled") return true;
+	}
+	return false;
+}
+
+/** Identity and timing of a family faction's currently engaged ranked war. */
+export interface EngagedWarContext {
+	warId: number | null;
+	/** Unix seconds the war began; hits before this belong to a previous war. */
+	start: number | null;
+	opponentFactionId: number | null;
+}
+
+/**
+ * Returns the engaged war context for a family faction, or null when no ranked
+ * war is running. Consumers use this to scope cumulative per-war counters.
+ */
+export function getEngagedWarContext(
+	factionId: number,
+): EngagedWarContext | null {
+	const entry = warCacheByFaction.get(factionId);
+	if (!entry) return null;
+	const war = entry.war;
+	if (war.state !== "active" && war.state !== "scheduled") return null;
+	return {
+		warId: war.warId,
+		start: war.start,
+		opponentFactionId: war.opponent?.id ?? null,
+	};
+}
+
 function getFactionCache(factionId: number): FactionWarCache {
 	let entry = warCacheByFaction.get(factionId);
 	if (!entry) {

@@ -618,6 +618,8 @@ export type IpcMessage =
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage
+	| IpcSubversiveRetalUpdatedMessage
+	| IpcSubversiveHitCountsUpdatedMessage
 	| IpcPersonalBountiesUpdatedMessage
 	| IpcPostDibsAlertMessage
 	| IpcEditDibsAlertMessage
@@ -706,6 +708,38 @@ export type IpcSubversiveWarUpdatedMessage = {
 		war?: unknown;
 		/** @deprecated Legacy single-faction payload, retained for compatibility. */
 		opponents?: unknown[];
+	};
+};
+
+/**
+ * Retal state for one family faction: opponents that have struck a member
+ * within the last 5 minutes. An empty list is meaningful — it clears badges.
+ */
+export type IpcSubversiveRetalUpdatedMessage = {
+	action: "subversive_retal_updated";
+	data: {
+		/** Family faction id the set applies to (2013 / 27312). */
+		factionId: number;
+		/** Opponent member ids currently holding a Retal badge. */
+		retalIds: number[];
+		updatedAt: number;
+	};
+};
+
+/**
+ * Per-member ranked war hit counts for one family faction. Counts are scoped to
+ * a single war and reset when the faction rolls into a new one.
+ */
+export type IpcSubversiveHitCountsUpdatedMessage = {
+	action: "subversive_hit_counts_updated";
+	data: {
+		/** Family faction id the counts apply to (2013 / 27312). */
+		factionId: number;
+		/** Torn war id the counts belong to. */
+		warId: number | null;
+		/** Landed ranked war hits, keyed by attacker Torn id as a string. */
+		counts: Record<string, number>;
+		updatedAt: number;
 	};
 };
 

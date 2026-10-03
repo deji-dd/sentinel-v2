@@ -253,8 +253,9 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 							<span style="color:var(--muted); font-size:11px;">[${item.id}] Lvl ${item.level}</span>
 						</div>
 						<div class="satf-roster-sub">
-							BS ${formatStats(item.estimatedBs)} · <span class="ff-${getFFTier(item.fairFight)}" style="font-weight:700; color:${getFFColor(item.fairFight)};">FF: ${item.fairFight.toFixed(2)}</span>
-						</div>
+								BS ${formatStats(item.estimatedBs)} · <span class="ff-${getFFTier(item.fairFight)}" style="font-weight:700; color:${getFFColor(item.fairFight)};">FF: ${item.fairFight.toFixed(2)}</span>
+								${item.hasRetal ? '<span class="satf-retal-badge" title="Hit one of our members in the last 5 minutes">• Retal</span>' : ""}
+							</div>
 					</div>
 					<div class="satf-queue-right">
 						<div class="satf-queue-time ${remaining === 0 ? "ready" : ""}">${remaining === 0 ? "READY" : formatSeconds(remaining)}</div>

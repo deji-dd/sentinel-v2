@@ -51,6 +51,40 @@ export function initSchedulerIpcListener(): void {
 				}
 			}
 
+			if (message.action === "subversive_hit_counts_updated" && message.data) {
+				const payload = message.data as {
+					factionId?: number;
+					warId?: number | null;
+					counts?: Record<string, number>;
+				};
+				if (typeof payload.factionId === "number") {
+					subversiveTargetCache.applyHitCounts(
+						payload.factionId,
+						payload.warId ?? null,
+						payload.counts ?? {},
+					);
+					broadcastWarUpdate();
+					subversiveWarEventManager.notifyUpdate();
+				}
+			}
+
+			if (message.action === "subversive_retal_updated" && message.data) {
+				const payload = message.data as {
+					factionId?: number;
+					retalIds?: number[];
+					updatedAt?: number;
+				};
+				if (typeof payload.factionId === "number") {
+					subversiveTargetCache.applyRetalUpdate(
+						payload.factionId,
+						Array.isArray(payload.retalIds) ? payload.retalIds : [],
+						payload.updatedAt,
+					);
+					broadcastWarUpdate();
+					subversiveWarEventManager.notifyUpdate();
+				}
+			}
+
 			if (message.action === "subversive_war_updated" && message.data) {
 				const payload = message.data as {
 					wars?: Record<string, FactionWarSnapshot>;

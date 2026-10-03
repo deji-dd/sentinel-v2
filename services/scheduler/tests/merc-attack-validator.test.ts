@@ -1,10 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import {
-	getAttackEndedTimestamp,
-	getProgressStateId,
-	isWithinPausedWindow,
-	parseNextLinkParams,
-} from "../src/workers/merc/merc-attack-validator-worker";
+	deriveDirection,
+	hasReachedWatermark,
+	nextPageCursor,
+	normaliseAttack,
+} from "../src/workers/merc/faction-attack-feed-worker";
+import { isWithinPausedWindow } from "../src/workers/merc/merc-attack-validator-worker";
+import {
+	qualifiesAsRetal,
+	RETAL_WINDOW_SECONDS,
+	resolveRetalTimestamp,
+} from "../src/workers/subversive/retal-tracker";
 
 /**
  * Replicates the start-time gate used by the merc target worker so the
@@ -17,72 +23,148 @@ function shouldPopulateTargets(
 	return nowMs >= contractStartMs;
 }
 
-describe("Merc Attack Validator - Pagination & Progress Persistence", () => {
-	describe("parseNextLinkParams", () => {
-		it("correctly extracts to timestamp from a full Torn API next link", () => {
-			const link =
-				"https://api.torn.com/faction/attacks?filters=outgoing&sort=DESC&limit=100&to=1728123456";
-			const params = parseNextLinkParams(link);
-
-			expect(params.filters).toBe("outgoing");
-			expect(params.sort).toBe("DESC");
-			expect(params.limit).toBe(100);
-			expect(params.to).toBe(1728123456);
+describe("Faction Attack Feed - Ingestion & Watermarks", () => {
+	describe("deriveDirection", () => {
+		it("classifies an attack on our faction member as incoming", () => {
+			expect(
+				deriveDirection(
+					{
+						id: 1,
+						attacker: { id: 9, faction: { id: 16312 } },
+						defender: { id: 3, faction: { id: 2013 } },
+					},
+					2013,
+				),
+			).toBe("incoming");
 		});
 
-		it("correctly extracts to timestamp from a relative next link", () => {
-			const link = "/faction/attacks?filters=outgoing&to=1728999888&sort=DESC";
-			const params = parseNextLinkParams(link);
-
-			expect(params.to).toBe(1728999888);
-			expect(params.filters).toBe("outgoing");
-			expect(params.sort).toBe("DESC");
+		it("classifies an attack by one of our members as outgoing", () => {
+			expect(
+				deriveDirection(
+					{
+						id: 2,
+						attacker: { id: 9, faction: { id: 2013 } },
+						defender: { id: 3, faction: { id: 16312 } },
+					},
+					2013,
+				),
+			).toBe("outgoing");
 		});
 
-		it("filters out key, comment, and timestamp cache buster", () => {
-			const link =
-				"https://api.torn.com/faction/attacks?filters=outgoing&to=1728123456&key=SECRET&comment=BOT&timestamp=1234";
-			const params = parseNextLinkParams(link);
-
-			expect(params.key).toBeUndefined();
-			expect(params.comment).toBeUndefined();
-			expect(params.timestamp).toBeUndefined();
-			expect(params.to).toBe(1728123456);
+		it("returns null when neither side belongs to the tracked faction", () => {
+			expect(
+				deriveDirection(
+					{
+						id: 3,
+						attacker: { id: 9, faction: { id: 555 } },
+						defender: { id: 4, faction: { id: 777 } },
+					},
+					2013,
+				),
+			).toBeNull();
 		});
 	});
 
-	describe("getProgressStateId", () => {
-		it("generates deterministic contract-scoped state key using factionId", () => {
-			const stateId = getProgressStateId("guild-123", "contract-a", {
-				factionId: 2013,
-				apiKey: "api-key-test",
-			});
-			expect(stateId).toBe(
-				"merc:attack_validator:guild-123:contract-a:faction_2013",
+	describe("hasReachedWatermark", () => {
+		it("treats an attack at or below the watermark as already seen", () => {
+			const watermark = {
+				lastAttackId: 1000,
+				lastAttackTimestamp: 1728123456,
+				updatedAt: "",
+			};
+			expect(hasReachedWatermark(1000, watermark)).toBe(true);
+			expect(hasReachedWatermark(999, watermark)).toBe(true);
+		});
+
+		it("treats an attack above the watermark as new", () => {
+			const watermark = {
+				lastAttackId: 1000,
+				lastAttackTimestamp: 1728123456,
+				updatedAt: "",
+			};
+			expect(hasReachedWatermark(1001, watermark)).toBe(false);
+		});
+
+		it("never stops on a cold start with no watermark", () => {
+			expect(hasReachedWatermark(1, null)).toBe(false);
+			expect(
+				hasReachedWatermark(1, {
+					lastAttackId: 0,
+					lastAttackTimestamp: 0,
+					updatedAt: "",
+				}),
+			).toBe(false);
+		});
+	});
+
+	describe("nextPageCursor", () => {
+		const stub = (attack: Record<string, number>) =>
+			({ ...attack, defender: { id: 1, faction: { id: 2013 } } }) as never;
+
+		it("prefers ended over started for the backfill cursor", () => {
+			expect(nextPageCursor(stub({ id: 1, ended: 500, started: 400 }))).toBe(
+				500,
 			);
 		});
 
-		it("scopes progress per contract so concurrent contracts do not share a watermark", () => {
-			const keyInfo = { factionId: 2013, apiKey: "api-key-test" };
-			const contractA = getProgressStateId("guild-123", "contract-a", keyInfo);
-			const contractB = getProgressStateId("guild-123", "contract-b", keyInfo);
-
-			// Regression: a shared watermark let one contract consume another
-			// contract's attacks, starving the newest contract of logs.
-			expect(contractA).not.toBe(contractB);
+		it("falls back to the started timestamp for an in-progress attack", () => {
+			expect(nextPageCursor(stub({ id: 1, started: 400 }))).toBe(400);
 		});
 
-		it("generates deterministic state key using hashed apiKey if factionId is missing", () => {
-			const keyInfo = { apiKey: "api-key-abc-123" };
-			const stateId1 = getProgressStateId("guild-123", "contract-a", keyInfo);
-			const stateId2 = getProgressStateId("guild-123", "contract-a", keyInfo);
-			expect(stateId1).toBe(stateId2);
-			expect(
-				stateId1.startsWith("merc:attack_validator:guild-123:contract-a:key_"),
-			).toBe(true);
+		it("returns null when the page carries no usable timestamp", () => {
+			expect(nextPageCursor(stub({ id: 1 }))).toBeNull();
+			expect(nextPageCursor(undefined)).toBeNull();
 		});
 	});
 
+	describe("normaliseAttack", () => {
+		it("detects the Stricken finishing hit for merc premium pricing", () => {
+			const event = normaliseAttack(
+				{
+					id: 42,
+					started: 100,
+					ended: 160,
+					result: "Hospitalized",
+					attacker: { id: 9, name: "Merc", faction: { id: 2013 } },
+					defender: { id: 3, name: "Target", faction: { id: 16312 } },
+					finishing_hit_effects: [{ name: "stricken", value: 1 }],
+				},
+				2013,
+			);
+
+			expect(event?.isStricken).toBe(true);
+			expect(event?.direction).toBe("outgoing");
+		});
+
+		it("does not flag Stricken for other finishing effects", () => {
+			const event = normaliseAttack(
+				{
+					id: 43,
+					started: 100,
+					ended: 160,
+					attacker: { id: 9, name: "Merc", faction: { id: 2013 } },
+					defender: { id: 3, name: "Target", faction: { id: 16312 } },
+					finishing_hit_effects: [{ name: "plunder", value: 23 }],
+				},
+				2013,
+			);
+
+			expect(event?.isStricken).toBe(false);
+		});
+
+		it("rejects records with no id or no defender", () => {
+			expect(
+				normaliseAttack(
+					{ id: 0, defender: { id: 3, faction: { id: 2013 } } },
+					2013,
+				),
+			).toBeNull();
+			expect(normaliseAttack({ id: 5 } as never, 2013)).toBeNull();
+		});
+	});
+});
+
+describe("Merc Attack Validator - Contract Gating", () => {
 	describe("isWithinPausedWindow", () => {
 		const pausedAt = "2026-01-01T12:00:00.000Z";
 		const resumedAt = "2026-01-01T14:00:00.000Z";
@@ -184,29 +266,19 @@ describe("Merc Attack Validator - Pagination & Progress Persistence", () => {
 		});
 	});
 
-	describe("getAttackEndedTimestamp", () => {
-		const base = {
-			id: 1,
-			attacker: { id: 2, name: "Merc" },
-			defender: { id: 3, name: "Target" },
-			result: "Hospitalized",
-		};
-
-		it("prefers ended over timestamp_ended", () => {
-			expect(
-				getAttackEndedTimestamp({ ...base, ended: 200, timestamp_ended: 100 }),
-			).toBe(200);
+	describe("resolveRetalTimestamp", () => {
+		it("prefers ended over started", () => {
+			expect(resolveRetalTimestamp({ endedAt: 200, startedAt: 100 })).toBe(200);
 		});
 
-		it("falls back through started and timestamp_started", () => {
-			expect(getAttackEndedTimestamp({ ...base, started: 150 })).toBe(150);
-			expect(getAttackEndedTimestamp({ ...base, timestamp_started: 120 })).toBe(
-				120,
+		it("falls back to started while an attack is still in progress", () => {
+			expect(resolveRetalTimestamp({ endedAt: null, startedAt: 150 })).toBe(
+				150,
 			);
 		});
 
-		it("returns 0 when no timestamp fields are present", () => {
-			expect(getAttackEndedTimestamp(base)).toBe(0);
+		it("returns 0 when neither timestamp is present", () => {
+			expect(resolveRetalTimestamp({ endedAt: null, startedAt: null })).toBe(0);
 		});
 	});
 
@@ -286,6 +358,96 @@ describe("Merc Attack Validator - Pagination & Progress Persistence", () => {
 				startTime: new Date(now - 60_000).toISOString(),
 			};
 			expect(isStartTimeEditable(contract, now)).toBe(false);
+		});
+	});
+});
+
+describe("Retal Tracker - Window & Faction Scoping", () => {
+	const NOW = 1_800_000_000;
+
+	const incomingHit = (overrides: Record<string, unknown> = {}) => ({
+		direction: "incoming",
+		defenderFactionId: 2013,
+		attackerId: 555,
+		endedAt: NOW,
+		startedAt: NOW - 30,
+		...overrides,
+	});
+
+	describe("qualifiesAsRetal", () => {
+		it("accepts an incoming hit on our faction inside the window", () => {
+			expect(qualifiesAsRetal(incomingHit(), 2013, NOW)).toBe(true);
+		});
+
+		it("rejects an attack exactly 300s old because the window is strict", () => {
+			expect(
+				qualifiesAsRetal(
+					incomingHit({ endedAt: NOW - RETAL_WINDOW_SECONDS }),
+					2013,
+					NOW,
+				),
+			).toBe(false);
+		});
+
+		it("accepts an attack 299s old", () => {
+			expect(
+				qualifiesAsRetal(
+					incomingHit({ endedAt: NOW - (RETAL_WINDOW_SECONDS - 1) }),
+					2013,
+					NOW,
+				),
+			).toBe(true);
+		});
+
+		it("rejects an attack older than the window", () => {
+			expect(
+				qualifiesAsRetal(
+					incomingHit({ endedAt: NOW - RETAL_WINDOW_SECONDS - 60 }),
+					2013,
+					NOW,
+				),
+			).toBe(false);
+		});
+
+		it("never qualifies our own outgoing attacks", () => {
+			expect(
+				qualifiesAsRetal(incomingHit({ direction: "outgoing" }), 2013, NOW),
+			).toBe(false);
+		});
+
+		it("is faction scoped: a hit on the other family faction does not apply", () => {
+			expect(
+				qualifiesAsRetal(incomingHit({ defenderFactionId: 27312 }), 2013, NOW),
+			).toBe(false);
+		});
+
+		it("rejects attacks with no resolvable attacker", () => {
+			expect(
+				qualifiesAsRetal(incomingHit({ attackerId: null }), 2013, NOW),
+			).toBe(false);
+			expect(qualifiesAsRetal(incomingHit({ attackerId: 0 }), 2013, NOW)).toBe(
+				false,
+			);
+		});
+
+		it("treats an in-progress attack as a live retal", () => {
+			expect(
+				qualifiesAsRetal(
+					incomingHit({ endedAt: null, startedAt: NOW - 10 }),
+					2013,
+					NOW,
+				),
+			).toBe(true);
+		});
+
+		it("rejects attacks with no usable timestamp", () => {
+			expect(
+				qualifiesAsRetal(
+					incomingHit({ endedAt: null, startedAt: null }),
+					2013,
+					NOW,
+				),
+			).toBe(false);
 		});
 	});
 });

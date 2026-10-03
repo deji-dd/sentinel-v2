@@ -901,6 +901,12 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				...war,
 				lead,
 			},
+			// The viewing member's own landed ranked war hits, resolved server
+			// side from the per-faction counts the scheduler publishes.
+			userHitCount: subversiveTargetCache.getUserHitCount(
+				session.tornId,
+				factionId,
+			),
 			factionId,
 			factionName: getSubversiveFactionName(factionId),
 			totalOpponents: opponents.length,

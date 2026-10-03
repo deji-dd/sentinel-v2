@@ -16,6 +16,13 @@ import {
 
 const logger = new Logger("SubversiveTargetCache");
 
+/**
+ * Grace period before an unrefreshed retal set is discarded. The scheduler
+ * broadcasts every 10s, so this is generous: its only job is to stop badges
+ * sticking forever if the tracker dies mid-war.
+ */
+const RETAL_TTL_MS = 45_000;
+
 export function createEmptyWarInfo(): CurrentWarInfo {
 	return {
 		state: "no_war",
@@ -150,6 +157,16 @@ class SubversiveTargetCache {
 	/** Opponent roster per family faction id. */
 	private opponentsByFaction: Map<number, Map<number, RankedWarOpponent>> =
 		new Map();
+	/** Retal badge sets pushed by the scheduler, per family faction id. */
+	private retalByFaction: Map<
+		number,
+		{ ids: Set<number>; updatedAtMs: number }
+	> = new Map();
+	/** Per-member ranked war hit counts, per family faction id. */
+	private hitCountsByFaction: Map<
+		number,
+		{ warId: number; counts: Record<string, number> }
+	> = new Map();
 
 	/**
 	 * Initializes the RAM target cache from the database (only non-hospitalized targets with known score).
@@ -647,7 +664,91 @@ class SubversiveTargetCache {
 		this.warByFaction.set(key, info);
 		if (info.state === "no_war") {
 			this.opponentsByFaction.set(key, new Map());
+			// Retal and hit counts are meaningless outside a war; drop them so
+			// stale state cannot survive into the next engagement.
+			this.retalByFaction.delete(key);
+			this.hitCountsByFaction.delete(key);
 		}
+	}
+
+	// ─── Retal (retaliation) Tracking ───────────────────────────────────────
+
+	/**
+	 * Applies a retal set pushed by the scheduler. An empty set is meaningful:
+	 * it clears the badges the previous broadcast applied.
+	 */
+	applyRetalUpdate(
+		factionId: number,
+		retalIds: number[],
+		updatedAtMs?: number,
+	): void {
+		const key = this.normalizeFaction(factionId);
+		this.retalByFaction.set(key, {
+			ids: new Set(retalIds),
+			updatedAtMs: updatedAtMs ?? Date.now(),
+		});
+	}
+
+	/**
+	 * Returns the currently badged opponent ids for a faction.
+	 *
+	 * Entries expire lazily on read: if the scheduler stops broadcasting (crash,
+	 * disabled worker) the badges fade on their own instead of sticking forever.
+	 */
+	getRetalIds(factionId?: number, ttlMs: number = RETAL_TTL_MS): number[] {
+		const key = this.normalizeFaction(factionId);
+		const entry = this.retalByFaction.get(key);
+		if (!entry) return [];
+
+		if (Date.now() - entry.updatedAtMs > ttlMs) {
+			this.retalByFaction.delete(key);
+			return [];
+		}
+
+		return Array.from(entry.ids);
+	}
+
+	isRetalTarget(targetId: number, factionId?: number): boolean {
+		const key = this.normalizeFaction(factionId);
+		const entry = this.retalByFaction.get(key);
+		if (!entry) return false;
+		if (Date.now() - entry.updatedAtMs > RETAL_TTL_MS) {
+			this.retalByFaction.delete(key);
+			return false;
+		}
+		return entry.ids.has(targetId);
+	}
+
+	// ─── Ranked War Hit Counts ───────────────────────────────────────────────
+
+	/**
+	 * Applies per-member ranked war hit counts pushed by the scheduler. Counts
+	 * are cumulative for one war, so there is no TTL: they are replaced wholesale
+	 * on each push and cleared when the war ends.
+	 */
+	applyHitCounts(
+		factionId: number,
+		warId: number | null,
+		counts: Record<string, number>,
+	): void {
+		const key = this.normalizeFaction(factionId);
+		if (warId === null) {
+			this.hitCountsByFaction.delete(key);
+			return;
+		}
+		this.hitCountsByFaction.set(key, { warId, counts });
+	}
+
+	/**
+	 * Resolves how many landed ranked war hits a member has made this war.
+	 * Returns 0 when the faction has no engaged war or the member has not hit.
+	 */
+	getUserHitCount(tornId?: number, factionId?: number): number {
+		if (typeof tornId !== "number" || tornId <= 0) return 0;
+		const key = this.normalizeFaction(factionId);
+		const entry = this.hitCountsByFaction.get(key);
+		if (!entry) return 0;
+		return entry.counts[String(tornId)] ?? 0;
 	}
 
 	getWarState(factionId?: number): CurrentWarInfo {
@@ -867,7 +968,11 @@ class SubversiveTargetCache {
 		options:
 			| number
 			| { limit?: number; attackerBsScore?: number; factionId?: number } = 15,
-	): (RankedWarOpponent & { secondsRemaining: number; fairFight: number })[] {
+	): (RankedWarOpponent & {
+		secondsRemaining: number;
+		fairFight: number;
+		hasRetal: boolean;
+	})[] {
 		const factionId =
 			typeof options === "object"
 				? (options.factionId ?? undefined)
@@ -881,6 +986,7 @@ class SubversiveTargetCache {
 		const attackerBsScore =
 			typeof options === "object" ? (options.attackerBsScore ?? 0) : 0;
 		const nowSec = Math.floor(Date.now() / 1000);
+		const retalIds = new Set(this.getRetalIds(factionId));
 		return Array.from(this.opponentsFor(factionId).values())
 			.filter((opp) => {
 				const state = opp.status.state?.toLowerCase() ?? "";
@@ -900,6 +1006,7 @@ class SubversiveTargetCache {
 					...opp,
 					secondsRemaining: Math.max(0, (opp.status.until ?? nowSec) - nowSec),
 					fairFight,
+					hasRetal: retalIds.has(opp.id),
 				};
 			})
 			.sort((a, b) => a.secondsRemaining - b.secondsRemaining)
@@ -916,6 +1023,7 @@ class SubversiveTargetCache {
 			isOnline: boolean;
 			isHighFF: boolean;
 			statusCategory: "ready" | "early_discharge";
+			hasRetal: boolean;
 			attackUrl: string;
 		}
 	> {
@@ -925,6 +1033,7 @@ class SubversiveTargetCache {
 
 		const { attackerBsScore, excludeIds = new Set() } = options;
 		const opponents = Array.from(this.opponentsFor(options.factionId).values());
+		const retalIds = new Set(this.getRetalIds(options.factionId));
 
 		const attackable = opponents.filter((opp) => {
 			if (excludeIds.has(opp.id)) return false;
@@ -956,6 +1065,7 @@ class SubversiveTargetCache {
 				isOnline,
 				isHighFF: calculatedFF > 3.0,
 				statusCategory,
+				hasRetal: retalIds.has(opp.id),
 				attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${opp.id}`,
 			};
 		});

@@ -47,6 +47,8 @@ export interface WarTarget {
 	attackUrl?: string;
 	isWarTarget?: boolean;
 	isInactive?: boolean;
+	/** Opponent struck a family member within the last 5 minutes. */
+	hasRetal?: boolean;
 }
 
 export interface BountyTarget {
@@ -87,6 +89,8 @@ export interface CurrentWarInfo {
 	lead?: number;
 	opponent?: WarFactionInfo | null;
 	subversive?: WarFactionInfo | null;
+	/** The viewing member's own landed ranked war hits this war. */
+	userHitCount?: number;
 	lastUpdated?: number;
 }
 

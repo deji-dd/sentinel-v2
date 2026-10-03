@@ -5,6 +5,7 @@ import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
 } from "./elimination";
+import { startFactionAttackFeedWorker } from "./merc/faction-attack-feed-worker";
 import { startMercAttackValidatorWorker } from "./merc/merc-attack-validator-worker";
 import { startMercContractWorker } from "./merc/merc-contract-worker";
 import { startLogManager } from "./personal/log-manager";
@@ -12,9 +13,11 @@ import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
 import { startSubversiveBountyFinder } from "./subversive/bounty-finder";
 import { startSubversiveFFScouterCrawlerWorker } from "./subversive/ffscouter-target-crawler";
+import { startHitCounter } from "./subversive/hit-counter";
 import { startSubversiveMembershipAuditor } from "./subversive/membership-auditor";
 import { startSubversiveRankedWarWorker } from "./subversive/ranked-war-worker";
 import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
+import { startRetalTracker } from "./subversive/retal-tracker";
 import { startSubversiveSnapshotIngestionWorker } from "./subversive/snapshot-ingestion-worker";
 import { startSubversiveTargetFinderWorker } from "./subversive/target-finder-worker";
 import { startSystemMaintenance } from "./system/maintenance";
@@ -155,9 +158,27 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		start: startMercContractWorker,
 	},
 	{
+		id: "subversive:faction_attack_feed",
+		description:
+			"10-second shared /v2/faction/attacks ingester for the Subversive family factions (single source of truth for merc hit validation and Retal tracking)",
+		start: startFactionAttackFeedWorker,
+	},
+	{
+		id: "subversive:retal_tracker",
+		description:
+			"Event-driven Retal badge tracker: opponents that struck a family member within the last 5 minutes, scoped to the current ranked war",
+		start: startRetalTracker,
+	},
+	{
+		id: "subversive:hit_counter",
+		description:
+			"Event-driven ranked war hit counter tracking each member's landed hits this war, consumed by the userscript scorecard",
+		start: startHitCounter,
+	},
+	{
 		id: "merc:attack_validator",
 		description:
-			"5-second mercenary outgoing attacks poller and hit validation engine",
+			"Event-driven mercenary hit validation engine consuming the shared faction attack feed",
 		start: startMercAttackValidatorWorker,
 	},
 ];

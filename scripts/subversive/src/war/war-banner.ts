@@ -7,10 +7,10 @@ let warEmpty: HTMLElement | null = null;
 let warActiveContent: HTMLElement | null = null;
 let warOpponentName: HTMLElement | null = null;
 let warTimer: HTMLElement | null = null;
-let warScoreSubversive: HTMLElement | null = null;
-let warScoreOpponent: HTMLElement | null = null;
 let warScoreLead: HTMLElement | null = null;
 let ownFactionLabel: HTMLElement | null = null;
+let userHitCountEl: HTMLElement | null = null;
+let warDetailsEl: HTMLElement | null = null;
 
 export function initWarBannerElements(root: ShadowRoot | Document): void {
 	warBanner = root.getElementById("satf-war-banner") as HTMLElement | null;
@@ -24,12 +24,12 @@ export function initWarBannerElements(root: ShadowRoot | Document): void {
 		root.getElementById("satf-war-title")) as HTMLElement | null;
 	ownFactionLabel =
 		(root.getElementById("satf-own-faction-lbl") as HTMLElement | null) ?? null;
-	warScoreSubversive = (root.getElementById("satf-score-subversive") ||
-		root.getElementById("satf-score-sa")) as HTMLElement | null;
-	warScoreOpponent = (root.getElementById("satf-score-opponent") ||
-		root.getElementById("satf-score-opp")) as HTMLElement | null;
 	warScoreLead = (root.getElementById("satf-score-lead") ||
 		root.getElementById("satf-war-lead")) as HTMLElement | null;
+	userHitCountEl =
+		(root.getElementById("satf-user-hit-count") as HTMLElement | null) ?? null;
+	warDetailsEl =
+		(root.getElementById("satf-war-details") as HTMLElement | null) ?? null;
 }
 
 export function updateWarCountdown(): void {
@@ -83,12 +83,6 @@ export function renderWarBanner(war: CurrentWarInfo | null): void {
 	if (warOpponentName) {
 		warOpponentName.textContent = war.opponent?.name || "Opponent";
 	}
-	if (warScoreSubversive) {
-		warScoreSubversive.textContent = String(war.subversive?.score ?? 0);
-	}
-	if (warScoreOpponent) {
-		warScoreOpponent.textContent = String(war.opponent?.score ?? 0);
-	}
 
 	if (warScoreLead) {
 		const saScore = war.subversive?.score ?? 0;
@@ -96,6 +90,19 @@ export function renderWarBanner(war: CurrentWarInfo | null): void {
 		const lead = saScore - oppScore;
 		warScoreLead.textContent = lead >= 0 ? `+${lead}` : String(lead);
 		warScoreLead.className = `satf-lead-badge ${lead >= 0 ? "lead-pos" : "lead-neg"}`;
+	}
+
+	// The viewer's own landed hits this war. Hidden until a count arrives so an
+	// unranked or not-yet-tracked war does not show a misleading zero.
+	if (userHitCountEl) {
+		const hits = (war as { userHitCount?: number }).userHitCount;
+		if (typeof hits === "number" && hits > 0) {
+			userHitCountEl.textContent = `${hits} ${hits === 1 ? "hit" : "hits"} this war`;
+			if (warDetailsEl) warDetailsEl.style.display = "";
+		} else {
+			userHitCountEl.textContent = "";
+			if (warDetailsEl) warDetailsEl.style.display = "none";
+		}
 	}
 
 	updateWarCountdown();

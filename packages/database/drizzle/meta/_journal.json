@@ -274,6 +274,20 @@
 			"when": 1791051341313,
 			"tag": "0038_absurd_mole_man",
 			"breakpoints": true
+		},
+		{
+			"idx": 39,
+			"version": "7",
+			"when": 1791064873635,
+			"tag": "0039_keen_matthew_murdock",
+			"breakpoints": true
+		},
+		{
+			"idx": 40,
+			"version": "7",
+			"when": 1791067812657,
+			"tag": "0040_curved_justice",
+			"breakpoints": true
 		}
 	]
 }

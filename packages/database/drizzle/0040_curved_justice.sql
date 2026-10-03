@@ -1,0 +1,1 @@
+ALTER TABLE "faction_attack_logs" ADD COLUMN "is_stricken" boolean DEFAULT false NOT NULL;

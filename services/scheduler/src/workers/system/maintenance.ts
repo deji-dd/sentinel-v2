@@ -2,6 +2,7 @@ import {
 	and,
 	db,
 	eq,
+	factionAttackLogs,
 	isNotNull,
 	lt,
 	reconcileTargetGuildsAndModules,
@@ -63,7 +64,22 @@ export async function executeMaintenance(): Promise<void> {
 			);
 		}
 
-		// 3. Prune travel destination stock history points older than 24 hours
+		// 3. Prune faction attack logs older than 7 days. These back the shared
+		//    /faction/attacks feed; the retal window is only 5 minutes and merc hit
+		//    dedupe is per-contract, so anything older than a week is dead weight.
+		const factionAttackCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		const prunedAttacks = await db
+			.delete(factionAttackLogs)
+			.where(lt(factionAttackLogs.createdAt, factionAttackCutoff))
+			.returning({ id: factionAttackLogs.id });
+
+		if (prunedAttacks.length > 0) {
+			logger.info(
+				`Pruned ${prunedAttacks.length} faction attack log records older than 7 days.`,
+			);
+		}
+
+		// 4. Prune travel destination stock history points older than 24 hours
 		const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
 		const allDestinations = await db.query.travelDestinations.findMany();
 		let prunedStockPointsCount = 0;

@@ -300,26 +300,57 @@ export function getPanelHtml(): string {
 				display: flex;
 				justify-content: space-between;
 				align-items: center;
-				gap: 8px;
+				gap: 10px;
 			}
 			.satf-score-box {
 				flex: 1;
 				display: flex;
 				flex-direction: column;
+				min-width: 0;
+			}
+			.satf-score-box.is-opponent {
+				text-align: right;
+			}
+			.satf-score-vs {
+				flex: 0 0 auto;
+				font-size: 10px;
+				font-weight: 800;
+				color: var(--muted);
+				letter-spacing: 1px;
 			}
 			.satf-score-lbl {
-				font-size: 10px;
-				color: var(--muted);
-				font-weight: 700;
+				font-size: 12px;
+				color: #fff;
+				font-weight: 800;
 				text-transform: uppercase;
 				white-space: nowrap;
 				overflow: hidden;
 				text-overflow: ellipsis;
 			}
-			.satf-score-val {
-				font-size: 14px;
+			.satf-retal-badge {
+				display: inline-block;
+				margin-left: 6px;
+				padding: 1px 6px;
+				border-radius: 4px;
+				font-size: 10px;
 				font-weight: 800;
-				color: #fff;
+				text-transform: uppercase;
+				letter-spacing: 0.4px;
+				background: rgba(239, 68, 68, 0.15);
+				color: #f87171;
+				border: 1px solid rgba(239, 68, 68, 0.35);
+			}
+			.satf-war-details {
+				display: flex;
+				justify-content: center;
+				margin-top: 8px;
+			}
+			.satf-hitcount {
+				font-size: 10px;
+				font-weight: 700;
+				text-transform: uppercase;
+				letter-spacing: 0.4px;
+				color: var(--muted);
 			}
 			.satf-lead-badge {
 				font-size: 11px;
@@ -808,7 +839,7 @@ export function getPanelHtml(): string {
 				</div>
 
 				<div id="satf-war-active-content" style="display: none;">
-					<!-- WAR SCOREBOARD BANNER -->
+					<!-- WAR SCORECARD BANNER -->
 					<div id="satf-war-banner" class="satf-war-banner">
 						<div class="satf-war-header-row">
 							<span id="satf-war-title">RANKED WAR</span>
@@ -817,16 +848,15 @@ export function getPanelHtml(): string {
 						<div class="satf-score-row">
 							<div class="satf-score-box">
 								<span id="satf-own-faction-lbl" class="satf-score-lbl">Subversive Alliance</span>
-								<span id="satf-score-sa" class="satf-score-val">--</span>
 							</div>
-							<div class="satf-score-box" style="text-align:center;">
-								<span class="satf-score-lbl">Target</span>
-								<span id="satf-score-target" class="satf-score-val" style="color:var(--muted);">--</span>
-							</div>
-							<div class="satf-score-box" style="text-align:right;">
+							<span class="satf-score-vs">VS</span>
+							<div class="satf-score-box is-opponent">
 								<span id="satf-opp-name" class="satf-score-lbl">Opponent</span>
-								<span id="satf-score-opp" class="satf-score-val">--</span>
 							</div>
+						</div>
+						<!-- Future scorecard detail rows land here -->
+						<div id="satf-war-details" class="satf-war-details" style="display: none;">
+							<span id="satf-user-hit-count" class="satf-hitcount" style="display: none;"></span>
 						</div>
 					</div>
 

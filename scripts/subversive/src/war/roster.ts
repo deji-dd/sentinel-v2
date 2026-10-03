@@ -135,8 +135,9 @@ export function renderAvailableTargets(targets?: WarTarget[]): void {
 							<span style="color:var(--muted); font-size:11px;">[${t.id}] Lvl ${t.level}</span>
 						</div>
 						<div class="satf-roster-sub">
-							BS ${formatStats(t.estimatedBs)} · <span class="ff-${getFFTier(ff)}" style="font-weight:700; color:${getFFColor(ff)};">FF: ${ff.toFixed(2)}</span>
-						</div>
+								BS ${formatStats(t.estimatedBs)} · <span class="ff-${getFFTier(ff)}" style="font-weight:700; color:${getFFColor(ff)};">FF: ${ff.toFixed(2)}</span>
+								${t.hasRetal ? '<span class="satf-retal-badge" title="Hit one of our members in the last 5 minutes">• Retal</span>' : ""}
+							</div>
 					</div>
 					<div class="satf-roster-right">
 						<a class="satf-btn satf-btn-primary satf-btn-sm" href="${t.attackUrl}" target="${state.directAttack ? "_self" : "_blank"}" style="text-decoration:none;">Hit</a>

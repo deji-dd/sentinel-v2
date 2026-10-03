@@ -48,12 +48,15 @@ export async function fetchWarStatus(): Promise<void> {
 			opponentIds?: number[];
 			factionId?: number;
 			factionName?: string;
+			userHitCount?: number;
 		}>("/v2/target-finder/war/status");
 		if (res?.war) {
 			const war: CurrentWarInfo = {
 				...res.war,
 				factionId: res.war.factionId ?? res.factionId,
 				factionName: res.war.factionName ?? res.factionName,
+				// Scorecard hit tally, resolved server-side for this session.
+				userHitCount: res.userHitCount ?? 0,
 			};
 			state.war = war;
 			state.warState = war.state;
