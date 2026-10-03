@@ -153,12 +153,72 @@ describe("buildTargetHitBreakdownCsv", () => {
 });
 
 describe("postMercContractPaid", () => {
-	it("announces the payment with hits, payout, and the CSV attachment", async () => {
+	it("announces the payment with hits, payout, and the merc CSVs attached", async () => {
 		const { client, mockChannel, sentPayloads } = makeClient("past-contracts");
 
 		const summary = emptySummary({
 			totalHits: 12,
 			totalPayout: 45000000,
+			mercPayouts: [
+				{
+					attackerId: 1,
+					attackerName: "MercOne",
+					attackerFactionId: 1111,
+					attackerFactionName: "Uphills",
+					totalHits: 7,
+					standardHits: 7,
+					strickenHits: 0,
+					totalPayout: 21000000,
+				},
+				{
+					attackerId: 2,
+					attackerName: "MercTwo",
+					attackerFactionId: 2222,
+					attackerFactionName: "Wanderers",
+					totalHits: 5,
+					standardHits: 4,
+					strickenHits: 1,
+					totalPayout: 24000000,
+				},
+			],
+			factionPayouts: [
+				{
+					factionId: 1111,
+					factionName: "Uphills",
+					totalHits: 7,
+					totalPayout: 21000000,
+					mercs: [
+						{
+							attackerId: 1,
+							attackerName: "MercOne",
+							attackerFactionId: 1111,
+							attackerFactionName: "Uphills",
+							totalHits: 7,
+							standardHits: 7,
+							strickenHits: 0,
+							totalPayout: 21000000,
+						},
+					],
+				},
+				{
+					factionId: 2222,
+					factionName: "Wanderers",
+					totalHits: 5,
+					totalPayout: 24000000,
+					mercs: [
+						{
+							attackerId: 2,
+							attackerName: "MercTwo",
+							attackerFactionId: 2222,
+							attackerFactionName: "Wanderers",
+							totalHits: 5,
+							standardHits: 4,
+							strickenHits: 1,
+							totalPayout: 24000000,
+						},
+					],
+				},
+			],
 			targetBreakdown: [
 				{
 					defenderId: 111,
@@ -186,8 +246,14 @@ describe("postMercContractPaid", () => {
 		expect(embed?.description).toContain("**12**");
 		expect(embed?.description).toContain("**$45,000,000**");
 
-		// The settlement ships the same per-target CSV as the conclusion receipt.
-		expect(sentPayloads[0]?.files).toHaveLength(1);
+		// One combined merc CSV plus one per merc faction — no client target CSV.
+		const files = sentPayloads[0]?.files as Array<{ name: string }>;
+		expect(files).toHaveLength(3);
+		expect(files.map((f) => f.name)).toEqual([
+			"merc_payouts_combined_contract-paid-test.csv",
+			"merc_payouts_uphills_contract-paid-test.csv",
+			"merc_payouts_wanderers_contract-paid-test.csv",
+		]);
 	});
 
 	it("falls back to 'Unknown' rather than throwing on an unparseable paidAt", async () => {

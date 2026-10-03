@@ -12,7 +12,7 @@ import {
 
 const logger = new Logger("Scheduler", "SubversiveRankedWarWorker");
 
-const SUBVERSIVE_FACTION_ID = 2013;
+import { SUBVERSIVE_FAMILY_FACTION_IDS } from "@sentinel/utils";
 
 export type WarState = "no_war" | "scheduled" | "active";
 
@@ -246,23 +246,207 @@ async function resolveOpponentStats(
 	};
 }
 
-// Cached war status to avoid hitting /faction/{id}/wars every 1 second during active wars
-let cachedWarInfo: CurrentWarInfo = {
-	state: "no_war",
-	warId: null,
-	start: null,
-	target: null,
-	winner: null,
-	opponent: null,
-	subversive: null,
-	lastUpdated: 0,
-};
-let lastWarsCheckTime = 0;
-let cachedOppFactionId: number | null = null;
+function createNoWarInfo(): CurrentWarInfo {
+	return {
+		state: "no_war",
+		warId: null,
+		start: null,
+		target: null,
+		winner: null,
+		opponent: null,
+		subversive: null,
+		lastUpdated: 0,
+	};
+}
+
+interface FactionWarCache {
+	war: CurrentWarInfo;
+	opponents: RankedWarOpponent[];
+	lastWarsCheck: number;
+}
+
+// Cached war status per family faction to avoid hitting /faction/{id}/wars every second during active wars
+const warCacheByFaction = new Map<number, FactionWarCache>();
 const WARS_CACHE_TTL_MS = 10_000; // Cache war metadata for 10s during active wars
 
+function getFactionCache(factionId: number): FactionWarCache {
+	let entry = warCacheByFaction.get(factionId);
+	if (!entry) {
+		entry = { war: createNoWarInfo(), opponents: [], lastWarsCheck: 0 };
+		warCacheByFaction.set(factionId, entry);
+	}
+	return entry;
+}
+
+function handleKeyError(err: unknown, apiKey: string): void {
+	if (
+		(err instanceof TornError &&
+			(err.code === 13 || err.code === 10 || err.code === 18)) ||
+		String(err).includes("Key temporarily disabled")
+	) {
+		const cooldownMs = markSubversiveKeyDisabled(apiKey);
+		const durationStr =
+			cooldownMs >= 60_000
+				? `${Math.round(cooldownMs / 60_000)}m`
+				: `${cooldownMs}ms`;
+		logger.warn(
+			`API key ending in '...${apiKey.slice(-4)}' marked temporarily disabled for ${durationStr}.`,
+		);
+	} else {
+		logger.warn(
+			`Failed to poll ranked war data: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+}
+
 /**
- * Checks the ranked war status and opponent roster for Subversive Alliance.
+ * Refreshes war metadata for a single family faction.
+ * Returns the war info and the resolved opponent faction id.
+ */
+async function refreshFactionWar(
+	client: TornApiClient,
+	factionId: number,
+	entry: FactionWarCache,
+	nowSec: number,
+): Promise<CurrentWarInfo> {
+	const keyObj = await getNextSubversiveUserKey();
+	if (!keyObj) {
+		logger.debug(
+			`No active API key available to check ranked war for faction ${factionId}.`,
+		);
+		return entry.war;
+	}
+
+	try {
+		const warsRes = (await client.get("/faction/{id}/wars", {
+			apiKey: keyObj.apiKey,
+			pathParams: { id: factionId },
+		})) as TornFactionWarsResponse;
+
+		recordSubversiveKeySuccess(keyObj.apiKey);
+
+		const ranked = warsRes.wars?.ranked;
+		if (!ranked || ranked.end !== null || ranked.winner !== null) {
+			const noWar: CurrentWarInfo = {
+				...createNoWarInfo(),
+				lastUpdated: Date.now(),
+			};
+			entry.war = noWar;
+			entry.opponents = [];
+			entry.lastWarsCheck = Date.now();
+			return noWar;
+		}
+
+		const factions = ranked.factions ?? [];
+		const ownFaction = factions.find((f) => f.id === factionId);
+		const oppFaction = factions.find((f) => f.id !== factionId);
+
+		const state: WarState = nowSec >= ranked.start ? "active" : "scheduled";
+
+		const warInfo: CurrentWarInfo = {
+			state,
+			warId: ranked.war_id,
+			start: ranked.start,
+			target: ranked.target,
+			winner: ranked.winner,
+			opponent: oppFaction
+				? {
+						id: oppFaction.id,
+						name: oppFaction.name,
+						score: oppFaction.score,
+						chain: oppFaction.chain,
+					}
+				: null,
+			subversive: ownFaction
+				? {
+						id: ownFaction.id,
+						name: ownFaction.name,
+						score: ownFaction.score,
+						chain: ownFaction.chain,
+					}
+				: null,
+			lastUpdated: Date.now(),
+		};
+
+		entry.war = warInfo;
+		entry.lastWarsCheck = Date.now();
+		return warInfo;
+	} catch (err) {
+		handleKeyError(err, keyObj.apiKey);
+		return entry.war;
+	}
+}
+
+/**
+ * Polls the opponent member roster for a family faction's ranked war.
+ */
+async function refreshFactionOpponents(
+	client: TornApiClient,
+	warInfo: CurrentWarInfo,
+): Promise<RankedWarOpponent[]> {
+	const oppFactionId = warInfo.opponent?.id ?? null;
+	if (!oppFactionId) return [];
+
+	if (warInfo.state !== "active" && warInfo.state !== "scheduled") {
+		return [];
+	}
+
+	const oppKey = await getNextSubversiveUserKey();
+	if (!oppKey) return [];
+
+	try {
+		const membersRes = (await client.get("/faction/{id}/members", {
+			apiKey: oppKey.apiKey,
+			pathParams: { id: oppFactionId },
+		})) as TornFactionMembersResponse;
+
+		recordSubversiveKeySuccess(oppKey.apiKey);
+
+		const rawMembers = membersRes.members ?? [];
+		if (rawMembers.length === 0) return [];
+
+		await batchResolveOpponentStats(rawMembers, oppFactionId);
+
+		const opponents: RankedWarOpponent[] = [];
+		for (const m of rawMembers) {
+			const stats = await resolveOpponentStats(m.id, m.level);
+			opponents.push({
+				id: m.id,
+				name: m.name,
+				level: m.level,
+				daysInFaction: m.days_in_faction,
+				position: m.position,
+				isOnWall: m.is_on_wall,
+				isInOc: m.is_in_oc,
+				hasEarlyDischarge: m.has_early_discharge,
+				lastAction: {
+					status: m.last_action?.status ?? "Offline",
+					timestamp: m.last_action?.timestamp ?? 0,
+					relative: m.last_action?.relative ?? "",
+				},
+				status: {
+					description: m.status?.description ?? "",
+					details: m.status?.details ?? null,
+					state: m.status?.state ?? "Okay",
+					color: m.status?.color ?? "green",
+					until: m.status?.until ?? null,
+					planeImageType: m.status?.plane_image_type,
+				},
+				estimatedBs: stats.estimatedBs,
+				estimatedScore: stats.estimatedScore,
+			});
+		}
+		return opponents;
+	} catch (err) {
+		handleKeyError(err, oppKey.apiKey);
+		return [];
+	}
+}
+
+/**
+ * Checks ranked war status + opponent rosters for every faction in the Subversive
+ * family (2013 Subversive Alliance, 27312 SA Succession). Each faction runs its own
+ * ranked war, so state, opponents and cadence are tracked per faction.
  * Broadcasts updates via Unix Domain Socket IPC to Sentinel API & WebSocket subscribers.
  * Returns the epoch ms timestamp for the next dynamic cadence.
  */
@@ -278,204 +462,52 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 	const client = new TornApiClient();
 	const nowSec = Math.floor(Date.now() / 1000);
 
-	let warInfo: CurrentWarInfo = {
-		state: "no_war",
-		warId: null,
-		start: null,
-		target: null,
-		winner: null,
-		opponent: null,
-		subversive: null,
-		lastUpdated: Date.now(),
-	};
+	const wars: Record<
+		string,
+		{ war: CurrentWarInfo; opponents: RankedWarOpponent[] }
+	> = {};
+	let nextCadenceMs = 30_000;
 
-	let oppFactionId: number | null = null;
+	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+		const entry = getFactionCache(factionId);
 
-	// 1. Check Subversive Alliance war status (cached for 10s during active wars)
-	const shouldCheckWars =
-		cachedWarInfo.state !== "active" ||
-		Date.now() - lastWarsCheckTime >= WARS_CACHE_TTL_MS;
+		// 1. Refresh war metadata (cached for 10s during active wars)
+		const shouldCheckWars =
+			entry.war.state !== "active" ||
+			Date.now() - entry.lastWarsCheck >= WARS_CACHE_TTL_MS;
 
-	if (shouldCheckWars) {
-		try {
-			const warsRes = (await client.get("/faction/{id}/wars", {
-				apiKey: keyObj.apiKey,
-				pathParams: { id: SUBVERSIVE_FACTION_ID },
-			})) as TornFactionWarsResponse;
-
-			recordSubversiveKeySuccess(keyObj.apiKey);
-
-			const ranked = warsRes.wars?.ranked;
-
-			if (ranked && ranked.end === null && ranked.winner === null) {
-				const factions = ranked.factions ?? [];
-				const saFaction = factions.find((f) => f.id === SUBVERSIVE_FACTION_ID);
-				const oppFaction = factions.find((f) => f.id !== SUBVERSIVE_FACTION_ID);
-
-				let state: WarState = "scheduled";
-				if (nowSec >= ranked.start) {
-					state = "active";
-				}
-
-				warInfo = {
-					state,
-					warId: ranked.war_id,
-					start: ranked.start,
-					target: ranked.target,
-					winner: ranked.winner,
-					opponent: oppFaction
-						? {
-								id: oppFaction.id,
-								name: oppFaction.name,
-								score: oppFaction.score,
-								chain: oppFaction.chain,
-							}
-						: null,
-					subversive: saFaction
-						? {
-								id: saFaction.id,
-								name: saFaction.name,
-								score: saFaction.score,
-								chain: saFaction.chain,
-							}
-						: null,
-					lastUpdated: Date.now(),
-				};
-
-				if (oppFaction) {
-					oppFactionId = oppFaction.id;
-				}
-			}
-
-			cachedWarInfo = warInfo;
-			cachedOppFactionId = oppFactionId;
-			lastWarsCheckTime = Date.now();
-		} catch (err) {
-			if (
-				(err instanceof TornError &&
-					(err.code === 13 || err.code === 10 || err.code === 18)) ||
-				String(err).includes("Key temporarily disabled")
-			) {
-				const cooldownMs = markSubversiveKeyDisabled(keyObj.apiKey);
-				const durationStr =
-					cooldownMs >= 60_000
-						? `${Math.round(cooldownMs / 60_000)}m`
-						: `${cooldownMs}ms`;
-				logger.warn(
-					`API key ending in '...${keyObj.apiKey.slice(-4)}' marked temporarily disabled for ${durationStr}.`,
-				);
-			} else {
-				logger.warn(
-					`Failed to check Subversive war status: ${err instanceof Error ? err.message : String(err)}`,
-				);
-			}
-			return Date.now() + 15_000;
+		let warInfo: CurrentWarInfo;
+		if (shouldCheckWars) {
+			warInfo = await refreshFactionWar(client, factionId, entry, nowSec);
+		} else {
+			warInfo = { ...entry.war, lastUpdated: Date.now() };
+			entry.war = warInfo;
 		}
-	} else {
-		// Use cached war info
-		warInfo = {
-			...cachedWarInfo,
-			lastUpdated: Date.now(),
-		};
-		oppFactionId = cachedOppFactionId;
-	}
 
-	// 2. Poll opponent members if in active or scheduled war
-	const parsedOpponents: RankedWarOpponent[] = [];
+		// 2. Refresh opponent roster when engaged
+		const opponents = await refreshFactionOpponents(client, warInfo);
+		entry.opponents = opponents;
 
-	if (
-		oppFactionId &&
-		(warInfo.state === "active" || warInfo.state === "scheduled")
-	) {
-		const oppKey = await getNextSubversiveUserKey();
-		if (oppKey) {
-			try {
-				const membersRes = (await client.get("/faction/{id}/members", {
-					apiKey: oppKey.apiKey,
-					pathParams: { id: oppFactionId },
-				})) as TornFactionMembersResponse;
+		wars[String(factionId)] = { war: warInfo, opponents };
 
-				recordSubversiveKeySuccess(oppKey.apiKey);
-
-				const rawMembers = membersRes.members ?? [];
-				if (rawMembers.length > 0) {
-					await batchResolveOpponentStats(rawMembers, oppFactionId);
-
-					for (const m of rawMembers) {
-						const stats = await resolveOpponentStats(m.id, m.level);
-						parsedOpponents.push({
-							id: m.id,
-							name: m.name,
-							level: m.level,
-							daysInFaction: m.days_in_faction,
-							position: m.position,
-							isOnWall: m.is_on_wall,
-							isInOc: m.is_in_oc,
-							hasEarlyDischarge: m.has_early_discharge,
-							lastAction: {
-								status: m.last_action?.status ?? "Offline",
-								timestamp: m.last_action?.timestamp ?? 0,
-								relative: m.last_action?.relative ?? "",
-							},
-							status: {
-								description: m.status?.description ?? "",
-								details: m.status?.details ?? null,
-								state: m.status?.state ?? "Okay",
-								color: m.status?.color ?? "green",
-								until: m.status?.until ?? null,
-								planeImageType: m.status?.plane_image_type,
-							},
-							estimatedBs: stats.estimatedBs,
-							estimatedScore: stats.estimatedScore,
-						});
-					}
-				}
-			} catch (err) {
-				if (
-					(err instanceof TornError &&
-						(err.code === 13 || err.code === 10 || err.code === 18)) ||
-					String(err).includes("Key temporarily disabled")
-				) {
-					const cooldownMs = markSubversiveKeyDisabled(oppKey.apiKey);
-					const durationStr =
-						cooldownMs >= 60_000
-							? `${Math.round(cooldownMs / 60_000)}m`
-							: `${cooldownMs}ms`;
-					logger.warn(
-						`API key ending in '...${oppKey.apiKey.slice(-4)}' marked temporarily disabled for ${durationStr}.`,
-					);
-				} else {
-					logger.warn(
-						`Failed to poll opponent members for faction ${oppFactionId}: ${err instanceof Error ? err.message : String(err)}`,
-					);
-				}
-			}
+		// 3. Dynamic cadence: fastest engaged faction wins
+		if (warInfo.state === "active") {
+			nextCadenceMs = 1_000;
+		} else if (warInfo.state === "scheduled" && nextCadenceMs > 15_000) {
+			nextCadenceMs = 15_000;
 		}
 	}
 
-	// 3. Broadcast war update to Sentinel API over Unix Domain Socket IPC
+	// 4. Broadcast war updates to Sentinel API over Unix Domain Socket IPC
 	const ipcServer = getActiveIpcServer();
 	if (ipcServer) {
 		ipcServer.broadcast({
 			action: "subversive_war_updated",
-			data: {
-				war: warInfo,
-				opponents: parsedOpponents,
-			},
+			data: { wars },
 		});
 	}
 
-	// 4. Dynamic cadence:
-	// - Active war: every 1s (1,000ms)
-	// - Scheduled war: every 15s
-	// - Peacetime / No war: every 30s
-	if (warInfo.state === "active") {
-		return Date.now() + 1_000;
-	}
-	if (warInfo.state === "scheduled") {
-		return Date.now() + 15_000;
-	}
-	return Date.now() + 30_000;
+	return Date.now() + nextCadenceMs;
 }
 
 /**

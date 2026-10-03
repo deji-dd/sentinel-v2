@@ -18,6 +18,12 @@ import {
 	TornApiClient,
 	tornApi,
 } from "@sentinel/torn-api";
+import {
+	describeSubversiveFamilyFactions,
+	getSubversiveFactionName,
+	isSubversiveFamilyFaction,
+	resolveSubversiveFactionId,
+} from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
 import { getAvailableSubversiveKeyPool } from "../../lib/subversive-key-pool";
 import {
@@ -27,8 +33,6 @@ import {
 	subversiveTargetCache,
 } from "../../lib/subversive-target-cache";
 import { subversiveWarEventManager } from "../../lib/subversive-war-events";
-
-const SUBVERSIVE_FACTION_ID = 2013;
 
 interface TornProfileResponse {
 	player_id?: number;
@@ -120,6 +124,9 @@ export async function resolveUserSession(
 	session = {
 		tornId: userRow.tornId,
 		tornName: userRow.tornName,
+		factionId: resolveSubversiveFactionId(userRow.factionId),
+		factionName:
+			userRow.factionName ?? getSubversiveFactionName(userRow.factionId),
 		bsScore: userRow.bsScore,
 		token,
 		isActive: userRow.isActive,
@@ -185,7 +192,10 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 			const tornId = profile?.player_id;
 			const playerName = profile?.name ?? `Player ${tornId}`;
-			const factionId = profile?.faction?.faction_id;
+			const rawFactionId = profile?.faction?.faction_id;
+			const factionName =
+				profile?.faction?.faction_name ??
+				getSubversiveFactionName(rawFactionId);
 
 			if (!tornId) {
 				set.status = 400;
@@ -195,15 +205,16 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				};
 			}
 
-			// STRICT FACTION 2013 ENFORCEMENT
-			if (factionId !== SUBVERSIVE_FACTION_ID) {
+			// FAMILY FACTION ENFORCEMENT (2013 Subversive Alliance / 27312 SA Succession)
+			if (!isSubversiveFamilyFaction(rawFactionId)) {
 				set.status = 403;
 				return {
 					success: false,
-					error:
-						"Access Denied: You must be an active member of Subversive Alliance (Faction 2013) to use this tool.",
+					error: `Access Denied: You must be an active member of ${describeSubversiveFamilyFactions()} to use this tool.`,
 				};
 			}
+
+			const factionId = resolveSubversiveFactionId(rawFactionId);
 
 			let str = Number(battlestats?.strength ?? profile?.strength ?? 0);
 			let spd = Number(battlestats?.speed ?? profile?.speed ?? 0);
@@ -259,6 +270,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				.values({
 					tornId,
 					tornName: playerName,
+					factionId,
+					factionName,
 					apiKeyEncrypted,
 					apiKeyHash,
 					bsScore,
@@ -279,6 +292,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					target: subversiveTargetFinderUsers.tornId,
 					set: {
 						tornName: playerName,
+						factionId,
+						factionName,
 						apiKeyEncrypted,
 						apiKeyHash,
 						bsScore,
@@ -317,6 +332,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			subversiveTargetCache.setUserSession({
 				tornId,
 				tornName: playerName,
+				factionId,
+				factionName,
 				bsScore,
 				token,
 				isActive: true,
@@ -330,6 +347,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				user: {
 					tornId,
 					tornName: playerName,
+					factionId,
+					factionName,
 					bsScore: Number(bsScore.toFixed(2)),
 					statsCachedAt: now.toISOString(),
 				},
@@ -797,7 +816,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			return { success: false, error: "Session expired or invalid." };
 		}
 
-		let war = subversiveTargetCache.getWarState();
+		const factionId = resolveSubversiveFactionId(session.factionId);
+		let war = subversiveTargetCache.getWarState(factionId);
 		if (
 			(war.state === "no_war" || war.target === null) &&
 			session.apiKeyEncrypted
@@ -809,7 +829,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					const client = new TornApiClient();
 					const warsRes = (await client.get("/faction/{id}/wars", {
 						apiKey: plainKey,
-						pathParams: { id: SUBVERSIVE_FACTION_ID },
+						pathParams: { id: factionId },
 					})) as {
 						wars?: {
 							ranked?: {
@@ -831,12 +851,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					const ranked = warsRes.wars?.ranked;
 					if (ranked && ranked.end === null && ranked.winner === null) {
 						const factions = ranked.factions ?? [];
-						const saFaction = factions.find(
-							(f) => f.id === SUBVERSIVE_FACTION_ID,
-						);
-						const oppFaction = factions.find(
-							(f) => f.id !== SUBVERSIVE_FACTION_ID,
-						);
+						const saFaction = factions.find((f) => f.id === factionId);
+						const oppFaction = factions.find((f) => f.id !== factionId);
 						const nowSec = Math.floor(Date.now() / 1000);
 
 						const newWar: CurrentWarInfo = {
@@ -863,7 +879,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 								: null,
 							lastUpdated: Date.now(),
 						};
-						subversiveTargetCache.setWarState(newWar);
+						subversiveTargetCache.setWarState(newWar, factionId);
 						war = newWar;
 					}
 				}
@@ -872,7 +888,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			}
 		}
 
-		const opponents = subversiveTargetCache.getWarOpponents();
+		const opponents = subversiveTargetCache.getWarOpponents(factionId);
 
 		let lead = 0;
 		if (war.subversive && war.opponent) {
@@ -885,6 +901,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				...war,
 				lead,
 			},
+			factionId,
+			factionName: getSubversiveFactionName(factionId),
 			totalOpponents: opponents.length,
 			opponentIds:
 				war.state === "active" || war.state === "scheduled"
@@ -925,7 +943,8 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			};
 		}
 
-		const war = subversiveTargetCache.getWarState();
+		const factionId = resolveSubversiveFactionId(session.factionId);
+		const war = subversiveTargetCache.getWarState(factionId);
 		const rawExclude = (query.exclude as string) || "";
 		const excludeIds = new Set(
 			rawExclude
@@ -955,6 +974,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		const target = subversiveTargetCache.getNextWarTarget({
 			attackerBsScore: session.bsScore,
+			factionId,
 			excludeIds,
 			minFF,
 			maxFF,
@@ -1005,6 +1025,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		const target = await subversiveTargetCache.getTargetOrOpponentDetails(
 			targetId,
 			session.bsScore,
+			resolveSubversiveFactionId(session.factionId),
 		);
 
 		return {
@@ -1036,8 +1057,10 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				.filter((id) => Number.isInteger(id) && id > 0),
 		);
 
+		const factionId = resolveSubversiveFactionId(session.factionId);
 		const targets = subversiveTargetCache.getAvailableWarTargets({
 			attackerBsScore: session.bsScore,
+			factionId,
 			excludeIds,
 		});
 
@@ -1045,7 +1068,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			success: true,
 			targets,
 			total: targets.length,
-			war: subversiveTargetCache.getWarState(),
+			war: subversiveTargetCache.getWarState(factionId),
 		};
 	})
 
@@ -1070,6 +1093,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		const queue = subversiveTargetCache.getHospitalQueue({
 			limit,
 			attackerBsScore: session.bsScore,
+			factionId: resolveSubversiveFactionId(session.factionId),
 		});
 
 		return {

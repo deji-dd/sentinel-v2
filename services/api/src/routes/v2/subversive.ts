@@ -21,6 +21,11 @@ import {
 	isValidApiKey,
 	TornApiClient,
 } from "@sentinel/torn-api";
+import {
+	getSubversiveFactionName,
+	PRIMARY_SUBVERSIVE_FACTION_ID,
+	SUBVERSIVE_FAMILY_FACTION_IDS,
+} from "@sentinel/utils";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import { subversiveDibsManager } from "../../lib/dibs-manager";
@@ -82,6 +87,39 @@ interface SubversiveConfigData {
 }
 
 const SUBVERSIVE_CONFIG_ID = "subversive:guild_config";
+
+const INVALID_DIBS_FACTION_ERROR =
+	"Invalid factionId: dibs settings are only available for the Subversive family factions.";
+
+/**
+ * Validates an optional faction id coming from a request and resolves it to a
+ * Subversive family faction. Defaults to Subversive Alliance (2013) when absent
+ * so older clients keep working against the primary faction.
+ *
+ * Sets a 400 status and returns null when the id is not a family faction.
+ */
+function parseDibsFactionId(
+	raw: number | null | undefined,
+	set: { status?: number | string },
+): number | null {
+	if (raw === undefined || raw === null || Number.isNaN(raw)) {
+		return PRIMARY_SUBVERSIVE_FACTION_ID;
+	}
+	if (!SUBVERSIVE_FAMILY_FACTION_IDS.includes(raw)) {
+		set.status = 400;
+		return null;
+	}
+	return raw;
+}
+
+/**
+ * Resolves the faction that owns a dibs target so Discord button claims and
+ * releases are evaluated against the owning faction's settings rather than
+ * defaulting to Subversive Alliance.
+ */
+function resolveDibsFactionForTarget(targetId: number): number | undefined {
+	return subversiveDibsManager.getDibsByTargetId(targetId)?.factionId;
+}
 
 // In-memory cache for Discord member lookups (30s TTL)
 const memberCache = new Map<
@@ -1121,20 +1159,31 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 	// ─── GET /api/v1/subversive/dibs-config ───────────────────────────────────
 	.get(
 		"/dibs-config",
-		async ({ user, set }) => {
+		async ({ user, set, query }) => {
 			const hasAdmin = await verifySubversiveAdmin(user);
 			if (!hasAdmin) {
 				set.status = 403;
 				return { error: "Forbidden: Subversive admin access required" };
 			}
-			const config = await subversiveDibsManager.getConfig();
-			return { config };
+
+			const factionId = parseDibsFactionId(query?.factionId, set);
+			if (factionId === null) return { error: INVALID_DIBS_FACTION_ERROR };
+
+			const config = await subversiveDibsManager.getConfig(factionId);
+			return {
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config,
+			};
 		},
 		{
+			query: t.Object({
+				factionId: t.Optional(t.Numeric()),
+			}),
 			detail: {
 				summary: "Get Subversive Dibs Configuration",
 				description:
-					"Returns hospital dibs settings including lead time, limits, and Discord channel.",
+					"Returns hospital dibs settings for one family faction, including lead time, limits, and Discord channel.",
 			},
 		},
 	)
@@ -1148,14 +1197,28 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				set.status = 403;
 				return { error: "Forbidden: Subversive admin access required" };
 			}
+
+			const factionId = parseDibsFactionId(body.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_DIBS_FACTION_ERROR };
+			}
+
+			const { factionId: _ignored, ...patch } = body;
 			const updated = await subversiveDibsManager.updateConfig(
-				body,
+				patch,
 				user?.username ?? "admin",
+				factionId,
 			);
-			return { success: true, config: updated };
+			return {
+				success: true,
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config: updated,
+			};
 		},
 		{
 			body: t.Object({
+				factionId: t.Optional(t.Numeric()),
 				enabled: t.Optional(t.Boolean()),
 				channelId: t.Optional(t.Nullable(t.String())),
 				claimLeadTime: t.Optional(t.Number({ minimum: 1, maximum: 60 })),
@@ -1167,7 +1230,8 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			}),
 			detail: {
 				summary: "Update Subversive Dibs Configuration",
-				description: "Updates hospital dibs coordination settings.",
+				description:
+					"Updates hospital dibs coordination settings for one family faction.",
 			},
 		},
 	)
@@ -1207,11 +1271,15 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Unauthorized: Invalid session" };
 			}
 
-			const result = await subversiveDibsManager.claimDibs(body.targetId, {
-				tornId: session.tornId,
-				tornName: session.tornName,
-				platform: "script",
-			});
+			const result = await subversiveDibsManager.claimDibs(
+				body.targetId,
+				{
+					tornId: session.tornId,
+					tornName: session.tornName,
+					platform: "script",
+				},
+				session.factionId,
+			);
 
 			if (!result.success) {
 				set.status = 400;
@@ -1253,9 +1321,13 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Unauthorized: Invalid session" };
 			}
 
-			const result = await subversiveDibsManager.releaseDibs(body.targetId, {
-				tornId: session.tornId,
-			});
+			const result = await subversiveDibsManager.releaseDibs(
+				body.targetId,
+				{
+					tornId: session.tornId,
+				},
+				session.factionId,
+			);
 
 			if (!result.success) {
 				set.status = 400;
@@ -1290,20 +1362,34 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				};
 			}
 
-			const result = await subversiveDibsManager.claimDibs(body.targetId, {
-				discordId: body.discordUserId,
-				discordTag: body.discordUsername,
-				tornId: resolved.tornId,
-				tornName: resolved.tornName,
-				platform: "discord",
-			});
+			const result = await subversiveDibsManager.claimDibs(
+				body.targetId,
+				{
+					discordId: body.discordUserId,
+					discordTag: body.discordUsername,
+					tornId: resolved.tornId,
+					tornName: resolved.tornName,
+					platform: "discord",
+				},
+				resolveDibsFactionForTarget(body.targetId),
+			);
 
 			if (!result.success) {
 				set.status = 400;
 				return { error: result.reason ?? "Failed to claim dibs" };
 			}
 
-			return { success: true, dibs: result.dibs };
+			// Surface the owning faction's post-hospital lock so Discord replies
+			// quote the correct timeout instead of a hardcoded value.
+			const factionId = result.dibs?.factionId;
+			const config = await subversiveDibsManager.getConfig(factionId);
+
+			return {
+				success: true,
+				dibs: result.dibs,
+				factionId: factionId ?? null,
+				postHospTimeoutSeconds: config.postHospTimeoutSeconds,
+			};
 		},
 		{
 			body: t.Object({
@@ -1323,10 +1409,14 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 		"/dibs/release-discord",
 		async ({ body, set }) => {
 			const resolved = await resolveDiscordTornUser(body.discordUserId);
-			const result = await subversiveDibsManager.releaseDibs(body.targetId, {
-				discordId: body.discordUserId,
-				tornId: resolved?.tornId,
-			});
+			const result = await subversiveDibsManager.releaseDibs(
+				body.targetId,
+				{
+					discordId: body.discordUserId,
+					tornId: resolved?.tornId,
+				},
+				resolveDibsFactionForTarget(body.targetId),
+			);
 
 			if (!result.success) {
 				set.status = 400;

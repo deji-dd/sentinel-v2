@@ -10,6 +10,7 @@ let warTimer: HTMLElement | null = null;
 let warScoreSubversive: HTMLElement | null = null;
 let warScoreOpponent: HTMLElement | null = null;
 let warScoreLead: HTMLElement | null = null;
+let ownFactionLabel: HTMLElement | null = null;
 
 export function initWarBannerElements(root: ShadowRoot | Document): void {
 	warBanner = root.getElementById("satf-war-banner") as HTMLElement | null;
@@ -21,6 +22,8 @@ export function initWarBannerElements(root: ShadowRoot | Document): void {
 		root.getElementById("satf-opp-name")) as HTMLElement | null;
 	warTimer = (root.getElementById("satf-war-timer") ||
 		root.getElementById("satf-war-title")) as HTMLElement | null;
+	ownFactionLabel =
+		(root.getElementById("satf-own-faction-lbl") as HTMLElement | null) ?? null;
 	warScoreSubversive = (root.getElementById("satf-score-subversive") ||
 		root.getElementById("satf-score-sa")) as HTMLElement | null;
 	warScoreOpponent = (root.getElementById("satf-score-opponent") ||
@@ -69,6 +72,14 @@ export function renderWarBanner(war: CurrentWarInfo | null): void {
 	}
 
 	warBanner.style.display = "block";
+
+	// Show the member's own family faction (2013 Subversive Alliance / 27312 SA Succession)
+	const ownFactionName =
+		state.user?.factionName ?? war.factionName ?? war.subversive?.name ?? null;
+	if (ownFactionLabel && ownFactionName) {
+		ownFactionLabel.textContent = ownFactionName;
+	}
+
 	if (warOpponentName) {
 		warOpponentName.textContent = war.opponent?.name || "Opponent";
 	}

@@ -1,4 +1,5 @@
 import type { DibsRecord } from "@sentinel/schemas";
+import { getSubversiveFactionName } from "@sentinel/utils";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
@@ -25,6 +26,30 @@ function formatStats(num: number | null | undefined): string {
 	if (num >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
 	if (num >= 1e3) return `${(num / 1e3).toFixed(1)}k`;
 	return Math.round(num).toLocaleString();
+}
+
+/**
+ * Builds the Faction field identifying which family faction's ranked war this
+ * dibs belongs to (Subversive Alliance 2013 / SA Succession 27312).
+ */
+function buildFactionField(dibs: DibsRecord): {
+	name: string;
+	value: string;
+	inline: boolean;
+} {
+	const factionId = dibs.factionId;
+	const factionName = factionId
+		? getSubversiveFactionName(factionId)
+		: "Unknown faction";
+	const profileUrl = factionId
+		? `https://www.torn.com/factions.php?step=profile&ID=${factionId}`
+		: null;
+
+	return {
+		name: "Faction",
+		value: profileUrl ? `[${factionName}](${profileUrl})` : factionName,
+		inline: true,
+	};
 }
 
 /**
@@ -91,6 +116,7 @@ export async function postDibsAlert(
 		);
 
 		embed.addFields(
+			buildFactionField(dibs),
 			{
 				name: "Hospital Exit",
 				value: `<t:${dibs.hospitalUntil}:R> (<t:${dibs.hospitalUntil}:T>)`,
@@ -162,6 +188,7 @@ export async function updateDibsAlert(
 		);
 
 		embed.addFields(
+			buildFactionField(dibs),
 			{
 				name: "Hospital Exit",
 				value: `<t:${dibs.hospitalUntil}:R> (<t:${dibs.hospitalUntil}:T>)`,
@@ -234,6 +261,7 @@ export async function handleDibsClaimButton(
 			success?: boolean;
 			error?: string;
 			dibs?: DibsRecord;
+			postHospTimeoutSeconds?: number;
 		} = {};
 
 		try {
@@ -248,8 +276,9 @@ export async function handleDibsClaimButton(
 					? `${json.dibs.claimedBy.tornName} [${json.dibs.claimedBy.tornId}]`
 					: "You";
 
+			const timeout = json.postHospTimeoutSeconds ?? 20;
 			await interaction.editReply({
-				content: `Dibs confirmed for ${json.dibs.targetName} [${json.dibs.targetId}] by ${claimant}. You have 20 seconds after hospital exit to initiate attack.`,
+				content: `Dibs confirmed for ${json.dibs.targetName} [${json.dibs.targetId}] by ${claimant}. You have ${timeout} seconds after hospital exit to initiate attack.`,
 			});
 		} else {
 			await interaction.editReply({

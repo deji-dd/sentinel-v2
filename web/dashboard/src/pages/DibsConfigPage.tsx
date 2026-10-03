@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface SubversiveDibsConfig {
 	enabled: boolean;
@@ -34,42 +35,72 @@ interface GuildChannel {
 	name: string;
 }
 
+/**
+ * Family factions that can run the Subversive script with their own dibs
+ * settings. Mirrors SUBVERSIVE_FAMILY_FACTION_IDS on the API.
+ */
+const DIBS_FACTIONS = [
+	{ id: 2013, name: "Subversive Alliance" },
+	{ id: 27312, name: "SA Succession" },
+] as const;
+
+const DEFAULT_CONFIG: SubversiveDibsConfig = {
+	enabled: true,
+	channelId: null,
+	claimLeadTime: 5,
+	maxDibsPerPerson: 1,
+	postHospTimeoutSeconds: 20,
+	autoDeleteOnDowned: true,
+};
+
 export function DibsConfigPage({
 	guildId: _guildId,
 }: {
 	guildId?: string;
 } = {}) {
-	const [config, setConfig] = useState<SubversiveDibsConfig>({
-		enabled: true,
-		channelId: null,
-		claimLeadTime: 5,
-		maxDibsPerPerson: 1,
-		postHospTimeoutSeconds: 20,
-		autoDeleteOnDowned: true,
-	});
+	const [factionId, setFactionId] = useState<number>(DIBS_FACTIONS[0].id);
+	const [config, setConfig] = useState<SubversiveDibsConfig>(DEFAULT_CONFIG);
 	const [channels, setChannels] = useState<GuildChannel[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 
-	const fetchData = useCallback(async () => {
+	const activeFaction =
+		DIBS_FACTIONS.find((f) => f.id === factionId) ?? DIBS_FACTIONS[0];
+
+	// Channels are shared across factions, so they are fetched only once.
+	const fetchChannels = useCallback(async () => {
 		try {
-			const [cfgRes, chRes] = await Promise.all([
-				fetch("/v2/subversive/dibs-config"),
-				fetch("/v2/subversive/guild-channels"),
-			]);
-
-			if (cfgRes.ok) {
-				const cfgData = (await cfgRes.json()) as {
-					config: SubversiveDibsConfig;
-				};
-				if (cfgData.config) {
-					setConfig(cfgData.config);
-				}
-			}
-
+			const chRes = await fetch("/v2/subversive/guild-channels");
 			if (chRes.ok) {
 				const chData = (await chRes.json()) as { channels: GuildChannel[] };
 				setChannels(chData.channels ?? []);
+			}
+		} catch (err) {
+			console.error("Failed loading dibs channels:", err);
+		}
+	}, []);
+
+	const fetchConfig = useCallback(async (targetFactionId: number) => {
+		setLoading(true);
+		try {
+			const cfgRes = await fetch(
+				`/v2/subversive/dibs-config?factionId=${targetFactionId}`,
+			);
+
+			if (cfgRes.ok) {
+				const cfgData = (await cfgRes.json()) as {
+					config?: SubversiveDibsConfig;
+				};
+				if (cfgData.config) {
+					setConfig({ ...DEFAULT_CONFIG, ...cfgData.config });
+				} else {
+					setConfig(DEFAULT_CONFIG);
+				}
+			} else {
+				const err = (await cfgRes.json().catch(() => ({}))) as {
+					error?: string;
+				};
+				toast.error(err.error || "Failed to load dibs configuration.");
 			}
 		} catch (err) {
 			console.error("Failed loading dibs data:", err);
@@ -80,8 +111,12 @@ export function DibsConfigPage({
 	}, []);
 
 	useEffect(() => {
-		void fetchData();
-	}, [fetchData]);
+		void fetchChannels();
+	}, [fetchChannels]);
+
+	useEffect(() => {
+		void fetchConfig(factionId);
+	}, [factionId, fetchConfig]);
 
 	const handleSave = async () => {
 		setSaving(true);
@@ -89,7 +124,7 @@ export function DibsConfigPage({
 			const res = await fetch("/v2/subversive/dibs-config", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(config),
+				body: JSON.stringify({ factionId, ...config }),
 			});
 
 			if (!res.ok) {
@@ -97,9 +132,13 @@ export function DibsConfigPage({
 				throw new Error(err.error || "Failed to update configuration");
 			}
 
-			const data = (await res.json()) as { config: SubversiveDibsConfig };
-			setConfig(data.config);
-			toast.success("War Dibs settings updated successfully.");
+			const data = (await res.json()) as {
+				config: SubversiveDibsConfig;
+			};
+			setConfig({ ...DEFAULT_CONFIG, ...data.config });
+			toast.success(
+				`Dibs settings updated for ${activeFaction.name} [${activeFaction.id}].`,
+			);
 		} catch (err) {
 			toast.error(
 				err instanceof Error ? err.message : "Failed to save settings.",
@@ -123,16 +162,40 @@ export function DibsConfigPage({
 
 	return (
 		<div className="space-y-6 max-w-5xl">
+			<Tabs
+				value={String(factionId)}
+				onValueChange={(val) => setFactionId(Number(val))}
+			>
+				<TabsList className="w-full max-w-lg">
+					{DIBS_FACTIONS.map((faction) => (
+						<TabsTrigger key={faction.id} value={String(faction.id)}>
+							{faction.name}
+							<span className="ml-1 font-mono text-[10px] opacity-70">
+								[{faction.id}]
+							</span>
+						</TabsTrigger>
+					))}
+				</TabsList>
+			</Tabs>
+
 			<Card className="border-border bg-card">
 				<CardHeader>
 					<CardTitle className="text-base font-medium flex items-center gap-2">
-						Dibs Settings
+						Dibs Settings — {activeFaction.name} [{activeFaction.id}]
 					</CardTitle>
+					<p className="text-xs text-muted-foreground">
+						These settings apply only to {activeFaction.name}'s ranked war. Each
+						family faction is configured separately.
+					</p>
 				</CardHeader>
 				<CardContent className="space-y-6">
 					<div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
 						<div className="space-y-0.5">
-							<div className="text-sm font-medium">Enable War Dibs</div>
+							<div className="text-sm font-medium">Enable Dibs</div>
+							<div className="text-xs text-muted-foreground">
+								Allow members of {activeFaction.name} to claim hospital exit
+								dibs.
+							</div>
 						</div>
 						<Switch
 							checked={config.enabled}
@@ -145,7 +208,7 @@ export function DibsConfigPage({
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="space-y-2">
 							<label
-								htmlFor="discord-dibs-channel"
+								htmlFor={`discord-dibs-channel-${factionId}`}
 								className="text-xs font-mono font-medium text-foreground"
 							>
 								Discord Dibs Channel
@@ -159,7 +222,10 @@ export function DibsConfigPage({
 									}))
 								}
 							>
-								<SelectTrigger id="discord-dibs-channel" className="w-full">
+								<SelectTrigger
+									id={`discord-dibs-channel-${factionId}`}
+									className="w-full"
+								>
 									<SelectValue placeholder="Select target channel" />
 								</SelectTrigger>
 								<SelectContent>
@@ -177,13 +243,13 @@ export function DibsConfigPage({
 
 						<div className="space-y-2">
 							<label
-								htmlFor="claim-lead-time"
+								htmlFor={`claim-lead-time-${factionId}`}
 								className="text-xs font-mono font-medium text-foreground"
 							>
 								Claim Lead Time (Minutes)
 							</label>
 							<Input
-								id="claim-lead-time"
+								id={`claim-lead-time-${factionId}`}
 								type="number"
 								min={1}
 								max={30}
@@ -199,13 +265,13 @@ export function DibsConfigPage({
 
 						<div className="space-y-2">
 							<label
-								htmlFor="max-dibs-per-person"
+								htmlFor={`max-dibs-per-person-${factionId}`}
 								className="text-xs font-mono font-medium text-foreground"
 							>
 								Max Dibs Per Person
 							</label>
 							<Input
-								id="max-dibs-per-person"
+								id={`max-dibs-per-person-${factionId}`}
 								type="number"
 								min={1}
 								max={5}
@@ -221,13 +287,13 @@ export function DibsConfigPage({
 
 						<div className="space-y-2">
 							<label
-								htmlFor="post-hosp-lock"
+								htmlFor={`post-hosp-lock-${factionId}`}
 								className="text-xs font-mono font-medium text-foreground"
 							>
 								Post-Hospital Lock Duration (Seconds)
 							</label>
 							<Input
-								id="post-hosp-lock"
+								id={`post-hosp-lock-${factionId}`}
 								type="number"
 								min={5}
 								max={120}

@@ -5,7 +5,12 @@ import {
 	type DibsRecord,
 	type SubversiveDibsConfig,
 } from "@sentinel/schemas";
-import { Logger } from "@sentinel/utils";
+import {
+	Logger,
+	PRIMARY_SUBVERSIVE_FACTION_ID,
+	resolveSubversiveFactionId,
+	SUBVERSIVE_FAMILY_FACTION_IDS,
+} from "@sentinel/utils";
 import { notifyBotAction } from "./bot-ipc";
 import {
 	type CurrentWarInfo,
@@ -14,11 +19,24 @@ import {
 } from "./subversive-target-cache";
 
 const logger = new Logger("API", "SubversiveDibsManager");
-const DIBS_CONFIG_ID = "subversive:dibs_config";
+
+/**
+ * Legacy (pre per-faction) systemStates row id. Kept only so existing
+ * Subversive Alliance settings survive the upgrade to faction-scoped rows.
+ */
+const LEGACY_DIBS_CONFIG_ID = "subversive:dibs_config";
+
+/**
+ * Dibs settings are stored per family faction so Subversive Alliance (2013)
+ * and SA Succession (27312) can run the script with independent rules.
+ */
+function getDibsConfigKey(factionId: number): string {
+	return `${LEGACY_DIBS_CONFIG_ID}:${factionId}`;
+}
 
 class SubversiveDibsManager {
-	private config: SubversiveDibsConfig = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
-	private configLoaded = false;
+	/** Per-faction config cache keyed by resolved faction id. */
+	private configs = new Map<number, SubversiveDibsConfig>();
 	private activeDibs = new Map<number, DibsRecord>();
 	private broadcastCallback: ((dibs: DibsRecord[]) => void) | null = null;
 
@@ -31,29 +49,62 @@ class SubversiveDibsManager {
 
 	/**
 	 * Explicitly sets the in-memory configuration (useful for tests or mocking).
+	 * Seeds every family faction unless a narrower override map is supplied.
 	 */
 	setConfigForTesting(config?: Partial<SubversiveDibsConfig>): void {
-		this.config = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG, ...config };
-		this.configLoaded = true;
+		this.configs.clear();
+		for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+			this.configs.set(factionId, {
+				...DEFAULT_SUBVERSIVE_DIBS_CONFIG,
+				...config,
+			});
+		}
+	}
+
+	/**
+	 * Explicitly overrides the config of a single family faction (useful for tests).
+	 */
+	setFactionConfigForTesting(
+		factionId: number,
+		config?: Partial<SubversiveDibsConfig>,
+	): void {
+		const resolved = resolveSubversiveFactionId(factionId);
+		this.configs.set(resolved, {
+			...DEFAULT_SUBVERSIVE_DIBS_CONFIG,
+			...config,
+		});
 	}
 
 	/**
 	 * Returns the cached in-memory configuration synchronously.
+	 * Always returns a value so hot paths (war events, WS pushes) never block on IO.
 	 */
-	getCachedConfig(): SubversiveDibsConfig {
-		return this.config;
+	getCachedConfig(factionId?: number | null): SubversiveDibsConfig {
+		const resolved = resolveSubversiveFactionId(factionId);
+		return this.configs.get(resolved) ?? { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
 	}
 
 	/**
-	 * Evaluates the full hospital queue directly from subversiveTargetCache.
+	 * Evaluates the hospital queues for every family faction directly from
+	 * subversiveTargetCache (dibs are per-faction: each faction fights its own war).
 	 */
 	async evaluateHospitalQueue(): Promise<void> {
-		const war = subversiveTargetCache.getWarState();
-		const hospitalQueue = subversiveTargetCache.getHospitalQueue({
-			limit: 1000,
-			attackerBsScore: 0,
+		for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+			const war = subversiveTargetCache.getWarState(factionId);
+			const hospitalQueue = subversiveTargetCache.getHospitalQueue({
+				limit: 1000,
+				attackerBsScore: 0,
+				factionId,
+			});
+			await this.processWarHospitalQueue(hospitalQueue, war, factionId);
+		}
+	}
+
+	private hasAnyEngagedWar(): boolean {
+		return SUBVERSIVE_FAMILY_FACTION_IDS.some((factionId) => {
+			const war = subversiveTargetCache.getWarState(factionId);
+			return war.state === "active" || war.state === "scheduled";
 		});
-		await this.processWarHospitalQueue(hospitalQueue, war);
 	}
 
 	private loopTimer: ReturnType<typeof setInterval> | null = null;
@@ -64,8 +115,7 @@ class SubversiveDibsManager {
 	startEvaluationLoop(intervalMs = 1000): void {
 		if (this.loopTimer) return;
 		this.loopTimer = setInterval(() => {
-			const war = subversiveTargetCache.getWarState();
-			if (war.state === "active" || war.state === "scheduled") {
+			if (this.hasAnyEngagedWar()) {
 				void this.evaluateHospitalQueue();
 			} else if (this.activeDibs.size > 0) {
 				this.activeDibs.clear();
@@ -85,45 +135,100 @@ class SubversiveDibsManager {
 	}
 
 	/**
-	 * Retrieves the current Dibs configuration, loading from systemStates on first run.
+	 * Persists a config row under the given systemStates id.
 	 */
-	async getConfig(): Promise<SubversiveDibsConfig> {
-		if (this.configLoaded) {
-			return this.config;
-		}
-
-		try {
-			const [entry] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, DIBS_CONFIG_ID));
-
-			if (entry?.data) {
-				this.config = {
-					...DEFAULT_SUBVERSIVE_DIBS_CONFIG,
-					...(entry.data as Partial<SubversiveDibsConfig>),
-				};
-			} else {
-				this.config = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
-			}
-			this.configLoaded = true;
-		} catch (err) {
-			logger.warn("Failed to load dibs config from database:", err);
-			this.config = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
-			this.configLoaded = true;
-		}
-
-		return this.config;
+	private async persistConfigRow(
+		rowId: string,
+		config: SubversiveDibsConfig,
+	): Promise<void> {
+		await db
+			.insert(systemStates)
+			.values({
+				id: rowId,
+				init: true,
+				data: config as unknown as Record<string, unknown>,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			})
+			.onConflictDoUpdate({
+				target: systemStates.id,
+				set: {
+					data: config as unknown as Record<string, unknown>,
+					updatedAt: new Date(),
+				},
+			});
 	}
 
 	/**
-	 * Updates the Dibs configuration in the database and updates RAM cache.
+	 * Reads one raw config row, returning null when absent.
+	 */
+	private async readConfigRow(
+		rowId: string,
+	): Promise<SubversiveDibsConfig | null> {
+		const [entry] = await db
+			.select()
+			.from(systemStates)
+			.where(eq(systemStates.id, rowId));
+
+		if (!entry?.data) return null;
+		return {
+			...DEFAULT_SUBVERSIVE_DIBS_CONFIG,
+			...(entry.data as Partial<SubversiveDibsConfig>),
+		};
+	}
+
+	/**
+	 * Retrieves the Dibs configuration for one family faction, loading it from
+	 * systemStates on first run and caching it thereafter.
+	 *
+	 * Migration: the pre-faction-scoped `subversive:dibs_config` row is treated as
+	 * the Subversive Alliance (2013) config. When the keyed row is missing, the
+	 * legacy row is read once and lazily re-persisted under the new key so the
+	 * upgrade never loses existing settings.
+	 */
+	async getConfig(factionId?: number | null): Promise<SubversiveDibsConfig> {
+		const resolved = resolveSubversiveFactionId(factionId);
+		const cached = this.configs.get(resolved);
+		if (cached) return cached;
+
+		let config: SubversiveDibsConfig = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
+		try {
+			const keyed = await this.readConfigRow(getDibsConfigKey(resolved));
+			if (keyed) {
+				config = keyed;
+			} else if (resolved === PRIMARY_SUBVERSIVE_FACTION_ID) {
+				// Legacy single-faction row predating per-faction settings.
+				const legacy = await this.readConfigRow(LEGACY_DIBS_CONFIG_ID);
+				if (legacy) {
+					config = legacy;
+					await this.persistConfigRow(getDibsConfigKey(resolved), config);
+					logger.info(
+						"Migrated legacy Subversive dibs config to faction-scoped row.",
+					);
+				}
+			}
+		} catch (err) {
+			logger.warn(
+				`Failed to load dibs config for faction ${resolved} from database:`,
+				err,
+			);
+		}
+
+		this.configs.set(resolved, config);
+		return config;
+	}
+
+	/**
+	 * Updates the Dibs configuration for one family faction in the database and
+	 * updates the RAM cache.
 	 */
 	async updateConfig(
 		patch: Partial<SubversiveDibsConfig>,
 		updatedBy = "admin",
+		factionId?: number | null,
 	): Promise<SubversiveDibsConfig> {
-		const current = await this.getConfig();
+		const resolved = resolveSubversiveFactionId(factionId);
+		const current = await this.getConfig(resolved);
 		const updated: SubversiveDibsConfig = {
 			...current,
 			...patch,
@@ -131,34 +236,23 @@ class SubversiveDibsManager {
 			updatedBy,
 		};
 
-		await db
-			.insert(systemStates)
-			.values({
-				id: DIBS_CONFIG_ID,
-				init: true,
-				data: updated as unknown as Record<string, unknown>,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					data: updated as unknown as Record<string, unknown>,
-					updatedAt: new Date(),
-				},
-			});
+		await this.persistConfigRow(getDibsConfigKey(resolved), updated);
 
-		this.config = updated;
-		this.configLoaded = true;
-		logger.info("Updated Subversive Dibs configuration successfully.");
-		return this.config;
+		this.configs.set(resolved, updated);
+		logger.info(
+			`Updated Subversive Dibs configuration for faction ${resolved}.`,
+		);
+		return updated;
 	}
 
 	/**
-	 * Returns all currently active Dibs records.
+	 * Returns all currently active Dibs records, optionally scoped to one faction.
 	 */
-	getActiveDibs(): DibsRecord[] {
-		return Array.from(this.activeDibs.values());
+	getActiveDibs(factionId?: number | null): DibsRecord[] {
+		const all = Array.from(this.activeDibs.values());
+		if (factionId === undefined || factionId === null) return all;
+		const scoped = resolveSubversiveFactionId(factionId);
+		return all.filter((d) => (d.factionId ?? scoped) === scoped);
 	}
 
 	/**
@@ -194,6 +288,20 @@ class SubversiveDibsManager {
 	}
 
 	/**
+	 * Clears all dibs belonging to a single faction. Returns true when something was removed.
+	 */
+	private clearDibsForFaction(factionId: number): boolean {
+		let removed = false;
+		for (const [targetId, dibs] of this.activeDibs.entries()) {
+			if (dibs.factionId === undefined || dibs.factionId === factionId) {
+				this.activeDibs.delete(targetId);
+				removed = true;
+			}
+		}
+		return removed;
+	}
+
+	/**
 	 * Core evaluation loop called on each 1-second war update cycle.
 	 */
 	async processWarHospitalQueue(
@@ -202,14 +310,15 @@ class SubversiveDibsManager {
 			fairFight: number;
 		})[],
 		war: CurrentWarInfo,
+		factionId: number = PRIMARY_SUBVERSIVE_FACTION_ID,
 	): Promise<void> {
-		const config = await this.getConfig();
+		const scopedFactionId = resolveSubversiveFactionId(factionId);
+		const config = await this.getConfig(scopedFactionId);
 		if (
 			!config.enabled ||
 			(war.state !== "active" && war.state !== "scheduled")
 		) {
-			if (this.activeDibs.size > 0) {
-				this.activeDibs.clear();
+			if (this.clearDibsForFaction(scopedFactionId)) {
 				this.notifyBroadcast();
 			}
 			return;
@@ -239,6 +348,7 @@ class SubversiveDibsManager {
 
 					const record: DibsRecord = {
 						targetId: opp.id,
+						factionId: scopedFactionId,
 						targetName: opp.name,
 						targetLevel: opp.level,
 						estimatedBs: opp.estimatedBs,
@@ -268,6 +378,7 @@ class SubversiveDibsManager {
 		const nowMs = Date.now();
 
 		for (const [targetId, dibs] of this.activeDibs.entries()) {
+			if ((dibs.factionId ?? scopedFactionId) !== scopedFactionId) continue;
 			const currentOpp = queueMap.get(targetId);
 
 			if (currentOpp) {
@@ -381,18 +492,27 @@ class SubversiveDibsManager {
 	async claimDibs(
 		targetId: number,
 		claimant: DibsClaimant,
+		claimantFactionId?: number | null,
 	): Promise<{ success: boolean; reason?: string; dibs?: DibsRecord }> {
-		const config = await this.getConfig();
+		const factionId = resolveSubversiveFactionId(claimantFactionId);
+		const config = await this.getConfig(factionId);
 		if (!config.enabled) {
 			return { success: false, reason: "War dibs is currently disabled." };
 		}
 
 		let dibs = this.activeDibs.get(targetId);
+		if (dibs && dibs.factionId !== undefined && dibs.factionId !== factionId) {
+			return {
+				success: false,
+				reason:
+					"Target belongs to another faction's ranked war and cannot be claimed.",
+			};
+		}
 		if (!dibs) {
 			// On-demand evaluation for target if in active/scheduled war hospital queue
-			const war = subversiveTargetCache.getWarState();
+			const war = subversiveTargetCache.getWarState(factionId);
 			if (war.state === "active" || war.state === "scheduled") {
-				const opp = subversiveTargetCache.getWarOpponent(targetId);
+				const opp = subversiveTargetCache.getWarOpponent(targetId, factionId);
 				if (opp) {
 					const nowSec = Math.floor(Date.now() / 1000);
 					const state = opp.status.state?.toLowerCase() ?? "";
@@ -414,6 +534,7 @@ class SubversiveDibsManager {
 							const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
 							const createdDibs: DibsRecord = {
 								targetId: opp.id,
+								factionId,
 								targetName: opp.name,
 								targetLevel: opp.level,
 								estimatedBs: opp.estimatedBs,
@@ -457,10 +578,10 @@ class SubversiveDibsManager {
 			};
 		}
 
-		// Check claimant's active dibs count
+		// Check claimant's active dibs count (scoped to the claimant's own faction)
 		let userActiveClaims = 0;
 		for (const d of this.activeDibs.values()) {
-			if (d.status === "claimed") {
+			if (d.status === "claimed" && (d.factionId ?? factionId) === factionId) {
 				const matchTorn =
 					claimant.tornId !== undefined &&
 					d.claimedBy?.tornId !== undefined &&
@@ -507,10 +628,22 @@ class SubversiveDibsManager {
 	async releaseDibs(
 		targetId: number,
 		claimant: { tornId?: number; discordId?: string },
+		claimantFactionId?: number | null,
 	): Promise<{ success: boolean; reason?: string }> {
 		const dibs = this.activeDibs.get(targetId);
 		if (!dibs) {
 			return { success: false, reason: "Dibs target not found." };
+		}
+
+		if (
+			dibs.factionId !== undefined &&
+			dibs.factionId !== resolveSubversiveFactionId(claimantFactionId)
+		) {
+			return {
+				success: false,
+				reason:
+					"Target belongs to another faction's ranked war and cannot be released.",
+			};
 		}
 
 		if (dibs.status !== "claimed") {

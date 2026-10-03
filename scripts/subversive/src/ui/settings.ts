@@ -32,7 +32,12 @@ export function updateSettingsAuthView(): void {
 	if (state.user) {
 		const displayName = state.user.name || state.user.tornName || "Member";
 		if (authNameId) {
-			authNameId.textContent = `${displayName} [${state.user.tornId}]`;
+			const factionLabel = state.user.factionName
+				? `${state.user.factionName} [${state.user.factionId ?? 2013}]`
+				: null;
+			authNameId.textContent = factionLabel
+				? `${displayName} [${state.user.tornId}] • ${factionLabel}`
+				: `${displayName} [${state.user.tornId}]`;
 		}
 		if (authConnectedBox) {
 			authConnectedBox.style.display = "block";

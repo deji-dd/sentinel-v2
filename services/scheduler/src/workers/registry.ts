@@ -121,7 +121,7 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 	{
 		id: "subversive:membership_auditor",
 		description:
-			"15-minute Subversive Alliance membership auditor against Faction 2013 roster",
+			"15-minute Subversive family membership auditor (2013 Subversive Alliance, 27312 SA Succession) against each user's own faction roster",
 		start: startSubversiveMembershipAuditor,
 	},
 	{
@@ -139,7 +139,7 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 	{
 		id: "subversive:ranked_war_worker",
 		description:
-			"30-second Subversive Alliance ranked war state auditor and monitoring engine",
+			"30-second per-faction ranked war state auditor and monitoring engine (tracks the ranked war of every Subversive family faction concurrently)",
 		start: startSubversiveRankedWarWorker,
 	},
 	{

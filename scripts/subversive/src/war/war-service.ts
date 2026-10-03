@@ -46,14 +46,33 @@ export async function fetchWarStatus(): Promise<void> {
 		const res = await apiRequest<{
 			war?: CurrentWarInfo;
 			opponentIds?: number[];
+			factionId?: number;
+			factionName?: string;
 		}>("/v2/target-finder/war/status");
 		if (res?.war) {
-			state.war = res.war;
-			state.warState = res.war.state;
+			const war: CurrentWarInfo = {
+				...res.war,
+				factionId: res.war.factionId ?? res.factionId,
+				factionName: res.war.factionName ?? res.factionName,
+			};
+			state.war = war;
+			state.warState = war.state;
 			try {
-				GM_setValue(STORAGE.warState, res.war.state);
+				GM_setValue(STORAGE.warState, war.state);
 			} catch {}
-			renderWarBanner(res.war);
+			// Keep the cached profile in sync with the faction the API resolved for us
+			if (
+				state.user &&
+				war.factionId &&
+				war.factionId !== state.user.factionId
+			) {
+				state.user.factionId = war.factionId;
+				if (war.factionName) state.user.factionName = war.factionName;
+				try {
+					GM_setValue(STORAGE.user, state.user);
+				} catch {}
+			}
+			renderWarBanner(war);
 		}
 		if (Array.isArray(res?.opponentIds)) {
 			state.warOpponentIds = res.opponentIds;

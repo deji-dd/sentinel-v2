@@ -669,11 +669,23 @@ export type IpcDeleteDibsAlertMessage = {
 	};
 };
 
+/**
+ * Ranked war snapshot for a single family faction (2013 / 27312).
+ */
+export type IpcSubversiveFactionWarSnapshot = {
+	war: unknown;
+	opponents: unknown[];
+};
+
 export type IpcSubversiveWarUpdatedMessage = {
 	action: "subversive_war_updated";
 	data: {
-		war: unknown;
-		opponents: unknown[];
+		/** War snapshots keyed by family faction id. */
+		wars: Record<string, IpcSubversiveFactionWarSnapshot>;
+		/** @deprecated Legacy single-faction payload, retained for compatibility. */
+		war?: unknown;
+		/** @deprecated Legacy single-faction payload, retained for compatibility. */
+		opponents?: unknown[];
 	};
 };
 

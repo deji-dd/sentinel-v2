@@ -2,6 +2,7 @@ import {
 	db,
 	desc,
 	eq,
+	gte,
 	subversiveRankedWars,
 	subversiveRecruitmentCandidates,
 	systemStates,
@@ -41,6 +42,10 @@ export const SUBVERSIVE_RECRUITMENT_STATE_ID = "subversive:recruitment_state";
 export const MAX_RANKED_WAR_DURATION_SECONDS = 123 * 3600; // 123 hours theoretical max duration
 export const MAX_RECRUITMENT_PAGES = 10;
 export const RECRUITMENT_PAGE_LIMIT = 100;
+
+// A player can fight several family factions in ranked wars, so candidates are
+// de-duplicated against everyone already surfaced in this window.
+export const CANDIDATE_DEDUPE_WINDOW_DAYS = 3;
 
 function parseNextLinkParams(
 	nextLink: string,
@@ -243,6 +248,26 @@ export async function runRecruitmentCycle(options?: {
 			forfeitedWars: 0,
 			candidatesFound: 0,
 		};
+	}
+
+	// 0. Hydrate recently surfaced candidates so the same player is not alerted twice
+	//when they attacked more than one family faction
+	const recentCandidateIds = new Set<number>();
+	try {
+		const recentRows = await db
+			.select({ playerId: subversiveRecruitmentCandidates.playerId })
+			.from(subversiveRecruitmentCandidates)
+			.where(
+				gte(
+					subversiveRecruitmentCandidates.createdAt,
+					new Date(
+						Date.now() - CANDIDATE_DEDUPE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+					),
+				),
+			);
+		for (const row of recentRows) recentCandidateIds.add(row.playerId);
+	} catch (err) {
+		logger.warn("Failed to hydrate recent candidate dedupe set:", err);
 	}
 
 	// 1. Fetch recent ranked wars across multiple pages using the Subversive script key pool
@@ -577,8 +602,15 @@ export async function runRecruitmentCycle(options?: {
 					normalizedRole === "co-leader" ||
 					normalizedRole === "coleader";
 
+				// Skip players already surfaced recently (e.g. same opponent that
+				// attacked more than one family faction)
+				if (recentCandidateIds.has(candidate.playerId)) {
+					continue;
+				}
+
 				qualifiedCandidatesCount++;
 				totalCandidatesFound++;
+				recentCandidateIds.add(candidate.playerId);
 
 				const candidateUuid = crypto.randomUUID();
 

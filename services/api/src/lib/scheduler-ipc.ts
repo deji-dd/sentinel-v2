@@ -6,6 +6,7 @@ import { broadcastWarUpdate } from "../routes/ws-subversive-war";
 import { subversiveDibsManager } from "./dibs-manager";
 import {
 	type CurrentWarInfo,
+	type FactionWarSnapshot,
 	type RankedWarOpponent,
 	subversiveTargetCache,
 } from "./subversive-target-cache";
@@ -52,15 +53,15 @@ export function initSchedulerIpcListener(): void {
 
 			if (message.action === "subversive_war_updated" && message.data) {
 				const payload = message.data as {
+					wars?: Record<string, FactionWarSnapshot>;
 					war?: CurrentWarInfo;
 					opponents?: RankedWarOpponent[];
 				};
-				if (payload.war) {
-					subversiveTargetCache.setWarState(payload.war);
-				}
-				if (Array.isArray(payload.opponents)) {
-					subversiveTargetCache.setWarOpponents(payload.opponents);
-				}
+				subversiveTargetCache.applyWarUpdate({
+					wars: payload.wars,
+					war: payload.war,
+					opponents: payload.opponents,
+				});
 				void (async () => {
 					await subversiveDibsManager.evaluateHospitalQueue();
 					broadcastWarUpdate();

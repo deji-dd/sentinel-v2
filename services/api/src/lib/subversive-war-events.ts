@@ -1,3 +1,4 @@
+import { resolveSubversiveFactionId } from "@sentinel/utils";
 import { subversiveDibsManager } from "./dibs-manager";
 import type { CachedUserSession } from "./subversive-target-cache";
 import { subversiveTargetCache } from "./subversive-target-cache";
@@ -34,10 +35,12 @@ class SubversiveWarEventManager {
 		session: CachedUserSession,
 		options: { maxFF?: number; maxBS?: number; modified?: boolean } = {},
 	): WarEventPayload {
-		const war = subversiveTargetCache.getWarState();
+		const factionId = resolveSubversiveFactionId(session.factionId);
+		const war = subversiveTargetCache.getWarState(factionId);
 		const attackerBsScore = session.bsScore ?? 0;
 		let targets = subversiveTargetCache.getAvailableWarTargets({
 			attackerBsScore,
+			factionId,
 		});
 		if (typeof options.maxFF === "number") {
 			const limitFF = options.maxFF;
@@ -50,10 +53,12 @@ class SubversiveWarEventManager {
 		const hospitalQueue = subversiveTargetCache.getHospitalQueue({
 			limit: 25,
 			attackerBsScore,
+			factionId,
 		});
-		const dibs = subversiveDibsManager.getActiveDibs();
+		const dibs = subversiveDibsManager.getActiveDibs(factionId);
 		const dibsLeadTimeSeconds =
-			(subversiveDibsManager.getCachedConfig()?.claimLeadTime ?? 5) * 60;
+			(subversiveDibsManager.getCachedConfig(factionId).claimLeadTime ?? 5) *
+			60;
 
 		return {
 			success: true,

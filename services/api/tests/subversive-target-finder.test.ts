@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { app } from "../src/app";
-import { subversiveTargetCache } from "../src/lib/subversive-target-cache";
+import {
+	type CurrentWarInfo,
+	type RankedWarOpponent,
+	subversiveTargetCache,
+} from "../src/lib/subversive-target-cache";
 
 describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
@@ -874,5 +878,143 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 			});
 		const idsAfterHosp = candidatesAfterHosp.map((c) => c.targetId);
 		expect(idsAfterHosp).not.toContain(601);
+	});
+
+	it("tracks ranked war state, rosters and hospital queues per family faction", () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		const makeOpponent = (
+			id: number,
+			name: string,
+			state: "okay" | "hospital",
+			until: number | null,
+		): RankedWarOpponent => ({
+			id,
+			name,
+			level: 70,
+			daysInFaction: 30,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Online", timestamp: nowSec, relative: "" },
+			status: {
+				description: name,
+				details: null,
+				state,
+				color: "green",
+				until,
+			},
+			estimatedBs: 1_000_000_000,
+			estimatedScore: 63_245,
+		});
+
+		const makeWar = (
+			factionId: number,
+			factionName: string,
+			opponentId: number,
+			opponentName: string,
+		): CurrentWarInfo => ({
+			state: "active",
+			warId: factionId === 2013 ? 9001 : 9002,
+			start: nowSec - 3600,
+			target: 150,
+			winner: null,
+			opponent: { id: opponentId, name: opponentName, score: 10, chain: 1 },
+			subversive: {
+				id: factionId,
+				name: factionName,
+				score: 20,
+				chain: 2,
+			},
+			lastUpdated: Date.now(),
+		});
+
+		// Simulates the scheduler broadcast with two concurrent ranked wars
+		subversiveTargetCache.applyWarUpdate({
+			wars: {
+				"2013": {
+					war: makeWar(2013, "Subversive Alliance", 7001, "Alpha Wolves"),
+					opponents: [makeOpponent(7001, "AlphaOne", "okay", null)],
+				},
+				"27312": {
+					war: makeWar(27312, "SA Succession", 8001, "Beta Order"),
+					opponents: [makeOpponent(8001, "BetaOne", "hospital", nowSec + 120)],
+				},
+			},
+		});
+
+		expect(subversiveTargetCache.getWarState(2013).warId).toBe(9001);
+		expect(subversiveTargetCache.getWarState(27312).warId).toBe(9002);
+
+		// Roster scoping
+		expect(
+			subversiveTargetCache.getWarOpponents(2013).map((o) => o.id),
+		).toEqual([7001]);
+		expect(
+			subversiveTargetCache.getWarOpponents(27312).map((o) => o.id),
+		).toEqual([8001]);
+		expect(subversiveTargetCache.isWarOpponent(8001, 2013)).toBe(false);
+		expect(subversiveTargetCache.isWarOpponent(8001, 27312)).toBe(true);
+
+		// Available targets scoping (only "okay" members)
+		expect(
+			subversiveTargetCache
+				.getAvailableWarTargets({ attackerBsScore: 60_000, factionId: 2013 })
+				.map((t) => t.id),
+		).toEqual([7001]);
+		expect(
+			subversiveTargetCache
+				.getAvailableWarTargets({ attackerBsScore: 60_000, factionId: 27312 })
+				.map((t) => t.id),
+		).toEqual([]);
+
+		// Hospital queue scoping
+		expect(
+			subversiveTargetCache
+				.getHospitalQueue({
+					limit: 25,
+					attackerBsScore: 60_000,
+					factionId: 2013,
+				})
+				.map((h) => h.id),
+		).toEqual([]);
+		expect(
+			subversiveTargetCache
+				.getHospitalQueue({
+					limit: 25,
+					attackerBsScore: 60_000,
+					factionId: 27312,
+				})
+				.map((h) => h.id),
+		).toEqual([8001]);
+
+		// Unknown faction ids fall back to the primary faction
+		expect(subversiveTargetCache.getWarOpponentIds(undefined)).toEqual([7001]);
+	});
+
+	it("still accepts the legacy single-war broadcast payload for faction 2013", () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+		subversiveTargetCache.applyWarUpdate({
+			war: {
+				state: "scheduled",
+				warId: 7777,
+				start: nowSec + 600,
+				target: 120,
+				winner: null,
+				opponent: { id: 6001, name: "Legacy Foe", score: 0, chain: 0 },
+				subversive: {
+					id: 2013,
+					name: "Subversive Alliance",
+					score: 0,
+					chain: 0,
+				},
+				lastUpdated: Date.now(),
+			},
+			opponents: [],
+		});
+
+		expect(subversiveTargetCache.getWarState(2013).warId).toBe(7777);
+		expect(subversiveTargetCache.getWarState(27312).warId).toBe(9002);
 	});
 });

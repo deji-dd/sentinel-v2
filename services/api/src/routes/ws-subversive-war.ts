@@ -1,3 +1,4 @@
+import { resolveSubversiveFactionId } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
 import { subversiveDibsManager } from "../lib/dibs-manager";
 import {
@@ -22,7 +23,14 @@ subversiveDibsManager.setBroadcastCallback((dibs) => {
 		try {
 			client.send({
 				type: "dibs_update",
-				dibs,
+				dibs: client.session
+					? dibs.filter(
+							(d) =>
+								(d.factionId ??
+									resolveSubversiveFactionId(client.session?.factionId)) ===
+								resolveSubversiveFactionId(client.session?.factionId),
+						)
+					: dibs,
 				timestamp: Date.now(),
 			});
 		} catch {
@@ -34,28 +42,28 @@ subversiveDibsManager.setBroadcastCallback((dibs) => {
 export function broadcastWarUpdate(): void {
 	if (activeWarSockets.size === 0) return;
 
-	const war = subversiveTargetCache.getWarState();
-	const dibs = subversiveDibsManager.getActiveDibs();
-
 	for (const client of activeWarSockets) {
 		try {
+			const factionId = resolveSubversiveFactionId(client.session?.factionId);
 			const attackerBsScore = client.session?.bsScore ?? 0;
 			const targets = subversiveTargetCache.getAvailableWarTargets({
 				attackerBsScore,
+				factionId,
 			});
 			const hospitalQueue = subversiveTargetCache.getHospitalQueue({
 				limit: 25,
 				attackerBsScore,
+				factionId,
 			});
 
-			const opponentIds = subversiveTargetCache.getWarOpponentIds();
+			const opponentIds = subversiveTargetCache.getWarOpponentIds(factionId);
 
 			client.send({
 				type: "war_update",
-				war,
+				war: subversiveTargetCache.getWarState(factionId),
 				targets,
 				hospitalQueue,
-				dibs,
+				dibs: subversiveDibsManager.getActiveDibs(factionId),
 				opponentIds,
 				timestamp: Date.now(),
 			});
@@ -83,22 +91,25 @@ export const wsSubversiveWarRoutes = new Elysia().ws("/api/ws/subversive-war", {
 		activeWarSockets.add(client);
 		(ws as unknown as { clientRef: WarSocketClient }).clientRef = client;
 
-		// Send immediate initial snapshot
-		const war = subversiveTargetCache.getWarState();
+		// Send immediate initial snapshot scoped to the session's own faction
+		const factionId = resolveSubversiveFactionId(session?.factionId);
 		const attackerBsScore = session?.bsScore ?? 0;
 		const targets = subversiveTargetCache.getAvailableWarTargets({
 			attackerBsScore,
+			factionId,
 		});
 		const hospitalQueue = subversiveTargetCache.getHospitalQueue({
 			limit: 25,
 			attackerBsScore,
+			factionId,
 		});
-		const opponentIds = subversiveTargetCache.getWarOpponentIds();
-		const dibs = subversiveDibsManager.getActiveDibs();
+		const opponentIds = subversiveTargetCache.getWarOpponentIds(factionId);
+		const dibs = subversiveDibsManager.getActiveDibs(factionId);
 
 		ws.send({
 			type: "war_snapshot",
-			war,
+			war: subversiveTargetCache.getWarState(factionId),
+			factionId,
 			targets,
 			hospitalQueue,
 			dibs,
@@ -126,17 +137,24 @@ export const wsSubversiveWarRoutes = new Elysia().ws("/api/ws/subversive-war", {
 				const session = await resolveUserSession(msg.token);
 				if (client && session) {
 					client.session = session;
+					const factionId = resolveSubversiveFactionId(session.factionId);
 					const targets = subversiveTargetCache.getAvailableWarTargets({
 						attackerBsScore: session.bsScore,
+						factionId,
 					});
 					ws.send({
 						type: "auth_ok",
 						user: {
 							tornId: session.tornId,
 							tornName: session.tornName,
+							factionId,
+							factionName: session.factionName ?? null,
 							bsScore: session.bsScore,
 						},
+						war: subversiveTargetCache.getWarState(factionId),
 						targets,
+						dibs: subversiveDibsManager.getActiveDibs(factionId),
+						opponentIds: subversiveTargetCache.getWarOpponentIds(factionId),
 					});
 				}
 			} else if (
@@ -152,11 +170,15 @@ export const wsSubversiveWarRoutes = new Elysia().ws("/api/ws/subversive-war", {
 					return;
 				}
 
-				const result = await subversiveDibsManager.claimDibs(msg.targetId, {
-					tornId: client.session.tornId,
-					tornName: client.session.tornName,
-					platform: "script",
-				});
+				const result = await subversiveDibsManager.claimDibs(
+					msg.targetId,
+					{
+						tornId: client.session.tornId,
+						tornName: client.session.tornName,
+						platform: "script",
+					},
+					client.session.factionId,
+				);
 
 				if (result.success) {
 					ws.send({
@@ -184,9 +206,11 @@ export const wsSubversiveWarRoutes = new Elysia().ws("/api/ws/subversive-war", {
 					return;
 				}
 
-				const result = await subversiveDibsManager.releaseDibs(msg.targetId, {
-					tornId: client.session.tornId,
-				});
+				const result = await subversiveDibsManager.releaseDibs(
+					msg.targetId,
+					{ tornId: client.session.tornId },
+					client.session.factionId,
+				);
 
 				if (result.success) {
 					ws.send({

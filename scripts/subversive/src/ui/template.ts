@@ -816,7 +816,7 @@ export function getPanelHtml(): string {
 						</div>
 						<div class="satf-score-row">
 							<div class="satf-score-box">
-								<span class="satf-score-lbl">Subversive Alliance</span>
+								<span id="satf-own-faction-lbl" class="satf-score-lbl">Subversive Alliance</span>
 								<span id="satf-score-sa" class="satf-score-val">--</span>
 							</div>
 							<div class="satf-score-box" style="text-align:center;">

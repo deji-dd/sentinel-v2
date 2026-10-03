@@ -30,6 +30,8 @@ export type DibsStatus = "open" | "claimed";
 
 export interface DibsRecord {
 	targetId: number;
+	/** Family faction whose ranked war this dibs belongs to (2013 / 27312). */
+	factionId?: number;
 	targetName: string;
 	targetLevel: number;
 	estimatedBs: number;

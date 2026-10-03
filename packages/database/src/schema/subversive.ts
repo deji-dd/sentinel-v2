@@ -137,6 +137,10 @@ export const subversiveTargetFinderUsers = pgTable(
 	{
 		tornId: integer("torn_id").primaryKey(),
 		tornName: text("torn_name").notNull(),
+		// Family faction the user belongs to (2013 Subversive Alliance, 27312 SA Succession).
+		// Defaults to 2013 so pre-migration rows keep working.
+		factionId: integer("faction_id").default(2013).notNull(),
+		factionName: text("faction_name"),
 		apiKeyEncrypted: text("api_key_encrypted").notNull(),
 		apiKeyHash: text("api_key_hash").notNull(),
 		bsScore: doublePrecision("bs_score").default(0).notNull(),
@@ -176,6 +180,7 @@ export const subversiveTargetFinderUsers = pgTable(
 	(table) => [
 		index("idx_subversive_tf_users_hash").on(table.apiKeyHash),
 		index("idx_subversive_tf_users_active").on(table.isActive),
+		index("idx_subversive_tf_users_faction").on(table.factionId),
 	],
 );
 

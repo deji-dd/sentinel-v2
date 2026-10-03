@@ -1,7 +1,11 @@
 import { db, eq, subversiveTargetFinderUsers } from "@sentinel/database";
 import type { FactionMembersResponse } from "@sentinel/schemas";
 import { type ManagedApiKey, tornApi } from "@sentinel/torn-api";
-import { Logger } from "@sentinel/utils";
+import {
+	getSubversiveFactionName,
+	Logger,
+	resolveSubversiveFactionId,
+} from "@sentinel/utils";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {
@@ -11,10 +15,9 @@ import {
 
 const logger = new Logger("SubversiveMembershipAuditor");
 
-const SUBVERSIVE_FACTION_ID = 2013;
-
 /**
- * Audit active Subversive Target Finder users against Faction 2013 roster.
+ * Audits active Subversive Target Finder users against the roster of the faction
+ * each user belongs to (2013 Subversive Alliance, 27312 SA Succession).
  */
 export async function auditSubversiveMembership(
 	apiKey: ManagedApiKey | null,
@@ -28,44 +31,58 @@ export async function auditSubversiveMembership(
 
 	if (activeUsers.length === 0) return 0;
 
-	try {
-		const factionRes = (await tornApi.get("/faction/{id}/members", {
-			apiKey: apiKey.apiKey,
-			userId: apiKey.userId,
-			pathParams: { id: SUBVERSIVE_FACTION_ID },
-		})) as FactionMembersResponse;
-
-		const activeFactionMemberIds = new Set(
-			(factionRes.members ?? []).map((m) => m.id),
-		);
-
-		let revokedCount = 0;
-		for (const user of activeUsers) {
-			if (!activeFactionMemberIds.has(user.tornId)) {
-				logger.warn(
-					`User ${user.tornName} [${user.tornId}] is no longer in Subversive Alliance (${SUBVERSIVE_FACTION_ID}). Revoking access.`,
-				);
-				await db
-					.update(subversiveTargetFinderUsers)
-					.set({
-						isActive: false,
-						updatedAt: new Date(),
-					})
-					.where(eq(subversiveTargetFinderUsers.tornId, user.tornId));
-				revokedCount++;
-			}
+	// Group users by their family faction so each roster is fetched only once
+	const usersByFaction = new Map<number, typeof activeUsers>();
+	for (const user of activeUsers) {
+		const factionId = resolveSubversiveFactionId(user.factionId);
+		const bucket = usersByFaction.get(factionId);
+		if (bucket) {
+			bucket.push(user);
+		} else {
+			usersByFaction.set(factionId, [user]);
 		}
-
-		if (revokedCount > 0) {
-			logger.info(
-				`Revoked Target Finder access for ${revokedCount} former member(s).`,
-			);
-		}
-		return revokedCount;
-	} catch (error) {
-		logger.error("Failed to audit Subversive Alliance faction roster:", error);
-		return 0;
 	}
+
+	let revokedCount = 0;
+
+	for (const [factionId, users] of usersByFaction) {
+		try {
+			const factionRes = (await tornApi.get("/faction/{id}/members", {
+				apiKey: apiKey.apiKey,
+				userId: apiKey.userId,
+				pathParams: { id: factionId },
+			})) as FactionMembersResponse;
+
+			const activeFactionMemberIds = new Set(
+				(factionRes.members ?? []).map((m) => m.id),
+			);
+
+			for (const user of users) {
+				if (!activeFactionMemberIds.has(user.tornId)) {
+					logger.warn(
+						`User ${user.tornName} [${user.tornId}] is no longer in ${getSubversiveFactionName(factionId)} (${factionId}). Revoking access.`,
+					);
+					await db
+						.update(subversiveTargetFinderUsers)
+						.set({
+							isActive: false,
+							updatedAt: new Date(),
+						})
+						.where(eq(subversiveTargetFinderUsers.tornId, user.tornId));
+					revokedCount++;
+				}
+			}
+		} catch (error) {
+			logger.error(`Failed to audit faction ${factionId} roster:`, error);
+		}
+	}
+
+	if (revokedCount > 0) {
+		logger.info(
+			`Revoked Target Finder access for ${revokedCount} former member(s).`,
+		);
+	}
+	return revokedCount;
 }
 
 /**

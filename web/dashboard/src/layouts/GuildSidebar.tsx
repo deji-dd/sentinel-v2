@@ -167,12 +167,6 @@ export function GuildSidebar({
 						icon: UserPlus,
 						accent: "text-emerald-400",
 					},
-					{
-						label: "War Dibs",
-						href: makeHref("/dibs"),
-						icon: Target,
-						accent: "text-amber-400",
-					},
 				]
 			: isAlliance
 				? [
@@ -238,6 +232,22 @@ export function GuildSidebar({
 			items: featureItems,
 		},
 	];
+
+	// Ranked-war features are only meaningful on faction dashboards, where the
+	// family factions (Subversive Alliance / SA Succession) run the script.
+	if (isFaction) {
+		sections.push({
+			title: "RW Features",
+			items: [
+				{
+					label: "Dibs",
+					href: makeHref("/dibs"),
+					icon: Target,
+					accent: "text-amber-400",
+				},
+			],
+		});
+	}
 
 	const isActive = (itemHref: string, exact?: boolean) => {
 		const cleanItemPath = itemHref.split("?")[0] ?? itemHref;

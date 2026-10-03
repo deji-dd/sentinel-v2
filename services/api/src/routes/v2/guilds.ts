@@ -39,6 +39,11 @@ import {
 	isValidApiKey,
 	TornApiClient,
 } from "@sentinel/torn-api";
+import {
+	describeSubversiveFamilyFactions,
+	getSubversiveFactionName,
+	isSubversiveFamilyFaction,
+} from "@sentinel/utils";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import {
@@ -1000,12 +1005,9 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					const match = k.donatedByDiscordTag.match(/\[Faction\s+(\d+)\]/);
 					if (match?.[1]) {
 						factionId = Number(match[1]);
-						factionName =
-							factionId === 2013
-								? "Subversive  Alliance"
-								: factionId === 27312
-									? "SA Succession"
-									: null;
+						factionName = isSubversiveFamilyFaction(factionId)
+							? getSubversiveFactionName(factionId)
+							: null;
 					}
 				}
 
@@ -1105,14 +1107,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				}
 
 				if (isMerc) {
-					const ALLOWED_MERC_FACTIONS = [2013, 27312];
-					if (
-						!playerFactionId ||
-						!ALLOWED_MERC_FACTIONS.includes(playerFactionId)
-					) {
+					if (!isSubversiveFamilyFaction(playerFactionId)) {
 						set.status = 400;
 						return {
-							error: `API key belongs to ${playerFactionName} [${playerFactionId ?? "None"}]. Mercenary guild keys must belong to family factions 2013 (Subversive Alliance) or 27312 (SA Succession).`,
+							error: `API key belongs to ${playerFactionName} [${playerFactionId ?? "None"}]. Mercenary guild keys must belong to family factions ${describeSubversiveFamilyFactions()}.`,
 						};
 					}
 

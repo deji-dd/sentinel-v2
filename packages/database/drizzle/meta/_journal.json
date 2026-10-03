@@ -267,6 +267,13 @@
 			"when": 1791046393188,
 			"tag": "0037_damp_lifeguard",
 			"breakpoints": true
+		},
+		{
+			"idx": 38,
+			"version": "7",
+			"when": 1791051341313,
+			"tag": "0038_absurd_mole_man",
+			"breakpoints": true
 		}
 	]
 }

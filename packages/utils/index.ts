@@ -6,3 +6,4 @@ export * from "./src/logger";
 export * from "./src/modules";
 export * from "./src/oil-rig";
 export * from "./src/oil-rig-briefing";
+export * from "./src/subversive-factions";

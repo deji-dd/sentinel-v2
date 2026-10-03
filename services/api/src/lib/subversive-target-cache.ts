@@ -7,9 +7,27 @@ import {
 	subversiveTargetFinderUsers,
 } from "@sentinel/database";
 import { getPlayerStats } from "@sentinel/torn-api";
-import { Logger } from "@sentinel/utils";
+import {
+	getSubversiveFactionName,
+	Logger,
+	PRIMARY_SUBVERSIVE_FACTION_ID,
+	resolveSubversiveFactionId,
+} from "@sentinel/utils";
 
 const logger = new Logger("SubversiveTargetCache");
+
+export function createEmptyWarInfo(): CurrentWarInfo {
+	return {
+		state: "no_war",
+		warId: null,
+		start: null,
+		target: null,
+		winner: null,
+		opponent: null,
+		subversive: null,
+		lastUpdated: 0,
+	};
+}
 
 export interface CachedTarget {
 	targetId: number;
@@ -30,6 +48,9 @@ export interface CachedTarget {
 export interface CachedUserSession {
 	tornId: number;
 	tornName: string;
+	/** Family faction the session belongs to (2013 / 27312). */
+	factionId?: number;
+	factionName?: string | null;
 	bsScore: number;
 	token: string;
 	isActive: boolean;
@@ -109,6 +130,14 @@ export interface CurrentWarInfo {
 	lastUpdated: number;
 }
 
+/**
+ * Ranked war context for a single family faction.
+ */
+export interface FactionWarSnapshot {
+	war: CurrentWarInfo;
+	opponents: RankedWarOpponent[];
+}
+
 class SubversiveTargetCache {
 	private targets: CachedTarget[] = [];
 	private targetMap: Map<number, CachedTarget> = new Map();
@@ -116,17 +145,11 @@ class SubversiveTargetCache {
 	private tokenToUserId: Map<string, number> = new Map();
 	private reservedTargets: Map<number, number> = new Map();
 
-	private currentWar: CurrentWarInfo = {
-		state: "no_war",
-		warId: null,
-		start: null,
-		target: null,
-		winner: null,
-		opponent: null,
-		subversive: null,
-		lastUpdated: 0,
-	};
-	private warOpponents: Map<number, RankedWarOpponent> = new Map();
+	/** Ranked war state per family faction id (2013 / 27312). */
+	private warByFaction: Map<number, CurrentWarInfo> = new Map();
+	/** Opponent roster per family faction id. */
+	private opponentsByFaction: Map<number, Map<number, RankedWarOpponent>> =
+		new Map();
 
 	/**
 	 * Initializes the RAM target cache from the database (only non-hospitalized targets with known score).
@@ -145,6 +168,8 @@ class SubversiveTargetCache {
 				this.setUserSession({
 					tornId: u.tornId,
 					tornName: u.tornName,
+					factionId: resolveSubversiveFactionId(u.factionId),
+					factionName: u.factionName ?? getSubversiveFactionName(u.factionId),
 					bsScore: u.bsScore,
 					token: "", // Assigned on login
 					isActive: u.isActive,
@@ -558,51 +583,112 @@ class SubversiveTargetCache {
 		return this.targets.length;
 	}
 
-	// ─── Ranked War Methods ──────────────────────────────────────────────────
+	// ─── Ranked War Methods (per family faction) ──────────────────────────────
 
-	private isWarEngaged(): boolean {
+	private normalizeFaction(factionId?: number | null): number {
+		return resolveSubversiveFactionId(factionId);
+	}
+
+	private warFor(factionId?: number | null): CurrentWarInfo {
 		return (
-			this.currentWar.state === "active" ||
-			this.currentWar.state === "scheduled"
+			this.warByFaction.get(this.normalizeFaction(factionId)) ??
+			createEmptyWarInfo()
 		);
 	}
 
-	setWarState(info: CurrentWarInfo): void {
-		this.currentWar = info;
+	private opponentsFor(
+		factionId?: number | null,
+	): Map<number, RankedWarOpponent> {
+		const key = this.normalizeFaction(factionId);
+		let map = this.opponentsByFaction.get(key);
+		if (!map) {
+			map = new Map();
+			this.opponentsByFaction.set(key, map);
+		}
+		return map;
+	}
+
+	private isWarEngaged(factionId?: number | null): boolean {
+		const war = this.warFor(factionId);
+		return war.state === "active" || war.state === "scheduled";
+	}
+
+	/**
+	 * Applies a payload of per-faction war snapshots broadcast by the scheduler.
+	 * Accepts either the new `wars` map (keyed by faction id) or the legacy
+	 * single-war payload (treated as the primary faction).
+	 */
+	applyWarUpdate(payload: {
+		wars?: Record<string, FactionWarSnapshot>;
+		war?: CurrentWarInfo;
+		opponents?: RankedWarOpponent[];
+	}): void {
+		if (payload.wars && typeof payload.wars === "object") {
+			for (const [rawFactionId, snapshot] of Object.entries(payload.wars)) {
+				const factionId = this.normalizeFaction(Number(rawFactionId));
+				if (!snapshot) continue;
+				this.setWarState(snapshot.war ?? createEmptyWarInfo(), factionId);
+				this.setWarOpponents(snapshot.opponents ?? [], factionId);
+			}
+			return;
+		}
+
+		if (payload.war) {
+			this.setWarState(payload.war, PRIMARY_SUBVERSIVE_FACTION_ID);
+			this.setWarOpponents(
+				payload.opponents ?? [],
+				PRIMARY_SUBVERSIVE_FACTION_ID,
+			);
+		}
+	}
+
+	setWarState(info: CurrentWarInfo, factionId?: number): void {
+		const key = this.normalizeFaction(factionId ?? info.subversive?.id);
+		this.warByFaction.set(key, info);
 		if (info.state === "no_war") {
-			this.warOpponents.clear();
+			this.opponentsByFaction.set(key, new Map());
 		}
 	}
 
-	getWarState(): CurrentWarInfo {
-		return this.currentWar;
+	getWarState(factionId?: number): CurrentWarInfo {
+		return this.warFor(factionId);
 	}
 
-	setWarOpponents(opponents: RankedWarOpponent[]): void {
-		this.warOpponents.clear();
+	setWarOpponents(opponents: RankedWarOpponent[], factionId?: number): void {
+		const key = this.normalizeFaction(factionId);
+		const map = new Map<number, RankedWarOpponent>();
 		for (const opp of opponents) {
-			this.warOpponents.set(opp.id, opp);
+			map.set(opp.id, opp);
 		}
+		this.opponentsByFaction.set(key, map);
 	}
 
-	getWarOpponents(): RankedWarOpponent[] {
-		return Array.from(this.warOpponents.values());
+	getWarOpponents(factionId?: number): RankedWarOpponent[] {
+		return Array.from(this.opponentsFor(factionId).values());
 	}
 
-	getWarOpponent(targetId: number): RankedWarOpponent | undefined {
-		return this.isWarEngaged() ? this.warOpponents.get(targetId) : undefined;
+	getWarOpponent(
+		targetId: number,
+		factionId?: number,
+	): RankedWarOpponent | undefined {
+		if (!this.isWarEngaged(factionId)) return undefined;
+		return this.opponentsFor(factionId).get(targetId);
 	}
 
-	isWarOpponent(targetId: number): boolean {
-		return this.isWarEngaged() && this.warOpponents.has(targetId);
+	isWarOpponent(targetId: number, factionId?: number): boolean {
+		return (
+			this.isWarEngaged(factionId) && this.opponentsFor(factionId).has(targetId)
+		);
 	}
 
-	getWarOpponentIds(): number[] {
-		return this.isWarEngaged() ? Array.from(this.warOpponents.keys()) : [];
+	getWarOpponentIds(factionId?: number): number[] {
+		if (!this.isWarEngaged(factionId)) return [];
+		return Array.from(this.opponentsFor(factionId).keys());
 	}
 
 	getNextWarTarget(options: {
 		attackerBsScore: number;
+		factionId?: number;
 		excludeIds?: Set<number>;
 		minFF?: number;
 		maxFF?: number;
@@ -627,12 +713,12 @@ class SubversiveTargetCache {
 			maxBS,
 		} = options;
 
-		if (!this.isWarEngaged()) {
+		if (!this.isWarEngaged(options.factionId)) {
 			return null;
 		}
 
 		const nowSec = Math.floor(Date.now() / 1000);
-		const opponents = Array.from(this.warOpponents.values());
+		const opponents = Array.from(this.opponentsFor(options.factionId).values());
 
 		// Unattackable states: Traveling, Abroad, Federal, Fallen, Jail
 		const attackable = opponents.filter((opp) => {
@@ -778,9 +864,16 @@ class SubversiveTargetCache {
 	}
 
 	getHospitalQueue(
-		options: number | { limit?: number; attackerBsScore?: number } = 15,
+		options:
+			| number
+			| { limit?: number; attackerBsScore?: number; factionId?: number } = 15,
 	): (RankedWarOpponent & { secondsRemaining: number; fairFight: number })[] {
-		if (!this.isWarEngaged()) {
+		const factionId =
+			typeof options === "object"
+				? (options.factionId ?? undefined)
+				: undefined;
+
+		if (!this.isWarEngaged(factionId)) {
 			return [];
 		}
 
@@ -788,7 +881,7 @@ class SubversiveTargetCache {
 		const attackerBsScore =
 			typeof options === "object" ? (options.attackerBsScore ?? 0) : 0;
 		const nowSec = Math.floor(Date.now() / 1000);
-		return Array.from(this.warOpponents.values())
+		return Array.from(this.opponentsFor(factionId).values())
 			.filter((opp) => {
 				const state = opp.status.state?.toLowerCase() ?? "";
 				return (
@@ -815,6 +908,7 @@ class SubversiveTargetCache {
 
 	getAvailableWarTargets(options: {
 		attackerBsScore: number;
+		factionId?: number;
 		excludeIds?: Set<number>;
 	}): Array<
 		RankedWarOpponent & {
@@ -825,12 +919,12 @@ class SubversiveTargetCache {
 			attackUrl: string;
 		}
 	> {
-		if (!this.isWarEngaged()) {
+		if (!this.isWarEngaged(options.factionId)) {
 			return [];
 		}
 
 		const { attackerBsScore, excludeIds = new Set() } = options;
-		const opponents = Array.from(this.warOpponents.values());
+		const opponents = Array.from(this.opponentsFor(options.factionId).values());
 
 		const attackable = opponents.filter((opp) => {
 			if (excludeIds.has(opp.id)) return false;
@@ -925,6 +1019,7 @@ class SubversiveTargetCache {
 	async getTargetOrOpponentDetails(
 		targetId: number,
 		attackerBsScore: number,
+		factionId?: number,
 	): Promise<{
 		id: number;
 		name: string;
@@ -943,8 +1038,10 @@ class SubversiveTargetCache {
 		attackUrl: string;
 		isWarTarget: boolean;
 	}> {
-		const isWarActive = this.isWarEngaged();
-		const opp = isWarActive ? this.warOpponents.get(targetId) : undefined;
+		const isWarActive = this.isWarEngaged(factionId);
+		const opp = isWarActive
+			? this.opponentsFor(factionId).get(targetId)
+			: undefined;
 		if (opp) {
 			const rawFF =
 				attackerBsScore > 0 && opp.estimatedScore > 0

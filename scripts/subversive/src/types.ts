@@ -19,6 +19,9 @@ export interface UserSessionData {
 	tornId: number;
 	name: string;
 	tornName?: string;
+	/** Family faction the session belongs to (2013 / 27312). */
+	factionId?: number;
+	factionName?: string;
 	bsScore?: number;
 	role?: string;
 }
@@ -75,6 +78,9 @@ export interface WarFactionInfo {
 export interface CurrentWarInfo {
 	warId?: number;
 	state: "active" | "scheduled" | "no_war" | "ended" | string;
+	/** Family faction this war belongs to (2013 / 27312). */
+	factionId?: number;
+	factionName?: string;
 	start?: number;
 	target?: number;
 	winner?: number | null;

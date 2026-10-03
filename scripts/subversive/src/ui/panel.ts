@@ -62,7 +62,10 @@ export function updateUserBadge(): void {
 	if (!userBadgeElem) return;
 	const displayName = state.user?.name || state.user?.tornName;
 	if (displayName) {
-		userBadgeElem.textContent = `${displayName} [${state.user?.tornId}]`;
+		const factionTag = state.user?.factionName
+			? ` • ${state.user.factionName}`
+			: "";
+		userBadgeElem.textContent = `${displayName} [${state.user?.tornId}]${factionTag}`;
 		userBadgeElem.style.color = "var(--accent)";
 	} else {
 		userBadgeElem.textContent = "Guest (Not connected)";

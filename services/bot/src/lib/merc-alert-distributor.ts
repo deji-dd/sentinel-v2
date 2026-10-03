@@ -826,13 +826,17 @@ export function buildTargetHitBreakdownCsv(
 }
 
 /**
- * Builds the standardized receipt embed, CSV attachments, and web receipt button for a mercenary contract.
- * Shared across war end summary notifications and the /receipt Discord slash command.
+ * Builds the mercenary payout CSVs: one combined file covering every merc, plus one
+ * file per merc faction (e.g. two factions splitting the roster yields three files).
+ *
+ * Each row breaks a merc down by name, Torn ID, faction, hits made, and payout.
+ * Shared by the contract receipt payload and the paid alert so both surfaces ship
+ * byte-identical merc breakdowns.
  */
-export function buildMercContractReceiptPayload(
+export function buildMercPayoutAttachments(
 	contract: MercContract,
 	summary: MercContractSummaryReport,
-): MercContractReceiptPayload {
+): AttachmentBuilder[] {
 	// CSV 1: Merc Payouts & Hit Breakdown (Combined)
 	let csvCombined =
 		"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
@@ -843,30 +847,41 @@ export function buildMercContractReceiptPayload(
 		csvCombined += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
 	}
 
-	// CSV Per-Faction Merc Payouts (e.g. 2 different factions split)
-	const mercAttachments: AttachmentBuilder[] = [
+	const attachments: AttachmentBuilder[] = [
 		new AttachmentBuilder(Buffer.from(csvCombined, "utf-8"), {
 			name: `merc_payouts_combined_${contract.id}.csv`,
 		}),
 	];
 
-	if (summary.factionPayouts && summary.factionPayouts.length > 0) {
-		for (const fp of summary.factionPayouts) {
-			const safeFaction = fp.factionName
-				.replace(/[^a-zA-Z0-9_-]/g, "_")
-				.toLowerCase();
-			let csvFaction =
-				"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
-			for (const m of fp.mercs) {
-				csvFaction += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fp.factionName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
-			}
-			mercAttachments.push(
-				new AttachmentBuilder(Buffer.from(csvFaction, "utf-8"), {
-					name: `merc_payouts_${safeFaction}_${contract.id}.csv`,
-				}),
-			);
+	// CSV Per-Faction Merc Payouts (e.g. 2 different factions split)
+	for (const fp of summary.factionPayouts ?? []) {
+		const safeFaction = fp.factionName
+			.replace(/[^a-zA-Z0-9_-]/g, "_")
+			.toLowerCase();
+		let csvFaction =
+			"Mercenary Name,Torn ID,Faction,Total Hits,Standard Hits,Stricken Hits,Total Payout ($)\n";
+		for (const m of fp.mercs) {
+			csvFaction += `"${m.attackerName.replace(/"/g, '""')}",${m.attackerId},"${fp.factionName.replace(/"/g, '""')}",${m.totalHits},${m.standardHits},${m.strickenHits},${m.totalPayout}\n`;
 		}
+		attachments.push(
+			new AttachmentBuilder(Buffer.from(csvFaction, "utf-8"), {
+				name: `merc_payouts_${safeFaction}_${contract.id}.csv`,
+			}),
+		);
 	}
+
+	return attachments;
+}
+
+/**
+ * Builds the standardized receipt embed, CSV attachments, and web receipt button for a mercenary contract.
+ * Shared across war end summary notifications and the /receipt Discord slash command.
+ */
+export function buildMercContractReceiptPayload(
+	contract: MercContract,
+	summary: MercContractSummaryReport,
+): MercContractReceiptPayload {
+	const mercAttachments = buildMercPayoutAttachments(contract, summary);
 
 	// CSV Target Hit Breakdown (Client receipt)
 	const csvTarget = buildTargetHitBreakdownCsv(summary);
@@ -1014,8 +1029,8 @@ export async function postMercContractEndSummary(
 
 /**
  * Announces that a concluded contract has been settled, in the guild's configured
- * past contracts channel. Attaches the same target hit breakdown CSV shipped with
- * the conclusion receipt.
+ * past contracts channel. Attaches the same merc payout CSVs shipped with the
+ * conclusion receipt — one combined file plus one file per merc faction.
  *
  * Deliberately does not call `deleteUpcomingContractAnnouncement` — that cleanup
  * already ran when the contract concluded, and re-running it could delete a newer
@@ -1045,18 +1060,13 @@ export async function postMercContractPaid(
 
 		const embed = createBaseEmbed(
 			`[CONTRACT PAID] ${contract.factionName} [${contract.factionId}]`,
-			`This contract has been marked as paid.\n\nTotal Hits Completed: **${summary.totalHits}**\nTotal Paid: **$${summary.totalPayout.toLocaleString()}**\n\nPaid On: **${paidAtTct}**\n\nThe full breakdown of hits against faction members is attached below as a CSV.`,
+			`This contract has been marked as paid.\n\nTotal Hits Completed: **${summary.totalHits}**\nTotal Paid: **$${summary.totalPayout.toLocaleString()}**\n\nPaid On: **${paidAtTct}**\n\nThe full merc breakdown — mercenary, faction, and hits made — is attached below as CSVs (one combined, plus one per merc faction).`,
 			EMBED_COLORS.SUCCESS,
 		);
 
-		const targetFile = new AttachmentBuilder(
-			Buffer.from(buildTargetHitBreakdownCsv(summary), "utf-8"),
-			{
-				name: `target_hit_breakdown_${contract.id}.csv`,
-			},
-		);
+		const mercAttachments = buildMercPayoutAttachments(contract, summary);
 
-		await channel.send({ embeds: [embed], files: [targetFile] });
+		await channel.send({ embeds: [embed], files: mercAttachments });
 	} catch (err) {
 		logger.error(`Failed to post paid alert for contract ${contract.id}:`, err);
 	}
