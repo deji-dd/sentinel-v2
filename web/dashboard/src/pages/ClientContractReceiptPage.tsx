@@ -106,10 +106,16 @@ export function ClientContractReceiptPage({
 				.receipt["toggle-pause"].post();
 
 			if (res.error) {
+				const errorValue = res.error.value;
 				const errMsg =
-					res.data && "error" in res.data && typeof res.data.error === "string"
-						? res.data.error
-						: "Failed to update contract status.";
+					typeof errorValue === "string"
+						? errorValue
+						: typeof errorValue === "object" &&
+								errorValue !== null &&
+								"error" in errorValue &&
+								typeof (errorValue as { error: unknown }).error === "string"
+							? (errorValue as { error: string }).error
+							: "Failed to update contract status.";
 				toast(errMsg, "error");
 				return;
 			}
