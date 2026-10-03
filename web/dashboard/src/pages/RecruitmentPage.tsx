@@ -446,8 +446,8 @@ export function RecruitmentPage({
 						<a
 							href={
 								import.meta.env.PROD
-									? "https://api.blasted-labs.tech/v2/target-finder/script.user.js"
-									: "/v2/target-finder/script.user.js?env=dev"
+									? "https://api.blasted-labs.tech/v2/subversive/script.user.js"
+									: "/v2/subversive/script.user.js?env=dev"
 							}
 							target="_blank"
 							rel="noopener noreferrer"

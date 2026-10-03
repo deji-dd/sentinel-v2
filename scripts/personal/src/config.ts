@@ -33,7 +33,7 @@ export const POLLING_CONFIG = {
 } as const;
 
 export const DEFAULT_SETTINGS: ScriptSettings = {
-	apiUrl: "https://sentinel.blasted-labs.tech",
+	apiUrl: "https://api.blasted-labs.tech",
 	apiKey: "",
 	panelOpen: false,
 	persistOpen: false,

@@ -33,7 +33,10 @@ import {
 import { hasActiveSubversiveKeys } from "../../lib/subversive-key-pool";
 import { authPlugin } from "../../middleware/auth";
 import { verifyGuildAdmin } from "./guilds";
-import { resolveUserSession } from "./subversive-target-finder";
+import {
+	resolveUserSession,
+	serveUserscript,
+} from "./subversive-target-finder";
 
 interface DiscordGuild {
 	id: string;
@@ -162,6 +165,13 @@ export async function verifySubversiveAdmin(
 }
 
 export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
+	// ─── GET /script & /script.user.js (Public Subversive Userscript Download) ─
+	.get("/script", async ({ query, set }) => {
+		return serveUserscript(query, set);
+	})
+	.get("/script.user.js", async ({ query, set }) => {
+		return serveUserscript(query, set);
+	})
 	.use(authPlugin)
 
 	// ─── GET /api/v1/subversive/status ─────────────────────────────────────────

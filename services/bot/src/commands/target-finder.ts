@@ -15,8 +15,8 @@ export const getTargetFinderScriptUrl = (): string => {
 		return process.env.TARGET_FINDER_SCRIPT_URL;
 	}
 	return process.env.NODE_ENV === "production"
-		? "https://api.blasted-labs.tech/v2/target-finder/script.user.js"
-		: "http://localhost:3000/v2/target-finder/script.user.js?env=dev";
+		? "https://api.blasted-labs.tech/v2/subversive/script.user.js"
+		: "http://localhost:3000/v2/subversive/script.user.js?env=dev";
 };
 
 export const targetFinderCommand: BotCommand = {

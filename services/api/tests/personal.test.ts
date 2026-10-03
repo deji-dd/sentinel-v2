@@ -14,7 +14,7 @@ describe("Elysia API Server - Personal Script Routes", () => {
 		const text = await response.text();
 		expect(text).toContain("Blasted's Script");
 		expect(text).toContain(
-			"https://sentinel.blasted-labs.tech/v2/personal/script.user.js",
+			"https://api.blasted-labs.tech/v2/personal/script.user.js",
 		);
 	});
 
@@ -30,10 +30,10 @@ describe("Elysia API Server - Personal Script Routes", () => {
 		const text = await response.text();
 		expect(text).toContain("Blasted's Script");
 		expect(text).toContain(
-			"// @downloadURL  https://sentinel.blasted-labs.tech/v2/personal/script.user.js",
+			"// @downloadURL  https://api.blasted-labs.tech/v2/personal/script.user.js",
 		);
 		expect(text).toContain(
-			"// @updateURL    https://sentinel.blasted-labs.tech/v2/personal/script.user.js",
+			"// @updateURL    https://api.blasted-labs.tech/v2/personal/script.user.js",
 		);
 	});
 
@@ -65,7 +65,26 @@ describe("Elysia API Server - Personal Script Routes", () => {
 		const text = await response.text();
 		expect(text).toContain("Blasted's Script");
 		expect(text).toContain(
-			"// @downloadURL  https://sentinel.blasted-labs.tech/v2/personal/script.user.js",
+			"// @downloadURL  https://api.blasted-labs.tech/v2/personal/script.user.js",
+		);
+	});
+
+	it("GET /api/v1/system/crime-ledger/script.user.js maintains backward compatibility for legacy script installations", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/api/v1/system/crime-ledger/script.user.js"),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain(
+			"application/javascript",
+		);
+		const text = await response.text();
+		expect(text).toContain("Blasted's Script");
+		expect(text).toContain(
+			"// @downloadURL  https://api.blasted-labs.tech/v2/personal/script.user.js",
+		);
+		expect(text).toContain(
+			"// @updateURL    https://api.blasted-labs.tech/v2/personal/script.user.js",
 		);
 	});
 });

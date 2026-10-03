@@ -47,11 +47,12 @@ function getMetadataBanner(version: string): string {
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @connect      api.blasted-labs.tech
 // @connect      sentinel.blasted-labs.tech
 // @connect      localhost
 // @connect      *
-// @downloadURL  https://sentinel.blasted-labs.tech/v2/personal/script.user.js
-// @updateURL    https://sentinel.blasted-labs.tech/v2/personal/script.user.js
+// @downloadURL  https://api.blasted-labs.tech/v2/personal/script.user.js
+// @updateURL    https://api.blasted-labs.tech/v2/personal/script.user.js
 // @run-at       document-idle
 // ==/UserScript==
 

@@ -1120,7 +1120,10 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		return serveUserscript(query, set);
 	});
 
-async function serveUserscript(query: { env?: string }, set: Context["set"]) {
+export async function serveUserscript(
+	query: { env?: string },
+	set: Context["set"],
+) {
 	try {
 		const candidatePaths = [
 			`${process.cwd()}/scripts/subversive-alliance.user.js`,

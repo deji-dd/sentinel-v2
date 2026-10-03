@@ -65,7 +65,10 @@ function extractConditionValue(condition: unknown): unknown {
 	if (Array.isArray(cond.queryChunks)) {
 		for (const chunk of cond.queryChunks) {
 			if (chunk && typeof chunk === "object" && "value" in chunk) {
-				return (chunk as Record<string, unknown>).value;
+				const val = (chunk as Record<string, unknown>).value;
+				if (typeof val === "string" || typeof val === "number") {
+					return val;
+				}
 			}
 		}
 	}
@@ -219,6 +222,10 @@ describe("Subversive Recruitment Worker", () => {
 		).mockImplementation(async () => mockKey);
 
 		const nowSec = Math.floor(Date.now() / 1000);
+		mockState = {
+			init: true,
+			data: { lastScanTimestamp: nowSec - 14400 },
+		};
 
 		// Page 1: 100 scheduled wars with future start times (end === 0)
 		const scheduledWarsPage1 = Array.from({ length: 100 }, (_, i) => ({
@@ -344,6 +351,10 @@ describe("Subversive Recruitment Worker", () => {
 		).mockImplementation(async () => mockKey);
 
 		const nowSec = Math.floor(Date.now() / 1000);
+		mockState = {
+			init: true,
+			data: { lastScanTimestamp: nowSec - 14400 },
+		};
 
 		// Simulate War 99902 on Page 1 already evaluated in a previous cycle
 		mockRankedWarsRows.push({ id: 99902 });

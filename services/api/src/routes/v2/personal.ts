@@ -27,15 +27,15 @@ export async function serveBlastedUserscript(
 	if (query.env === "dev") {
 		content = content
 			.replace(
-				/apiUrl:\s*"https:\/\/sentinel\.blasted-labs\.tech"/g,
+				/apiUrl:\s*"https:\/\/(?:sentinel|api)\.blasted-labs\.tech"/g,
 				'apiUrl: "http://localhost:3000"',
 			)
 			.replace(
-				/@downloadURL\s+https:\/\/sentinel\.blasted-labs\.tech\/(?:api\/v1\/system\/crime-ledger|v2\/system\/crime-ledger|v2\/personal)\/script\.user\.js/g,
+				/@downloadURL\s+https:\/\/(?:sentinel|api)\.blasted-labs\.tech\/(?:api\/v1\/system\/crime-ledger|v2\/system\/crime-ledger|v2\/personal)\/script\.user\.js/g,
 				"@downloadURL  http://localhost:3000/v2/personal/script.user.js?env=dev",
 			)
 			.replace(
-				/@updateURL\s+https:\/\/sentinel\.blasted-labs\.tech\/(?:api\/v1\/system\/crime-ledger|v2\/system\/crime-ledger|v2\/personal)\/script\.user\.js/g,
+				/@updateURL\s+https:\/\/(?:sentinel|api)\.blasted-labs\.tech\/(?:api\/v1\/system\/crime-ledger|v2\/system\/crime-ledger|v2\/personal)\/script\.user\.js/g,
 				"@updateURL    http://localhost:3000/v2/personal/script.user.js?env=dev",
 			);
 	}

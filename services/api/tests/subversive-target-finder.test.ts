@@ -52,6 +52,46 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(text).toContain("http://localhost:3000");
 	});
 
+	it("GET /v2/subversive/script serves production userscript by default", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/v2/subversive/script"),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/javascript");
+		const text = await response.text();
+		expect(text).toContain("Subversive Alliance");
+		expect(text).toContain("https://api.blasted-labs.tech");
+	});
+
+	it("GET /v2/subversive/script.user.js serves production userscript directly for Tampermonkey", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/v2/subversive/script.user.js"),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/javascript");
+		const text = await response.text();
+		expect(text).toContain("Subversive Alliance");
+		expect(text).toContain(
+			"// @downloadURL  https://api.blasted-labs.tech/v2/subversive/script.user.js",
+		);
+		expect(text).toContain(
+			"// @updateURL    https://api.blasted-labs.tech/v2/subversive/script.user.js",
+		);
+	});
+
+	it("GET /v2/subversive/script?env=dev serves dev userscript configured for localhost", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/v2/subversive/script?env=dev"),
+		);
+
+		expect(response.status).toBe(200);
+		const text = await response.text();
+		expect(text).toContain("Subversive Alliance (DEV)");
+		expect(text).toContain("http://localhost:3000");
+	});
+
 	it("POST /api/v1/target-finder/auth rejects invalid key formats", async () => {
 		const response = await app.handle(
 			new Request("http://localhost/api/v1/target-finder/auth", {
