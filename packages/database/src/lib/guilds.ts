@@ -278,6 +278,8 @@ export interface MercChannelConfig {
 	contractCreationMessageId?: string | null;
 	upcomingContracts: string | null;
 	targets: string | null;
+	revivables?: string | null;
+	revivablesMessageId?: string | null;
 	mercLog: string | null;
 	clientCategory: string | null;
 	archiveCategory: string | null;
@@ -286,7 +288,7 @@ export interface MercChannelConfig {
 }
 
 /**
- * Retrieves the mercenary channel configuration (contract creation, upcoming contracts, targets, merc log, categories) by channel name.
+ * Retrieves the mercenary channel configuration (contract creation, upcoming contracts, targets, revivables, merc log, categories) by channel name.
  */
 export async function getMercChannelConfig(
 	guildId: string,
@@ -303,6 +305,8 @@ export async function getMercChannelConfig(
 				contractCreationMessageId: row.contractCreationMessageId ?? null,
 				upcomingContracts: row.upcomingContracts ?? null,
 				targets: row.targets ?? null,
+				revivables: row.revivables ?? null,
+				revivablesMessageId: row.revivablesMessageId ?? null,
 				mercLog: row.mercLog ?? null,
 				clientCategory: row.clientCategory ?? null,
 				archiveCategory: row.archiveCategory ?? null,
@@ -322,6 +326,8 @@ export async function getMercChannelConfig(
 			contractCreationMessageId: data?.contractCreationMessageId ?? null,
 			upcomingContracts: data?.upcomingContracts ?? null,
 			targets: data?.targets ?? null,
+			revivables: data?.revivables ?? null,
+			revivablesMessageId: data?.revivablesMessageId ?? null,
 			mercLog: data?.mercLog ?? null,
 			clientCategory: data?.clientCategory ?? null,
 			archiveCategory: data?.archiveCategory ?? null,
@@ -334,6 +340,8 @@ export async function getMercChannelConfig(
 			contractCreationMessageId: null,
 			upcomingContracts: null,
 			targets: null,
+			revivables: null,
+			revivablesMessageId: null,
 			mercLog: null,
 			clientCategory: null,
 			archiveCategory: null,
@@ -373,6 +381,14 @@ export async function updateMercChannelConfig(
 			: current.upcomingContracts;
 	const targets =
 		config.targets !== undefined ? cleanName(config.targets) : current.targets;
+	const revivables =
+		config.revivables !== undefined
+			? cleanName(config.revivables)
+			: current.revivables;
+	const revivablesMessageId =
+		config.revivablesMessageId !== undefined
+			? config.revivablesMessageId
+			: current.revivablesMessageId;
 	const mercLog =
 		config.mercLog !== undefined ? cleanName(config.mercLog) : current.mercLog;
 	const clientCategory =
@@ -394,6 +410,8 @@ export async function updateMercChannelConfig(
 			contractCreationMessageId,
 			upcomingContracts,
 			targets,
+			revivables,
+			revivablesMessageId,
 			mercLog,
 			clientCategory,
 			archiveCategory,
@@ -407,6 +425,8 @@ export async function updateMercChannelConfig(
 				contractCreationMessageId,
 				upcomingContracts,
 				targets,
+				revivables,
+				revivablesMessageId,
 				mercLog,
 				clientCategory,
 				archiveCategory,
@@ -420,12 +440,30 @@ export async function updateMercChannelConfig(
 		contractCreationMessageId,
 		upcomingContracts,
 		targets,
+		revivables,
+		revivablesMessageId,
 		mercLog,
 		clientCategory,
 		archiveCategory,
 		updatedAt: now.toISOString(),
 		updatedBy: updatedBy ?? current.updatedBy ?? null,
 	};
+}
+
+/**
+ * Updates the tracked message ID for the persistent revivables embed in Discord.
+ */
+export async function updateMercRevivablesMessageId(
+	guildId: string,
+	messageId: string | null,
+): Promise<void> {
+	await db
+		.update(mercChannelConfigs)
+		.set({
+			revivablesMessageId: messageId,
+			updatedAt: new Date(),
+		})
+		.where(eq(mercChannelConfigs.guildId, guildId));
 }
 
 /**
@@ -833,10 +871,12 @@ export function mapRowToMercContract(
 	if (status !== "cancelled") {
 		if (endMs && endMs <= now) {
 			status = "completed";
-		} else if (startMs > now) {
-			status = "upcoming";
-		} else {
-			status = "active";
+		} else if (status !== "paused" && status !== "completed") {
+			if (startMs > now) {
+				status = "upcoming";
+			} else {
+				status = "active";
+			}
 		}
 	}
 

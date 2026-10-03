@@ -1688,6 +1688,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						contractCreation: null,
 						upcomingContracts: null,
 						targets: null,
+						revivables: null,
 						mercLog: null,
 						updatedAt: null,
 						updatedBy: null,
@@ -1743,7 +1744,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			detail: {
 				summary: "Mercenary Channels Configuration",
 				description:
-					"Returns configured contract creation, upcoming contracts, targets, merc log, and categories alongside available guild channel names.",
+					"Returns configured contract creation, upcoming contracts, targets, revivables, merc log, and categories alongside available guild channel names.",
 			},
 		},
 	)
@@ -1765,6 +1766,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					contractCreation: body.contractCreation,
 					upcomingContracts: body.upcomingContracts,
 					targets: body.targets,
+					revivables: body.revivables,
 					mercLog: body.mercLog,
 					clientCategory: body.clientCategory,
 					archiveCategory: body.archiveCategory,
@@ -1788,6 +1790,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				contractCreation: t.Optional(t.Nullable(t.String())),
 				upcomingContracts: t.Optional(t.Nullable(t.String())),
 				targets: t.Optional(t.Nullable(t.String())),
+				revivables: t.Optional(t.Nullable(t.String())),
 				mercLog: t.Optional(t.Nullable(t.String())),
 				clientCategory: t.Optional(t.Nullable(t.String())),
 				archiveCategory: t.Optional(t.Nullable(t.String())),
@@ -1795,7 +1798,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			detail: {
 				summary: "Update Mercenary Channels Configuration",
 				description:
-					"Updates designated channel names for contract creation, upcoming contracts, targets, merc log, client category, and archive category.",
+					"Updates designated channel names for contract creation, upcoming contracts, targets, revivables, merc log, client category, and archive category.",
 			},
 		},
 	)

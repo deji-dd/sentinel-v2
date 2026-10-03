@@ -60,7 +60,7 @@ function formatStats(num: number | null | undefined): string {
 /**
  * Finds a guild TextChannel by its ID or name (ignoring leading #, case-insensitive, with common aliases).
  */
-async function resolveChannelByName(
+export async function resolveChannelByName(
 	client: Client,
 	guildId: string,
 	channelNameOrId: string,

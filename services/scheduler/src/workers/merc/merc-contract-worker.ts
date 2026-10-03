@@ -765,6 +765,10 @@ interface TornFactionMembersResponse {
 let lastTrackedSummaryKey = "";
 let lastTrackedLogTime = 0;
 let lastExpiredTokenCheck = 0;
+const revivablesUpdateTracker = new Map<
+	string,
+	{ signature: string; lastSentAt: number }
+>();
 
 /**
  * Runs a single cycle of the Mercenary Contract Worker.
@@ -973,6 +977,44 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 					nowSec,
 					nowMs,
 				);
+			}
+
+			if (channelConfig.revivables) {
+				const revivables = members
+					.filter((m) => Boolean(m.is_revivable))
+					.map((m) => ({
+						id: m.id,
+						name: m.name,
+						level: m.level,
+						statusState: m.status?.state ?? m.last_action?.status ?? "Hospital",
+						statusDescription: m.status?.description ?? "",
+						statusUntil: m.status?.until ?? null,
+						lastActionRelative: m.last_action?.relative ?? null,
+					}));
+
+				const sig = revivables.map((r) => `${r.id}:${r.statusState}`).join(",");
+				const trackerKey = `${contract.guildId}:${contract.id}`;
+				const prev = revivablesUpdateTracker.get(trackerKey);
+
+				const shouldUpdate =
+					!prev ||
+					(sig !== prev.signature && nowMs - prev.lastSentAt >= 5_000) ||
+					nowMs - prev.lastSentAt >= 30_000;
+
+				if (shouldUpdate) {
+					revivablesUpdateTracker.set(trackerKey, {
+						signature: sig,
+						lastSentAt: nowMs,
+					});
+
+					void notifyBotAction("update_merc_revivables_list", {
+						guildId: contract.guildId,
+						channelName: channelConfig.revivables,
+						factionName: contract.factionName,
+						factionId: contract.factionId,
+						members: revivables,
+					});
+				}
 			}
 		} catch (err) {
 			if (

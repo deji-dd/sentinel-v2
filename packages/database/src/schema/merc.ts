@@ -159,6 +159,8 @@ export const mercChannelConfigs = pgTable("merc_channel_configs", {
 	contractCreationMessageId: text("contract_creation_message_id"),
 	upcomingContracts: text("upcoming_contracts"),
 	targets: text("targets"),
+	revivables: text("revivables"),
+	revivablesMessageId: text("revivables_message_id"),
 	mercLog: text("merc_log"),
 	clientCategory: text("client_category"),
 	archiveCategory: text("archive_category"),

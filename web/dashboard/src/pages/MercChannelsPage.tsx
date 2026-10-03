@@ -18,6 +18,7 @@ interface MercChannelsConfig {
 	contractCreation: string | null;
 	upcomingContracts: string | null;
 	targets: string | null;
+	revivables: string | null;
 	mercLog: string | null;
 	clientCategory: string | null;
 	archiveCategory: string | null;
@@ -41,6 +42,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		contractCreation: null,
 		upcomingContracts: null,
 		targets: null,
+		revivables: null,
 		mercLog: null,
 		clientCategory: null,
 		archiveCategory: null,
@@ -49,6 +51,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		contractCreation: null,
 		upcomingContracts: null,
 		targets: null,
+		revivables: null,
 		mercLog: null,
 		clientCategory: null,
 		archiveCategory: null,
@@ -80,6 +83,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 					contractCreation: cfg.contractCreation ?? null,
 					upcomingContracts: cfg.upcomingContracts ?? null,
 					targets: cfg.targets ?? null,
+					revivables: cfg.revivables ?? null,
 					mercLog: cfg.mercLog ?? null,
 					clientCategory: cfg.clientCategory ?? null,
 					archiveCategory: cfg.archiveCategory ?? null,
@@ -140,6 +144,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		config.contractCreation !== initialConfig.contractCreation ||
 		config.upcomingContracts !== initialConfig.upcomingContracts ||
 		config.targets !== initialConfig.targets ||
+		config.revivables !== initialConfig.revivables ||
 		config.mercLog !== initialConfig.mercLog ||
 		config.clientCategory !== initialConfig.clientCategory ||
 		config.archiveCategory !== initialConfig.archiveCategory;
@@ -158,6 +163,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 				contractCreation: config.contractCreation,
 				upcomingContracts: config.upcomingContracts,
 				targets: config.targets,
+				revivables: config.revivables,
 				mercLog: config.mercLog,
 				clientCategory: config.clientCategory,
 				archiveCategory: config.archiveCategory,
@@ -369,7 +375,59 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						)}
 					</div>
 
-					{/* 4. Merc Log Channel */}
+					{/* 4. Revivables Channel */}
+					<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
+						<label
+							htmlFor="select-revivables"
+							className="text-sm font-semibold text-foreground block cursor-pointer"
+						>
+							Revivables List
+						</label>
+
+						<div className="max-w-md">
+							<Select
+								value={config.revivables ?? "none"}
+								onValueChange={(val) =>
+									setConfig((prev) => ({
+										...prev,
+										revivables: val === "none" ? null : val,
+									}))
+								}
+							>
+								<SelectTrigger
+									id="select-revivables"
+									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
+								>
+									<SelectValue placeholder="-- No Channel Selected --" />
+								</SelectTrigger>
+								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
+									<SelectGroup>
+										<SelectItem value="none">
+											-- No Channel Selected --
+										</SelectItem>
+										{channelNames.map((name) => (
+											<SelectItem key={name} value={name}>
+												#{name}
+											</SelectItem>
+										))}
+									</SelectGroup>
+								</SelectContent>
+							</Select>
+						</div>
+
+						{config.revivables && (
+							<div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-background border border-border/80 text-xs font-mono">
+								<span className="text-muted-foreground text-[10px]">
+									SELECTED:
+								</span>
+								<span className="text-cyan-400 font-semibold">
+									#{config.revivables}
+								</span>
+							</div>
+						)}
+					</div>
+
+					{/* 5. Merc Log Channel */}
 					<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
 						<label
 							htmlFor="select-merc-log"

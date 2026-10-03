@@ -42,6 +42,7 @@ import {
 	processExpiredMercContractTokens,
 	updateMercContractCreationChannel,
 } from "../merc-contract-creation";
+import { updateMercRevivablesList } from "../merc-revivables";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
@@ -570,6 +571,11 @@ export function setupBotIpcListeners(client: Client): void {
 			const maxAge = (message.data as { maxAgeDays?: number } | undefined)
 				?.maxAgeDays;
 			void cleanupOldArchivedMercChannels(client, maxAge ?? 7);
+		} else if (
+			message.action === "update_merc_revivables_list" &&
+			message.data
+		) {
+			void updateMercRevivablesList(client, message.data);
 		} else if (
 			message.action === "bulk_verification_progress" &&
 			message.requestId?.startsWith("cron-")

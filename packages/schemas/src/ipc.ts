@@ -638,7 +638,8 @@ export type IpcMessage =
 	| IpcMercClaimTargetRequestMessage
 	| IpcMercClaimTargetResponseMessage
 	| IpcMercReleaseTargetRequestMessage
-	| IpcMercReleaseTargetResponseMessage;
+	| IpcMercReleaseTargetResponseMessage
+	| IpcUpdateMercRevivablesListMessage;
 
 export type IpcPostDibsAlertMessage = {
 	action: "post_dibs_alert";
@@ -838,5 +839,24 @@ export type IpcMercReleaseTargetResponseMessage = {
 		targetId?: number;
 		error?: string;
 		reason?: string;
+	};
+};
+
+export type IpcUpdateMercRevivablesListMessage = {
+	action: "update_merc_revivables_list";
+	data: {
+		guildId: string;
+		channelName: string;
+		factionName: string;
+		factionId: number;
+		members: Array<{
+			id: number;
+			name: string;
+			level: number;
+			statusState: string;
+			statusDescription: string;
+			statusUntil?: number | null;
+			lastActionRelative?: string | null;
+		}>;
 	};
 };
