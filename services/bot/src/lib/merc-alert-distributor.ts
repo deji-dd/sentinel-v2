@@ -809,6 +809,23 @@ export interface MercContractReceiptPayload {
 }
 
 /**
+ * Renders the per-target hit breakdown as CSV.
+ *
+ * Shared by the contract conclusion receipt and the paid alert so both
+ * attachments stay byte-identical. Embedded names are quote-escaped per RFC 4180.
+ */
+export function buildTargetHitBreakdownCsv(
+	summary: MercContractSummaryReport,
+): string {
+	let csv =
+		"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
+	for (const t of summary.targetBreakdown) {
+		csv += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
+	}
+	return csv;
+}
+
+/**
  * Builds the standardized receipt embed, CSV attachments, and web receipt button for a mercenary contract.
  * Shared across war end summary notifications and the /receipt Discord slash command.
  */
@@ -852,11 +869,7 @@ export function buildMercContractReceiptPayload(
 	}
 
 	// CSV Target Hit Breakdown (Client receipt)
-	let csvTarget =
-		"Target Name,Torn ID,Total Times Hit,Standard Hits Received,Stricken Hits Received\n";
-	for (const t of summary.targetBreakdown) {
-		csvTarget += `"${t.defenderName.replace(/"/g, '""')}",${t.defenderId},${t.totalHits},${t.standardHitsReceived},${t.strickenHitsReceived}\n`;
-	}
+	const csvTarget = buildTargetHitBreakdownCsv(summary);
 
 	const targetFile = new AttachmentBuilder(Buffer.from(csvTarget, "utf-8"), {
 		name: `target_hit_breakdown_${contract.id}.csv`,
@@ -996,6 +1009,56 @@ export async function postMercContractEndSummary(
 			"Failed to post contract end summary and CSV attachments:",
 			err,
 		);
+	}
+}
+
+/**
+ * Announces that a concluded contract has been settled, in the guild's configured
+ * past contracts channel. Attaches the same target hit breakdown CSV shipped with
+ * the conclusion receipt.
+ *
+ * Deliberately does not call `deleteUpcomingContractAnnouncement` — that cleanup
+ * already ran when the contract concluded, and re-running it could delete a newer
+ * contract's announcement that reused the same message slot.
+ */
+export async function postMercContractPaid(
+	client: Client,
+	guildId: string,
+	channelName: string,
+	contract: MercContract,
+	summary: MercContractSummaryReport,
+	paidAt: string,
+): Promise<void> {
+	try {
+		const channel = await resolveChannelByName(client, guildId, channelName);
+		if (!channel) {
+			logger.warn(
+				`Past contracts channel "${channelName}" not found in guild ${guildId}`,
+			);
+			return;
+		}
+
+		const paidTimestamp = new Date(paidAt);
+		const paidAtTct = Number.isNaN(paidTimestamp.getTime())
+			? "Unknown"
+			: formatTctTimestamp(paidTimestamp);
+
+		const embed = createBaseEmbed(
+			`[CONTRACT PAID] ${contract.factionName} [${contract.factionId}]`,
+			`This contract has been marked as paid.\n\nTotal Hits Completed: **${summary.totalHits}**\nTotal Paid: **$${summary.totalPayout.toLocaleString()}**\n\nPaid On: **${paidAtTct}**\n\nThe full breakdown of hits against faction members is attached below as a CSV.`,
+			EMBED_COLORS.SUCCESS,
+		);
+
+		const targetFile = new AttachmentBuilder(
+			Buffer.from(buildTargetHitBreakdownCsv(summary), "utf-8"),
+			{
+				name: `target_hit_breakdown_${contract.id}.csv`,
+			},
+		);
+
+		await channel.send({ embeds: [embed], files: [targetFile] });
+	} catch (err) {
+		logger.error(`Failed to post paid alert for contract ${contract.id}:`, err);
 	}
 }
 

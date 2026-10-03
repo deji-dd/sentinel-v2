@@ -1,5 +1,6 @@
 import {
 	AlertTriangle,
+	BadgeCheck,
 	CheckCircle2,
 	Clock,
 	Copy,
@@ -88,6 +89,8 @@ export interface MercContract {
 	excludedMembers?: number[];
 	pausedWindows?: Array<{ pausedAt: string; resumedAt: string | null }>;
 	status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
+	/** Set once the contract is settled. Null means unpaid. */
+	paidAt?: string | null;
 	createdAt: string;
 	updatedAt?: string | null;
 	createdBy?: string | null;
@@ -316,6 +319,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 
 	const [contracts, setContracts] = useState<MercContract[]>([]);
 	const [loading, setLoading] = useState(true);
+	// Contract awaiting paid-confirmation, and the id currently being settled.
+	const [pendingPaidContract, setPendingPaidContract] =
+		useState<MercContract | null>(null);
+	const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const [activeTab, setActiveTab] = useState<"current" | "past">("current");
 
@@ -831,6 +838,41 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 				err instanceof Error ? err.message : "Error resuming contract.",
 				"error",
 			);
+		}
+	};
+
+	/**
+	 * Settles a concluded contract. Fire-and-forget with a busy guard — the route is
+	 * idempotent, so a double-click cannot post two alerts.
+	 */
+	const handleMarkPaid = async (contractId: string) => {
+		if (markingPaidId === contractId) return;
+		setMarkingPaidId(contractId);
+		try {
+			const guildRoute = api.v2.guilds({ guildId });
+			if (!guildRoute) return;
+
+			const res = await guildRoute.merc.contracts({ contractId }).paid.patch();
+
+			if (res.error) {
+				const msg =
+					typeof res.error.value === "string"
+						? res.error.value
+						: "Failed to mark contract as paid.";
+				toast(msg, "error");
+				return;
+			}
+
+			toast("Contract marked as paid.", "success");
+			setPendingPaidContract(null);
+			fetchContracts();
+		} catch (err) {
+			toast(
+				err instanceof Error ? err.message : "Error marking contract as paid.",
+				"error",
+			);
+		} finally {
+			setMarkingPaidId(null);
 		}
 	};
 
@@ -1368,6 +1410,16 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 														PAUSED
 													</Badge>
 												)}
+												{contract.paidAt && (
+													<Badge
+														variant="outline"
+														className="border-emerald-500/40 bg-emerald-500/10 text-emerald-500 gap-1 font-mono text-[10px]"
+														title={`Marked as paid on ${formatTctDateTime(contract.paidAt)}`}
+													>
+														<BadgeCheck className="size-3" />
+														PAID
+													</Badge>
+												)}
 												<a
 													href={`https://www.torn.com/factions.php?step=profile&ID=${contract.factionId}`}
 													target="_blank"
@@ -1470,6 +1522,19 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 												>
 													<XCircle className="size-3.5 mr-1" />
 													Cancel
+												</Button>
+											)}
+											{/* Settling is only offered on concluded contracts, and only once. */}
+											{contract.status === "completed" && !contract.paidAt && (
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() => setPendingPaidContract(contract)}
+													className="h-8 px-2.5 text-xs font-semibold text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 cursor-pointer"
+													title="Mark this contract as paid and announce it in the past contracts channel"
+												>
+													<BadgeCheck className="size-3.5 mr-1" />
+													Mark as Paid
 												</Button>
 											)}
 											<Button
@@ -3322,6 +3387,67 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 								</>
 							) : (
 								"Save Changes"
+							)}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Confirm Mark as Paid */}
+			<Dialog
+				open={pendingPaidContract !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingPaidContract(null);
+				}}
+			>
+				<DialogContent className="rounded-2xl border-border bg-card max-w-md">
+					<DialogHeader>
+						<DialogTitle className="text-base font-bold text-foreground">
+							Mark Contract As Paid?
+						</DialogTitle>
+					</DialogHeader>
+					<div className="space-y-3 text-xs text-muted-foreground">
+						<p>
+							This records the payment for{" "}
+							<span className="font-semibold text-foreground">
+								{pendingPaidContract?.factionName}
+							</span>{" "}
+							({pendingPaidContract?.factionId}) and posts an announcement in
+							your configured past contracts channel.
+						</p>
+						<p className="text-amber-500/90">
+							This cannot be undone from the dashboard. Confirm the payment has
+							actually been sent first.
+						</p>
+					</div>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setPendingPaidContract(null)}
+							disabled={markingPaidId !== null}
+							className="rounded-xl text-xs font-semibold cursor-pointer"
+						>
+							Cancel
+						</Button>
+						<Button
+							size="sm"
+							onClick={() =>
+								pendingPaidContract && handleMarkPaid(pendingPaidContract.id)
+							}
+							disabled={markingPaidId !== null}
+							className="rounded-xl text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-600/90 cursor-pointer"
+						>
+							{markingPaidId !== null ? (
+								<>
+									<Loader2 className="size-3.5 mr-1.5 animate-spin" />
+									Confirming...
+								</>
+							) : (
+								<>
+									<BadgeCheck className="size-3.5 mr-1.5" />
+									Confirm Payment
+								</>
 							)}
 						</Button>
 					</DialogFooter>

@@ -32,6 +32,7 @@ import {
 	deleteUpcomingContractAnnouncement,
 	postMercContractAnnouncement,
 	postMercContractEndSummary,
+	postMercContractPaid,
 	postMercHitLog,
 	postMercTargetAlert,
 	updateMercTargetAlert,
@@ -521,6 +522,24 @@ export function setupBotIpcListeners(client: Client): void {
 					channelName,
 					contract,
 					summary,
+				);
+			}
+		} else if (message.action === "post_merc_contract_paid" && message.data) {
+			const guildId = message.data.guildId as string;
+			const channelName = message.data.channelName as string;
+			const contract = message.data
+				.contract as import("@sentinel/database").MercContract;
+			const summary = message.data
+				.summary as import("@sentinel/database").MercContractSummaryReport;
+			const paidAt = message.data.paidAt as string;
+			if (guildId && channelName && contract && summary) {
+				void postMercContractPaid(
+					client,
+					guildId,
+					channelName,
+					contract,
+					summary,
+					paidAt,
 				);
 			}
 		} else if (

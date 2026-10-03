@@ -20,6 +20,7 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 
 		spyOn(database, "getMercChannelConfig").mockResolvedValue({
 			contractCreation: null,
+			pastContracts: null,
 			upcomingContracts: null,
 			targets: null,
 			mercLog: null,
@@ -101,6 +102,7 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 
 		spyOn(database, "getMercChannelConfig").mockResolvedValue({
 			contractCreation: null,
+			pastContracts: null,
 			upcomingContracts: null,
 			targets: null,
 			mercLog: null,
@@ -185,6 +187,7 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 
 		spyOn(database, "getMercChannelConfig").mockResolvedValue({
 			contractCreation: null,
+			pastContracts: null,
 			upcomingContracts: null,
 			targets: null,
 			mercLog: null,
@@ -292,6 +295,7 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 
 		spyOn(database, "getMercChannelConfig").mockResolvedValue({
 			contractCreation: null,
+			pastContracts: null,
 			upcomingContracts: null,
 			targets: null,
 			mercLog: null,
@@ -435,6 +439,7 @@ describe("Mercenary Channel Archiving on Token Expiration", () => {
 
 		spyOn(database, "getMercChannelConfig").mockResolvedValue({
 			contractCreation: null,
+			pastContracts: null,
 			upcomingContracts: null,
 			targets: null,
 			mercLog: null,

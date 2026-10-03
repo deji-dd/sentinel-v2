@@ -281,6 +281,7 @@ export interface MercChannelConfig {
 	revivables?: string | null;
 	revivablesMessageId?: string | null;
 	mercLog: string | null;
+	pastContracts: string | null;
 	clientCategory: string | null;
 	archiveCategory: string | null;
 	updatedAt?: string | null;
@@ -308,6 +309,7 @@ export async function getMercChannelConfig(
 				revivables: row.revivables ?? null,
 				revivablesMessageId: row.revivablesMessageId ?? null,
 				mercLog: row.mercLog ?? null,
+				pastContracts: row.pastContracts ?? null,
 				clientCategory: row.clientCategory ?? null,
 				archiveCategory: row.archiveCategory ?? null,
 				updatedAt: row.updatedAt?.toISOString() ?? null,
@@ -329,6 +331,7 @@ export async function getMercChannelConfig(
 			revivables: data?.revivables ?? null,
 			revivablesMessageId: data?.revivablesMessageId ?? null,
 			mercLog: data?.mercLog ?? null,
+			pastContracts: data?.pastContracts ?? null,
 			clientCategory: data?.clientCategory ?? null,
 			archiveCategory: data?.archiveCategory ?? null,
 			updatedAt: data?.updatedAt ?? null,
@@ -343,6 +346,7 @@ export async function getMercChannelConfig(
 			revivables: null,
 			revivablesMessageId: null,
 			mercLog: null,
+			pastContracts: null,
 			clientCategory: null,
 			archiveCategory: null,
 			updatedAt: null,
@@ -391,6 +395,10 @@ export async function updateMercChannelConfig(
 			: current.revivablesMessageId;
 	const mercLog =
 		config.mercLog !== undefined ? cleanName(config.mercLog) : current.mercLog;
+	const pastContracts =
+		config.pastContracts !== undefined
+			? cleanName(config.pastContracts)
+			: current.pastContracts;
 	const clientCategory =
 		config.clientCategory !== undefined
 			? cleanName(config.clientCategory)
@@ -413,6 +421,7 @@ export async function updateMercChannelConfig(
 			revivables,
 			revivablesMessageId,
 			mercLog,
+			pastContracts,
 			clientCategory,
 			archiveCategory,
 			updatedBy: updatedBy ?? current.updatedBy ?? null,
@@ -428,6 +437,7 @@ export async function updateMercChannelConfig(
 				revivables,
 				revivablesMessageId,
 				mercLog,
+				pastContracts,
 				clientCategory,
 				archiveCategory,
 				updatedBy: updatedBy ?? current.updatedBy ?? null,
@@ -443,6 +453,7 @@ export async function updateMercChannelConfig(
 		revivables,
 		revivablesMessageId,
 		mercLog,
+		pastContracts,
 		clientCategory,
 		archiveCategory,
 		updatedAt: now.toISOString(),
@@ -819,6 +830,8 @@ export interface MercContract {
 	excludedMembers?: number[];
 	pausedWindows?: MercContractPauseWindow[];
 	status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
+	/** Set once an admin settles a concluded contract. Null means unpaid. */
+	paidAt?: string | null;
 	clientChannelId?: string | null;
 	clientDiscordId?: string | null;
 	upcomingMessageId?: string | null;
@@ -956,6 +969,7 @@ export function mapRowToMercContract(
 			? (row.pausedWindows as MercContractPauseWindow[])
 			: [],
 		status,
+		paidAt: row.paidAt ? row.paidAt.toISOString() : null,
 		clientChannelId: row.clientChannelId ?? null,
 		clientDiscordId: row.clientDiscordId ?? null,
 		upcomingMessageId: row.upcomingMessageId ?? null,
@@ -1287,6 +1301,80 @@ export async function updateMercContract(
 
 	const all = await getMercContracts(guildId);
 	return all.find((c) => c.id === contractId) ?? null;
+}
+
+/**
+ * Outcome of a mark-as-paid attempt.
+ * `alreadyPaid` is true when the contract was settled before this call, in which
+ * case nothing was written and the caller must not re-fire the Discord alert.
+ */
+export type MarkMercContractPaidResult =
+	| { success: true; alreadyPaid: boolean; contract: MercContract }
+	| { success: false; error: string };
+
+/**
+ * Marks a concluded mercenary contract as paid by stamping `paid_at`.
+ *
+ * Only 'completed' contracts may be settled — a contract that never concluded has
+ * no payout to settle. The guard reads the *derived* status from
+ * `mapRowToMercContract` rather than the stored column, so contracts that finished
+ * by passing their end time (whose stored status may still be 'active') settle
+ * correctly, matching what the dashboard renders.
+ *
+ * This is a one-way transition: once stamped, `paid_at` is preserved.
+ */
+export async function markMercContractPaid(
+	guildId: string,
+	contractId: string,
+): Promise<MarkMercContractPaidResult> {
+	const [existingRow] = await db
+		.select()
+		.from(mercContracts)
+		.where(
+			and(eq(mercContracts.guildId, guildId), eq(mercContracts.id, contractId)),
+		)
+		.limit(1);
+
+	if (!existingRow) {
+		return { success: false, error: "Contract not found." };
+	}
+
+	// Idempotency: a settled contract must not post a second alert.
+	if (existingRow.paidAt) {
+		return {
+			success: true,
+			alreadyPaid: true,
+			contract: mapRowToMercContract(existingRow),
+		};
+	}
+
+	const derived = mapRowToMercContract(existingRow);
+	if (derived.status !== "completed") {
+		return {
+			success: false,
+			error:
+				"Only completed contracts can be marked as paid. This contract has not concluded yet.",
+		};
+	}
+
+	const paidAt = new Date();
+	const [updated] = await db
+		.update(mercContracts)
+		.set({ paidAt, updatedAt: paidAt })
+		.where(
+			and(eq(mercContracts.guildId, guildId), eq(mercContracts.id, contractId)),
+		)
+		.returning();
+
+	if (!updated) {
+		return { success: false, error: "Failed to mark contract as paid." };
+	}
+
+	return {
+		success: true,
+		alreadyPaid: false,
+		contract: mapRowToMercContract(updated),
+	};
 }
 
 /**

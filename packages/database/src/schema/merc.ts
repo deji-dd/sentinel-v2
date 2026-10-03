@@ -79,6 +79,11 @@ export const mercContracts = pgTable(
 
 		// Lifecycle & Metadata
 		status: text("status").default("active").notNull(), // 'active' | 'upcoming' | 'completed' | 'cancelled'
+		// Settlement: set once an admin marks a concluded contract as paid.
+		// Nullable rather than a boolean so "unpaid" is simply paidAt IS NULL,
+		// which needs no backfill and no risk of the two columns disagreeing.
+		// Only ever set on 'completed' contracts.
+		paidAt: timestamp("paid_at", { withTimezone: true, mode: "date" }),
 		clientChannelId: text("client_channel_id"),
 		clientDiscordId: text("client_discord_id"),
 		upcomingMessageId: text("upcoming_message_id"),
@@ -163,6 +168,8 @@ export const mercChannelConfigs = pgTable("merc_channel_configs", {
 	revivables: text("revivables"),
 	revivablesMessageId: text("revivables_message_id"),
 	mercLog: text("merc_log"),
+	// Alerts posted when a concluded contract is marked as paid.
+	pastContracts: text("past_contracts"),
 	clientCategory: text("client_category"),
 	archiveCategory: text("archive_category"),
 	updatedBy: text("updated_by"),

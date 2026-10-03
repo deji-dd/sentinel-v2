@@ -130,6 +130,7 @@ describe("Merc Alert Distributor Timestamps & Formatting", () => {
 
 			spyOn(database, "getMercChannelConfig").mockResolvedValue({
 				contractCreation: null,
+				pastContracts: null,
 				upcomingContracts: "upcoming-contracts",
 				targets: null,
 				mercLog: null,

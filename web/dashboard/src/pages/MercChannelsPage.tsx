@@ -20,6 +20,7 @@ interface MercChannelsConfig {
 	targets: string | null;
 	revivables: string | null;
 	mercLog: string | null;
+	pastContracts: string | null;
 	clientCategory: string | null;
 	archiveCategory: string | null;
 	updatedAt?: string | null;
@@ -44,6 +45,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		targets: null,
 		revivables: null,
 		mercLog: null,
+		pastContracts: null,
 		clientCategory: null,
 		archiveCategory: null,
 	});
@@ -53,6 +55,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		targets: null,
 		revivables: null,
 		mercLog: null,
+		pastContracts: null,
 		clientCategory: null,
 		archiveCategory: null,
 	});
@@ -85,6 +88,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 					targets: cfg.targets ?? null,
 					revivables: cfg.revivables ?? null,
 					mercLog: cfg.mercLog ?? null,
+					pastContracts: cfg.pastContracts ?? null,
 					clientCategory: cfg.clientCategory ?? null,
 					archiveCategory: cfg.archiveCategory ?? null,
 					updatedAt: cfg.updatedAt ?? null,
@@ -146,6 +150,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 		config.targets !== initialConfig.targets ||
 		config.revivables !== initialConfig.revivables ||
 		config.mercLog !== initialConfig.mercLog ||
+		config.pastContracts !== initialConfig.pastContracts ||
 		config.clientCategory !== initialConfig.clientCategory ||
 		config.archiveCategory !== initialConfig.archiveCategory;
 
@@ -165,6 +170,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 				targets: config.targets,
 				revivables: config.revivables,
 				mercLog: config.mercLog,
+				pastContracts: config.pastContracts,
 				clientCategory: config.clientCategory,
 				archiveCategory: config.archiveCategory,
 			});
@@ -474,6 +480,62 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 								</span>
 								<span className="text-emerald-400 font-semibold">
 									#{config.mercLog}
+								</span>
+							</div>
+						)}
+					</div>
+
+					{/* 6. Past Contracts Channel */}
+					<div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
+						<label
+							htmlFor="select-past-contracts"
+							className="text-sm font-semibold text-foreground block cursor-pointer"
+						>
+							Past Contracts
+						</label>
+						<p className="text-[11px] text-muted-foreground">
+							Announcements are posted here when a completed contract is marked
+							as paid.
+						</p>
+
+						<div className="max-w-md">
+							<Select
+								value={config.pastContracts ?? "none"}
+								onValueChange={(val) =>
+									setConfig((prev) => ({
+										...prev,
+										pastContracts: val === "none" ? null : val,
+									}))
+								}
+							>
+								<SelectTrigger
+									id="select-past-contracts"
+									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
+								>
+									<SelectValue placeholder="-- No Channel Selected --" />
+								</SelectTrigger>
+								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
+									<SelectGroup>
+										<SelectItem value="none">
+											-- No Channel Selected --
+										</SelectItem>
+										{channelNames.map((name) => (
+											<SelectItem key={name} value={name}>
+												#{name}
+											</SelectItem>
+										))}
+									</SelectGroup>
+								</SelectContent>
+							</Select>
+						</div>
+
+						{config.pastContracts && (
+							<div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-background border border-border/80 text-xs font-mono">
+								<span className="text-muted-foreground text-[10px]">
+									SELECTED:
+								</span>
+								<span className="text-emerald-400 font-semibold">
+									#{config.pastContracts}
 								</span>
 							</div>
 						)}

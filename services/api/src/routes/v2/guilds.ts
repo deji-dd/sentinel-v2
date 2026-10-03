@@ -20,6 +20,7 @@ import {
 	ilike,
 	inArray,
 	like,
+	markMercContractPaid,
 	or,
 	reactionRoleMappings,
 	reactionRoleMessages,
@@ -1744,7 +1745,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			detail: {
 				summary: "Mercenary Channels Configuration",
 				description:
-					"Returns configured contract creation, upcoming contracts, targets, revivables, merc log, and categories alongside available guild channel names.",
+					"Returns configured contract creation, upcoming contracts, targets, revivables, merc log, past contracts, and categories alongside available guild channel names.",
 			},
 		},
 	)
@@ -1768,6 +1769,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					targets: body.targets,
 					revivables: body.revivables,
 					mercLog: body.mercLog,
+					pastContracts: body.pastContracts,
 					clientCategory: body.clientCategory,
 					archiveCategory: body.archiveCategory,
 				},
@@ -1792,13 +1794,14 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				targets: t.Optional(t.Nullable(t.String())),
 				revivables: t.Optional(t.Nullable(t.String())),
 				mercLog: t.Optional(t.Nullable(t.String())),
+				pastContracts: t.Optional(t.Nullable(t.String())),
 				clientCategory: t.Optional(t.Nullable(t.String())),
 				archiveCategory: t.Optional(t.Nullable(t.String())),
 			}),
 			detail: {
 				summary: "Update Mercenary Channels Configuration",
 				description:
-					"Updates designated channel names for contract creation, upcoming contracts, targets, revivables, merc log, client category, and archive category.",
+					"Updates designated channel names for contract creation, upcoming contracts, targets, revivables, merc log, past contracts, client category, and archive category.",
 			},
 		},
 	)
@@ -2200,6 +2203,71 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				summary: "Update Mercenary Contract",
 				description:
 					"Updates an existing mercenary contract's status or details (only contracts that haven't started can edit terms/timing).",
+			},
+		},
+	)
+	// PATCH /v2/guilds/:guildId/merc/contracts/:contractId/paid — mark as paid
+	.patch(
+		"/:guildId/merc/contracts/:contractId/paid",
+		async ({ params, user, set }) => {
+			const canManage = await verifyGuildAdmin(user, params.guildId);
+			if (!canManage) {
+				set.status = 403;
+				return {
+					error: "Forbidden: Administrator access to this server is required.",
+				};
+			}
+
+			const result = await markMercContractPaid(
+				params.guildId,
+				params.contractId,
+			);
+
+			if (!result.success) {
+				const notFound = result.error === "Contract not found.";
+				set.status = notFound ? 404 : 409;
+				return { error: result.error };
+			}
+
+			// Already settled: nothing was written, so do not repost the alert.
+			// Guards against double-clicks and retries duplicating the embed.
+			if (result.alreadyPaid) {
+				return {
+					success: true,
+					alreadyPaid: true,
+					contract: result.contract,
+				};
+			}
+
+			// Announce the settlement in the configured past contracts channel.
+			// The write above already succeeded, so a missing channel is non-fatal.
+			const channelConfig = await getMercChannelConfig(params.guildId);
+			if (channelConfig.pastContracts && result.contract.paidAt) {
+				const summary = await getMercContractSummary(params.contractId);
+				void notifyBotAction("post_merc_contract_paid", {
+					guildId: params.guildId,
+					channelName: channelConfig.pastContracts,
+					contract: result.contract,
+					summary,
+					paidAt: result.contract.paidAt,
+				});
+			}
+
+			return {
+				success: true,
+				alreadyPaid: false,
+				contract: result.contract,
+			};
+		},
+		{
+			params: t.Object({
+				guildId: t.String(),
+				contractId: t.String(),
+			}),
+			detail: {
+				summary: "Mark Mercenary Contract As Paid",
+				description:
+					"Settles a concluded mercenary contract by stamping its paid timestamp, then announces the payment in the configured past contracts channel. Only completed contracts can be settled; repeat calls are no-ops.",
 			},
 		},
 	)

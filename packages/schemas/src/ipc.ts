@@ -630,6 +630,7 @@ export type IpcMessage =
 	| IpcDeleteAllMercTargetAlertsMessage
 	| IpcPostMercHitLogMessage
 	| IpcPostMercContractEndSummaryMessage
+	| IpcPostMercContractPaidMessage
 	| IpcDeleteMercUpcomingAnnouncementMessage
 	| IpcSyncMercContractCreationMessage
 	| IpcArchiveMercClientChannelMessage
@@ -757,6 +758,24 @@ export type IpcPostMercContractEndSummaryMessage = {
 		channelName: string;
 		contract: unknown;
 		summary: unknown;
+	};
+};
+
+/**
+ * Sent when an admin settles a concluded contract, to announce the payment in the
+ * guild's configured past contracts channel. Fired exactly once per contract —
+ * the API suppresses it if `paid_at` was already set.
+ */
+export type IpcPostMercContractPaidMessage = {
+	action: "post_merc_contract_paid";
+	data: {
+		guildId: string;
+		/** Channel name for the past contracts channel; resolved by the bot. */
+		channelName: string;
+		contract: unknown;
+		summary: unknown;
+		/** ISO timestamp of when the contract was marked paid. */
+		paidAt: string;
 	};
 };
 
