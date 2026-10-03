@@ -622,6 +622,7 @@ export type IpcMessage =
 	| IpcPostDibsAlertMessage
 	| IpcEditDibsAlertMessage
 	| IpcDeleteDibsAlertMessage
+	| IpcSweepDibsChannelMessage
 	| IpcPostMercContractAnnouncementMessage
 	| IpcPostMercTargetAlertMessage
 	| IpcMercTargetMessageRecordedMessage
@@ -666,6 +667,25 @@ export type IpcDeleteDibsAlertMessage = {
 		channelId: string;
 		messageId: string;
 		targetId?: number;
+	};
+};
+
+/**
+ * Reconciles a dibs channel by deleting our own orphaned / expired dibs callouts.
+ *
+ * `liveMessageIds` are the messages the API still considers active and must never
+ * be touched. `trackedMessageIds` are messages the API has on record but no longer
+ * treats as active — those are orphans (e.g. war termed, API restarted) and are
+ * deleted. Anything authored by this bot past `maxAgeHours` is also removed.
+ */
+export type IpcSweepDibsChannelMessage = {
+	action: "sweep_dibs_channel";
+	data: {
+		channelId: string;
+		factionId: number;
+		liveMessageIds: string[];
+		trackedMessageIds: string[];
+		maxAgeHours: number;
 	};
 };
 

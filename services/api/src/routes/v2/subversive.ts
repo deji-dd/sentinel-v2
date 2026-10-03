@@ -29,6 +29,7 @@ import {
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
 import { subversiveDibsManager } from "../../lib/dibs-manager";
+import { dibsMessageStore } from "../../lib/dibs-message-store";
 import { fetchDiscordApi } from "../../lib/discord-auth";
 import { resolveDiscordTornUser } from "../../lib/resolve-discord-torn-user";
 import {
@@ -1227,6 +1228,13 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 					t.Number({ minimum: 5, maximum: 300 }),
 				),
 				autoDeleteOnDowned: t.Optional(t.Boolean()),
+				channelMaintenanceEnabled: t.Optional(t.Boolean()),
+				maxDibsMessageAgeHours: t.Optional(
+					t.Number({ minimum: 1, maximum: 168 }),
+				),
+				sweepIntervalMinutes: t.Optional(
+					t.Number({ minimum: 0, maximum: 1440 }),
+				),
 			}),
 			detail: {
 				summary: "Update Subversive Dibs Configuration",
@@ -1247,6 +1255,62 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "List Active Dibs Claims",
 				description: "Returns currently active hospital exit dibs claims.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/dibs/sweep ───────────────────────────────────
+	.post(
+		"/dibs/sweep",
+		async ({ body, user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseDibsFactionId(body?.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_DIBS_FACTION_ERROR };
+			}
+
+			const liveMessageIds =
+				await subversiveDibsManager.sweepDibsChannel(factionId);
+			const tracked = await dibsMessageStore.list(factionId);
+			const config = await subversiveDibsManager.getConfig(factionId);
+
+			// null means the sweep was skipped (no channel configured or bot offline).
+			if (liveMessageIds === null) {
+				return {
+					success: false,
+					factionId,
+					factionName: getSubversiveFactionName(factionId),
+					skipped: !config.channelId
+						? "no_channel_configured"
+						: "bot_unreachable",
+					trackedMessageCount: tracked.length,
+					liveMessageCount: 0,
+				};
+			}
+
+			return {
+				success: true,
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				liveMessageCount: liveMessageIds.length,
+				trackedMessageCount: tracked.length,
+			};
+		},
+		{
+			body: t.Optional(
+				t.Object({
+					factionId: t.Optional(t.Numeric()),
+				}),
+			),
+			detail: {
+				summary: "Sweep Subversive Dibs Channel",
+				description:
+					"Reconciles the dibs channel for one family faction by deleting orphaned and expired dibs callouts.",
 			},
 		},
 	)

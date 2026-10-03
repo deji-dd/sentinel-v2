@@ -1,4 +1,4 @@
-import { RefreshCw, Save } from "lucide-react";
+import { Eraser, RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,9 @@ interface SubversiveDibsConfig {
 	maxDibsPerPerson: number;
 	postHospTimeoutSeconds: number;
 	autoDeleteOnDowned: boolean;
+	channelMaintenanceEnabled?: boolean;
+	maxDibsMessageAgeHours?: number;
+	sweepIntervalMinutes?: number;
 }
 
 interface GuildChannel {
@@ -51,6 +54,9 @@ const DEFAULT_CONFIG: SubversiveDibsConfig = {
 	maxDibsPerPerson: 1,
 	postHospTimeoutSeconds: 20,
 	autoDeleteOnDowned: true,
+	channelMaintenanceEnabled: true,
+	maxDibsMessageAgeHours: 6,
+	sweepIntervalMinutes: 15,
 };
 
 export function DibsConfigPage({
@@ -63,6 +69,8 @@ export function DibsConfigPage({
 	const [channels, setChannels] = useState<GuildChannel[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
+	const [sweeping, setSweeping] = useState(false);
+	const [lastSweep, setLastSweep] = useState<string | null>(null);
 
 	const activeFaction =
 		DIBS_FACTIONS.find((f) => f.id === factionId) ?? DIBS_FACTIONS[0];
@@ -117,6 +125,52 @@ export function DibsConfigPage({
 	useEffect(() => {
 		void fetchConfig(factionId);
 	}, [factionId, fetchConfig]);
+
+	/**
+	 * Triggers an on-demand channel sweep for the active faction. Removes
+	 * orphaned dibs callouts left behind by termed wars, API restarts, or
+	 * failed IPC deliveries.
+	 */
+	const handleSweep = async () => {
+		setSweeping(true);
+		try {
+			const res = await fetch("/v2/subversive/dibs/sweep", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ factionId }),
+			});
+
+			const data = (await res.json()) as {
+				success?: boolean;
+				error?: string;
+				skipped?: string;
+				liveMessageCount?: number;
+				trackedMessageCount?: number;
+			};
+
+			if (!res.ok || !data.success) {
+				if (data.skipped === "no_channel_configured") {
+					toast.error("No dibs channel is configured for this faction yet.");
+				} else if (data.skipped === "bot_unreachable") {
+					toast.error("Discord bot is offline — sweep could not run.");
+				} else {
+					toast.error(data.error || "Failed to sweep the dibs channel.");
+				}
+				return;
+			}
+
+			setLastSweep(new Date().toLocaleTimeString());
+			toast.success(
+				`Channel swept. ${data.trackedMessageCount ?? 0} tracked, ${data.liveMessageCount ?? 0} still active.`,
+			);
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Failed to sweep the channel.",
+			);
+		} finally {
+			setSweeping(false);
+		}
+	};
 
 	const handleSave = async () => {
 		setSaving(true);
@@ -332,6 +386,125 @@ export function DibsConfigPage({
 						)}
 						Save Changes
 					</Button>
+				</CardFooter>
+			</Card>
+
+			<Card className="border-border bg-card">
+				<CardHeader>
+					<CardTitle className="text-base font-medium flex items-center gap-2">
+						Channel Maintenance
+					</CardTitle>
+					<p className="text-xs text-muted-foreground">
+						Removes orphaned and expired dibs callouts from the Discord channel.
+						This cleans up after wars that were termed, API restarts, and failed
+						Discord deliveries — cases the normal dibs lifecycle cannot reach.
+					</p>
+				</CardHeader>
+				<CardContent className="space-y-6">
+					<div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
+						<div className="space-y-0.5">
+							<div className="text-sm font-medium">Enable Automatic Sweeps</div>
+							<div className="text-xs text-muted-foreground">
+								Runs the cleanup on a schedule. Manual sweeps still work when
+								this is off.
+							</div>
+						</div>
+						<Switch
+							checked={config.channelMaintenanceEnabled ?? true}
+							onCheckedChange={(checked) =>
+								setConfig((prev) => ({
+									...prev,
+									channelMaintenanceEnabled: checked,
+								}))
+							}
+						/>
+					</div>
+
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div className="space-y-2">
+							<label
+								htmlFor={`max-dibs-age-${factionId}`}
+								className="text-xs font-mono font-medium text-foreground"
+							>
+								Max Message Age (Hours)
+							</label>
+							<Input
+								id={`max-dibs-age-${factionId}`}
+								type="number"
+								min={1}
+								max={168}
+								value={config.maxDibsMessageAgeHours ?? 6}
+								onChange={(e) =>
+									setConfig((prev) => ({
+										...prev,
+										maxDibsMessageAgeHours: Math.max(
+											1,
+											Number(e.target.value) || 1,
+										),
+									}))
+								}
+							/>
+							<p className="text-[11px] text-muted-foreground">
+								Dibs callouts older than this are always removed.
+							</p>
+						</div>
+
+						<div className="space-y-2">
+							<label
+								htmlFor={`sweep-interval-${factionId}`}
+								className="text-xs font-mono font-medium text-foreground"
+							>
+								Sweep Interval (Minutes)
+							</label>
+							<Input
+								id={`sweep-interval-${factionId}`}
+								type="number"
+								min={0}
+								max={1440}
+								value={config.sweepIntervalMinutes ?? 15}
+								onChange={(e) =>
+									setConfig((prev) => ({
+										...prev,
+										sweepIntervalMinutes: Math.max(
+											0,
+											Number(e.target.value) || 0,
+										),
+									}))
+								}
+							/>
+							<p className="text-[11px] text-muted-foreground">
+								0 disables the automatic schedule.
+							</p>
+						</div>
+					</div>
+				</CardContent>
+				<CardFooter className="flex items-center justify-between gap-3 border-t border-border pt-4">
+					<span className="text-[11px] text-muted-foreground">
+						{lastSweep ? `Last swept at ${lastSweep}` : "Not swept yet"}
+					</span>
+					<div className="flex gap-2">
+						<Button
+							variant="outline"
+							onClick={handleSweep}
+							disabled={sweeping}
+							className="gap-2"
+						>
+							{sweeping ? (
+								<RefreshCw className="size-4 animate-spin" />
+							) : (
+								<Eraser className="size-4" />
+							)}
+							Sweep Now
+						</Button>
+						<Button onClick={handleSave} disabled={saving} className="gap-2">
+							{saving ? (
+								<RefreshCw className="size-4 animate-spin" />
+							) : (
+								<Save className="size-4" />
+							)}
+							Save Changes
+						</Button>
+					</div>
 				</CardFooter>
 			</Card>
 		</div>

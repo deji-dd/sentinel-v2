@@ -1,11 +1,12 @@
 import type { DibsRecord } from "@sentinel/schemas";
-import { getSubversiveFactionName } from "@sentinel/utils";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
 	type ButtonInteraction,
 	ButtonStyle,
 	type Client,
+	ComponentType,
+	type Message,
 	MessageFlags,
 	type TextChannel,
 } from "discord.js";
@@ -26,30 +27,6 @@ function formatStats(num: number | null | undefined): string {
 	if (num >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
 	if (num >= 1e3) return `${(num / 1e3).toFixed(1)}k`;
 	return Math.round(num).toLocaleString();
-}
-
-/**
- * Builds the Faction field identifying which family faction's ranked war this
- * dibs belongs to (Subversive Alliance 2013 / SA Succession 27312).
- */
-function buildFactionField(dibs: DibsRecord): {
-	name: string;
-	value: string;
-	inline: boolean;
-} {
-	const factionId = dibs.factionId;
-	const factionName = factionId
-		? getSubversiveFactionName(factionId)
-		: "Unknown faction";
-	const profileUrl = factionId
-		? `https://www.torn.com/factions.php?step=profile&ID=${factionId}`
-		: null;
-
-	return {
-		name: "Faction",
-		value: profileUrl ? `[${factionName}](${profileUrl})` : factionName,
-		inline: true,
-	};
 }
 
 /**
@@ -116,7 +93,6 @@ export async function postDibsAlert(
 		);
 
 		embed.addFields(
-			buildFactionField(dibs),
 			{
 				name: "Hospital Exit",
 				value: `<t:${dibs.hospitalUntil}:R> (<t:${dibs.hospitalUntil}:T>)`,
@@ -188,7 +164,6 @@ export async function updateDibsAlert(
 		);
 
 		embed.addFields(
-			buildFactionField(dibs),
 			{
 				name: "Hospital Exit",
 				value: `<t:${dibs.hospitalUntil}:R> (<t:${dibs.hospitalUntil}:T>)`,
@@ -229,6 +204,145 @@ export async function deleteDibsAlert(
 	} catch (err) {
 		logger.warn("Failed deleting downed target dibs alert:", err);
 	}
+}
+
+/**
+ * Identifies whether a message is one of our dibs callouts.
+ *
+ * The claim/release button customIds are the discriminator: only this bot posts
+ * `dibs_claim:` / `dibs_release:` components, and it authorises deletion on that
+ * basis alone. We never delete anything we cannot prove we created.
+ */
+function isDibsCalloutMessage(message: Message): boolean {
+	return message.components.some((row) => {
+		// TopLevelComponent may be a FileComponent, which has no sub-components.
+		if (row.type !== ComponentType.ActionRow) return false;
+
+		return row.components.some((component) => {
+			const data = component.toJSON() as { custom_id?: string };
+			const customId = data.custom_id;
+			return (
+				typeof customId === "string" &&
+				(customId.startsWith("dibs_claim:") ||
+					customId.startsWith("dibs_release:"))
+			);
+		});
+	});
+}
+
+export interface DibsSweepResult {
+	deleted: number;
+	skippedNotOurs: number;
+	deletedTooOld: number;
+	deletedOrphaned: number;
+}
+
+/**
+ * Reconciles a dibs channel by deleting our own dibs messages that are either
+ * past the configured max age or no longer present in the API's live set.
+ *
+ * This is the safety net for orphans the normal lifecycle cannot clean:
+ * wars that were termed, API restarts that lost in-memory state, and IPC
+ * deliveries that failed. Messages are only ever deleted when this bot authored
+ * them, so unrelated channel content is never touched.
+ */
+export async function sweepDibsChannel(
+	client: Client,
+	channelId: string,
+	options: {
+		liveMessageIds: string[];
+		trackedMessageIds: string[];
+		maxAgeHours: number;
+		scanLimit?: number;
+	},
+): Promise<DibsSweepResult> {
+	const result: DibsSweepResult = {
+		deleted: 0,
+		skippedNotOurs: 0,
+		deletedTooOld: 0,
+		deletedOrphaned: 0,
+	};
+
+	try {
+		const channel = (await client.channels
+			.fetch(channelId)
+			.catch(() => null)) as TextChannel | null;
+		if (!channel || !("messages" in channel)) return result;
+
+		const live = new Set(options.liveMessageIds);
+		const tracked = new Set(options.trackedMessageIds);
+		const scanLimit = options.scanLimit ?? 100;
+
+		// Only look back as far as the configured max age plus a margin, so a long
+		// channel does not turn every sweep into a full-history scan.
+		const maxAgeMs = Math.max(1, options.maxAgeHours) * 60 * 60 * 1000;
+		const oldestRelevant = Date.now() - maxAgeMs * 2;
+
+		const messages = await channel.messages
+			.fetch({ limit: scanLimit })
+			.catch(() => null);
+		if (!messages) return result;
+
+		const toDelete: Message[] = [];
+
+		for (const message of messages.values()) {
+			// Never delete a live dibs, regardless of age.
+			if (live.has(message.id)) continue;
+
+			// Author gate: only delete messages this bot posted.
+			if (
+				message.author?.bot !== true ||
+				message.author.id !== client.user?.id ||
+				!isDibsCalloutMessage(message)
+			) {
+				if (tracked.has(message.id)) result.skippedNotOurs++;
+				continue;
+			}
+
+			if (message.createdTimestamp < oldestRelevant) continue;
+
+			const tooOld = Date.now() - message.createdTimestamp >= maxAgeMs * 1000;
+
+			// Orphan = ours, not live, and still tracked (so the API knows about it
+			// but no longer considers it active). Older ones are removed purely on age.
+			const orphaned = tracked.has(message.id);
+
+			if (tooOld || orphaned) {
+				toDelete.push(message);
+				if (tooOld) result.deletedTooOld++;
+				if (orphaned) result.deletedOrphaned++;
+			}
+		}
+
+		if (toDelete.length > 0) {
+			// bulkDelete only accepts messages younger than 14 days.
+			const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+			const bulkDeleteable = toDelete.filter(
+				(m) => m.createdTimestamp > cutoff,
+			);
+
+			if (bulkDeleteable.length > 0) {
+				await channel.bulkDelete(bulkDeleteable, true).catch(() => {});
+				result.deleted += bulkDeleteable.length;
+			}
+
+			for (const message of toDelete) {
+				if (message.createdTimestamp <= cutoff) {
+					await message.delete().catch(() => {});
+					result.deleted++;
+				}
+			}
+		}
+
+		logger.info(
+			`Dibs sweep ${channelId}: removed ${result.deleted} message(s) ` +
+				`(${result.deletedOrphaned} orphaned, ${result.deletedTooOld} expired).`,
+		);
+	} catch (err) {
+		logger.warn("Failed sweeping dibs channel:", err);
+	}
+
+	return result;
 }
 
 /**

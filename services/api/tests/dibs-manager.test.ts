@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { subversiveDibsManager } from "../src/lib/dibs-manager";
+import { dibsMessageStore } from "../src/lib/dibs-message-store";
 import {
 	type CurrentWarInfo,
 	type RankedWarOpponent,
@@ -750,6 +751,205 @@ describe("SubversiveDibsManager", () => {
 
 			expect(record?.discordChannelId).toBe("channel-succession");
 			expect(record?.factionId).toBe(27312);
+		});
+	});
+	describe("channel maintenance", () => {
+		const maintenanceWar = (
+			overrides: Partial<CurrentWarInfo> = {},
+		): CurrentWarInfo => ({
+			...mockWar,
+			warId: 60001,
+			subversive: {
+				id: 2013,
+				name: "Subversive Alliance",
+				score: 60,
+				chain: 15,
+			},
+			...overrides,
+		});
+
+		const maintenanceEntry = (
+			id: number,
+			name: string,
+			secondsRemaining: number,
+			nowSec: number,
+		) => ({
+			id,
+			name,
+			level: 80,
+			daysInFaction: 40,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Online", timestamp: nowSec, relative: "" },
+			status: {
+				description: "In hospital",
+				details: null,
+				state: "hospital",
+				color: "red",
+				until: nowSec + secondsRemaining,
+			},
+			estimatedBs: 500_000_000,
+			estimatedScore: 40_000,
+			secondsRemaining,
+			fairFight: 2.5,
+		});
+
+		it("deletes tracked Discord messages when a war is termed", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveDibsManager.setFactionConfigForTesting(2013, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-primary",
+			});
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[maintenanceEntry(8101, "TeremedOne", 120, nowSec)],
+				maintenanceWar(),
+				2013,
+			);
+
+			const record = subversiveDibsManager
+				.getActiveDibs(2013)
+				.find((d) => d.targetId === 8101);
+			expect(record).toBeDefined();
+
+			// Simulate the bot having posted and reported its message id back.
+			await subversiveDibsManager.recordDiscordMessage(
+				8101,
+				"channel-primary",
+				"msg-8101",
+			);
+
+			// War is termed -> clearDibsForFaction must delete the message.
+			await subversiveDibsManager.processWarHospitalQueue(
+				[],
+				maintenanceWar({ state: "no_war", opponent: null }),
+				2013,
+			);
+
+			expect(
+				subversiveDibsManager.getActiveDibs(2013).map((d) => d.targetId),
+			).not.toContain(8101);
+
+			// The message id must also be cleared so a later sweep does not
+			// try to delete a message that is already gone.
+			await dibsMessageStore.flush();
+			const tracked = await dibsMessageStore.list(2013);
+			expect(tracked.map((ref) => ref.messageId)).not.toContain("msg-8101");
+		});
+
+		it("keeps other factions' messages when one faction's war is termed", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveDibsManager.setFactionConfigForTesting(2013, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-primary",
+			});
+			subversiveDibsManager.setFactionConfigForTesting(27312, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-succession",
+			});
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[maintenanceEntry(8201, "PrimaryKeeps", 120, nowSec)],
+				maintenanceWar(),
+				2013,
+			);
+			await subversiveDibsManager.processWarHospitalQueue(
+				[maintenanceEntry(8202, "SuccessionTermed", 120, nowSec)],
+				maintenanceWar({
+					warId: 60002,
+					subversive: { id: 27312, name: "SA Succession", score: 9, chain: 2 },
+				}),
+				27312,
+			);
+
+			await subversiveDibsManager.recordDiscordMessage(
+				8201,
+				"channel-primary",
+				"msg-8201",
+			);
+			await subversiveDibsManager.recordDiscordMessage(
+				8202,
+				"channel-succession",
+				"msg-8202",
+			);
+
+			// Term only the succession war.
+			await subversiveDibsManager.processWarHospitalQueue(
+				[],
+				maintenanceWar({
+					state: "no_war",
+					opponent: null,
+					warId: 60002,
+					subversive: { id: 27312, name: "SA Succession", score: 9, chain: 2 },
+				}),
+				27312,
+			);
+
+			await dibsMessageStore.flush();
+			const successionTracked = await dibsMessageStore.list(27312);
+			expect(successionTracked.map((ref) => ref.messageId)).not.toContain(
+				"msg-8202",
+			);
+
+			// The 2013 message must survive untouched.
+			const primaryTracked = await dibsMessageStore.list(2013);
+			expect(primaryTracked.map((ref) => ref.messageId)).toContain("msg-8201");
+			expect(
+				subversiveDibsManager.getActiveDibs(2013).map((d) => d.targetId),
+			).toContain(8201);
+		});
+
+		it("skips the sweep when no dibs channel is configured", async () => {
+			subversiveDibsManager.setFactionConfigForTesting(2013, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: null,
+			});
+
+			const result = await subversiveDibsManager.sweepDibsChannel(2013);
+			expect(result).toBeNull();
+		});
+
+		it("reports tracked and live counts independently per faction", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveDibsManager.setFactionConfigForTesting(2013, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-primary",
+			});
+			subversiveDibsManager.setFactionConfigForTesting(27312, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-succession",
+			});
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[maintenanceEntry(8301, "LiveTarget", 120, nowSec)],
+				maintenanceWar(),
+				2013,
+			);
+			await subversiveDibsManager.recordDiscordMessage(
+				8301,
+				"channel-primary",
+				"msg-8301",
+			);
+
+			const primaryTracked = await dibsMessageStore.list(2013);
+			await dibsMessageStore.flush();
+			const successionTracked = await dibsMessageStore.list(27312);
+
+			expect(primaryTracked.map((ref) => ref.messageId)).toContain("msg-8301");
+			expect(successionTracked.map((ref) => ref.messageId)).not.toContain(
+				"msg-8301",
+			);
 		});
 	});
 });

@@ -14,6 +14,7 @@ import { handleCronVerificationProgress } from "../cron-verification-logger";
 import {
 	deleteDibsAlert,
 	postDibsAlert,
+	sweepDibsChannel,
 	updateDibsAlert,
 } from "../dibs-alert-distributor";
 import { updateElimsArmoryStorageChannel } from "../elims-armory-storage";
@@ -399,6 +400,19 @@ export function setupBotIpcListeners(client: Client): void {
 			const messageId = message.data.messageId as string;
 			if (channelId && messageId) {
 				void deleteDibsAlert(client, channelId, messageId);
+			}
+		} else if (message.action === "sweep_dibs_channel" && message.data) {
+			const channelId = message.data.channelId as string;
+			const liveMessageIds = (message.data.liveMessageIds ?? []) as string[];
+			const trackedMessageIds = (message.data.trackedMessageIds ??
+				[]) as string[];
+			const maxAgeHours = (message.data.maxAgeHours as number) ?? 6;
+			if (channelId) {
+				void sweepDibsChannel(client, channelId, {
+					liveMessageIds,
+					trackedMessageIds,
+					maxAgeHours,
+				});
 			}
 		} else if (
 			message.action === "post_merc_contract_announcement" &&

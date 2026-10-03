@@ -12,6 +12,7 @@ import {
 	SUBVERSIVE_FAMILY_FACTION_IDS,
 } from "@sentinel/utils";
 import { notifyBotAction } from "./bot-ipc";
+import { dibsMessageStore } from "./dibs-message-store";
 import {
 	type CurrentWarInfo,
 	type RankedWarOpponent,
@@ -108,6 +109,7 @@ class SubversiveDibsManager {
 	}
 
 	private loopTimer: ReturnType<typeof setInterval> | null = null;
+	private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 	/**
 	 * Starts background interval timer evaluating hospital queue countdowns.
@@ -118,10 +120,40 @@ class SubversiveDibsManager {
 			if (this.hasAnyEngagedWar()) {
 				void this.evaluateHospitalQueue();
 			} else if (this.activeDibs.size > 0) {
+				// War ended without ever posting delete_dibs_alert, leaving orphaned
+				// messages behind. Delete them before dropping the records.
+				this.deleteAllTrackedMessages();
 				this.activeDibs.clear();
 				this.notifyBroadcast();
 			}
 		}, intervalMs);
+	}
+
+	/**
+	 * Deletes every tracked Discord message and forgets it from the ledger.
+	 * Used when a war terminates and no further lifecycle handling will run.
+	 */
+	private deleteAllTrackedMessages(): void {
+		for (const dibs of this.activeDibs.values()) {
+			this.deleteDibsMessage(dibs);
+		}
+	}
+
+	/**
+	 * Sends a delete_dibs_alert for a record and clears its ledger entry.
+	 */
+	private deleteDibsMessage(dibs: DibsRecord): void {
+		const channelId = dibs.discordChannelId;
+		const messageId = dibs.discordMessageId;
+		if (!channelId || !messageId) return;
+
+		void notifyBotAction("delete_dibs_alert", {
+			channelId,
+			messageId,
+			targetId: dibs.targetId,
+		});
+		void dibsMessageStore.forget(messageId);
+		dibs.discordMessageId = undefined;
 	}
 
 	/**
@@ -132,6 +164,104 @@ class SubversiveDibsManager {
 			clearInterval(this.loopTimer);
 			this.loopTimer = null;
 		}
+	}
+
+	/**
+	 * Starts the periodic dibs channel maintenance sweep.
+	 *
+	 * The sweep asks the bot to delete any tracked dibs message that is no longer
+	 * live (war termed, target downed, lock expired) plus any older than the
+	 * configured max age. This is the safety net for orphans the normal lifecycle
+	 * cannot clean: API restarts, failed IPC deliveries, and races at war end.
+	 */
+	startSweepLoop(fallbackIntervalMinutes = 15): void {
+		if (this.sweepTimer) return;
+
+		// Poll every minute and decide from each faction's own configured cadence,
+		// so per-faction changes take effect without a restart.
+		this.sweepTimer = setInterval(() => {
+			void this.runDueSweeps(fallbackIntervalMinutes);
+		}, 60_000);
+	}
+
+	stopSweepLoop(): void {
+		if (this.sweepTimer) {
+			clearInterval(this.sweepTimer);
+			this.sweepTimer = null;
+		}
+	}
+
+	/** Last sweep time per faction, so cadence is respected independently. */
+	private lastSweepAt = new Map<number, number>();
+
+	private async runDueSweeps(fallbackIntervalMinutes: number): Promise<void> {
+		const now = Date.now();
+		for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+			const config = await this.getConfig(factionId);
+			if (config.channelMaintenanceEnabled === false) continue;
+
+			const intervalMinutes =
+				typeof config.sweepIntervalMinutes === "number"
+					? config.sweepIntervalMinutes
+					: fallbackIntervalMinutes;
+			if (intervalMinutes <= 0) continue;
+
+			const last = this.lastSweepAt.get(factionId) ?? 0;
+			if (now - last < intervalMinutes * 60_000) continue;
+
+			this.lastSweepAt.set(factionId, now);
+			await this.sweepDibsChannel(factionId);
+		}
+	}
+
+	/**
+	 * Reconciles the dibs Discord channel for one faction by asking the bot to
+	 * delete every tracked message that is no longer live or is past its max age.
+	 *
+	 * @param factionId faction to sweep (defaults to primary)
+	 * @returns the message ids requested for deletion, or null when skipped
+	 */
+	async sweepDibsChannel(factionId?: number | null): Promise<string[] | null> {
+		const resolved = resolveSubversiveFactionId(factionId);
+		const config = await this.getConfig(resolved);
+		const channelId = config.channelId;
+		if (!channelId) return null;
+
+		// Live = still in activeDibs. Anything else tracked is an orphan.
+		const liveMessageIds = new Set<string>();
+		for (const dibs of this.activeDibs.values()) {
+			if ((dibs.factionId ?? resolved) !== resolved) continue;
+			if (dibs.discordMessageId) liveMessageIds.add(dibs.discordMessageId);
+		}
+
+		const maxAgeHours =
+			typeof config.maxDibsMessageAgeHours === "number"
+				? config.maxDibsMessageAgeHours
+				: 6;
+
+		// Everything we have on record for this faction's channel, so the bot can
+		// delete ids that are still tracked but already dead.
+		const tracked = await dibsMessageStore.list(resolved);
+
+		const delivered = await notifyBotAction("sweep_dibs_channel", {
+			channelId,
+			factionId: resolved,
+			liveMessageIds: [...liveMessageIds],
+			trackedMessageIds: tracked.map((ref) => ref.messageId),
+			maxAgeHours,
+		});
+
+		if (!delivered) {
+			logger.warn(
+				`Dibs channel sweep skipped for faction ${resolved}: bot unreachable.`,
+			);
+			return null;
+		}
+
+		logger.info(
+			`Dibs channel sweep dispatched for faction ${resolved} (${liveMessageIds.size} live, ${tracked.length} tracked, maxAge ${maxAgeHours}h).`,
+		);
+		return [...liveMessageIds];
 	}
 
 	/**
@@ -263,14 +393,25 @@ class SubversiveDibsManager {
 	}
 
 	/**
-	 * Associates a Discord message ID and channel ID with an active Dibs record.
+	 * Associates a Discord message ID and channel ID with an active Dibs record,
+	 * persisting it so the message can still be cleaned up after a restart.
 	 */
 	recordDiscordMessage(
 		targetId: number,
 		channelId: string,
 		messageId: string,
-	): void {
+	): Promise<void> {
 		const dibs = this.activeDibs.get(targetId);
+
+		// Track even when the in-memory record is already gone (e.g. the war
+		// ended while the embed was being posted) so the sweeper can clean it up.
+		const tracked = dibsMessageStore.track({
+			targetId,
+			factionId: dibs?.factionId,
+			channelId,
+			messageId,
+		});
+
 		if (dibs) {
 			dibs.discordChannelId = channelId;
 			dibs.discordMessageId = messageId;
@@ -285,15 +426,22 @@ class SubversiveDibsManager {
 				});
 			}
 		}
+
+		return tracked;
 	}
 
 	/**
-	 * Clears all dibs belonging to a single faction. Returns true when something was removed.
+	 * Clears all dibs belonging to a single faction, deleting any Discord messages
+	 * they own. Returns true when something was removed.
+	 *
+	 * This is the path taken when a war is termed, so it MUST emit delete_dibs_alert
+	 * — previously it silently dropped the records and orphaned the messages.
 	 */
 	private clearDibsForFaction(factionId: number): boolean {
 		let removed = false;
 		for (const [targetId, dibs] of this.activeDibs.entries()) {
 			if (dibs.factionId === undefined || dibs.factionId === factionId) {
+				this.deleteDibsMessage(dibs);
 				this.activeDibs.delete(targetId);
 				removed = true;
 			}
@@ -698,4 +846,7 @@ class SubversiveDibsManager {
 export const subversiveDibsManager = new SubversiveDibsManager();
 if (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) {
 	subversiveDibsManager.startEvaluationLoop();
+	// Channel maintenance: clears orphaned/expired dibs callouts left behind by
+	// termed wars, API restarts, or failed IPC deliveries.
+	subversiveDibsManager.startSweepLoop();
 }
