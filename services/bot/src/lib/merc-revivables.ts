@@ -37,17 +37,15 @@ export function buildMercRevivablesEmbed(
 	contractId?: string,
 ) {
 	const embed = createBaseEmbed(
-		`REVIVABLE MEMBERS - ${factionName.toUpperCase()} [${factionId}]`,
+		`${factionName.toUpperCase()} [${factionId}] • Revivable`,
 		undefined,
 		EMBED_COLORS.PRIMARY,
 	);
 
 	if (members.length === 0) {
-		embed.setDescription(
-			"No revivable members currently identified. This list refreshes automatically on every scan cycle.",
-		);
+		embed.setDescription("No revivable members currently identified.");
 		embed.setFooter({
-			text: `Sentinel Mercenaries${contractId ? ` • Contract: ${contractId.slice(0, 8)}` : ""} | Auto-updated`,
+			text: `Sentinel`,
 		});
 		return embed;
 	}
@@ -62,13 +60,11 @@ export function buildMercRevivablesEmbed(
 			m.statusUntil && m.statusUntil > Date.now() / 1000
 				? ` (<t:${Math.floor(m.statusUntil)}:R>)`
 				: "";
-		const hospDesc = m.statusDescription
-			? ` | ${m.statusDescription}${hospTimer}`
-			: "";
+		const hospDesc = m.statusDescription ? ` Out in ${hospTimer}` : "";
 		const lastAction = m.lastActionRelative
-			? ` | Last: ${m.lastActionRelative}`
+			? ` • Last Action: ${m.lastActionRelative}`
 			: "";
-		return `• [${m.name} [${m.id}]](https://www.torn.com/profiles.php?XID=${m.id}) — Lvl ${m.level}${hospDesc}${lastAction}`;
+		return `• [${m.name} [${m.id}]](https://www.torn.com/profiles.php?XID=${m.id}) — ${hospDesc}${lastAction}`;
 	});
 
 	if (sorted.length > 50) {

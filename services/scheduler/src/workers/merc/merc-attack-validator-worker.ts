@@ -290,14 +290,61 @@ export async function handleIngestedAttacks(
 	}
 }
 
+/**
+ * Liveness watchdog for the shared feed.
+ *
+ * The validator deliberately has no second API path: the feed is the only
+ * reader of `/v2/faction/attacks`, so a direct poll here would double the call
+ * rate against rate-limited master keys for no additional coverage. The risk
+ * worth guarding instead is silence — if the feed stalls while merc contracts
+ * are open, hits would stop crediting unnoticed. This detects that and shouts
+ * about it instead of silently double-polling.
+ */
+const FEED_STALEN_WARN_MS = 90_000;
+let lastFeedEventAtMs = Date.now();
+let hasWarnedAboutStaleFeed = false;
+
+/** Called on every feed emission; also seeds the clock so a quiet feed is fine. */
+function markFeedAlive(): void {
+	lastFeedEventAtMs = Date.now();
+	if (hasWarnedAboutStaleFeed) {
+		logger.info(
+			"Faction attack feed recovered; merc validation is receiving data.",
+		);
+		hasWarnedAboutStaleFeed = false;
+	}
+}
+
+/**
+ * Logs loudly when contracts are creditable but no feed data has arrived for an
+ * unusually long stretch. An idle faction legitimately produces no attacks, so
+ * this only fires while there is something to validate.
+ */
+async function assertFeedIsAlive(): Promise<void> {
+	const contracts = await getValidatableContracts();
+	if (contracts.length === 0) return;
+
+	const silentMs = Date.now() - lastFeedEventAtMs;
+	if (silentMs < FEED_STALEN_WARN_MS) return;
+
+	if (hasWarnedAboutStaleFeed) return;
+	hasWarnedAboutStaleFeed = true;
+	logger.error(
+		`No faction attack data for ${Math.round(silentMs / 1000)}s while ${contracts.length} merc contract(s) are open. Hit validation is stalled — check the '${"subversive:faction_attack_feed"}' worker and master API keys.`,
+	);
+}
+
 let isSubscriptionActive = false;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Starts the Mercenary Attack Validator Worker.
  *
- * Validation is now event-driven off the shared faction attack feed rather than
- * polling the Torn API directly, so this worker no longer runs a timed cycle of
- * its own — it only reacts to newly ingested attacks.
+ * Validation is driven entirely by the shared faction attack feed, which is the
+ * sole reader of `/v2/faction/attacks`. Polling here as well would double the
+ * call rate against rate-limited master keys without adding coverage, so instead
+ * the worker runs a watchdog: if the feed goes silent while contracts are open,
+ * that is logged as an error rather than silently stalling payouts.
  */
 export const startMercAttackValidatorWorker: WorkerStarter = () => {
 	if (isSubscriptionActive) return;
@@ -306,6 +353,7 @@ export const startMercAttackValidatorWorker: WorkerStarter = () => {
 	schedulerEvents.on(
 		"faction_attacks_ingested",
 		(attacks: FactionAttackEvent[]) => {
+			markFeedAlive();
 			void handleIngestedAttacks(attacks).catch((err: unknown) => {
 				logger.warn(
 					`Merc attack validation failed for an ingested batch: ${err instanceof Error ? err.message : String(err)}`,
@@ -314,5 +362,16 @@ export const startMercAttackValidatorWorker: WorkerStarter = () => {
 		},
 	);
 
-	logger.info("Merc attack validator subscribed to faction attack feed.");
+	watchdogTimer = setInterval(() => {
+		void assertFeedIsAlive().catch((err: unknown) => {
+			logger.warn(
+				`Merc feed watchdog check failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		});
+	}, 30_000);
+	watchdogTimer.unref?.();
+
+	logger.info(
+		"Merc attack validator subscribed to faction attack feed with liveness watchdog.",
+	);
 };

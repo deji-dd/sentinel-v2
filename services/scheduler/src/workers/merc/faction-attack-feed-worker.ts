@@ -21,6 +21,7 @@ import {
 } from "../../lib/family-master-keys";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
+import { getEngagedWarContext } from "../subversive/ranked-war-worker";
 
 const logger = new Logger("Scheduler", "FactionAttackFeed");
 
@@ -77,23 +78,49 @@ interface TornFactionAttacksResponse {
 }
 
 const PAGE_LIMIT = 100;
-const MAX_PAGES = 10;
-/** On a cold start we backfill this much history so late subscribers still see it. */
+/**
+ * Pages ingested per cycle while draining an in-progress war. Mirrors the
+ * personal log manager's burst approach: a live war is thousands of attacks deep
+ * and fetching it all in one cycle would guarantee a Torn rate-limit lockout.
+ * The cursor persists, so each cycle resumes where the last stopped and the
+ * backlog drains gradually instead of stalling ingestion.
+ *
+ * This is only used to reconcile a war that was already running when ingestion
+ * first began (or after a long outage). Routine operation needs no backfill at
+ * all: the watermark already tracks the newest edge, so every subsequent cycle
+ * only reads the handful of attacks since the last one.
+ */
+const WAR_BACKFILL_PAGES_PER_CYCLE = 5;
+/** Small pause between burst pages, as the log manager does, to stay polite. */
+const BURST_PAGE_DELAY_MS = 150;
+/** Guard against a runaway loop if a cursor somehow stops advancing. */
+const MAX_PAGES_PER_CYCLE = 40;
+/**
+ * Backfill window when no ranked war is engaged. Retal only needs 5 minutes and
+ * merc hits dedupe per contract, so a day is ample for reconciliation.
+ */
 const BACKFILL_SECONDS = 24 * 60 * 60;
+/**
+ * Backfill window while a ranked war is running. Wars routinely last several
+ * days, so a 24h window would start the hit counter partway into the war and
+ * understate every member's tally.
+ */
+const WAR_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const BULK_INSERT_CHUNK = 100;
 
 export interface AttackWatermark {
 	lastAttackId: number;
 	lastAttackTimestamp: number;
+	/** Backfill cursor walking back through history; null when caught up. */
+	backfillCursor: number | null;
 	updatedAt: string;
 }
 
 const inMemoryWatermarks = new Map<string, AttackWatermark>();
 
 /**
- * Reads the backfill cursor for a faction. `sort=DESC` means Torn's
- * `links.next` is always null, so the feed derives the cursor from the highest
- * attack id it has already stored.
+ * Reads persisted ingest progress for a faction. `sort=DESC` means Torn's
+ * `links.next` is always null, so the feed derives its own cursors.
  */
 export async function getAttackWatermark(
 	factionId: number,
@@ -115,6 +142,10 @@ export async function getAttackWatermark(
 				const watermark: AttackWatermark = {
 					lastAttackId: data.lastAttackId,
 					lastAttackTimestamp: data.lastAttackTimestamp ?? 0,
+					backfillCursor:
+						typeof data.backfillCursor === "number"
+							? data.backfillCursor
+							: null,
 					updatedAt: data.updatedAt ?? new Date().toISOString(),
 				};
 				inMemoryWatermarks.set(stateId, watermark);
@@ -132,14 +163,29 @@ export async function getAttackWatermark(
 
 export async function saveAttackWatermark(
 	factionId: number,
-	lastAttackId: number,
-	lastAttackTimestamp: number,
+	updates: Partial<
+		Pick<
+			AttackWatermark,
+			"lastAttackId" | "lastAttackTimestamp" | "backfillCursor"
+		>
+	>,
 ): Promise<void> {
 	const stateId = familyMasterKeyStateId(factionId);
+	const current: AttackWatermark = inMemoryWatermarks.get(stateId) ?? {
+		lastAttackId: 0,
+		lastAttackTimestamp: 0,
+		backfillCursor: null,
+		updatedAt: new Date().toISOString(),
+	};
 
 	const watermark: AttackWatermark = {
-		lastAttackId,
-		lastAttackTimestamp,
+		lastAttackId: updates.lastAttackId ?? current.lastAttackId,
+		lastAttackTimestamp:
+			updates.lastAttackTimestamp ?? current.lastAttackTimestamp,
+		backfillCursor:
+			updates.backfillCursor === undefined
+				? current.backfillCursor
+				: updates.backfillCursor,
 		updatedAt: new Date().toISOString(),
 	};
 	inMemoryWatermarks.set(stateId, watermark);
@@ -261,10 +307,24 @@ export function nextPageCursor(
 
 interface IngestResult {
 	events: FactionAttackEvent[];
-	/** False when the page cap was hit before the stop point. */
-	complete: boolean;
+	/** False when the burst page budget ran out with backlog remaining. */
+	caughtUp: boolean;
 }
 
+/** Sleep helper so burst pages do not hammer the API back to back. */
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Ingests one burst of pages for a faction.
+ *
+ * Two cursors move independently:
+ *  - the newest edge (watermark attack id) only advances when the stop point is
+ *    reached, so an interrupted run never skips attacks;
+ *  - the backfill cursor walks toward history and persists between cycles, so a
+ *    deep war drains gradually instead of needing one enormous cycle.
+ */
 async function ingestFaction(
 	client: TornApiClient,
 	key: FamilyMasterApiKey,
@@ -272,19 +332,29 @@ async function ingestFaction(
 	const watermark = await getAttackWatermark(key.factionId);
 	const nowSec = Math.floor(Date.now() / 1000);
 
-	// Cold start: backfill a bounded window so a freshly restarted scheduler
-	// does not lose the recent retal/merc history.
+	const warStart = getEngagedWarContext(key.factionId)?.start ?? null;
+	const backfillSeconds =
+		warStart !== null ? WAR_BACKFILL_SECONDS : BACKFILL_SECONDS;
+
+	// A live backfill cursor means we are still catching up on history.
 	let cursor =
-		watermark && watermark.lastAttackTimestamp > 0
+		watermark?.backfillCursor ??
+		(watermark && watermark.lastAttackTimestamp > 0
 			? watermark.lastAttackTimestamp
-			: nowSec - BACKFILL_SECONDS;
+			: nowSec - backfillSeconds);
+
+	const isBackfilling = watermark?.backfillCursor != null;
+	const pageBudget = isBackfilling
+		? WAR_BACKFILL_PAGES_PER_CYCLE
+		: MAX_PAGES_PER_CYCLE;
 
 	const events: FactionAttackEvent[] = [];
 	const seenAttackIds = new Set<number>();
 	let page = 0;
 	let reachedStopPoint = false;
+	let stoppedOnShortPage = false;
 
-	while (page < MAX_PAGES && cursor !== null && !reachedStopPoint) {
+	while (page < pageBudget && cursor !== null && !reachedStopPoint) {
 		// No `filters` param: one call returns both directions.
 		const response = (await client.get("/faction/attacks", {
 			apiKey: key.apiKey,
@@ -296,7 +366,10 @@ async function ingestFaction(
 		})) as TornFactionAttacksResponse;
 
 		const attacks = response.attacks ?? [];
-		if (attacks.length === 0) break;
+		if (attacks.length === 0) {
+			stoppedOnShortPage = true;
+			break;
+		}
 
 		for (const attack of attacks) {
 			if (seenAttackIds.has(attack.id)) continue;
@@ -312,25 +385,26 @@ async function ingestFaction(
 		}
 
 		if (reachedStopPoint) break;
-		if (attacks.length < PAGE_LIMIT) break;
+		if (attacks.length < PAGE_LIMIT) {
+			stoppedOnShortPage = true;
+			break;
+		}
 
 		const nextCursor = nextPageCursor(attacks[attacks.length - 1]);
 		// Guard against re-requesting the same cursor, which would loop forever.
 		if (nextCursor === null || nextCursor >= cursor) break;
 		cursor = nextCursor;
 		page++;
+
+		if (page < pageBudget) await delay(BURST_PAGE_DELAY_MS);
 	}
 
-	// The watermark only advances on a clean run. If we bailed out on the page
-	// cap we would otherwise skip every attack between here and the stop point.
-	if (!reachedStopPoint && events.length > 0) {
-		logger.warn(
-			`Faction ${key.factionId} ingestion hit the ${MAX_PAGES}-page cap before its stop point; watermark held back so the next cycle re-reads the backlog.`,
-		);
-		return { events, complete: false };
-	}
+	const caughtUp =
+		reachedStopPoint || stoppedOnShortPage || cursor === null || page === 0;
 
-	if (events.length > 0) {
+	// The newest-edge watermark only advances on a clean catch-up. If we bailed
+	// out early we would otherwise skip every attack between here and the stop.
+	if (caughtUp && events.length > 0) {
 		let highestAttackId = 0;
 		let highestTimestamp = 0;
 		for (const event of events) {
@@ -340,15 +414,21 @@ async function ingestFaction(
 			}
 		}
 		if (highestAttackId > (watermark?.lastAttackId ?? 0)) {
-			await saveAttackWatermark(
-				key.factionId,
-				highestAttackId,
-				highestTimestamp,
-			);
+			await saveAttackWatermark(key.factionId, {
+				lastAttackId: highestAttackId,
+				lastAttackTimestamp: highestTimestamp,
+			});
 		}
 	}
 
-	return { events, complete: true };
+	// Persist the backfill cursor so the next cycle resumes exactly here.
+	if (!caughtUp && cursor !== null) {
+		await saveAttackWatermark(key.factionId, { backfillCursor: cursor });
+	} else if (watermark?.backfillCursor != null) {
+		await saveAttackWatermark(key.factionId, { backfillCursor: null });
+	}
+
+	return { events, caughtUp };
 }
 
 async function persistAttacks(
@@ -443,10 +523,12 @@ export async function runFactionAttackFeedCycle(): Promise<number> {
 
 	const client = new TornApiClient();
 	const collected: FactionAttackEvent[] = [];
+	let anyCatchingUp = false;
 
 	for (const key of keys) {
 		try {
-			const { events } = await ingestFaction(client, key);
+			const { events, caughtUp } = await ingestFaction(client, key);
+			if (!caughtUp) anyCatchingUp = true;
 			if (events.length === 0) continue;
 			collected.push(...events);
 			await persistAttacks(events, key.keyId);
@@ -465,13 +547,23 @@ export async function runFactionAttackFeedCycle(): Promise<number> {
 		schedulerEvents.emit("faction_attacks_ingested", collected);
 	}
 
+	if (anyCatchingUp) {
+		logger.debug(
+			"Attack feed is still draining backlog; next cycle resumes from the persisted cursor.",
+		);
+	}
+
+	// While draining a backlog we return immediately so the next burst starts
+	// straight away instead of idling for a full cadence.
+	if (anyCatchingUp) return Date.now() + BURST_PAGE_DELAY_MS * 2;
+
 	return Date.now() + cadenceMs;
 }
 
 export const startFactionAttackFeedWorker: WorkerStarter = (options) => {
 	startEventDrivenRunner({
 		worker: "subversive:faction_attack_feed",
-		// Boot on the idle tier; the first cycle re-evaluates immediately.
+		// Boot on the idle tier; the first cycle re-evaluates activity.
 		defaultCadenceSeconds: DEFAULT_ATTACK_FEED_CADENCE_MS / 1000,
 		initialDelayMs: options?.initialDelayMs ?? 1500,
 		handler: runFactionAttackFeedCycle,

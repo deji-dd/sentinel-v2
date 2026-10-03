@@ -70,6 +70,7 @@ describe("Faction Attack Feed - Ingestion & Watermarks", () => {
 			const watermark = {
 				lastAttackId: 1000,
 				lastAttackTimestamp: 1728123456,
+				backfillCursor: null,
 				updatedAt: "",
 			};
 			expect(hasReachedWatermark(1000, watermark)).toBe(true);
@@ -80,6 +81,7 @@ describe("Faction Attack Feed - Ingestion & Watermarks", () => {
 			const watermark = {
 				lastAttackId: 1000,
 				lastAttackTimestamp: 1728123456,
+				backfillCursor: null,
 				updatedAt: "",
 			};
 			expect(hasReachedWatermark(1001, watermark)).toBe(false);
@@ -91,6 +93,7 @@ describe("Faction Attack Feed - Ingestion & Watermarks", () => {
 				hasReachedWatermark(1, {
 					lastAttackId: 0,
 					lastAttackTimestamp: 0,
+					backfillCursor: null,
 					updatedAt: "",
 				}),
 			).toBe(false);

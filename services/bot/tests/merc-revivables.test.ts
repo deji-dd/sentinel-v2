@@ -104,7 +104,7 @@ describe("Mercenary Contract Status Mapping & Revivables Embed", () => {
 		const embed = buildMercRevivablesEmbed("Test Faction", 9999, []);
 		const json = embed.toJSON();
 
-		expect(json.title).toBe("REVIVABLE MEMBERS - TEST FACTION [9999]");
+		expect(json.title).toBe("TEST FACTION [9999] • Revivable");
 		expect(json.description).toContain(
 			"No revivable members currently identified",
 		);
@@ -137,7 +137,7 @@ describe("Mercenary Contract Status Mapping & Revivables Embed", () => {
 		const embed = buildMercRevivablesEmbed("Wild West", 1234, members);
 		const json = embed.toJSON();
 
-		expect(json.title).toBe("REVIVABLE MEMBERS - WILD WEST [1234]");
+		expect(json.title).toBe("WILD WEST [1234] • Revivable");
 		// Sorted by level DESC (WyattEarp level 80 before DocHolliday level 75)
 		expect(json.description).toContain(
 			"[WyattEarp [222]](https://www.torn.com/profiles.php?XID=222)",
@@ -145,7 +145,11 @@ describe("Mercenary Contract Status Mapping & Revivables Embed", () => {
 		expect(json.description).toContain(
 			"[DocHolliday [111]](https://www.torn.com/profiles.php?XID=111)",
 		);
-		expect(json.footer?.text).toContain("Total: 2");
+		expect((json.description as string).indexOf("WyattEarp")).toBeLessThan(
+			(json.description as string).indexOf("DocHolliday"),
+		);
+		expect(json.footer?.text).toContain("Sentinel Mercenaries | Total: 2");
+		expect(json.footer?.text).toContain("Auto-updated");
 		// Zero emojis rule
 		expect(json.title).not.toMatch(/[\u{1F300}-\u{1F9FF}]/u);
 		expect(json.description).not.toMatch(/[\u{1F300}-\u{1F9FF}]/u);
