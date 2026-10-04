@@ -291,9 +291,20 @@ export async function teardownRwPrimaryDisplays(
 		}
 	}
 
+	// Scoped to the four primary categories. This table also stores the
+	// secondary travel embed under `RW_TRAVELING_CATEGORY`, so a
+	// faction-scoped delete would silently destroy the other channel's
+	// message on every war teardown.
 	await db
 		.delete(subversiveRwDisplayMessages)
-		.where(eq(subversiveRwDisplayMessages.factionId, factionId))
+		.where(
+			and(
+				eq(subversiveRwDisplayMessages.factionId, factionId),
+				inArray(subversiveRwDisplayMessages.category, [
+					...RW_DISPLAY_CATEGORIES,
+				]),
+			),
+		)
 		.catch((err) =>
 			logger.warn(
 				`Failed clearing ranked-war display rows for faction ${factionId}:`,

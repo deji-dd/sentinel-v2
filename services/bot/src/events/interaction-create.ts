@@ -66,6 +66,7 @@ import {
 	handleContractCreationButtonClick,
 } from "../lib/merc-contract-creation";
 import { handleRwDisplaysButton } from "../lib/rw-primary-displays";
+import { handleRwTravelingSelect } from "../lib/rw-traveling-displays";
 
 const logger = new Logger("Bot", "InteractionCreate");
 
@@ -164,6 +165,8 @@ export const interactionCreateEvent = {
 					await handleTeamBreakdownSelect(interaction);
 				} else if (interaction.customId === MERC_RECEIPT_SELECT_ID) {
 					await handleMercReceiptSelect(interaction);
+				} else if (interaction.customId.startsWith("rw_traveling_select:")) {
+					await handleRwTravelingSelect(interaction);
 				}
 				return;
 			}

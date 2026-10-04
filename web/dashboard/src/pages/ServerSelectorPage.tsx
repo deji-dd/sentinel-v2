@@ -230,7 +230,7 @@ export default function ServerSelectorPage() {
 	const guildMap = new Map(guilds.map((g) => [g.id, g]));
 
 	return (
-		<div className="min-h-screen w-full flex flex-col items-center justify-center p-4 sm:p-6 bg-background text-foreground font-sans relative overflow-hidden">
+		<div className="min-h-dvh w-full flex flex-col items-center justify-center p-4 sm:p-6 bg-background text-foreground font-sans relative overflow-hidden">
 			{/* Top Header Bar: User Profile & Controls */}
 			<div className="absolute top-4 right-4 z-20 flex items-center gap-2">
 				{authenticated && user && (

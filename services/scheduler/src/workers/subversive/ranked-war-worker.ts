@@ -1,21 +1,32 @@
 import { db, inArray, subversiveTargetFinderTargets } from "@sentinel/database";
 import {
 	emptyRwDisplayBuckets,
+	emptyRwTravelingBuckets,
 	type IpcMessage,
 	type RwDisplaysUpdate,
+	type RwTravelingUpdate,
 } from "@sentinel/schemas";
 import { getPlayerStats, TornApiClient, TornError } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import type { IpcServer } from "@sentinel/utils/ipc";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import {
+	resolvePrimaryDisplayChannels,
+	resolveSecondaryDisplayChannels,
+} from "../../lib/rw-channel-config";
 import { classifyOpponentsIntoRwBuckets } from "../../lib/rw-opponent-buckets";
 import {
 	clearRwDisplaysBroadcastState,
 	hasRwDisplaysBroadcastState,
-	resolvePrimaryDisplayChannels,
 	shouldBroadcastRwDisplays,
 } from "../../lib/rw-primary-displays";
+import { classifyTravelingOpponents } from "../../lib/rw-traveling-buckets";
+import {
+	clearRwTravelingBroadcastState,
+	hasRwTravelingBroadcastState,
+	shouldBroadcastRwTraveling,
+} from "../../lib/rw-traveling-displays";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {
@@ -620,6 +631,7 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 		});
 
 		await broadcastRwPrimaryDisplays(ipcServer, wars, nowSec);
+		await broadcastRwTravelingDisplays(ipcServer, wars);
 	}
 
 	schedulerEvents.emit("ranked_war_updated");
@@ -719,11 +731,107 @@ async function broadcastRwPrimaryDisplays(
 }
 
 /**
+ * Buckets each engaged faction's airborne roster by flight destination and
+ * pushes it to the Discord bot.
+ *
+ * Reads the same already-polled member roster the primary displays use, so it
+ * costs no additional Torn request. Runs alongside the primary broadcast rather
+ * than inside it, with independent suppression state: travelers populate none
+ * of the four primary buckets, so folding this into that payload would let a
+ * departure be suppressed as "unchanged".
+ *
+ * Mirrors the primary lifecycle exactly, including the `no_war` teardown that
+ * only goes to a faction that previously rendered.
+ */
+async function broadcastRwTravelingDisplays(
+	ipcServer: IpcServer<IpcMessage>,
+	wars: Record<string, { war: CurrentWarInfo; opponents: RankedWarOpponent[] }>,
+): Promise<void> {
+	const engagedFactionIds: number[] = [];
+	const idleFactionIds: number[] = [];
+
+	for (const [factionId, snapshot] of Object.entries(wars)) {
+		const state = snapshot.war.state;
+		if (state === "active" || state === "scheduled") {
+			engagedFactionIds.push(Number(factionId));
+		} else {
+			idleFactionIds.push(Number(factionId));
+		}
+	}
+
+	const nowMs = Date.now();
+
+	for (const factionId of idleFactionIds) {
+		if (!hasRwTravelingBroadcastState(factionId)) continue;
+
+		ipcServer.broadcast({
+			action: "subversive_rw_traveling_update",
+			data: {
+				factionId,
+				opponentFactionId: 0,
+				opponentFactionName: "",
+				warId: null,
+				warState: "no_war",
+				channelId: lastTravelingChannelByFaction.get(factionId) ?? null,
+				destinations: emptyRwTravelingBuckets(),
+				updatedAt: nowMs,
+			},
+		});
+
+		clearRwTravelingBroadcastState(factionId);
+		lastTravelingChannelByFaction.delete(factionId);
+	}
+
+	if (engagedFactionIds.length === 0) return;
+
+	const channelIdByFaction =
+		await resolveSecondaryDisplayChannels(engagedFactionIds);
+
+	for (const factionId of engagedFactionIds) {
+		const snapshot = wars[String(factionId)];
+		if (!snapshot) continue;
+
+		const opponent = snapshot.war.opponent;
+		if (!opponent) continue;
+
+		const destinations = classifyTravelingOpponents(snapshot.opponents);
+
+		if (!shouldBroadcastRwTraveling(factionId, destinations, nowMs)) continue;
+
+		const channelId = channelIdByFaction.get(factionId) ?? null;
+		lastTravelingChannelByFaction.set(factionId, channelId);
+
+		const payload: RwTravelingUpdate = {
+			factionId,
+			opponentFactionId: opponent.id,
+			opponentFactionName: opponent.name,
+			warId: snapshot.war.warId,
+			warState: snapshot.war.state === "active" ? "active" : "scheduled",
+			channelId,
+			destinations,
+			updatedAt: nowMs,
+		};
+
+		ipcServer.broadcast({
+			action: "subversive_rw_traveling_update",
+			data: payload,
+		});
+	}
+}
+
+/**
  * The channel each faction was last rendered into, kept so a war-ended
  * teardown can carry it. The bot needs the id to delete the messages before it
  * drops them from the database.
  */
 const lastRenderedChannelByFaction = new Map<number, string | null>();
+
+/**
+ * The secondary channel each faction's travel embed was last rendered into.
+ * Kept separately from the primary so a channel change on one display cannot
+ * misdirect the other's teardown.
+ */
+const lastTravelingChannelByFaction = new Map<number, string | null>();
 
 /**
  * Starts the periodic Subversive Ranked War worker in the scheduler.

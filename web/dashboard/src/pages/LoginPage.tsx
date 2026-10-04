@@ -83,7 +83,7 @@ export default function LoginPage() {
 	}, [loading, authenticated, navigate, redirectTo]);
 
 	return (
-		<div className="min-h-screen w-full flex flex-col items-center justify-center p-4 bg-background text-foreground font-sans relative overflow-hidden">
+		<div className="min-h-dvh w-full flex flex-col items-center justify-center p-4 bg-background text-foreground font-sans relative overflow-hidden">
 			{/* Theme Switcher in Top Right */}
 			<div className="absolute top-4 right-4 z-20">
 				<Button

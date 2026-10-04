@@ -1,8 +1,19 @@
-import { Loader2, Menu } from "lucide-react";
+import { Menu, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+import { PageLoader } from "@/components/PageLoader";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+	Sheet,
+	SheetContent,
+	SheetDescription,
+	SheetHeader,
+	SheetTitle,
+} from "@/components/ui/sheet";
 import { useAuth } from "../contexts/AuthContext";
+import { useTheme } from "../hooks/useTheme";
 import { api } from "../lib/api";
+import { getNavSections, getPageLabel } from "../lib/navigation";
 import { DibsConfigPage } from "../pages/DibsConfigPage";
 import GeneralSettingsPage from "../pages/GuildSettingsPage";
 import { MercChannelsPage } from "../pages/MercChannelsPage";
@@ -14,23 +25,6 @@ import TerritoryPage from "../pages/TerritoryPage";
 import VerificationPage from "../pages/VerificationPage";
 import { useRouter } from "../router";
 import { GuildSidebar } from "./GuildSidebar";
-
-function PageFallback() {
-	return (
-		<div className="flex flex-col items-center justify-center h-screen w-screen gap-3 text-muted-foreground text-sm font-sans bg-background relative overflow-hidden">
-			<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 size-[500px] bg-primary/5 rounded-full blur-[100px] pointer-events-none" />
-			<Loader2 className="size-7 animate-spin text-primary relative z-10" />
-			<div className="flex items-center gap-2 relative z-10 font-mono text-xs">
-				<span className="font-bold text-foreground tracking-widest uppercase">
-					SENTINEL
-				</span>
-				<span className="text-muted-foreground uppercase tracking-wider">
-					• Loading Server Config...
-				</span>
-			</div>
-		</div>
-	);
-}
 
 function extractGuildId(path: string): string | null {
 	const match = path.match(/^\/guilds\/([^/]+)/);
@@ -47,11 +41,17 @@ function extractSubPath(path: string, guildId: string): string {
 export default function GuildShell() {
 	const { path, queryParams, navigate } = useRouter();
 	const { authenticated, loading: authLoading } = useAuth();
+	const { theme, toggle } = useTheme();
 
 	const guildId = extractGuildId(path);
 	const subPath = guildId ? extractSubPath(path, guildId) : "/";
 
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+
+	// Close the drawer whenever the route changes (e.g. deep links / back button).
+	useEffect(() => {
+		setSidebarOpen(false);
+	}, [path]);
 
 	const [serverTypes, setServerTypes] = useState<{
 		faction?: string | null;
@@ -128,6 +128,10 @@ export default function GuildShell() {
 					guildId === serverTypes.faction &&
 					serverTypes.merc !== guildId,
 			));
+	const isAlliance =
+		activeServerType === "alliance" ||
+		(!activeServerType &&
+			Boolean(serverTypes.alliance && guildId === serverTypes.alliance));
 
 	// Auth guard
 	useEffect(() => {
@@ -137,7 +141,7 @@ export default function GuildShell() {
 	}, [authLoading, authenticated, navigate]);
 
 	if (authLoading || !authenticated || !guildId) {
-		return <PageFallback />;
+		return <PageLoader label="Loading Server Config..." />;
 	}
 
 	const renderPage = () => {
@@ -165,7 +169,7 @@ export default function GuildShell() {
 		if (subPath === "/contracts")
 			return <MercContractsPage guildId={guildId} />;
 		if (isMerc) {
-			return <div className="p-8 text-muted-foreground">Page not found.</div>;
+			return <NotFound />;
 		}
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/recruitment")
@@ -173,65 +177,124 @@ export default function GuildShell() {
 		if (subPath === "/rw-channels") return <RwChannelsPage guildId={guildId} />;
 		if (subPath === "/dibs") return <DibsConfigPage guildId={guildId} />;
 		if (subPath === "/reaction-roles") {
-			if (isFaction) {
-				return <div className="p-8 text-muted-foreground">Page not found.</div>;
-			}
+			if (isFaction) return <NotFound />;
 			return <ReactionRolesPage guildId={guildId} />;
 		}
 
-		return <div className="p-8 text-muted-foreground">Page not found.</div>;
+		return <NotFound />;
 	};
 
+	const sections = getNavSections({
+		guildId,
+		effectiveType: activeServerType,
+		isMerc,
+		isFaction,
+		isAlliance,
+	});
+	const pageLabel = getPageLabel(subPath, sections) ?? "Dashboard";
+
 	return (
-		<div className="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans relative">
-			{/* Subtle Background Radial Glow */}
-			<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 size-[600px] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
+		<div className="relative flex h-dvh w-full overflow-hidden bg-background font-sans text-foreground">
+			{/* Decorative background glow — hidden from screen readers, behind content */}
+			<div className="app-glow" aria-hidden="true" />
 
-			{/* Mobile Overlay */}
-			{sidebarOpen && (
-				<button
-					type="button"
-					aria-label="Close sidebar overlay"
-					onClick={() => setSidebarOpen(false)}
-					className="fixed inset-0 bg-black/50 z-30 block lg:hidden border-0 p-0 cursor-pointer"
-				/>
-			)}
-
-			{/* Sidebar Container */}
-			<div
-				className={`fixed lg:relative inset-y-0 left-0 z-40 h-full w-64 lg:w-72 shrink-0 transition-transform duration-200 ease-in-out ${
-					sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-				}`}
-			>
-				<GuildSidebar
-					guildId={guildId}
-					activeServerType={activeServerType}
-					onNavigate={() => setSidebarOpen(false)}
-				/>
+			{/* ── Desktop rail ─────────────────────────────────────────────── */}
+			<div className="relative z-20 hidden shrink-0 border-r border-border/80 lg:block lg:w-72">
+				<GuildSidebar guildId={guildId} activeServerType={activeServerType} />
 			</div>
 
-			{/* Main Scrollable Content Area */}
-			<div className="flex-1 flex flex-col h-full overflow-hidden relative z-10 min-w-0">
-				{/* Mobile Menu Bar Toggle */}
-				<div className="lg:hidden p-4 border-b border-border/80 flex items-center justify-between bg-card/60 backdrop-blur-md">
+			{/* ── Mobile drawer ────────────────────────────────────────────── */}
+			<Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+				<SheetContent
+					side="left"
+					showCloseButton={false}
+					className="w-[86vw] max-w-xs border-r border-border/80 bg-card/95 p-0 backdrop-blur-xl lg:hidden"
+				>
+					<SheetHeader className="sr-only">
+						<SheetTitle>Server navigation</SheetTitle>
+						<SheetDescription>
+							Choose a section of this server's dashboard.
+						</SheetDescription>
+					</SheetHeader>
+					<GuildSidebar
+						guildId={guildId}
+						activeServerType={activeServerType}
+						onNavigate={() => setSidebarOpen(false)}
+					/>
+				</SheetContent>
+			</Sheet>
+
+			{/* ── Main column ──────────────────────────────────────────────── */}
+			<div className="relative z-10 flex min-w-0 flex-1 flex-col">
+				{/* App bar — the only chrome on mobile, sticky on desktop too. */}
+				<header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border/80 bg-background/85 px-3 backdrop-blur-xl sm:h-16 sm:px-4 lg:px-6">
 					<Button
 						variant="ghost"
-						size="icon"
-						onClick={() => setSidebarOpen((o) => !o)}
-						aria-label="Toggle sidebar menu"
-						className="size-9 rounded-full cursor-pointer"
+						size="icon-sm"
+						onClick={() => setSidebarOpen(true)}
+						aria-label="Open navigation"
+						className="shrink-0 rounded-full lg:hidden"
 					>
 						<Menu className="size-4" />
 					</Button>
-					<span className="font-bold text-sm font-mono uppercase tracking-tight">
-						Sentinel
-					</span>
-				</div>
 
-				<main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-					<div className="max-w-4xl mx-auto">{renderPage()}</div>
+					{/* Mobile: current page. Desktop: brand mark. */}
+					<div className="flex min-w-0 flex-1 items-center gap-2">
+						<span className="truncate text-sm font-semibold tracking-tight lg:hidden">
+							{pageLabel}
+						</span>
+						<span className="hidden font-mono text-sm font-bold tracking-widest text-foreground uppercase lg:inline">
+							Sentinel
+						</span>
+						<Badge
+							variant="outline"
+							className="hidden shrink-0 px-1.5 py-0 text-[9px] font-mono text-muted-foreground sm:inline-flex"
+						>
+							{isMerc
+								? "MERCENARY"
+								: isFaction
+									? "FACTION"
+									: isAlliance
+										? "ALLIANCE"
+										: "SERVER"}
+						</Badge>
+					</div>
+
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onClick={toggle}
+						aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+						title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+						className="shrink-0 rounded-full border border-border/60 bg-card/60"
+					>
+						{theme === "dark" ? (
+							<Sun className="size-4" />
+						) : (
+							<Moon className="size-4" />
+						)}
+					</Button>
+				</header>
+
+				{/* Scroll container. `min-h-0` is what actually lets it scroll
+				    inside a flex column on mobile Safari. */}
+				<main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+					<div className="px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
+						{renderPage()}
+					</div>
 				</main>
 			</div>
+		</div>
+	);
+}
+
+function NotFound() {
+	return (
+		<div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
+			<h2 className="text-base font-semibold">Page not found</h2>
+			<p className="text-sm text-muted-foreground">
+				This section is not available for this server type.
+			</p>
 		</div>
 	);
 }

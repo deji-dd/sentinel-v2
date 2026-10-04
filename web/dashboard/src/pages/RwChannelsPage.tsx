@@ -1,20 +1,20 @@
-import { Clock, Loader2, RotateCcw, Save } from "lucide-react";
+import { Clock, Hash, RotateCcw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
+import { PageHeader } from "@/components/PageHeader";
+import { PageShell } from "@/components/PageShell";
+import { SectionCard, SectionCardFooter } from "@/components/SectionCard";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import {
-	Card,
-	CardContent,
-	CardFooter,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface RwChannelConfig {
 	primaryDisplaysChannelId: string | null;
+	secondaryDisplaysChannelId: string | null;
 	updatedAt?: string | null;
 	updatedBy?: string | null;
 }
@@ -30,6 +30,7 @@ const RW_FACTIONS = [
 
 const DEFAULT_CONFIG: RwChannelConfig = {
 	primaryDisplaysChannelId: null,
+	secondaryDisplaysChannelId: null,
 };
 
 /**
@@ -39,13 +40,18 @@ const DEFAULT_CONFIG: RwChannelConfig = {
 const CHANNEL_FIELDS: ReadonlyArray<{
 	field: keyof RwChannelConfig;
 	label: string;
+	/** Design-token accent so the highlight survives the light theme. */
 	accent: string;
 }> = [
 	{
 		field: "primaryDisplaysChannelId",
 		label: "Primary Displays",
-
-		accent: "text-amber-400",
+		accent: "text-warning",
+	},
+	{
+		field: "secondaryDisplaysChannelId",
+		label: "Secondary Displays",
+		accent: "text-info",
 	},
 ];
 
@@ -132,6 +138,7 @@ export function RwChannelsPage({
 				body: JSON.stringify({
 					factionId,
 					primaryDisplaysChannelId: config.primaryDisplaysChannelId,
+					secondaryDisplaysChannelId: config.secondaryDisplaysChannelId,
 				}),
 			});
 
@@ -160,58 +167,90 @@ export function RwChannelsPage({
 
 	if (loading) {
 		return (
-			<div className="space-y-6">
-				<div className="pb-6 border-b border-border/60">
-					<Skeleton className="h-9 w-64" />
-				</div>
-				<Skeleton className="h-96 w-full rounded-2xl" />
-			</div>
+			<PageShell>
+				<PageHeader
+					title="Channel Selections"
+					description="Designate the channels ranked-war displays are posted to."
+					icon={Hash}
+				/>
+				<Skeleton className="h-10 w-full max-w-lg rounded-xl" />
+				<Skeleton className="h-72 w-full rounded-xl" />
+			</PageShell>
 		);
 	}
 
 	return (
-		<div className="space-y-8 pb-12 max-w-5xl">
+		<PageShell>
+			<PageHeader
+				title="Channel Selections"
+				description="Designate the channels ranked-war displays are posted to."
+				icon={Hash}
+			/>
+
+			{/* Faction switcher. Two long faction names cannot share a phone row
+			    comfortably, so the list stretches and each label truncates. */}
 			<Tabs
 				value={String(factionId)}
 				onValueChange={(val) => setFactionId(Number(val))}
 			>
-				<TabsList className="w-full max-w-lg">
+				<TabsList className="h-auto w-full max-w-lg p-1">
 					{RW_FACTIONS.map((faction) => (
-						<TabsTrigger key={faction.id} value={String(faction.id)}>
-							{faction.name}
+						<TabsTrigger
+							key={faction.id}
+							value={String(faction.id)}
+							className="min-w-0 py-1.5"
+						>
+							<span className="truncate">{faction.name}</span>
 						</TabsTrigger>
 					))}
 				</TabsList>
 			</Tabs>
 
-			<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
-				<CardHeader className="border-b border-border/40">
-					<CardTitle className="text-base font-medium">
-						Channel Selections
-					</CardTitle>
-				</CardHeader>
-
-				<CardContent className="space-y-6">
+			<SectionCard
+				title={activeFaction.name}
+				description={`Faction ID ${activeFaction.id}`}
+				action={
+					<StatusBadge tone={isDirty ? "warning" : "success"} size="sm">
+						{isDirty ? "Unsaved" : "Saved"}
+					</StatusBadge>
+				}
+				flush
+			>
+				<div className="flex flex-col gap-4 px-4 py-4 sm:px-6">
 					{CHANNEL_FIELDS.map(({ field, label, accent }) => {
 						const inputId = `select-${String(field)}-${factionId}`;
 						const selected = config[field] ?? null;
 
+						// The two displays must not share a channel: the primary
+						// channel's stale-message sweep deletes any bot-authored
+						// message it does not recognise, so a shared channel would
+						// have it destroy the travel embed as strays. Hiding the
+						// other field's selection makes the conflict unreachable
+						// rather than relying on the save being rejected.
+						const otherField = CHANNEL_FIELDS.find(
+							(f) => f.field !== field,
+						)?.field;
+						const reservedByOther = otherField ? config[otherField] : null;
+						const availableChannels = reservedByOther
+							? channels.filter((c) => c.id !== reservedByOther)
+							: channels;
+
 						return (
 							<div
 								key={field}
-								className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3"
+								className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 sm:p-4"
 							>
-								<label
+								<Label
 									htmlFor={inputId}
-									className="text-sm font-semibold text-foreground block cursor-pointer"
+									className="cursor-pointer text-sm font-semibold"
 								>
 									{label}
-								</label>
+								</Label>
 
-								<div className="max-w-md">
+								<div className="w-full min-w-0 sm:max-w-md">
 									<ChannelSelect
 										id={inputId}
-										channels={channels}
+										channels={availableChannels}
 										value={selected}
 										onValueChange={(val) =>
 											setConfig((prev) => ({
@@ -221,89 +260,90 @@ export function RwChannelsPage({
 										}
 										noneLabel="-- No Channel Selected --"
 										placeholder="-- No Channel Selected --"
-										contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+										contentClassName="rounded-xl border-border bg-popover text-popover-foreground"
 									/>
 								</div>
 
-								{selected && (
-									<div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-background border border-border/80 text-xs font-mono">
-										<span className="text-muted-foreground text-[10px]">
-											SELECTED:
+								{selected ? (
+									<div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-1.5 text-xs">
+										<span className="shrink-0 font-mono text-[10px] text-muted-foreground uppercase">
+											Selected
 										</span>
-										<span className={`${accent} font-semibold`}>
+										<span
+											className={`min-w-0 truncate font-mono font-semibold ${accent}`}
+											title={
+												channels.find((c) => c.id === selected)?.name ??
+												selected
+											}
+										>
 											#
 											{channels.find((c) => c.id === selected)?.name ??
 												selected}
 										</span>
 									</div>
-								)}
+								) : null}
 							</div>
 						);
 					})}
 
-					{config.updatedAt && (
-						<div className="pt-2 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/60">
+					{config.updatedAt ? (
+						<div className="flex flex-col gap-1 border-t border-border/60 pt-3 text-[11px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
 							<div className="flex items-center gap-1.5">
-								<Clock className="size-3.5" />
+								<Clock className="size-3.5 shrink-0" />
 								<span>
 									Last updated: {new Date(config.updatedAt).toLocaleString()}
 								</span>
 							</div>
-							{config.updatedBy && (
-								<span className="font-mono text-[10px]">
+							{config.updatedBy ? (
+								<span className="truncate font-mono text-[10px]">
 									By: {config.updatedBy}
 								</span>
-							)}
+							) : null}
 						</div>
-					)}
-				</CardContent>
+					) : null}
+				</div>
 
-				<CardFooter className="flex items-center justify-between gap-4 border-t border-border pt-4">
-					<div className="text-xs text-muted-foreground font-mono">
-						{isDirty ? (
-							<span className="text-amber-500 flex items-center gap-2 font-medium">
-								<span className="size-2 rounded-full bg-amber-500 animate-pulse" />
+				<SectionCardFooter
+					status={
+						isDirty ? (
+							<span className="flex items-center gap-2 font-medium text-warning">
+								<span className="size-2 shrink-0 animate-pulse rounded-full bg-warning" />
 								Unsaved changes pending
 							</span>
 						) : (
 							<span>All settings saved</span>
-						)}
-					</div>
-
-					<div className="flex items-center gap-3">
-						{isDirty && (
-							<Button
-								type="button"
-								variant="outline"
-								onClick={handleDiscard}
-								disabled={saving}
-								className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer gap-2"
-							>
-								<RotateCcw className="size-3.5" data-icon="inline-start" />
-								Discard Changes
-							</Button>
-						)}
-
+						)
+					}
+				>
+					{isDirty ? (
 						<Button
 							type="button"
-							onClick={() => void handleSave()}
-							disabled={saving || !isDirty}
-							className="h-10 px-6 rounded-xl text-xs font-semibold cursor-pointer gap-2"
+							variant="outline"
+							onClick={handleDiscard}
+							disabled={saving}
+							className="gap-2"
 						>
-							{saving ? (
-								<Loader2
-									className="size-4 animate-spin"
-									data-icon="inline-start"
-								/>
-							) : (
-								<Save className="size-4" data-icon="inline-start" />
-							)}
-							{saving ? "Saving Changes..." : "Save Changes"}
+							<RotateCcw className="size-3.5" />
+							Discard
 						</Button>
-					</div>
-				</CardFooter>
-			</Card>
-		</div>
+					) : null}
+
+					<Button
+						type="button"
+						onClick={() => void handleSave()}
+						disabled={saving || !isDirty}
+						className="gap-2"
+					>
+						{saving ? (
+							<Spinner className="size-4" />
+						) : (
+							<Save className="size-4" />
+						)}
+						{saving ? "Saving..." : "Save Changes"}
+					</Button>
+				</SectionCardFooter>
+			</SectionCard>
+		</PageShell>
 	);
 }
 

@@ -4,10 +4,7 @@ import { cn } from "@/lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
 	return (
-		<div
-			data-slot="table-container"
-			className="relative w-full overflow-x-auto"
-		>
+		<div data-slot="table-container" className="scroll-x relative w-full">
 			<table
 				data-slot="table"
 				className={cn("w-full caption-bottom text-sm", className)}
@@ -21,7 +18,10 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
 	return (
 		<thead
 			data-slot="table-header"
-			className={cn("[&_tr]:border-b [&_tr]:border-border/40", className)}
+			className={cn(
+				"bg-muted/30 [&_tr]:border-b [&_tr]:border-border/40",
+				className,
+			)}
 			{...props}
 		/>
 	);
@@ -68,7 +68,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
 		<th
 			data-slot="table-head"
 			className={cn(
-				"h-10 px-3 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+				"h-10 px-3 text-left align-middle text-xs font-semibold tracking-wide text-muted-foreground uppercase whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
 				className,
 			)}
 			{...props}
@@ -81,7 +81,9 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
 		<td
 			data-slot="table-cell"
 			className={cn(
-				"p-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+				// Cells wrap by default: long channel names, usernames and error
+				// strings used to force a huge horizontal scroll on phones.
+				"p-3 align-middle break-anywhere [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
 				className,
 			)}
 			{...props}

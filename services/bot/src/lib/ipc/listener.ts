@@ -48,6 +48,7 @@ import { updateMercRevivablesList } from "../merc-revivables";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { updateRwPrimaryDisplays } from "../rw-primary-displays";
+import { updateRwTravelingDisplays } from "../rw-traveling-displays";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
 
 type PendingRequest = {
@@ -385,6 +386,11 @@ export function setupBotIpcListeners(client: Client): void {
 			message.data
 		) {
 			void updateRwPrimaryDisplays(client, message.data);
+		} else if (
+			message.action === "subversive_rw_traveling_update" &&
+			message.data
+		) {
+			void updateRwTravelingDisplays(client, message.data);
 		} else if (message.action === "post_dibs_alert" && message.data) {
 			const channelId = message.data.channelId as string;
 			const dibs = message.data

@@ -1,97 +1,20 @@
-import { db, inArray, subversiveRwChannelConfigs } from "@sentinel/database";
 import {
 	RW_DISPLAY_CATEGORIES,
 	type RwDisplayBuckets,
 } from "@sentinel/schemas";
-import { Logger } from "@sentinel/utils";
-
-const logger = new Logger("Scheduler", "RwPrimaryDisplays");
 
 /**
- * How long a resolved primary-channel selection is reused before re-reading it.
+ * Broadcast throttling for the four primary ranked-war displays.
  *
- * The war cycle ticks every second during an active war, and this table has at
- * most one row per family faction, so re-reading it every tick would be pure
- * waste. Thirty seconds keeps the "admin just deselected the channel" case
- * responsive without adding a second poll to the hot path.
+ * Suppression lives here rather than in the bot because the scheduler is the
+ * side that knows whether the roster actually changed. The bot keeps its own
+ * render-interval floor as a second line of defence against Discord's
+ * per-channel edit budget.
+ *
+ * The secondary travel display keeps its own independent state — see
+ * `rw-traveling-displays.ts`. Sharing it would let a traveling-only change be
+ * suppressed as "unchanged", because travelers populate none of these buckets.
  */
-const CHANNEL_CONFIG_TTL_MS = 30_000;
-
-interface CachedChannelConfig {
-	channelIdByFaction: Map<number, string | null>;
-	loadedAtMs: number;
-}
-
-let cachedChannelConfig: CachedChannelConfig | null = null;
-
-/**
- * Reads the primary displays channel for every given faction.
- *
- * A faction with no row at all resolves to `null` (nothing selected), which is
- * a normal state rather than an error: the dashboard simply has not been
- * configured for it yet.
- *
- * A database failure resolves every faction to `null` and is not cached, so the
- * next cycle retries. Degrading to "no channel" is safe because the bot treats
- * it as "tear down", which is preferable to reposting into a channel an admin
- * may have just unselected.
- */
-export async function resolvePrimaryDisplayChannels(
-	factionIds: number[],
-): Promise<Map<number, string | null>> {
-	if (factionIds.length === 0) return new Map();
-
-	const now = Date.now();
-	if (
-		cachedChannelConfig &&
-		now - cachedChannelConfig.loadedAtMs < CHANNEL_CONFIG_TTL_MS
-	) {
-		const out = new Map<number, string | null>();
-		for (const factionId of factionIds) {
-			out.set(
-				factionId,
-				cachedChannelConfig.channelIdByFaction.get(factionId) ?? null,
-			);
-		}
-		return out;
-	}
-
-	const channelIdByFaction = new Map<number, string | null>();
-	try {
-		const rows = await db
-			.select({
-				factionId: subversiveRwChannelConfigs.factionId,
-				primaryDisplaysChannelId:
-					subversiveRwChannelConfigs.primaryDisplaysChannelId,
-			})
-			.from(subversiveRwChannelConfigs)
-			.where(inArray(subversiveRwChannelConfigs.factionId, factionIds));
-
-		for (const row of rows) {
-			// Empty strings are historically possible in this column; the
-			// backfill migration normalised them to NULL but the PUT handler does
-			// not validate, so treat them as unset rather than as a bad snowflake.
-			channelIdByFaction.set(
-				row.factionId,
-				row.primaryDisplaysChannelId?.trim() || null,
-			);
-		}
-		cachedChannelConfig = { channelIdByFaction, loadedAtMs: now };
-	} catch (err) {
-		logger.warn("Failed to resolve ranked-war primary display channels:", err);
-		// Deliberately not cached, so the next cycle retries the read.
-		return new Map(factionIds.map((id) => [id, null]));
-	}
-
-	return new Map(
-		factionIds.map((id) => [id, channelIdByFaction.get(id) ?? null]),
-	);
-}
-
-/** Test seam: drops the memoised channel selection. */
-export function resetPrimaryDisplayChannelCache(): void {
-	cachedChannelConfig = null;
-}
 
 /**
  * Builds a stable fingerprint of the four buckets.

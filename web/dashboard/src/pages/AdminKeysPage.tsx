@@ -267,7 +267,7 @@ export default function AdminKeysPage({
 
 	if (!isAdmin && !loading) {
 		return (
-			<div className="min-h-screen w-full flex flex-col items-center justify-center p-6 bg-background text-foreground font-sans">
+			<div className="min-h-dvh w-full flex flex-col items-center justify-center p-6 bg-background text-foreground font-sans">
 				<Card className="max-w-md w-full p-6 text-center border-destructive/40 bg-destructive/5 space-y-4">
 					<div className="size-12 rounded-2xl bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
 						<ShieldAlert className="size-6" />
@@ -659,7 +659,7 @@ export default function AdminKeysPage({
 	}
 
 	return (
-		<div className="min-h-screen w-full bg-background text-foreground font-sans relative overflow-x-hidden">
+		<div className="min-h-dvh w-full bg-background text-foreground font-sans relative overflow-x-hidden">
 			{/* Subtle Background Radial Glow */}
 			<div className="absolute top-0 left-1/2 -translate-x-1/2 size-[600px] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
 

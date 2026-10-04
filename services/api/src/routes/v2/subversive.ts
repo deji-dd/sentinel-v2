@@ -32,7 +32,10 @@ import { subversiveDibsManager } from "../../lib/dibs-manager";
 import { dibsMessageStore } from "../../lib/dibs-message-store";
 import { fetchDiscordApi } from "../../lib/discord-auth";
 import { resolveDiscordTornUser } from "../../lib/resolve-discord-torn-user";
-import { subversiveRwChannelManager } from "../../lib/rw-channel-manager";
+import {
+	RwChannelConflictError,
+	subversiveRwChannelManager,
+} from "../../lib/rw-channel-manager";
 import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
@@ -1310,27 +1313,38 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			}
 
 			const { factionId: _ignored, ...patch } = body;
-			const updated = await subversiveRwChannelManager.updateConfig(
-				patch,
-				user?.username ?? "admin",
-				factionId,
-			);
-			return {
-				success: true,
-				factionId,
-				factionName: getSubversiveFactionName(factionId),
-				config: updated,
-			};
+			try {
+				const updated = await subversiveRwChannelManager.updateConfig(
+					patch,
+					user?.username ?? "admin",
+					factionId,
+				);
+				return {
+					success: true,
+					factionId,
+					factionName: getSubversiveFactionName(factionId),
+					config: updated,
+				};
+			} catch (err) {
+				// Only the shared-channel case is a client mistake. Anything else
+				// is a genuine failure and must not be reported as a bad request.
+				if (err instanceof RwChannelConflictError) {
+					set.status = 400;
+					return { error: err.message };
+				}
+				throw err;
+			}
 		},
 		{
 			body: t.Object({
 				factionId: t.Optional(t.Numeric()),
 				primaryDisplaysChannelId: t.Optional(t.Nullable(t.String())),
+				secondaryDisplaysChannelId: t.Optional(t.Nullable(t.String())),
 			}),
 			detail: {
 				summary: "Update Subversive Ranked-War Channel Selections",
 				description:
-					"Routes ranked-war tooling channels for one family faction.",
+					"Routes ranked-war tooling channels for one family faction. The primary and secondary selections must differ.",
 			},
 		},
 	)

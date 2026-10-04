@@ -88,3 +88,116 @@ export type IpcSubversiveRwDisplaysUpdateMessage = {
 	action: "subversive_rw_displays_update";
 	data: RwDisplaysUpdate;
 };
+
+/* ────────────────────────── secondary (travel) display ────────────────────────── */
+
+/**
+ * The category key the travel embed's message id is stored under.
+ *
+ * Lives alongside the four primary categories in
+ * `subversive_rw_display_messages`. It is deliberately *not* part of
+ * `RW_DISPLAY_CATEGORIES`, so the primary renderer neither reads nor deletes
+ * it.
+ */
+export const RW_TRAVELING_CATEGORY = "traveling";
+
+/**
+ * Every destination Torn can report a flight destination as.
+ *
+ * Mirrors Torn's own `CountryEnum` exactly, in the API's spelling. Note the
+ * eleventh entry is `"UAE"`, **not** "United Arab Emirates" — the long form is
+ * the human-readable label only, and matching on it would silently drop every
+ * UAE traveler.
+ *
+ * `"Torn"` is the eleventh country plus the city itself: a player with
+ * `"Traveling from Switzerland to Torn"` is flying *home*, and is a real,
+ * reportable destination rather than something to discard. Excluding it would
+ * make the embed claim nobody is flying while the roster plainly shows
+ * airborne players.
+ */
+export const TORN_TRAVEL_DESTINATIONS = [
+	"Mexico",
+	"Hawaii",
+	"South Africa",
+	"Japan",
+	"China",
+	"Argentina",
+	"Switzerland",
+	"Canada",
+	"United Kingdom",
+	"UAE",
+	"Cayman Islands",
+	"Torn",
+] as const;
+
+export type TravelDestination = (typeof TORN_TRAVEL_DESTINATIONS)[number];
+
+/** Players currently inbound to one destination. */
+export interface RwTravelingDestination {
+	destination: TravelDestination;
+	players: RwOpponentLine[];
+}
+
+/**
+ * Destinations with at least one airborne player, ordered by player count
+ * descending then destination name.
+ *
+ * An array rather than a record so the ordering is explicit and survives the
+ * IPC round-trip, and so only populated destinations appear — the Discord
+ * select menu should list destinations that are actually active.
+ */
+export type RwTravelingBuckets = RwTravelingDestination[];
+
+/** An empty travel bucket set, used when a war is not engaged. */
+export function emptyRwTravelingBuckets(): RwTravelingBuckets {
+	return [];
+}
+
+/**
+ * Label shown for the `Torn` destination.
+ *
+ * `"Torn"` alone reads as a country in a list of countries; the distinction
+ * between "flying to Japan" and "flying home to the city" is the whole point
+ * of this display, so it is spelled out in the embed field name.
+ */
+export const TRAVEL_DESTINATION_LABELS: Record<TravelDestination, string> = {
+	...(Object.fromEntries(TORN_TRAVEL_DESTINATIONS.map((d) => [d, d])) as Record<
+		TravelDestination,
+		string
+	>),
+	Torn: "Returning to Torn",
+};
+
+/**
+ * Payload for the secondary travel display.
+ *
+ * Separate from `RwDisplaysUpdate` on purpose: traveling players match neither
+ * `state === "Okay"` nor `state === "Hospital"`, so they appear in none of the
+ * four primary buckets. Sharing one payload would mean a traveling-only change
+ * produced an identical bucket signature and got suppressed as "unchanged",
+ * leaving the travel embed stale while the primary embeds looked healthy.
+ *
+ * `warState` and `channelId` behave exactly as in `RwDisplaysUpdate`, including
+ * `no_war` as the teardown signal.
+ */
+export interface RwTravelingUpdate {
+	/** Family faction (2013 / 27312) whose channel this display belongs to. */
+	factionId: number;
+	/** The opposing faction this roster came from; 0 when `no_war`. */
+	opponentFactionId: number;
+	/** The opposing faction name; empty when `no_war`. */
+	opponentFactionName: string;
+	/** Torn ranked war id, or null when scheduled but not yet begun. */
+	warId: number | null;
+	warState: "no_war" | "scheduled" | "active";
+	/** Discord snowflake of the secondary channel, or null when unset. */
+	channelId: string | null;
+	destinations: RwTravelingBuckets;
+	/** Epoch ms the scheduler produced this payload. */
+	updatedAt: number;
+}
+
+export type IpcSubversiveRwTravelingUpdateMessage = {
+	action: "subversive_rw_traveling_update";
+	data: RwTravelingUpdate;
+};

@@ -13,6 +13,16 @@ export interface SubversiveRwChannelConfig {
 	// ── Channel selections ─────────────────────────────────────────────────
 	/** Channel hosting the faction's primary ranked-war display. */
 	primaryDisplaysChannelId: string | null;
+	/**
+	 * Channel hosting the faction's secondary ranked-war display, which
+	 * summarises where the opposing roster is currently flying.
+	 *
+	 * Must differ from `primaryDisplaysChannelId`: the primary channel's
+	 * stale-message sweep deletes any bot-authored message it does not
+	 * recognise, so a shared channel would have the primary sweep destroy the
+	 * travel embed as strays on the next war cycle.
+	 */
+	secondaryDisplaysChannelId: string | null;
 
 	updatedAt?: string;
 	updatedBy?: string;
@@ -20,4 +30,5 @@ export interface SubversiveRwChannelConfig {
 
 export const DEFAULT_SUBVERSIVE_RW_CHANNEL_CONFIG: SubversiveRwChannelConfig = {
 	primaryDisplaysChannelId: null,
+	secondaryDisplaysChannelId: null,
 };

@@ -295,7 +295,7 @@ export function ClientContractReceiptPage({
 
 	if (loading) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4">
+			<div className="flex flex-col items-center justify-center min-h-dvh bg-background text-foreground px-4">
 				<Loader2 className="size-8 animate-spin text-primary mb-4" />
 				<div className="font-mono text-sm tracking-wider uppercase text-muted-foreground">
 					Loading Contract Receipt...
@@ -306,7 +306,7 @@ export function ClientContractReceiptPage({
 
 	if (error || !data) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4">
+			<div className="flex flex-col items-center justify-center min-h-dvh bg-background text-foreground px-4">
 				<Card className="max-w-md w-full border-border/80 bg-card/90 shadow-2xl backdrop-blur-md rounded-2xl p-6 text-center space-y-4">
 					<div className="size-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
 						<AlertTriangle className="size-6" />
@@ -343,7 +343,7 @@ export function ClientContractReceiptPage({
 	const hitsList = summary.hits ?? [];
 
 	return (
-		<div className="min-h-screen bg-background text-foreground py-10 px-4 flex justify-center">
+		<div className="min-h-dvh bg-background text-foreground py-10 px-4 flex justify-center">
 			<div className="max-w-4xl w-full space-y-8">
 				{/* Top Branding & Status Header */}
 				<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/40 pb-6">

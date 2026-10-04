@@ -1,0 +1,1 @@
+ALTER TABLE "subversive_rw_channel_configs" ADD COLUMN "secondary_displays_channel_id" text;

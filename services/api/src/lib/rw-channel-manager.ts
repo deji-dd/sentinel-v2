@@ -12,6 +12,23 @@ import {
 const logger = new Logger("API", "SubversiveRwChannelManager");
 
 /**
+ * Raised when a patch would point the primary and secondary displays at the
+ * same Discord channel.
+ *
+ * A distinct type so the HTTP layer can answer 400 for this client mistake
+ * without also swallowing genuine database failures as if they were the admin's
+ * fault.
+ */
+export class RwChannelConflictError extends Error {
+	constructor() {
+		super(
+			"Primary and secondary ranked-war displays must use different channels.",
+		);
+		this.name = "RwChannelConflictError";
+	}
+}
+
+/**
  * Reads and writes the Discord channel selections used by the ranked-war
  * tooling, one row per family faction in `subversive_rw_channel_configs`.
  */
@@ -59,6 +76,7 @@ class SubversiveRwChannelManager {
 	): SubversiveRwChannelConfig {
 		return {
 			primaryDisplaysChannelId: row.primaryDisplaysChannelId,
+			secondaryDisplaysChannelId: row.secondaryDisplaysChannelId,
 			updatedAt: row.updatedAt.toISOString(),
 			updatedBy: row.updatedBy ?? undefined,
 		};
@@ -104,6 +122,11 @@ class SubversiveRwChannelManager {
 	/**
 	 * Merges a patch into one family faction's ranked-war channels, persisting
 	 * the row and refreshing the in-memory cache.
+	 *
+	 * @throws {RwChannelConflictError} when the patch would point both displays
+	 * at the same channel. The primary channel's stale-message sweep deletes
+	 * any bot-authored message it does not recognise, so a shared channel would
+	 * have that sweep destroy the travel embed as strays on the next war cycle.
 	 */
 	async updateConfig(
 		patch: Partial<SubversiveRwChannelConfig>,
@@ -113,37 +136,39 @@ class SubversiveRwChannelManager {
 		const resolved = resolveSubversiveFactionId(factionId);
 		const current = await this.getConfig(resolved);
 
+		// Resolved once and reused by both the insert and the update branch:
+		// duplicating this merge per branch is how the two channels drifted
+		// apart in the first place.
+		const merged = {
+			primaryDisplaysChannelId:
+				patch.primaryDisplaysChannelId !== undefined
+					? patch.primaryDisplaysChannelId
+					: current.primaryDisplaysChannelId,
+			secondaryDisplaysChannelId:
+				patch.secondaryDisplaysChannelId !== undefined
+					? patch.secondaryDisplaysChannelId
+					: current.secondaryDisplaysChannelId,
+		};
+
+		if (
+			merged.primaryDisplaysChannelId &&
+			merged.primaryDisplaysChannelId === merged.secondaryDisplaysChannelId
+		) {
+			throw new RwChannelConflictError();
+		}
+
 		const [row] = await db
 			.insert(subversiveRwChannelConfigs)
-			.values({
-				factionId: resolved,
-				primaryDisplaysChannelId:
-					patch.primaryDisplaysChannelId !== undefined
-						? patch.primaryDisplaysChannelId
-						: current.primaryDisplaysChannelId,
-				updatedBy,
-			})
+			.values({ factionId: resolved, ...merged, updatedBy })
 			.onConflictDoUpdate({
 				target: subversiveRwChannelConfigs.factionId,
-				set: {
-					primaryDisplaysChannelId:
-						patch.primaryDisplaysChannelId !== undefined
-							? patch.primaryDisplaysChannelId
-							: current.primaryDisplaysChannelId,
-					updatedBy,
-					updatedAt: new Date(),
-				},
+				set: { ...merged, updatedBy, updatedAt: new Date() },
 			})
 			.returning();
 
 		const updated = row
 			? SubversiveRwChannelManager.toConfig(row)
-			: {
-					...current,
-					primaryDisplaysChannelId:
-						patch.primaryDisplaysChannelId ?? current.primaryDisplaysChannelId,
-					updatedBy,
-				};
+			: { ...current, ...merged, updatedBy };
 
 		this.configs.set(resolved, updated);
 		logger.info(

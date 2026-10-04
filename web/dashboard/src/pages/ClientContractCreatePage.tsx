@@ -369,7 +369,7 @@ export function ClientContractCreatePage() {
 
 	if (sessionLoading) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4">
+			<div className="flex flex-col items-center justify-center min-h-dvh bg-background text-foreground px-4">
 				<Loader2 className="size-8 animate-spin text-primary mb-4" />
 				<div className="font-mono text-sm tracking-wider uppercase text-muted-foreground">
 					Validating Contract Session...
@@ -380,7 +380,7 @@ export function ClientContractCreatePage() {
 
 	if (sessionError) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4">
+			<div className="flex flex-col items-center justify-center min-h-dvh bg-background text-foreground px-4">
 				<Card className="max-w-md w-full border-border/80 bg-card/90 shadow-2xl backdrop-blur-md rounded-2xl p-6 text-center space-y-4">
 					<div className="size-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
 						<AlertTriangle className="size-6" />
@@ -404,7 +404,7 @@ export function ClientContractCreatePage() {
 
 	if (submittedContract) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground px-4 py-12">
+			<div className="flex flex-col items-center justify-center min-h-dvh bg-background text-foreground px-4 py-12">
 				<Card className="max-w-xl w-full border-emerald-500/30 bg-card/90 shadow-2xl backdrop-blur-md rounded-2xl p-8 space-y-2">
 					<div className="size-16 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/20">
 						<CheckCircle2 className="size-8" />
@@ -481,7 +481,7 @@ export function ClientContractCreatePage() {
 	}
 
 	return (
-		<div className="min-h-screen bg-background text-foreground py-10 px-4 flex justify-center">
+		<div className="min-h-dvh bg-background text-foreground py-10 px-4 flex justify-center">
 			<div className="max-w-3xl w-full space-y-8">
 				{/* Top Branding Banner */}
 				<div className="text-center space-y-2">

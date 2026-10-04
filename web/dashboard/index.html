@@ -3,8 +3,32 @@
 	<head>
 		<meta charset="UTF-8" />
 		<base href="/" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+		/>
+		<meta name="color-scheme" content="dark light" />
 		<title>Sentinel - Dashboard</title>
+		<script>
+			// Apply the persisted theme before first paint so there is never a
+			// flash of the wrong palette. Mirrors src/hooks/useTheme.ts.
+			(() => {
+				var stored, theme, root;
+				try {
+					stored = localStorage.getItem("sentinel-theme");
+					theme =
+						stored === "light" || stored === "dark" ? stored : "dark";
+					root = document.documentElement;
+					root.setAttribute("data-theme", theme);
+					root.classList.toggle("dark", theme === "dark");
+					root.style.backgroundColor =
+						theme === "light" ? "#f8fafc" : "#060911";
+				} catch (_e) {
+					document.documentElement.setAttribute("data-theme", "dark");
+					document.documentElement.classList.add("dark");
+				}
+			})();
+		</script>
 		<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
 		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -13,9 +37,9 @@
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
 	</head>
-	<body style="margin: 0; background: #090d16;">
+	<body style="margin: 0; background: #060911;">
 		<div id="root">
-			<div style="display: flex; height: 100vh; width: 100vw; align-items: center; justify-content: center; background: #090d16; color: #94a3b8; font-family: system-ui, -apple-system, sans-serif; flex-direction: column; gap: 16px; position: fixed; inset: 0; z-index: 99999;">
+			<div style="display: flex; height: 100dvh; width: 100%; align-items: center; justify-content: center; background: #060911; color: #94a3b8; font-family: system-ui, -apple-system, sans-serif; flex-direction: column; gap: 16px; position: fixed; inset: 0; z-index: 99999;">
 				<div style="width: 44px; height: 44px; border: 3px solid rgba(255, 255, 255, 0.08); border-top-color: #6366f1; border-radius: 50%; animation: sentinel-spin 0.75s linear infinite;"></div>
 				<div style="display: flex; align-items: center; gap: 8px;">
 					<span style="font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; font-family: monospace; color: #f8fafc;">SENTINEL</span>
