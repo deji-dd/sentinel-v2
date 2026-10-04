@@ -22,6 +22,7 @@ import {
 	describeSubversiveFamilyFactions,
 	getSubversiveFactionName,
 	isSubversiveFamilyFaction,
+	Logger,
 	resolveSubversiveFactionId,
 } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
@@ -33,6 +34,8 @@ import {
 	subversiveTargetCache,
 } from "../../lib/subversive-target-cache";
 import { subversiveWarEventManager } from "../../lib/subversive-war-events";
+
+const logger = new Logger("API", "SubversiveTargetFinder");
 
 interface TornProfileResponse {
 	player_id?: number;
@@ -895,6 +898,18 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			lead = war.subversive.score - war.opponent.score;
 		}
 
+		// Diagnostics: the userscript renders nothing when this is 0, so record
+		// which side is empty (cache miss vs member genuinely at zero).
+		const userHitCount = subversiveTargetCache.getUserHitCount(
+			session.tornId,
+			factionId,
+		);
+		if (war.state === "active") {
+			logger.warn(
+				`War status: user ${session.tornId} on faction ${factionId} -> userHitCount=${userHitCount} (factionCached=${subversiveTargetCache.hasHitCounts(factionId)}).`,
+			);
+		}
+
 		return {
 			success: true,
 			war: {
@@ -903,10 +918,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			},
 			// The viewing member's own landed ranked war hits, resolved server
 			// side from the per-faction counts the scheduler publishes.
-			userHitCount: subversiveTargetCache.getUserHitCount(
-				session.tornId,
-				factionId,
-			),
+			userHitCount,
 			factionId,
 			factionName: getSubversiveFactionName(factionId),
 			totalOpponents: opponents.length,

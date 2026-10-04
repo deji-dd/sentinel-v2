@@ -751,6 +751,15 @@ class SubversiveTargetCache {
 		return entry.counts[String(tornId)] ?? 0;
 	}
 
+	/**
+	 * Diagnostics: whether any hit counts have been received for a faction at all.
+	 * Distinguishes "the scheduler never pushed" from "pushed, but this member is
+	 * genuinely at zero".
+	 */
+	hasHitCounts(factionId?: number): boolean {
+		return this.hitCountsByFaction.has(this.normalizeFaction(factionId));
+	}
+
 	getWarState(factionId?: number): CurrentWarInfo {
 		return this.warFor(factionId);
 	}

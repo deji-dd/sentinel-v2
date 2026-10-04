@@ -118,6 +118,11 @@ async function hydrateFromDatabase(): Promise<void> {
 			context.start === null ||
 			context.opponentFactionId === null
 		) {
+			// Diagnostics: without an opponent id no attack can be attributed to the
+			// opposing faction, so the tally would silently stay at zero.
+			logger.warn(
+				`Hit count hydration skipped for faction ${factionId}: context=${JSON.stringify(context)}.`,
+			);
 			continue;
 		}
 
@@ -181,7 +186,14 @@ export function broadcastHitCounts(): void {
 
 	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
 		const state = ensureState(factionId);
-		if (state.warId === null) continue;
+		if (state.warId === null) {
+			// Diagnostics: a null warId here means the war worker has not learned
+			// about the engagement, so nothing can ever be counted or published.
+			logger.warn(
+				`Hit count broadcast skipped for faction ${factionId}: no engaged war id resolved.`,
+			);
+			continue;
+		}
 
 		const counts: Record<string, number> = {};
 		for (const [playerId, count] of state.counts) {

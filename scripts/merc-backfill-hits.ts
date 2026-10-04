@@ -304,25 +304,49 @@ async function processSingleContract(
 		timestamp: Date;
 	}> = [];
 
+	// Diagnostics: tally every reason a qualifying attack was dropped so a dry run
+	// explains itself instead of silently reporting only what survived.
+	const dropReasons: Record<string, number> = {
+		no_participants: 0,
+		disqualifying_result: 0,
+		wrong_defender_faction: 0,
+		excluded_member: 0,
+		already_recorded: 0,
+	};
+	let qualifying = 0;
+
 	for (const attack of candidateAttacks) {
-		if (!attack.attacker || !attack.defender) continue;
-		if (DISQUALIFYING_RESULTS.has(attack.result)) continue;
+		if (!attack.attacker || !attack.defender) {
+			dropReasons.no_participants++;
+			continue;
+		}
+		if (DISQUALIFYING_RESULTS.has(attack.result)) {
+			dropReasons.disqualifying_result++;
+			continue;
+		}
 
 		// The DEFENDER must belong to the target faction
 		const defenderFactionId =
 			attack.defender.faction?.id ?? attack.defender.faction_id ?? null;
 		if (defenderFactionId !== contract.factionId) {
+			dropReasons.wrong_defender_faction++;
 			continue;
 		}
 
 		// Excluded members check
 		if (contract.excludedMembers?.includes(attack.defender.id)) {
+			dropReasons.excluded_member++;
 			continue;
 		}
 
+		qualifying++;
+
 		// Check if already recorded in database
 		const alreadyInDb = await isAttackProcessed(attack.id, contract.id);
-		if (alreadyInDb) continue;
+		if (alreadyInDb) {
+			dropReasons.already_recorded++;
+			continue;
+		}
 
 		// Calculate payout value: only hospitalized attacks receive payout
 		const isHospitalized = attack.result.toLowerCase() === "hospitalized";
@@ -357,6 +381,11 @@ async function processSingleContract(
 			timestamp: new Date(attackTimestampSec * 1000),
 		});
 	}
+
+	console.log(
+		`  ${qualifying} attack(s) hit the target faction and passed all contract rules.`,
+	);
+	console.log(`  Drop reasons: ${JSON.stringify(dropReasons)}`);
 
 	if (missedHitsToCredit.length === 0) {
 		console.log(`  No missed hits found for this contract.`);

@@ -279,14 +279,30 @@ export async function handleIngestedAttacks(
 		logChannels.set(guildId, channelConfig.mercLog || "merc-logs");
 	}
 
+	// Diagnostics: an attack that matches no contract target faction is the most
+	// common silent drop, so surface the counts rather than losing them quietly.
+	let matchedFaction = 0;
+	let noContractForFaction = 0;
+
 	for (const attack of outgoing) {
 		try {
+			if (contracts.some((c) => c.factionId === attack.defenderFactionId)) {
+				matchedFaction++;
+			} else {
+				noContractForFaction++;
+			}
 			await creditAttackAgainstContracts(attack, contracts, logChannels);
 		} catch (err) {
 			logger.warn(
 				`Error crediting merc attack ${attack.attackId}: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
+	}
+
+	if (outgoing.length > 0) {
+		logger.info(
+			`Merc batch: ${outgoing.length} outgoing attack(s); ${matchedFaction} matched a contract faction, ${noContractForFaction} did not (no open contract for that target).`,
+		);
 	}
 }
 

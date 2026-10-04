@@ -50,6 +50,13 @@ export async function fetchWarStatus(): Promise<void> {
 			factionName?: string;
 			userHitCount?: number;
 		}>("/v2/target-finder/war/status");
+
+		// Diagnostics: prints the raw hit count and war state to the browser
+		// console so a blank scorecard can be traced without server log access.
+		// Look for the "[Subversive Alliance]" prefix in DevTools.
+		console.debug(
+			`[Subversive Alliance] war/status -> userHitCount=${res?.userHitCount} warState=${res?.war?.state} factionId=${res?.factionId}`,
+		);
 		if (res?.war) {
 			const war: CurrentWarInfo = {
 				...res.war,
