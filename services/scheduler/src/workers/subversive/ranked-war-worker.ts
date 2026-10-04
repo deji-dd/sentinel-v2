@@ -1,8 +1,21 @@
 import { db, inArray, subversiveTargetFinderTargets } from "@sentinel/database";
+import {
+	emptyRwDisplayBuckets,
+	type IpcMessage,
+	type RwDisplaysUpdate,
+} from "@sentinel/schemas";
 import { getPlayerStats, TornApiClient, TornError } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+import type { IpcServer } from "@sentinel/utils/ipc";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { classifyOpponentsIntoRwBuckets } from "../../lib/rw-opponent-buckets";
+import {
+	clearRwDisplaysBroadcastState,
+	hasRwDisplaysBroadcastState,
+	resolvePrimaryDisplayChannels,
+	shouldBroadcastRwDisplays,
+} from "../../lib/rw-primary-displays";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {
@@ -26,6 +39,22 @@ export interface RankedWarOpponent {
 	isOnWall: boolean;
 	isInOc: boolean;
 	hasEarlyDischarge: boolean;
+	/**
+	 * Torn's standing "this player allows revives" permission flag, NOT a live
+	 * "is down right now" state. Only meaningful combined with a Hospital
+	 * status: a player is actually revivable when this is true AND
+	 * `status.state === "Hospital"`.
+	 *
+	 * Verified against the live API: a 99-member opposing roster returned 40
+	 * members with this set while only 1 was in hospital, and zero overlapped.
+	 */
+	isRevivable: boolean;
+	/**
+	 * The player's revive opt-in preference. Torn only populates this for the
+	 * key's own faction; it reads "Unknown" for every opponent member, so
+	 * cross-faction logic must rely on `isRevivable` instead.
+	 */
+	reviveSetting: string;
 	lastAction: {
 		status: string;
 		timestamp: number;
@@ -93,6 +122,11 @@ interface TornFactionMembersResponse {
 		is_on_wall: boolean;
 		is_in_oc: boolean;
 		has_early_discharge: boolean;
+		/**
+		 * Torn only populates this for the key's own faction; it reads
+		 * "Unknown" for every member of an opposing faction.
+		 */
+		revive_setting?: string;
 		last_action: {
 			status: string;
 			timestamp: number;
@@ -339,7 +373,11 @@ export function getEngagedWarContext(
 function getFactionCache(factionId: number): FactionWarCache {
 	let entry = warCacheByFaction.get(factionId);
 	if (!entry) {
-		entry = { war: createNoWarInfo(), opponents: [], lastWarsCheck: 0 };
+		entry = {
+			war: createNoWarInfo(),
+			opponents: [],
+			lastWarsCheck: 0,
+		};
 		warCacheByFaction.set(factionId, entry);
 	}
 	return entry;
@@ -446,6 +484,11 @@ async function refreshFactionWar(
 
 /**
  * Polls the opponent member roster for a family faction's ranked war.
+ *
+ * Deliberately uncached: the roster drives live hospital, online and revive
+ * decisions, so it is refreshed on every cycle. Torn quota is handled by the
+ * script key pool, which round-robins requests across keys so no single key
+ * approaches its own limit.
  */
 async function refreshFactionOpponents(
 	client: TornApiClient,
@@ -486,6 +529,8 @@ async function refreshFactionOpponents(
 				isOnWall: m.is_on_wall,
 				isInOc: m.is_in_oc,
 				hasEarlyDischarge: m.has_early_discharge,
+				isRevivable: m.is_revivable ?? false,
+				reviveSetting: m.revive_setting ?? "Unknown",
 				lastAction: {
 					status: m.last_action?.status ?? "Offline",
 					timestamp: m.last_action?.timestamp ?? 0,
@@ -503,6 +548,7 @@ async function refreshFactionOpponents(
 				estimatedScore: stats.estimatedScore,
 			});
 		}
+
 		return opponents;
 	} catch (err) {
 		handleKeyError(err, oppKey.apiKey);
@@ -551,7 +597,7 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 			entry.war = warInfo;
 		}
 
-		// 2. Refresh opponent roster when engaged
+		// 2. Refresh opponent roster when engaged (live, every cycle)
 		const opponents = await refreshFactionOpponents(client, warInfo);
 		entry.opponents = opponents;
 
@@ -572,12 +618,112 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 			action: "subversive_war_updated",
 			data: { wars },
 		});
+
+		await broadcastRwPrimaryDisplays(ipcServer, wars, nowSec);
 	}
 
 	schedulerEvents.emit("ranked_war_updated");
 
 	return Date.now() + nextCadenceMs;
 }
+
+/**
+ * Classifies each engaged faction's opposing roster and pushes the four
+ * primary-display buckets to the Discord bot.
+ *
+ * Runs for factions with a `scheduled` or `active` war. A faction whose war has
+ * ended is sent one `no_war` payload so the bot tears its embeds down; without
+ * it the four embeds would sit in the channel showing a finished war forever.
+ * The teardown only goes to a faction that previously rendered something, so a
+ * permanently idle faction generates no traffic.
+ */
+async function broadcastRwPrimaryDisplays(
+	ipcServer: IpcServer<IpcMessage>,
+	wars: Record<string, { war: CurrentWarInfo; opponents: RankedWarOpponent[] }>,
+	nowSec: number,
+): Promise<void> {
+	const engagedFactionIds: number[] = [];
+	const idleFactionIds: number[] = [];
+
+	for (const [factionId, snapshot] of Object.entries(wars)) {
+		const state = snapshot.war.state;
+		if (state === "active" || state === "scheduled") {
+			engagedFactionIds.push(Number(factionId));
+		} else {
+			idleFactionIds.push(Number(factionId));
+		}
+	}
+
+	const nowMs = Date.now();
+
+	for (const factionId of idleFactionIds) {
+		if (!hasRwDisplaysBroadcastState(factionId)) continue;
+
+		ipcServer.broadcast({
+			action: "subversive_rw_displays_update",
+			data: {
+				factionId,
+				opponentFactionId: 0,
+				opponentFactionName: "",
+				warId: null,
+				warState: "no_war",
+				// Carry the last known channel so the bot can delete the messages
+				// before forgetting where they lived.
+				channelId: lastRenderedChannelByFaction.get(factionId) ?? null,
+				buckets: emptyRwDisplayBuckets(),
+				updatedAt: nowMs,
+			},
+		});
+
+		clearRwDisplaysBroadcastState(factionId);
+		lastRenderedChannelByFaction.delete(factionId);
+	}
+
+	if (engagedFactionIds.length === 0) return;
+
+	const channelIdByFaction =
+		await resolvePrimaryDisplayChannels(engagedFactionIds);
+
+	for (const factionId of engagedFactionIds) {
+		const snapshot = wars[String(factionId)];
+		if (!snapshot) continue;
+
+		const opponent = snapshot.war.opponent;
+		// An engaged war with no resolvable opposing faction cannot be rendered;
+		// the next cycle will refresh the war metadata and try again.
+		if (!opponent) continue;
+
+		const buckets = classifyOpponentsIntoRwBuckets(snapshot.opponents, nowSec);
+
+		if (!shouldBroadcastRwDisplays(factionId, buckets, nowMs)) continue;
+
+		const channelId = channelIdByFaction.get(factionId) ?? null;
+		lastRenderedChannelByFaction.set(factionId, channelId);
+
+		const payload: RwDisplaysUpdate = {
+			factionId,
+			opponentFactionId: opponent.id,
+			opponentFactionName: opponent.name,
+			warId: snapshot.war.warId,
+			warState: snapshot.war.state === "active" ? "active" : "scheduled",
+			channelId,
+			buckets,
+			updatedAt: nowMs,
+		};
+
+		ipcServer.broadcast({
+			action: "subversive_rw_displays_update",
+			data: payload,
+		});
+	}
+}
+
+/**
+ * The channel each faction was last rendered into, kept so a war-ended
+ * teardown can carry it. The bot needs the id to delete the messages before it
+ * drops them from the database.
+ */
+const lastRenderedChannelByFaction = new Map<number, string | null>();
 
 /**
  * Starts the periodic Subversive Ranked War worker in the scheduler.

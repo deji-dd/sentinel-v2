@@ -1,6 +1,7 @@
 import { Eraser, RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -10,13 +11,6 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -31,11 +25,6 @@ interface SubversiveDibsConfig {
 	channelMaintenanceEnabled?: boolean;
 	maxDibsMessageAgeHours?: number;
 	sweepIntervalMinutes?: number;
-}
-
-interface GuildChannel {
-	id: string;
-	name: string;
 }
 
 /**
@@ -66,7 +55,7 @@ export function DibsConfigPage({
 } = {}) {
 	const [factionId, setFactionId] = useState<number>(DIBS_FACTIONS[0].id);
 	const [config, setConfig] = useState<SubversiveDibsConfig>(DEFAULT_CONFIG);
-	const [channels, setChannels] = useState<GuildChannel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [sweeping, setSweeping] = useState(false);
@@ -80,7 +69,7 @@ export function DibsConfigPage({
 		try {
 			const chRes = await fetch("/v2/subversive/guild-channels");
 			if (chRes.ok) {
-				const chData = (await chRes.json()) as { channels: GuildChannel[] };
+				const chData = (await chRes.json()) as { channels: DiscordChannel[] };
 				setChannels(chData.channels ?? []);
 			}
 		} catch (err) {
@@ -267,32 +256,20 @@ export function DibsConfigPage({
 							>
 								Discord Dibs Channel
 							</label>
-							<Select
-								value={config.channelId ?? "none"}
+							<ChannelSelect
+								id={`discord-dibs-channel-${factionId}`}
+								channels={channels}
+								value={config.channelId}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										channelId: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id={`discord-dibs-channel-${factionId}`}
-									className="w-full"
-								>
-									<SelectValue placeholder="Select target channel" />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="none">
-										No channel selected (Disabled)
-									</SelectItem>
-									{channels.map((ch) => (
-										<SelectItem key={ch.id} value={ch.id}>
-											#{ch.name}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
+								noneLabel="No channel selected (Disabled)"
+								placeholder="Select target channel"
+								triggerClassName="w-full"
+							/>
 						</div>
 
 						<div className="space-y-2">

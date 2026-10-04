@@ -1,28 +1,15 @@
 import { Loader2, MapPin, Plus, RotateCcw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotInitializedView from "../components/NotInitializedView";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
-
-interface Channel {
-	id: string;
-	name: string;
-	type: number;
-}
 
 interface FactionMeta {
 	name: string;
@@ -49,7 +36,7 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 	const [isInitialized, setIsInitialized] = useState(true);
 	const [isEnabled, setIsEnabled] = useState(true);
 
-	const [channels, setChannels] = useState<Channel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 
 	// DB Territory Blueprints & Async Search State
 	const [searchQuery, setSearchQuery] = useState("");
@@ -97,7 +84,6 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 		JSON.stringify(ttFactionIds) !== JSON.stringify(initialTtFactionIds);
 
 	const textChannels = channels.filter((c) => c.type === 0 || c.type === 5);
-
 	const fetchConfig = useCallback(async () => {
 		setLoading(true);
 		try {
@@ -395,33 +381,17 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 							Target Discord Channel
 						</label>
 						{textChannels.length > 0 ? (
-							<Select
-								value={ttFullChannelId ?? "none"}
+							<ChannelSelect
+								id="full-channel-select"
+								channels={channels}
+								value={ttFullChannelId}
 								onValueChange={(val) =>
 									setTtFullChannelId(val === "none" ? null : val)
 								}
-							>
-								<SelectTrigger
-									id="full-channel-select"
-									className="w-full h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
-									<SelectGroup>
-										<SelectItem value="none">
-											<span className="text-muted-foreground italic">
-												-- No Channel Selected --
-											</span>
-										</SelectItem>
-										{textChannels.map((c) => (
-											<SelectItem key={c.id} value={c.id}>
-												#{c.name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-60"
+							/>
 						) : (
 							<Input
 								id="full-channel-select"
@@ -452,33 +422,17 @@ export default function TerritoryPage({ guildId }: TerritoryPageProps) {
 							Target Discord Channel
 						</label>
 						{textChannels.length > 0 ? (
-							<Select
-								value={ttFilteredChannelId ?? "none"}
+							<ChannelSelect
+								id="filtered-channel-select"
+								channels={channels}
+								value={ttFilteredChannelId}
 								onValueChange={(val) =>
 									setTtFilteredChannelId(val === "none" ? null : val)
 								}
-							>
-								<SelectTrigger
-									id="filtered-channel-select"
-									className="w-full h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
-									<SelectGroup>
-										<SelectItem value="none">
-											<span className="text-muted-foreground italic">
-												-- No Channel Selected --
-											</span>
-										</SelectItem>
-										{textChannels.map((c) => (
-											<SelectItem key={c.id} value={c.id}>
-												#{c.name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-60"
+							/>
 						) : (
 							<Input
 								id="filtered-channel-select"

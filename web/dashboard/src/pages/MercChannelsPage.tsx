@@ -1,5 +1,6 @@
 import { Clock, Loader2, RotateCcw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -37,7 +38,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 	const [loading, setLoading] = useState(true);
 	const [isSaving, setIsSaving] = useState(false);
 
-	const [channelNames, setChannelNames] = useState<string[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [categoryNames, setCategoryNames] = useState<string[]>([]);
 	const [config, setConfig] = useState<MercChannelsConfig>({
 		contractCreation: null,
@@ -72,8 +73,11 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 
 			if (res.data && "config" in res.data) {
 				const cfg = res.data.config as MercChannelsConfig;
-				const names = Array.isArray(res.data.channelNames)
-					? (res.data.channelNames as string[])
+				const grouped = Array.isArray(
+					(res.data as Record<string, unknown>).groupedChannels,
+				)
+					? ((res.data as Record<string, unknown>)
+							.groupedChannels as DiscordChannel[])
 					: [];
 
 				const catNames = Array.isArray(
@@ -97,24 +101,15 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 
 				setConfig(currentConfig);
 				setInitialConfig(currentConfig);
-				setChannelNames(names);
+				setChannels(grouped);
 				setCategoryNames(catNames);
 			} else {
-				// Fallback to standard channels endpoint if merc endpoint returns empty
+				// Fallback to standard channels endpoint if merc endpoint returns empty.
+				// That endpoint is unfiltered, so categories and parent_id come through
+				// and the picks can still be grouped by section.
 				const chanRes = await guildRoute.channels.get();
 				if (chanRes.data && "channels" in chanRes.data) {
-					const allChans = chanRes.data.channels as Array<{
-						name: string;
-						type: number;
-					}>;
-					const names = Array.from(
-						new Set(
-							allChans
-								.filter((c) => c.type === 0 || c.type === 5)
-								.map((c) => c.name)
-								.filter(Boolean),
-						),
-					).sort((a, b) => a.localeCompare(b));
+					const allChans = chanRes.data.channels as DiscordChannel[];
 					const cats = Array.from(
 						new Set(
 							allChans
@@ -123,7 +118,7 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 								.filter(Boolean),
 						),
 					).sort((a, b) => a.localeCompare(b));
-					setChannelNames(names);
+					setChannels(allChans);
 					setCategoryNames(cats);
 				}
 			}
@@ -235,34 +230,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</label>
 
 						<div className="max-w-md">
-							<Select
-								value={config.contractCreation ?? "none"}
+							<ChannelSelect
+								id="select-contract-creation"
+								channels={channels}
+								value={config.contractCreation}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										contractCreation: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-contract-creation"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.contractCreation && (
@@ -287,34 +269,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</label>
 
 						<div className="max-w-md">
-							<Select
-								value={config.upcomingContracts ?? "none"}
+							<ChannelSelect
+								id="select-upcoming-contracts"
+								channels={channels}
+								value={config.upcomingContracts}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										upcomingContracts: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-upcoming-contracts"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.upcomingContracts && (
@@ -339,34 +308,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</label>
 
 						<div className="max-w-md">
-							<Select
-								value={config.targets ?? "none"}
+							<ChannelSelect
+								id="select-targets"
+								channels={channels}
+								value={config.targets}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										targets: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-targets"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.targets && (
@@ -391,34 +347,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</label>
 
 						<div className="max-w-md">
-							<Select
-								value={config.revivables ?? "none"}
+							<ChannelSelect
+								id="select-revivables"
+								channels={channels}
+								value={config.revivables}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										revivables: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-revivables"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.revivables && (
@@ -443,34 +386,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</label>
 
 						<div className="max-w-md">
-							<Select
-								value={config.mercLog ?? "none"}
+							<ChannelSelect
+								id="select-merc-log"
+								channels={channels}
+								value={config.mercLog}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										mercLog: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-merc-log"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.mercLog && (
@@ -499,34 +429,21 @@ export function MercChannelsPage({ guildId }: MercChannelsPageProps) {
 						</p>
 
 						<div className="max-w-md">
-							<Select
-								value={config.pastContracts ?? "none"}
+							<ChannelSelect
+								id="select-past-contracts"
+								channels={channels}
+								value={config.pastContracts}
 								onValueChange={(val) =>
 									setConfig((prev) => ({
 										...prev,
 										pastContracts: val === "none" ? null : val,
 									}))
 								}
-							>
-								<SelectTrigger
-									id="select-past-contracts"
-									className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-72">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Channel Selected --
-										</SelectItem>
-										{channelNames.map((name) => (
-											<SelectItem key={name} value={name}>
-												#{name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Channel Selected --"
+								placeholder="-- No Channel Selected --"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-72"
+								getItemValue={(ch) => ch.name}
+							/>
 						</div>
 
 						{config.pastContracts && (

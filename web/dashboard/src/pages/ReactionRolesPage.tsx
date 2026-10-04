@@ -11,6 +11,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -28,12 +29,6 @@ import NotInitializedView from "../components/NotInitializedView";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
-
-interface Channel {
-	id: string;
-	name: string;
-	type: number;
-}
 
 interface Role {
 	id: string;
@@ -89,7 +84,7 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 	const [isInitialized, setIsInitialized] = useState(true);
 	const [isEnabled, setIsEnabled] = useState(true);
 
-	const [channels, setChannels] = useState<Channel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [roles, setRoles] = useState<Role[]>([]);
 	const [messages, setMessages] = useState<ReactionRoleMessage[]>([]);
 
@@ -141,10 +136,9 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 			}
 
 			if (channelsRes.data && "channels" in channelsRes.data) {
-				const textChannels = (channelsRes.data.channels as Channel[]).filter(
-					(c) => c.type === 0 || c.type === 5,
-				);
-				setChannels(textChannels);
+				// Stored unfiltered (categories included) so both dropdowns can group by
+				// server section; ChannelSelect filters by type at render time.
+				setChannels(channelsRes.data.channels as DiscordChannel[]);
 			}
 
 			if (rolesRes.data && "roles" in rolesRes.data) {
@@ -499,24 +493,16 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 
 						{/* Channel Filter Dropdown */}
 						<div className="w-full sm:w-56">
-							<Select
+							<ChannelSelect
+								channels={channels}
 								value={selectedChannelFilter}
 								onValueChange={(val) => setSelectedChannelFilter(val)}
-							>
-								<SelectTrigger className="h-10 rounded-xl bg-background border-input text-foreground text-sm">
-									<SelectValue placeholder="All Target Channels" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground">
-									<SelectGroup>
-										<SelectItem value="all">All Target Channels</SelectItem>
-										{channels.map((ch) => (
-											<SelectItem key={ch.id} value={ch.id}>
-												#{ch.name}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="All Target Channels"
+								noneValue="all"
+								placeholder="All Target Channels"
+								triggerClassName="h-10 rounded-xl bg-background border-input text-foreground text-sm"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground"
+							/>
 						</div>
 					</div>
 				</div>
@@ -582,32 +568,15 @@ export default function ReactionRolesPage({ guildId }: ReactionRolesPageProps) {
 								>
 									Target Channel <span className="text-destructive">*</span>
 								</label>
-								<Select
+								<ChannelSelect
+									id="rr-channel"
+									channels={channels}
 									value={channelId}
 									onValueChange={(val) => setChannelId(val)}
-								>
-									<SelectTrigger
-										id="rr-channel"
-										className="h-10 rounded-xl bg-background border-input text-foreground text-sm font-medium"
-									>
-										<SelectValue placeholder="-- Select Target Channel --" />
-									</SelectTrigger>
-									<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground max-h-60">
-										<SelectGroup>
-											{channels.length === 0 ? (
-												<SelectItem value="" disabled>
-													No text channels found
-												</SelectItem>
-											) : (
-												channels.map((ch) => (
-													<SelectItem key={ch.id} value={ch.id}>
-														#{ch.name}
-													</SelectItem>
-												))
-											)}
-										</SelectGroup>
-									</SelectContent>
-								</Select>
+									placeholder="-- Select Target Channel --"
+									triggerClassName="h-10 rounded-xl bg-background border-input text-foreground text-sm font-medium"
+									contentClassName="rounded-xl border-border bg-popover text-popover-foreground max-h-60"
+								/>
 								<p className="text-[11px] text-muted-foreground">
 									The Discord channel where Sentinel will post and maintain this
 									reaction menu.

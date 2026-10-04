@@ -3,6 +3,7 @@
  * Worker/Scheduler V2, Bot, and API applications.
  */
 
+import type { IpcSubversiveRwDisplaysUpdateMessage } from "./rw-displays";
 import type { FactionMember } from "./torn/api";
 
 export type IpcWarAction =
@@ -620,6 +621,7 @@ export type IpcMessage =
 	| IpcSubversiveWarUpdatedMessage
 	| IpcSubversiveRetalUpdatedMessage
 	| IpcSubversiveHitCountsUpdatedMessage
+	| IpcSubversiveRwDisplaysUpdateMessage
 	| IpcPersonalBountiesUpdatedMessage
 	| IpcPostDibsAlertMessage
 	| IpcEditDibsAlertMessage

@@ -288,6 +288,20 @@
 			"when": 1791067812657,
 			"tag": "0040_curved_justice",
 			"breakpoints": true
+		},
+		{
+			"idx": 41,
+			"version": "7",
+			"when": 1791141898703,
+			"tag": "0041_sour_doctor_spectrum",
+			"breakpoints": true
+		},
+		{
+			"idx": 42,
+			"version": "7",
+			"when": 1791148745439,
+			"tag": "0042_mysterious_lady_deathstrike",
+			"breakpoints": true
 		}
 	]
 }

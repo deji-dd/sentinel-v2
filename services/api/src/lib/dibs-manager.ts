@@ -1,4 +1,4 @@
-import { db, eq, systemStates } from "@sentinel/database";
+import { db, eq, subversiveDibsConfigs } from "@sentinel/database";
 import {
 	DEFAULT_SUBVERSIVE_DIBS_CONFIG,
 	type DibsClaimant,
@@ -22,19 +22,10 @@ import {
 const logger = new Logger("API", "SubversiveDibsManager");
 
 /**
- * Legacy (pre per-faction) systemStates row id. Kept only so existing
- * Subversive Alliance settings survive the upgrade to faction-scoped rows.
+ * Dibs settings live in `subversive_dibs_configs`, one row per family faction.
+ * Rows written before that table existed were migrated by SQL; see drizzle
+ * migration 0041.
  */
-const LEGACY_DIBS_CONFIG_ID = "subversive:dibs_config";
-
-/**
- * Dibs settings are stored per family faction so Subversive Alliance (2013)
- * and SA Succession (27312) can run the script with independent rules.
- */
-function getDibsConfigKey(factionId: number): string {
-	return `${LEGACY_DIBS_CONFIG_ID}:${factionId}`;
-}
-
 class SubversiveDibsManager {
 	/** Per-faction config cache keyed by resolved faction id. */
 	private configs = new Map<number, SubversiveDibsConfig>();
@@ -264,57 +255,31 @@ class SubversiveDibsManager {
 		return [...liveMessageIds];
 	}
 
-	/**
-	 * Persists a config row under the given systemStates id.
-	 */
-	private async persistConfigRow(
-		rowId: string,
-		config: SubversiveDibsConfig,
-	): Promise<void> {
-		await db
-			.insert(systemStates)
-			.values({
-				id: rowId,
-				init: true,
-				data: config as unknown as Record<string, unknown>,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					data: config as unknown as Record<string, unknown>,
-					updatedAt: new Date(),
-				},
-			});
-	}
-
-	/**
-	 * Reads one raw config row, returning null when absent.
-	 */
-	private async readConfigRow(
-		rowId: string,
-	): Promise<SubversiveDibsConfig | null> {
-		const [entry] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, rowId));
-
-		if (!entry?.data) return null;
+	/** Maps one table row onto the config shape shared with the HTTP layer. */
+	private static toConfig(
+		row: typeof subversiveDibsConfigs.$inferSelect,
+	): SubversiveDibsConfig {
 		return {
-			...DEFAULT_SUBVERSIVE_DIBS_CONFIG,
-			...(entry.data as Partial<SubversiveDibsConfig>),
+			enabled: row.enabled,
+			channelId: row.channelId,
+			claimLeadTime: row.claimLeadTime,
+			maxDibsPerPerson: row.maxDibsPerPerson,
+			postHospTimeoutSeconds: row.postHospTimeoutSeconds,
+			autoDeleteOnDowned: row.autoDeleteOnDowned,
+			channelMaintenanceEnabled: row.channelMaintenanceEnabled,
+			maxDibsMessageAgeHours: row.maxDibsMessageAgeHours,
+			sweepIntervalMinutes: row.sweepIntervalMinutes,
+			updatedAt: row.updatedAt.toISOString(),
+			updatedBy: row.updatedBy ?? undefined,
 		};
 	}
 
 	/**
-	 * Retrieves the Dibs configuration for one family faction, loading it from
-	 * systemStates on first run and caching it thereafter.
+	 * Retrieves the Dibs configuration for one family faction, reading it from
+	 * `subversive_dibs_configs` on first run and caching it thereafter.
 	 *
-	 * Migration: the pre-faction-scoped `subversive:dibs_config` row is treated as
-	 * the Subversive Alliance (2013) config. When the keyed row is missing, the
-	 * legacy row is read once and lazily re-persisted under the new key so the
-	 * upgrade never loses existing settings.
+	 * A missing row is not an error: it means the dashboard has never saved
+	 * settings for that faction yet, so the factory defaults apply.
 	 */
 	async getConfig(factionId?: number | null): Promise<SubversiveDibsConfig> {
 		const resolved = resolveSubversiveFactionId(factionId);
@@ -323,19 +288,13 @@ class SubversiveDibsManager {
 
 		let config: SubversiveDibsConfig = { ...DEFAULT_SUBVERSIVE_DIBS_CONFIG };
 		try {
-			const keyed = await this.readConfigRow(getDibsConfigKey(resolved));
-			if (keyed) {
-				config = keyed;
-			} else if (resolved === PRIMARY_SUBVERSIVE_FACTION_ID) {
-				// Legacy single-faction row predating per-faction settings.
-				const legacy = await this.readConfigRow(LEGACY_DIBS_CONFIG_ID);
-				if (legacy) {
-					config = legacy;
-					await this.persistConfigRow(getDibsConfigKey(resolved), config);
-					logger.info(
-						"Migrated legacy Subversive dibs config to faction-scoped row.",
-					);
-				}
+			const [row] = await db
+				.select()
+				.from(subversiveDibsConfigs)
+				.where(eq(subversiveDibsConfigs.factionId, resolved));
+
+			if (row) {
+				config = SubversiveDibsManager.toConfig(row);
 			}
 		} catch (err) {
 			logger.warn(
@@ -359,14 +318,62 @@ class SubversiveDibsManager {
 	): Promise<SubversiveDibsConfig> {
 		const resolved = resolveSubversiveFactionId(factionId);
 		const current = await this.getConfig(resolved);
-		const updated: SubversiveDibsConfig = {
-			...current,
-			...patch,
-			updatedAt: new Date().toISOString(),
-			updatedBy,
-		};
+		const merged: SubversiveDibsConfig = { ...current, ...patch };
 
-		await this.persistConfigRow(getDibsConfigKey(resolved), updated);
+		const [row] = await db
+			.insert(subversiveDibsConfigs)
+			.values({
+				factionId: resolved,
+				enabled: merged.enabled,
+				channelId: merged.channelId,
+				claimLeadTime: merged.claimLeadTime,
+				maxDibsPerPerson: merged.maxDibsPerPerson,
+				postHospTimeoutSeconds: merged.postHospTimeoutSeconds,
+				autoDeleteOnDowned: merged.autoDeleteOnDowned,
+				channelMaintenanceEnabled:
+					merged.channelMaintenanceEnabled ??
+					DEFAULT_SUBVERSIVE_DIBS_CONFIG.channelMaintenanceEnabled ??
+					true,
+				maxDibsMessageAgeHours:
+					merged.maxDibsMessageAgeHours ??
+					DEFAULT_SUBVERSIVE_DIBS_CONFIG.maxDibsMessageAgeHours ??
+					6,
+				sweepIntervalMinutes:
+					merged.sweepIntervalMinutes ??
+					DEFAULT_SUBVERSIVE_DIBS_CONFIG.sweepIntervalMinutes ??
+					15,
+				updatedBy,
+			})
+			.onConflictDoUpdate({
+				target: subversiveDibsConfigs.factionId,
+				set: {
+					enabled: merged.enabled,
+					channelId: merged.channelId,
+					claimLeadTime: merged.claimLeadTime,
+					maxDibsPerPerson: merged.maxDibsPerPerson,
+					postHospTimeoutSeconds: merged.postHospTimeoutSeconds,
+					autoDeleteOnDowned: merged.autoDeleteOnDowned,
+					channelMaintenanceEnabled:
+						merged.channelMaintenanceEnabled ??
+						DEFAULT_SUBVERSIVE_DIBS_CONFIG.channelMaintenanceEnabled ??
+						true,
+					maxDibsMessageAgeHours:
+						merged.maxDibsMessageAgeHours ??
+						DEFAULT_SUBVERSIVE_DIBS_CONFIG.maxDibsMessageAgeHours ??
+						6,
+					sweepIntervalMinutes:
+						merged.sweepIntervalMinutes ??
+						DEFAULT_SUBVERSIVE_DIBS_CONFIG.sweepIntervalMinutes ??
+						15,
+					updatedBy,
+					updatedAt: new Date(),
+				},
+			})
+			.returning();
+
+		const updated = row
+			? SubversiveDibsManager.toConfig(row)
+			: { ...merged, updatedAt: new Date().toISOString(), updatedBy };
 
 		this.configs.set(resolved, updated);
 		logger.info(

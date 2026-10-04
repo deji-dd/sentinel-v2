@@ -15,6 +15,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,12 +52,6 @@ import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
-
-interface Channel {
-	id: string;
-	name: string;
-	type: number;
-}
 
 interface Role {
 	id: string;
@@ -118,7 +113,7 @@ export default function VerificationPage({
 	const [isEnabled, setIsEnabled] = useState(true);
 	const [hasApiKey, setHasApiKey] = useState(true);
 
-	const [channels, setChannels] = useState<Channel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [roles, setRoles] = useState<Role[]>([]);
 
 	// Verification Form States
@@ -1138,33 +1133,18 @@ export default function VerificationPage({
 							</div>
 							<div className="w-full max-w-md">
 								{channels.length > 0 ? (
-									<Select
+									<ChannelSelect
+										id="faction-channel-select"
+										channels={channels}
+										allowedTypes={[0]}
 										value={factionListChannelId}
 										onValueChange={(val) =>
 											setFactionListChannelId(val === "none" ? "" : val)
 										}
-									>
-										<SelectTrigger
-											id="faction-channel-select"
-											className="w-full h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-										>
-											<SelectValue placeholder="-- No Channel Selected --" />
-										</SelectTrigger>
-										<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground">
-											<SelectGroup>
-												<SelectItem value="none">
-													-- No Channel Selected --
-												</SelectItem>
-												{channels
-													.filter((c) => c.type === 0)
-													.map((ch) => (
-														<SelectItem key={ch.id} value={ch.id}>
-															#{ch.name}
-														</SelectItem>
-													))}
-											</SelectGroup>
-										</SelectContent>
-									</Select>
+										noneLabel="-- No Channel Selected --"
+										placeholder="-- No Channel Selected --"
+										contentClassName="rounded-xl border-border bg-popover text-popover-foreground"
+									/>
 								) : (
 									<Input
 										id="faction-channel-select"

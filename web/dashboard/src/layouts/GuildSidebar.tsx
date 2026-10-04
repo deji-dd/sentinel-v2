@@ -240,6 +240,12 @@ export function GuildSidebar({
 			title: "RW Features",
 			items: [
 				{
+					label: "Channel Selections",
+					href: makeHref("/rw-channels"),
+					icon: Hash,
+					accent: "text-emerald-400",
+				},
+				{
 					label: "Dibs",
 					href: makeHref("/dibs"),
 					icon: Target,

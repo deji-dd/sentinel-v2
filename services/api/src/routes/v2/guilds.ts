@@ -1703,6 +1703,15 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			let channelNames: string[] = [];
 			let categoryNames: string[] = [];
 			let categories: Array<{ id: string; name: string }> = [];
+			// Full channel payload (text + category) so the dashboard can render the
+			// picks grouped under their server section.
+			let groupedChannels: Array<{
+				id: string;
+				name: string;
+				type: number;
+				position: number;
+				parent_id: string | null;
+			}> = [];
 
 			if (botToken) {
 				const channels = await fetchDiscordApi<DiscordChannel[]>(
@@ -1728,6 +1737,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						a.name.localeCompare(b.name),
 					);
 					categoryNames = Array.from(new Set(categories.map((c) => c.name)));
+
+					groupedChannels = channels
+						.filter((c) => c.type === 0 || c.type === 4 || c.type === 5)
+						.map((c) => ({
+							id: c.id,
+							name: c.name,
+							type: c.type,
+							position: c.position,
+							parent_id: c.parent_id,
+						}))
+						.sort((a, b) => a.position - b.position);
 				}
 			}
 
@@ -1736,6 +1756,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				channelNames,
 				categoryNames,
 				categories,
+				groupedChannels,
 			};
 		},
 		{

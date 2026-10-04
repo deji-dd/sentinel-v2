@@ -5,6 +5,7 @@ import {
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -299,3 +300,133 @@ export type SubversiveTargetFinderTarget =
 	typeof subversiveTargetFinderTargets.$inferSelect;
 export type NewSubversiveTargetFinderTarget =
 	typeof subversiveTargetFinderTargets.$inferInsert;
+
+/**
+ * Hospital dibs settings, one row per Subversive family faction (2013 / 27312).
+ *
+ * Each faction runs its own ranked war, so its rules — lead time, per-member
+ * claim cap, Discord channel and maintenance cadence — are stored separately.
+ * Defaults here are the factory defaults; the dashboard only writes a row once
+ * an admin actually saves.
+ */
+export const subversiveDibsConfigs = pgTable("subversive_dibs_configs", {
+	/** Family faction these settings apply to (2013 / 27312). */
+	factionId: integer("faction_id").primaryKey(),
+	enabled: boolean("enabled").default(true).notNull(),
+	/** Discord snowflake of the dibs callout channel, or null when unrouted. */
+	channelId: text("channel_id"),
+	/** Minutes before hospital exit that a dibs can be claimed (e.g. 5). */
+	claimLeadTime: integer("claim_lead_time").default(5).notNull(),
+	/** Concurrent dibs a single member may hold (e.g. 1). */
+	maxDibsPerPerson: integer("max_dibs_per_person").default(1).notNull(),
+	/** Seconds a claimed dibs stays locked after hospital exit (e.g. 20). */
+	postHospTimeoutSeconds: integer("post_hosp_timeout_seconds")
+		.default(20)
+		.notNull(),
+	/** Removes the dibs callout when the target is downed. */
+	autoDeleteOnDowned: boolean("auto_delete_on_downed").default(true).notNull(),
+	/** ── Channel maintenance ───────────────────────────────────────────────
+	 * Enables the periodic sweep that removes orphaned dibs callouts left by
+	 * termed wars, API restarts, or failed Discord deliveries.
+	 */
+	channelMaintenanceEnabled: boolean("channel_maintenance_enabled")
+		.default(true)
+		.notNull(),
+	/** Callouts older than this are always swept, regardless of liveness. */
+	maxDibsMessageAgeHours: integer("max_dibs_message_age_hours")
+		.default(6)
+		.notNull(),
+	/** Minutes between automatic sweeps. 0 disables the schedule only. */
+	sweepIntervalMinutes: integer("sweep_interval_minutes").default(15).notNull(),
+	updatedBy: text("updated_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type SubversiveDibsConfigRow = typeof subversiveDibsConfigs.$inferSelect;
+export type NewSubversiveDibsConfigRow =
+	typeof subversiveDibsConfigs.$inferInsert;
+
+/**
+ * Ranked-war channel selections, one row per Subversive family faction.
+ *
+ * Separate from the dibs config because these route the war tooling itself
+ * rather than one feature's alerts. Every column is a Discord snowflake, or
+ * NULL when that selection is not routed yet.
+ */
+export const subversiveRwChannelConfigs = pgTable(
+	"subversive_rw_channel_configs",
+	{
+		/** Family faction these channels apply to (2013 / 27312). */
+		factionId: integer("faction_id").primaryKey(),
+		/** Channel hosting the faction's primary ranked-war display. */
+		primaryDisplaysChannelId: text("primary_displays_channel_id"),
+		updatedBy: text("updated_by"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+);
+
+export type SubversiveRwChannelConfigRow =
+	typeof subversiveRwChannelConfigs.$inferSelect;
+export type NewSubversiveRwChannelConfigRow =
+	typeof subversiveRwChannelConfigs.$inferInsert;
+
+/**
+ * The Discord messages currently rendering the ranked-war primary displays.
+ *
+ * Deliberately separate from `subversive_rw_channel_configs`: that table is
+ * admin-owned configuration edited through the API's channel manager, whereas
+ * this is bot-owned runtime state rewritten every war cycle. Keeping them apart
+ * stops the bot's message bookkeeping from leaking into the admin config row
+ * (whose field-merge logic is duplicated at three call sites) and makes
+ * "fetch every live display for this faction" a single indexed query.
+ *
+ * One row per category per faction. Rows are deleted when the war ends or the
+ * channel is deselected, so a stale id is never silently reused.
+ */
+export const subversiveRwDisplayMessages = pgTable(
+	"subversive_rw_display_messages",
+	{
+		/** Family faction the displays belong to (2013 / 27312). */
+		factionId: integer("faction_id")
+			.notNull()
+			.references(() => subversiveRwChannelConfigs.factionId, {
+				onDelete: "cascade",
+			}),
+		/**
+		 * Which of the four embeds this row tracks.
+		 *
+		 * One of `hospital` | `offlineOkay` | `onlineOkay` | `revivable`, as
+		 * declared by `RW_DISPLAY_CATEGORIES` in `@sentinel/schemas`. Stored as
+		 * text rather than a PG enum to match every other discriminator column
+		 * in this schema.
+		 */
+		category: text("category").notNull(),
+		/** Discord snowflake of the message rendering the embed. */
+		messageId: text("message_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.factionId, table.category] }),
+		index("idx_subversive_rw_display_messages_faction").on(table.factionId),
+	],
+);
+
+export type SubversiveRwDisplayMessageRow =
+	typeof subversiveRwDisplayMessages.$inferSelect;
+export type NewSubversiveRwDisplayMessageRow =
+	typeof subversiveRwDisplayMessages.$inferInsert;

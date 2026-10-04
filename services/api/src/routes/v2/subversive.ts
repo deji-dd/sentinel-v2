@@ -32,6 +32,7 @@ import { subversiveDibsManager } from "../../lib/dibs-manager";
 import { dibsMessageStore } from "../../lib/dibs-message-store";
 import { fetchDiscordApi } from "../../lib/discord-auth";
 import { resolveDiscordTornUser } from "../../lib/resolve-discord-torn-user";
+import { subversiveRwChannelManager } from "../../lib/rw-channel-manager";
 import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
@@ -92,6 +93,9 @@ const SUBVERSIVE_CONFIG_ID = "subversive:guild_config";
 const INVALID_DIBS_FACTION_ERROR =
 	"Invalid factionId: dibs settings are only available for the Subversive family factions.";
 
+const INVALID_RW_CHANNELS_FACTION_ERROR =
+	"Invalid factionId: ranked-war channels are only available for the Subversive family factions.";
+
 /**
  * Validates an optional faction id coming from a request and resolves it to a
  * Subversive family faction. Defaults to Subversive Alliance (2013) when absent
@@ -99,7 +103,7 @@ const INVALID_DIBS_FACTION_ERROR =
  *
  * Sets a 400 status and returns null when the id is not a family faction.
  */
-function parseDibsFactionId(
+function parseSubversiveFactionId(
 	raw: number | null | undefined,
 	set: { status?: number | string },
 ): number | null {
@@ -567,23 +571,35 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			}
 
 			const channels = await fetchDiscordApi<
-				Array<{ id: string; name: string; type: number }>
+				Array<{
+					id: string;
+					name: string;
+					type: number;
+					position: number;
+					parent_id: string | null;
+				}>
 			>(`/guilds/${targetGuildId}/channels`, `Bot ${botToken}`);
 
 			if (!channels || !Array.isArray(channels)) {
 				return { channels: [] };
 			}
 
-			// Type 0 = GUILD_TEXT, Type 5 = GUILD_ANNOUNCEMENT
-			const textChannels = channels
-				.filter((c) => c.type === 0 || c.type === 5)
+			// Type 0 = GUILD_TEXT, Type 5 = GUILD_ANNOUNCEMENT.
+			// Categories (type 4) are kept so the dashboard can group channels under
+			// their server section, and parent_id ties each channel to its category.
+			// Consumers must filter by type themselves before rendering selectables.
+			const groupedChannels = channels
+				.filter((c) => c.type === 0 || c.type === 4 || c.type === 5)
 				.map((c) => ({
 					id: c.id,
 					name: c.name,
+					type: c.type,
+					position: c.position,
+					parent_id: c.parent_id,
 				}))
-				.sort((a, b) => a.name.localeCompare(b.name));
+				.sort((a, b) => a.position - b.position);
 
-			return { channels: textChannels };
+			return { channels: groupedChannels };
 		},
 		{
 			detail: {
@@ -1167,7 +1183,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const factionId = parseDibsFactionId(query?.factionId, set);
+			const factionId = parseSubversiveFactionId(query?.factionId, set);
 			if (factionId === null) return { error: INVALID_DIBS_FACTION_ERROR };
 
 			const config = await subversiveDibsManager.getConfig(factionId);
@@ -1199,7 +1215,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const factionId = parseDibsFactionId(body.factionId, set);
+			const factionId = parseSubversiveFactionId(body.factionId, set);
 			if (factionId === null) {
 				return { error: INVALID_DIBS_FACTION_ERROR };
 			}
@@ -1244,6 +1260,81 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 		},
 	)
 
+	// ─── GET /api/v1/subversive/rw-channels-config ────────────────────────────
+	.get(
+		"/rw-channels-config",
+		async ({ user, set, query }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(query?.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_RW_CHANNELS_FACTION_ERROR };
+			}
+
+			const config = await subversiveRwChannelManager.getConfig(factionId);
+			return {
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config,
+			};
+		},
+		{
+			query: t.Object({
+				factionId: t.Optional(t.Numeric()),
+			}),
+			detail: {
+				summary: "Get Subversive Ranked-War Channel Selections",
+				description:
+					"Returns the Discord channels one family faction uses for ranked-war tooling.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/subversive/rw-channels-config ────────────────────────────
+	.put(
+		"/rw-channels-config",
+		async ({ body, user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(body.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_RW_CHANNELS_FACTION_ERROR };
+			}
+
+			const { factionId: _ignored, ...patch } = body;
+			const updated = await subversiveRwChannelManager.updateConfig(
+				patch,
+				user?.username ?? "admin",
+				factionId,
+			);
+			return {
+				success: true,
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config: updated,
+			};
+		},
+		{
+			body: t.Object({
+				factionId: t.Optional(t.Numeric()),
+				primaryDisplaysChannelId: t.Optional(t.Nullable(t.String())),
+			}),
+			detail: {
+				summary: "Update Subversive Ranked-War Channel Selections",
+				description:
+					"Routes ranked-war tooling channels for one family faction.",
+			},
+		},
+	)
+
 	// ─── GET /api/v1/subversive/dibs/active ───────────────────────────────────
 	.get(
 		"/dibs/active",
@@ -1269,7 +1360,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const factionId = parseDibsFactionId(body?.factionId, set);
+			const factionId = parseSubversiveFactionId(body?.factionId, set);
 			if (factionId === null) {
 				return { error: INVALID_DIBS_FACTION_ERROR };
 			}

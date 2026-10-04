@@ -99,6 +99,17 @@ export interface RankedWarOpponent {
 	isOnWall: boolean;
 	isInOc: boolean;
 	hasEarlyDischarge: boolean;
+	/**
+	 * Torn's standing "this player allows revives" permission flag, not a live
+	 * "is down right now" state. Must be combined with a Hospital status to
+	 * mean the player is actually revivable.
+	 *
+	 * Optional here because this payload arrives over IPC from the scheduler
+	 * and older workers omit it; the scheduler always populates it.
+	 */
+	isRevivable?: boolean;
+	/** Only populated for the key's own faction; "Unknown" for opponents. */
+	reviveSetting?: string;
 	lastAction: {
 		status: string;
 		timestamp: number;

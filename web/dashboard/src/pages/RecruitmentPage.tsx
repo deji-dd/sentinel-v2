@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,13 +23,6 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
 	Table,
@@ -98,11 +92,6 @@ interface EvaluatedWar {
 	evaluatedAt: string;
 }
 
-interface GuildChannel {
-	id: string;
-	name: string;
-}
-
 function formatNumberHuman(num: number | null | undefined): string {
 	if (num === null || num === undefined || num === 0) return "N/A";
 	if (num >= 1_000_000_000) {
@@ -150,7 +139,7 @@ export function RecruitmentPage({
 		autoScanEnabled: false,
 		excludedFactionIds: [],
 	});
-	const [channels, setChannels] = useState<GuildChannel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [configLoading, setConfigLoading] = useState(true);
 	const [statsInput, setStatsInput] = useState<string>(() =>
 		config.minStats > 0 ? config.minStats.toLocaleString("en-US") : "",
@@ -225,7 +214,7 @@ export function RecruitmentPage({
 				}
 			}
 			if (chRes.ok) {
-				const chData = (await chRes.json()) as { channels: GuildChannel[] };
+				const chData = (await chRes.json()) as { channels: DiscordChannel[] };
 				setChannels(chData.channels ?? []);
 			}
 			if (keysRes.ok) {
@@ -837,26 +826,19 @@ export function RecruitmentPage({
 									>
 										Notification Channel
 									</label>
-									<Select
-										value={config.notificationChannelId || ""}
+									<ChannelSelect
+										id="select-channel"
+										channels={channels}
+										value={config.notificationChannelId}
 										onValueChange={(val) =>
 											setConfig((prev) => ({
 												...prev,
 												notificationChannelId: val || null,
 											}))
 										}
-									>
-										<SelectTrigger id="select-channel" className="w-full">
-											<SelectValue placeholder="Select Discord text channel..." />
-										</SelectTrigger>
-										<SelectContent>
-											{channels.map((ch) => (
-												<SelectItem key={ch.id} value={ch.id}>
-													#{ch.name}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
+										placeholder="Select Discord text channel..."
+										triggerClassName="w-full"
+									/>
 								</div>
 							)}
 						</div>

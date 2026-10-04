@@ -65,6 +65,7 @@ import {
 	handleArchiveChannelButtonClick,
 	handleContractCreationButtonClick,
 } from "../lib/merc-contract-creation";
+import { handleRwDisplaysButton } from "../lib/rw-primary-displays";
 
 const logger = new Logger("Bot", "InteractionCreate");
 
@@ -109,6 +110,8 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("monitoring_revives_page:")
 				) {
 					await handleFactionMonitoringButton(interaction);
+				} else if (interaction.customId.startsWith("rw_displays_page:")) {
+					await handleRwDisplaysButton(interaction);
 				} else if (interaction.customId === "giveaway_create_init") {
 					await handleGiveawayCreateInitButton(interaction);
 				} else if (interaction.customId.startsWith("giveaway_item_page:")) {

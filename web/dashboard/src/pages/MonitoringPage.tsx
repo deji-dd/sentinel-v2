@@ -8,6 +8,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -19,25 +20,11 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import NotInitializedView from "../components/NotInitializedView";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
-
-interface Channel {
-	id: string;
-	name: string;
-	type: number;
-}
 
 interface MonitoredFaction {
 	id: string;
@@ -64,7 +51,7 @@ export default function MonitoringPage({ guildId }: MonitoringPageProps) {
 	const [isInitialized, setIsInitialized] = useState(true);
 	const [isModuleEnabled, setIsModuleEnabled] = useState(false);
 
-	const [channels, setChannels] = useState<Channel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [monitors, setMonitors] = useState<MonitoredFaction[]>([]);
 
 	// Add Faction Modal State
@@ -110,10 +97,9 @@ export default function MonitoringPage({ guildId }: MonitoringPageProps) {
 			}
 
 			if (channelsRes.data && "channels" in channelsRes.data) {
-				const textChannels = channelsRes.data.channels.filter(
-					(c: Channel) => c.type === 0,
-				);
-				setChannels(textChannels);
+				// Stored unfiltered (categories included) so the selects can group by
+				// server section; ChannelSelect does the type filtering at render time.
+				setChannels(channelsRes.data.channels as DiscordChannel[]);
 			}
 
 			if (monitoringRes.data && "monitored" in monitoringRes.data) {
@@ -441,34 +427,22 @@ export default function MonitoringPage({ guildId }: MonitoringPageProps) {
 												>
 													Dedicated Discord Output Channel
 												</label>
-												<Select
-													value={m.revivesChannelId || "none"}
+												<ChannelSelect
+													id={`channel-select-${m.id}`}
+													channels={channels}
+													allowedTypes={[0]}
+													value={m.revivesChannelId}
 													onValueChange={(val) =>
 														handleUpdateMonitor(m.id, {
 															revivesChannelId: val === "none" ? null : val,
 														})
 													}
 													disabled={savingMonitorId === m.id}
-												>
-													<SelectTrigger
-														id={`channel-select-${m.id}`}
-														className="rounded-xl border-border/70 bg-card/60 text-sm"
-													>
-														<SelectValue placeholder="Select output channel..." />
-													</SelectTrigger>
-													<SelectContent className="max-h-64">
-														<SelectGroup>
-															<SelectItem value="none">
-																-- None (Paused) --
-															</SelectItem>
-															{channels.map((ch) => (
-																<SelectItem key={ch.id} value={ch.id}>
-																	#{ch.name}
-																</SelectItem>
-															))}
-														</SelectGroup>
-													</SelectContent>
-												</Select>
+													noneLabel="-- None (Paused) --"
+													placeholder="Select output channel..."
+													triggerClassName="rounded-xl border-border/70 bg-card/60 text-sm"
+													contentClassName="max-h-64"
+												/>
 											</div>
 
 											<div className="text-xs text-muted-foreground space-y-1 self-end">

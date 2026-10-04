@@ -12,6 +12,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,11 +31,6 @@ import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 import { useRouter } from "../router";
 
-interface Channel {
-	id: string;
-	name: string;
-	type: number;
-}
 interface Role {
 	id: string;
 	name: string;
@@ -85,7 +81,7 @@ export default function GuildSettingsPage({
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Discord Data
-	const [channels, setChannels] = useState<Channel[]>([]);
+	const [channels, setChannels] = useState<DiscordChannel[]>([]);
 	const [roles, setRoles] = useState<Role[]>([]);
 
 	// Form state
@@ -463,33 +459,19 @@ export default function GuildSettingsPage({
 							Target Discord Channel
 						</label>
 						{channels.length > 0 ? (
-							<Select
+							<ChannelSelect
+								id="log-channel-select"
+								channels={channels}
+								allowedTypes={[0]}
 								value={logChannelId}
 								onValueChange={(val) =>
 									setLogChannelId(val === "none" ? "" : val)
 								}
-							>
-								<SelectTrigger
-									id="log-channel-select"
-									className="w-xs h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
-								>
-									<SelectValue placeholder="-- No Audit Log Channel Selected --" />
-								</SelectTrigger>
-								<SelectContent className="rounded-xl border-border bg-popover text-popover-foreground">
-									<SelectGroup>
-										<SelectItem value="none">
-											-- No Audit Log Channel Selected --
-										</SelectItem>
-										{channels
-											.filter((c) => c.type === 0)
-											.map((ch) => (
-												<SelectItem key={ch.id} value={ch.id}>
-													#{ch.name}
-												</SelectItem>
-											))}
-									</SelectGroup>
-								</SelectContent>
-							</Select>
+								noneLabel="-- No Audit Log Channel Selected --"
+								placeholder="-- No Audit Log Channel Selected --"
+								triggerClassName="w-xs h-10 rounded-xl bg-background border-input text-foreground text-sm font-sans"
+								contentClassName="rounded-xl border-border bg-popover text-popover-foreground"
+							/>
 						) : (
 							<Input
 								id="log-channel-select"
