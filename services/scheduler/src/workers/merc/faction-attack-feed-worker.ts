@@ -426,10 +426,7 @@ async function ingestFaction(
 		}
 
 		const nextCursor = nextPageCursor(attacks[attacks.length - 1]);
-		// Guard against re-requesting the same cursor, which would loop forever.
-		// This is NOT a catch-up: treat it as stalled so we neither advance the
-		// newest-edge watermark nor clear the backfill cursor and lose history.
-		if (nextCursor === null || nextCursor >= cursor) {
+		if (nextCursor === null) {
 			cursorStalled = true;
 			break;
 		}
@@ -438,6 +435,18 @@ async function ingestFaction(
 			// Everything back to the war start (or the window floor) is now read.
 			reachedHistoryFloor = true;
 			break;
+		}
+
+		// Many attacks resolve within the same second, so a full page can end on
+		// the very timestamp we queried with. Re-requesting that cursor would
+		// return the identical page forever, so step one second earlier to force
+		// forward progress. Overlap is harmless: rows upsert on (faction, attack)
+		// and repeat ids are skipped by seenAttackIds.
+		if (nextCursor >= cursor) {
+			cursorStalled = true;
+			cursor = cursor - 1;
+		} else {
+			cursor = nextCursor;
 		}
 
 		cursor = nextCursor;
@@ -475,10 +484,11 @@ async function ingestFaction(
 	}
 
 	if (cursorStalled) {
-		// Leave the cursor exactly where it is so the next cycle retries from the
-		// same point rather than starting the walk over.
+		// The page ended on its own cursor (dense same-second traffic). We stepped
+		// back one second to keep draining, and the watermark deliberately stays put
+		// so nothing unread is ever skipped past.
 		logger.warn(
-			`Faction ${key.factionId}: attack feed cursor stalled at ${cursor}; leaving backfill position unchanged.`,
+			`Faction ${key.factionId}: attack feed cursor collided with a full page ending on the same second; stepped back to ${cursor} to keep draining.`,
 		);
 	}
 

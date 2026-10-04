@@ -59,6 +59,9 @@ const ATTACK_IDS_ARG = getArgValue("--attack-ids");
 interface OutgoingAttack {
 	id: number;
 	code?: string;
+	/** `/faction/attacks` returns `started`/`ended`; `/torn/{id}` uses the timestamp_* names. */
+	started?: number;
+	ended?: number;
 	timestamp_started?: number;
 	timestamp_ended?: number;
 	attacker?: {
@@ -80,6 +83,24 @@ interface OutgoingAttack {
 	} | null;
 	result: string;
 	finishing_hit_effects?: Array<{ name: string }>;
+}
+
+/**
+ * Resolves when an attack finished, accepting either endpoint's field naming.
+ *
+ * `/faction/attacks` returns `started`/`ended`, whereas `/torn/{id}` returns
+ * `timestamp_started`/`timestamp_ended`. Reading only the timestamp_* names made
+ * every faction-feed attack look timestamp-less, so the contract timeframe window
+ * was never applied and every hit was stamped with the moment the script ran.
+ */
+function resolveAttackEnded(attack: OutgoingAttack): number {
+	return (
+		attack.ended ??
+		attack.timestamp_ended ??
+		attack.started ??
+		attack.timestamp_started ??
+		0
+	);
 }
 
 const DISQUALIFYING_RESULTS = new Set([
@@ -248,8 +269,7 @@ async function processSingleContract(
 			if (attacks.length === 0) break;
 
 			for (const attack of attacks) {
-				const attackEnded =
-					attack.timestamp_ended ?? attack.timestamp_started ?? 0;
+				const attackEnded = resolveAttackEnded(attack);
 				if (attackEnded > 0 && attackEnded < contractStartSec) {
 					reachedStop = true;
 					break;
@@ -364,8 +384,16 @@ async function processSingleContract(
 					: contract.hitPrice;
 		}
 
-		const attackTimestampSec =
-			attack.timestamp_ended ?? attack.timestamp_started ?? Date.now() / 1000;
+		const resolvedEnded = resolveAttackEnded(attack);
+		// Never fall back to "now": a fabricated timestamp silently corrupts the
+		// hit history and any payout period derived from it.
+		if (resolvedEnded <= 0) {
+			console.warn(
+				`  Attack ${attack.id} has no usable timestamp; skipping rather than stamping it with the current time.`,
+			);
+			continue;
+		}
+		const attackTimestampSec = resolvedEnded;
 
 		missedHitsToCredit.push({
 			attackId: attack.id,

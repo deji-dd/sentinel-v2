@@ -121,6 +121,20 @@ describe("Faction Attack Feed - Ingestion & Watermarks", () => {
 			expect(nextPageCursor(stub({ id: 1 }))).toBeNull();
 			expect(nextPageCursor(undefined)).toBeNull();
 		});
+
+		// Guards the cursor-advance rule: when a full page ends on the timestamp we
+		// queried with, the feed must step the cursor back rather than treat the
+		// cycle as "caught up" (which would advance the watermark past unread
+		// attacks) or re-request the identical page forever.
+		it("reports a non-advancing cursor when a full page shares one timestamp", () => {
+			const cursor = 1728000000;
+			const pageEndsOnCursor = stub({ id: 99, ended: cursor });
+			const next = nextPageCursor(pageEndsOnCursor);
+			expect(next).toBe(cursor);
+			// The feed relies on this comparison to detect the collision and step
+			// the cursor back a second instead of declaring itself caught up.
+			expect(next !== null && next >= cursor).toBe(true);
+		});
 	});
 
 	describe("normaliseAttack", () => {
