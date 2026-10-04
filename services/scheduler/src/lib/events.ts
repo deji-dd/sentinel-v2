@@ -15,6 +15,8 @@ export type SchedulerEvents = {
 	 * can never stall ingestion.
 	 */
 	faction_attacks_ingested: [attacks: FactionAttackEvent[]];
+	/** Fires after the Subversive ranked war tracking cycle refreshes war state. */
+	ranked_war_updated: [];
 };
 
 class TypedEventEmitter extends EventEmitter {

@@ -1,6 +1,7 @@
 import { db, inArray, subversiveTargetFinderTargets } from "@sentinel/database";
 import { getPlayerStats, TornApiClient, TornError } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
@@ -572,6 +573,8 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 			data: { wars },
 		});
 	}
+
+	schedulerEvents.emit("ranked_war_updated");
 
 	return Date.now() + nextCadenceMs;
 }

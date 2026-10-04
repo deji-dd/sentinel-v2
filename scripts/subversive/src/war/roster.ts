@@ -177,12 +177,16 @@ export async function fetchAvailableTargets(): Promise<void> {
 			targets?: WarTarget[];
 		}>(`/v2/target-finder/war/targets/available?${params.toString()}`);
 		if (res?.war) {
-			state.war = res.war;
-			state.warState = res.war.state;
+			const war = {
+				...res.war,
+				userHitCount: res.war.userHitCount ?? state.war?.userHitCount ?? 0,
+			};
+			state.war = war;
+			state.warState = war.state;
 			try {
-				GM_setValue(STORAGE.warState, res.war.state);
+				GM_setValue(STORAGE.warState, war.state);
 			} catch {}
-			renderWarBanner(res.war);
+			renderWarBanner(war);
 		}
 		if (Array.isArray(res?.targets)) {
 			renderAvailableTargets(res.targets);

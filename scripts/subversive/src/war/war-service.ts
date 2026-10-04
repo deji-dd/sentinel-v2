@@ -51,19 +51,17 @@ export async function fetchWarStatus(): Promise<void> {
 			userHitCount?: number;
 		}>("/v2/target-finder/war/status");
 
-		// Diagnostics: prints the raw hit count and war state to the browser
-		// console so a blank scorecard can be traced without server log access.
-		// Look for the "[Subversive Alliance]" prefix in DevTools.
-		console.debug(
-			`[Subversive Alliance] war/status -> userHitCount=${res?.userHitCount} warState=${res?.war?.state} factionId=${res?.factionId}`,
-		);
 		if (res?.war) {
 			const war: CurrentWarInfo = {
 				...res.war,
 				factionId: res.war.factionId ?? res.factionId,
 				factionName: res.war.factionName ?? res.factionName,
 				// Scorecard hit tally, resolved server-side for this session.
-				userHitCount: res.userHitCount ?? 0,
+				userHitCount:
+					res.war.userHitCount ??
+					res.userHitCount ??
+					state.war?.userHitCount ??
+					0,
 			};
 			state.war = war;
 			state.warState = war.state;
@@ -166,8 +164,12 @@ export async function fetchNextTarget(
 		}>(`/v2/target-finder/war/targets/next?${params.toString()}`);
 
 		if (res.war) {
-			state.war = res.war;
-			renderWarBanner(res.war);
+			const war: CurrentWarInfo = {
+				...res.war,
+				userHitCount: res.war.userHitCount ?? state.war?.userHitCount ?? 0,
+			};
+			state.war = war;
+			renderWarBanner(war);
 		}
 
 		if (res.target) {
@@ -219,8 +221,13 @@ export async function fetchNextTarget(
 			data?: { war?: CurrentWarInfo };
 		};
 		if (errorObj?.data?.war) {
-			state.war = errorObj.data.war;
-			renderWarBanner(errorObj.data.war);
+			const war: CurrentWarInfo = {
+				...errorObj.data.war,
+				userHitCount:
+					errorObj.data.war.userHitCount ?? state.war?.userHitCount ?? 0,
+			};
+			state.war = war;
+			renderWarBanner(war);
 		}
 		if (setStatusFn)
 			setStatusFn(errorObj.message || "Failed to fetch target.", "error");
@@ -435,12 +442,16 @@ export async function runLongPollLoop(): Promise<void> {
 					state.dibsLeadTimeSeconds = res.dibsLeadTimeSeconds;
 				}
 				if (res.war) {
-					state.war = res.war;
-					state.warState = res.war.state;
+					const war: CurrentWarInfo = {
+						...res.war,
+						userHitCount: res.war.userHitCount ?? state.war?.userHitCount ?? 0,
+					};
+					state.war = war;
+					state.warState = war.state;
 					try {
-						GM_setValue(STORAGE.warState, res.war.state);
+						GM_setValue(STORAGE.warState, war.state);
 					} catch {}
-					renderWarBanner(res.war);
+					renderWarBanner(war);
 				}
 				if (Array.isArray(res.targets)) {
 					renderAvailableTargets(res.targets);

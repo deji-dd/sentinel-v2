@@ -62,6 +62,7 @@ export function qualifiesAsRankedWarHit(
 		attackerId: number | null;
 		defenderFactionId: number | null;
 		startedAt: number | null;
+		endedAt?: number | null;
 		result: string | null;
 	},
 	context: { start: number | null; opponentFactionId: number | null },
@@ -74,8 +75,9 @@ export function qualifiesAsRankedWarHit(
 	if (attack.defenderFactionId !== context.opponentFactionId) return false;
 
 	// Without a war start we cannot prove the attack belongs to this war.
-	if (context.start === null || attack.startedAt === null) return false;
-	if (attack.startedAt < context.start) return false;
+	const attackTime = attack.endedAt ?? attack.startedAt ?? null;
+	if (context.start === null || attackTime === null) return false;
+	if (attackTime < context.start) return false;
 
 	return isLandedHit(attack.result);
 }
@@ -253,6 +255,10 @@ export function startHitCounter(): void {
 			broadcastHitCounts();
 		},
 	);
+
+	schedulerEvents.on("ranked_war_updated", () => {
+		void hydrateFromDatabase().then(() => broadcastHitCounts());
+	});
 
 	// The war worker learns about new wars on its own cycle, so re-check the
 	// engaged war periodically to catch a war starting (or ending) mid-flight.

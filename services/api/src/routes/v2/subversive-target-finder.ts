@@ -915,6 +915,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			war: {
 				...war,
 				lead,
+				userHitCount,
 			},
 			// The viewing member's own landed ranked war hits, resolved server
 			// side from the per-faction counts the scheduler publishes.
@@ -981,12 +982,20 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			? Number.parseFloat(query.maxBS as string)
 			: undefined;
 
+		const userHitCount = subversiveTargetCache.getUserHitCount(
+			session.tornId,
+			factionId,
+		);
+
 		if (war.state !== "active" && war.state !== "scheduled") {
 			return {
 				success: false,
 				message: "No active ranked war.",
 				target: null,
-				war,
+				war: {
+					...war,
+					userHitCount,
+				},
 			};
 		}
 
@@ -1005,14 +1014,20 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				message:
 					"No targets currently available matching criteria. Check hospital queue or settings.",
 				target: null,
-				war,
+				war: {
+					...war,
+					userHitCount,
+				},
 			};
 		}
 
 		return {
 			success: true,
 			target,
-			war,
+			war: {
+				...war,
+				userHitCount,
+			},
 			member: {
 				tornId: session.tornId,
 				tornName: session.tornName,
@@ -1082,11 +1097,19 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			excludeIds,
 		});
 
+		const userHitCount = subversiveTargetCache.getUserHitCount(
+			session.tornId,
+			factionId,
+		);
+
 		return {
 			success: true,
 			targets,
 			total: targets.length,
-			war: subversiveTargetCache.getWarState(factionId),
+			war: {
+				...subversiveTargetCache.getWarState(factionId),
+				userHitCount,
+			},
 		};
 	})
 

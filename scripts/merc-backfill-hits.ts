@@ -25,6 +25,7 @@ import {
 	closeDatabase,
 	db,
 	eq,
+	factionAttackLogs,
 	guildApiKeys,
 	inArray,
 	isAttackProcessed,
@@ -423,19 +424,55 @@ async function processSingleContract(
 	console.log(
 		`\n  FOUND ${missedHitsToCredit.length} MISSED HIT(S) FOR CONTRACT ${contract.id}:`,
 	);
+
+	// Decisive diagnostic: was the attack ever ingested into the shared feed?
+	// Absent  -> the ingestion layer never saw it (backfill/watermark problem).
+	// Present -> ingestion was fine and the validator chose not to credit it
+	//            (contract gating problem). These need completely different fixes.
+	const ingestRows = await db
+		.select({
+			attackId: factionAttackLogs.attackId,
+			factionId: factionAttackLogs.factionId,
+			direction: factionAttackLogs.direction,
+			result: factionAttackLogs.result,
+			startedAt: factionAttackLogs.startedAt,
+			endedAt: factionAttackLogs.endedAt,
+		})
+		.from(factionAttackLogs)
+		.where(
+			inArray(
+				factionAttackLogs.attackId,
+				missedHitsToCredit.map((h) => h.attackId),
+			),
+		);
+	const ingestedById = new Map(ingestRows.map((r) => [r.attackId, r]));
+
 	console.table(
-		missedHitsToCredit.map((h) => ({
-			"Attack ID": h.attackId,
-			Attacker: `${h.attackerName} [${h.attackerId}]`,
-			Defender: `${h.defenderName} [${h.defenderId}]`,
-			Result: h.result,
-			Stricken: h.isStricken ? "YES" : "NO",
-			Payout: `$${h.payoutValue.toLocaleString()}`,
-			"Timestamp (TCT)": h.timestamp
-				.toISOString()
-				.replace("T", " ")
-				.slice(0, 19),
-		})),
+		missedHitsToCredit.map((h) => {
+			const ingested = ingestedById.get(h.attackId);
+			return {
+				"Attack ID": h.attackId,
+				Attacker: `${h.attackerName} [${h.attackerId}]`,
+				Defender: `${h.defenderName} [${h.defenderId}]`,
+				Result: h.result,
+				Payout: `$${h.payoutValue.toLocaleString()}`,
+				"Timestamp (TCT)": h.timestamp
+					.toISOString()
+					.replace("T", " ")
+					.slice(0, 19),
+				"Ingested?": ingested ? "YES" : "NO — never ingested",
+				"Ingested as": ingested
+					? `${ingested.direction} via faction ${ingested.factionId}`
+					: "-",
+			};
+		}),
+	);
+
+	const neverIngested = missedHitsToCredit.filter(
+		(h) => !ingestedById.has(h.attackId),
+	).length;
+	console.log(
+		`  ${neverIngested} of ${missedHitsToCredit.length} were NEVER ingested (ingestion gap); ${missedHitsToCredit.length - neverIngested} were ingested but not credited (validator gating).`,
 	);
 
 	if (!APPLY) {

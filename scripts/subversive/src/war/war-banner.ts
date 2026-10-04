@@ -100,7 +100,7 @@ export function renderWarBanner(war: CurrentWarInfo | null): void {
 	// wrapper leaves the text written but permanently invisible.
 	if (userHitCountEl) {
 		const hits = (war as { userHitCount?: number }).userHitCount;
-		if (typeof hits === "number" && hits > 0) {
+		if (typeof hits === "number" && hits >= 0 && isWarEngaged()) {
 			userHitCountEl.textContent = `${hits} ${hits === 1 ? "hit" : "hits"} this war`;
 			userHitCountEl.style.display = "";
 			if (warDetailsEl) warDetailsEl.style.display = "";

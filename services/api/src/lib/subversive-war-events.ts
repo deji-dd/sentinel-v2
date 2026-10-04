@@ -7,7 +7,9 @@ export interface WarEventPayload {
 	success: true;
 	modified: boolean;
 	version: number;
-	war?: ReturnType<typeof subversiveTargetCache.getWarState>;
+	war?: ReturnType<typeof subversiveTargetCache.getWarState> & {
+		userHitCount?: number;
+	};
 	targets?: ReturnType<typeof subversiveTargetCache.getAvailableWarTargets>;
 	hospitalQueue?: ReturnType<typeof subversiveTargetCache.getHospitalQueue>;
 	dibs?: ReturnType<typeof subversiveDibsManager.getActiveDibs>;
@@ -60,11 +62,19 @@ class SubversiveWarEventManager {
 			(subversiveDibsManager.getCachedConfig(factionId).claimLeadTime ?? 5) *
 			60;
 
+		const userHitCount = subversiveTargetCache.getUserHitCount(
+			session.tornId,
+			factionId,
+		);
+
 		return {
 			success: true,
 			modified: options.modified ?? true,
 			version: this.currentVersion,
-			war,
+			war: {
+				...war,
+				userHitCount,
+			},
 			targets,
 			hospitalQueue,
 			dibs,
