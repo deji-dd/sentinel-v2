@@ -54,9 +54,18 @@ export interface MercActiveTargetAlert {
 
 export const OFFLINE_JITTER_SECONDS = 10;
 
+/**
+ * Explicit execution budget for the contract worker. The 1s cadence default floors
+ * the timeout at only 5s, which a cold FFScouter BS-estimate burst or a Torn
+ * rate-limit backoff blows through on a full faction roster.
+ */
+export const MERC_WORKER_TIMEOUT_MS = 25_000;
+
 export class MercTargetManager {
 	private alerts = new Map<string, MercActiveTargetAlert>();
 	private statsCache = new Map<number, number>();
+	private bsCacheMisses = 0;
+	private bsFetchMs = 0;
 	private hospitalTracker = new Map<
 		string,
 		{
@@ -283,17 +292,110 @@ export class MercTargetManager {
 		const cached = this.statsCache.get(memberId);
 		if (cached) return cached;
 
+		this.bsCacheMisses++;
+		const fetchStartedAt = Date.now();
 		try {
 			const [ffResult] = await getPlayerStats([memberId]);
+			this.bsFetchMs += Date.now() - fetchStartedAt;
 			if (ffResult?.bs_estimate && ffResult.bs_estimate > 0) {
 				this.statsCache.set(memberId, ffResult.bs_estimate);
 				return ffResult.bs_estimate;
 			}
-		} catch {}
+		} catch (err) {
+			this.bsFetchMs += Date.now() - fetchStartedAt;
+			logger.warn(
+				`BS estimate lookup failed for member ${memberId}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 
 		const approxBs = Math.max(10_000, level * 50_000);
 		this.statsCache.set(memberId, approxBs);
 		return approxBs;
+	}
+
+	/**
+	 * Pre-warms the BS estimate cache for a whole roster in one batched upstream
+	 * request, instead of each member paying its own sequential lookup inside
+	 * `processMember`. Only uncached member IDs are sent upstream.
+	 *
+	 * @param members - Faction members to pre-warm for.
+	 * @param signal - Abort signal to bail out before/while fetching.
+	 */
+	async prewarmEstimatedBs(
+		members: FactionMember[],
+		signal?: AbortSignal,
+	): Promise<{ requested: number; resolved: number; fetchMs: number }> {
+		const pending = Array.from(
+			new Set(
+				members.filter((m) => !this.statsCache.has(m.id)).map((m) => m.id),
+			),
+		);
+
+		if (pending.length === 0) {
+			return { requested: 0, resolved: 0, fetchMs: 0 };
+		}
+
+		if (signal?.aborted) {
+			return { requested: pending.length, resolved: 0, fetchMs: 0 };
+		}
+
+		this.bsCacheMisses += pending.length;
+		const fetchStartedAt = Date.now();
+
+		let results: Awaited<ReturnType<typeof getPlayerStats>> = [];
+		try {
+			results = await getPlayerStats(pending);
+		} catch (err) {
+			this.bsFetchMs += Date.now() - fetchStartedAt;
+			logger.warn(
+				`Batched BS estimate pre-warm failed for ${pending.length} member(s): ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return {
+				requested: pending.length,
+				resolved: 0,
+				fetchMs: Date.now() - fetchStartedAt,
+			};
+		}
+
+		this.bsFetchMs += Date.now() - fetchStartedAt;
+
+		let resolved = 0;
+		const levelById = new Map<number, number>();
+		for (const m of members) {
+			if (!levelById.has(m.id)) levelById.set(m.id, m.level);
+		}
+
+		for (const r of results) {
+			const id = Number(r?.player_id);
+			if (!Number.isInteger(id) || id <= 0) continue;
+			if (r?.bs_estimate && r.bs_estimate > 0) {
+				this.statsCache.set(id, r.bs_estimate);
+				resolved++;
+			} else {
+				// Preserve the existing level-based fallback, cached so the
+				// per-member path stays a pure cache hit afterwards.
+				const level = levelById.get(id);
+				if (level !== undefined) {
+					this.statsCache.set(id, Math.max(10_000, level * 50_000));
+				}
+			}
+		}
+
+		return {
+			requested: pending.length,
+			resolved,
+			fetchMs: Date.now() - fetchStartedAt,
+		};
+	}
+
+	/** Diagnostic counters for the current cycle (BS estimation cache behaviour). */
+	resetBsStats(): void {
+		this.bsCacheMisses = 0;
+		this.bsFetchMs = 0;
+	}
+
+	getBsStats(): { misses: number; fetchMs: number } {
+		return { misses: this.bsCacheMisses, fetchMs: this.bsFetchMs };
 	}
 
 	async processMember(
@@ -774,7 +876,9 @@ const revivablesUpdateTracker = new Map<
  * Runs a single cycle of the Mercenary Contract Worker.
  * 1-second cadence when active or imminent contracts exist; 15s when idle.
  */
-export async function runMercContractTrackingCycle(): Promise<number> {
+export async function runMercContractTrackingCycle(
+	signal?: AbortSignal,
+): Promise<number> {
 	const nowMs = Date.now();
 	const nowSec = Math.floor(nowMs / 1000);
 
@@ -785,18 +889,29 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 	}
 
 	// 1. Fetch active, upcoming, and paused contracts
+	const contractsQueryStart = Date.now();
 	const rows = await db
 		.select()
 		.from(mercContracts)
 		.where(
 			and(inArray(mercContracts.status, ["active", "upcoming", "paused"])),
 		);
+	logger.info(
+		`[perf] contracts query: ${Date.now() - contractsQueryStart}ms (${rows.length} row(s))`,
+	);
 
 	if (rows.length === 0) {
 		return Date.now() + 15_000;
 	}
 
+	if (signal?.aborted) {
+		logger.warn("Merc contract cycle aborted before contract evaluation.");
+		return Date.now() + 1_000;
+	}
+
 	const contracts = rows.map(mapRowToMercContract);
+	mercTargetManager.resetBsStats();
+	const cycleStartedAt = nowMs;
 
 	const relevantContracts: MercContract[] = [];
 
@@ -941,6 +1056,13 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 	const apiClient = new TornApiClient();
 
 	for (const contract of relevantContracts) {
+		if (signal?.aborted) {
+			logger.warn(
+				"Merc contract cycle aborted before processing remaining contracts.",
+			);
+			return Date.now() + 1_000;
+		}
+
 		const [guildConfig] = await db
 			.select()
 			.from(guildConfigs)
@@ -950,7 +1072,10 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 		const targetsChannel = channelConfig.targets || "targets";
 		const mercRoleId = guildConfig?.mercRoleId;
 
+		const tornFetchStart = Date.now();
+		const keyPoolStart = Date.now();
 		const keyObj = await getNextSubversiveUserKey();
+		const keyPoolMs = Date.now() - keyPoolStart;
 		if (!keyObj) {
 			logger.warn(
 				"No active script API keys available for merc contract target polling.",
@@ -963,11 +1088,30 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 				apiKey: keyObj.apiKey,
 				pathParams: { id: contract.factionId },
 			})) as TornFactionMembersResponse;
+			const tornFetchMs = Date.now() - tornFetchStart;
 
 			recordSubversiveKeySuccess(keyObj.apiKey);
 
 			const members = membersRes.members ?? [];
+
+			// Batch BS estimates for the whole roster in one upstream request so
+			// the per-member loop below is a pure cache hit.
+			const prewarm = await mercTargetManager.prewarmEstimatedBs(
+				members,
+				signal,
+			);
+
+			const processStart = Date.now();
+			let processed = 0;
 			for (const m of members) {
+				// Stop early when this cycle has already been abandoned by the
+				// scheduler timeout, so it cannot overlap the retry cycle.
+				if (signal?.aborted) {
+					logger.warn(
+						`Merc contract cycle aborted mid-roster for contract ${contract.id} after ${processed}/${members.length} members.`,
+					);
+					return Date.now() + 1_000;
+				}
 				await mercTargetManager.processMember(
 					contract,
 					contract.guildId,
@@ -977,7 +1121,13 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 					nowSec,
 					nowMs,
 				);
+				processed++;
 			}
+			const processMs = Date.now() - processStart;
+
+			logger.info(
+				`[perf] contract=${contract.id} faction=${contract.factionId} keyPool=${keyPoolMs}ms tornFetch=${tornFetchMs}ms bsPrewarm=${prewarm.fetchMs}ms (${prewarm.resolved}/${prewarm.requested} resolved) memberProcess=${processMs}ms members=${members.length} bsMisses=${mercTargetManager.getBsStats().misses} bsFetchMs=${mercTargetManager.getBsStats().fetchMs}ms`,
+			);
 
 			if (channelConfig.revivables) {
 				const revivables = members
@@ -1018,6 +1168,9 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 				}
 			}
 		} catch (err) {
+			logger.warn(
+				`[perf] contract=${contract.id} faction=${contract.factionId} keyPool=${keyPoolMs}ms FAILED after ${Date.now() - tornFetchStart}ms: ${err instanceof Error ? err.message : String(err)}`,
+			);
 			if (
 				(err instanceof TornError &&
 					(err.code === 13 || err.code === 10 || err.code === 18)) ||
@@ -1035,6 +1188,13 @@ export async function runMercContractTrackingCycle(): Promise<number> {
 		}
 	}
 
+	const cycleMs = Date.now() - cycleStartedAt;
+	if (cycleMs > 3_000) {
+		logger.warn(
+			`[perf] merc cycle took ${cycleMs}ms (timeout budget is ${MERC_WORKER_TIMEOUT_MS}ms); contracts=${relevantContracts.length}`,
+		);
+	}
+
 	// 1-second cadence when active or imminent contracts are running
 	return Date.now() + 1_000;
 }
@@ -1046,6 +1206,7 @@ export const startMercContractWorker: WorkerStarter = (options) => {
 	startEventDrivenRunner({
 		worker: "merc:contract_worker",
 		defaultCadenceSeconds: 1,
+		timeoutMs: MERC_WORKER_TIMEOUT_MS,
 		initialDelayMs: options?.initialDelayMs ?? 1000,
 		handler: runMercContractTrackingCycle,
 	});

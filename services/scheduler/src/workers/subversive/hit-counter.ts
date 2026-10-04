@@ -1,4 +1,4 @@
-import { and, db, eq, factionAttackLogs, gte } from "@sentinel/database";
+import { and, db, eq, factionAttackLogs, gte, sql } from "@sentinel/database";
 import { Logger, SUBVERSIVE_FAMILY_FACTION_IDS } from "@sentinel/utils";
 import { ATTACK_FEED_CADENCE_MS } from "../../lib/attack-feed-cadence";
 import { schedulerEvents } from "../../lib/events";
@@ -11,6 +11,11 @@ const logger = new Logger("Scheduler", "HitCounter");
 
 /** Counts broadcast on the fastest feed tier so the number stays current. */
 const BROADCAST_INTERVAL_MS = ATTACK_FEED_CADENCE_MS.both;
+/**
+ * Re-send an unchanged tally at least this often. Covers an API restart or IPC
+ * reconnect, which would otherwise lose the in-memory counts for good.
+ */
+const FORCED_REBROADCAST_INTERVAL_MS = 60_000;
 
 /** Per faction: war the counts belong to, and each member's landed RW hits. */
 interface FactionHitState {
@@ -96,6 +101,11 @@ function recordAttacks(attacks: FactionAttackEvent[]): void {
 /**
  * Rebuilds counts from `faction_attack_logs` for the currently engaged war, so
  * a scheduler restart mid-war does not zero every member's tally.
+ *
+ * The rebuild REPLACES the in-memory tally rather than adding to it. This runs
+ * on a timer as well as at boot, and `recordAttacks` also folds in live feed
+ * batches, so accumulating here would inflate every member's total once per
+ * cycle.
  */
 async function hydrateFromDatabase(): Promise<void> {
 	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
@@ -124,18 +134,24 @@ async function hydrateFromDatabase(): Promise<void> {
 						eq(factionAttackLogs.direction, "outgoing"),
 						eq(factionAttackLogs.isRankedWar, true),
 						eq(factionAttackLogs.defenderFactionId, context.opponentFactionId),
-						gte(factionAttackLogs.startedAt, context.start),
+						// Resolve on when the attack finished, not when it began: a
+						// long-running attack started just before the war still
+						// lands inside it and must count.
+						gte(
+							sql`coalesce(${factionAttackLogs.endedAt}, ${factionAttackLogs.startedAt})`,
+							context.start,
+						),
 					),
 				);
 
+			// Rebuild from scratch: DB is the source of truth for this war.
+			const rebuilt = new Map<number, number>();
 			for (const row of rows) {
 				if (row.attackerId === null) continue;
 				if (!isLandedHit(row.result)) continue;
-				state.counts.set(
-					row.attackerId,
-					(state.counts.get(row.attackerId) ?? 0) + 1,
-				);
+				rebuilt.set(row.attackerId, (rebuilt.get(row.attackerId) ?? 0) + 1);
 			}
+			state.counts = rebuilt;
 
 			logger.info(
 				`Hydrated ranked war hit counts for faction ${factionId}: ${state.counts.size} member(s), ${[...state.counts.values()].reduce((a, b) => a + b, 0)} total hit(s).`,
@@ -149,8 +165,13 @@ async function hydrateFromDatabase(): Promise<void> {
 }
 
 /**
- * Broadcasts per-member hit counts per faction over IPC. An unchanged set is
- * suppressed so a quiet war produces no traffic.
+ * Broadcasts per-member hit counts per faction over IPC.
+ *
+ * An unchanged set is normally suppressed so a quiet war produces no traffic,
+ * but the suppression is lifted once `FORCED_REBROADCAST_INTERVAL_MS` elapses.
+ * The API holds these counts in memory only, so a restarted or reconnecting API
+ * starts from an empty map; without the heartbeat it would sit at zero until
+ * some member happened to land a hit.
  */
 export function broadcastHitCounts(): void {
 	const ipcServer = getActiveIpcServer();
@@ -167,9 +188,13 @@ export function broadcastHitCounts(): void {
 			counts[String(playerId)] = count;
 		}
 		const signature = JSON.stringify(counts);
-		if (signature === lastBroadcastSignature.get(factionId)) continue;
-
 		const lastAt = lastBroadcastAtMs.get(factionId) ?? 0;
+		const unchanged = signature === lastBroadcastSignature.get(factionId);
+		const stale = nowMs - lastAt >= FORCED_REBROADCAST_INTERVAL_MS;
+
+		// Nothing new to say, but the API may have missed the last one.
+		if (unchanged && !stale) continue;
+
 		if (lastAt > 0 && nowMs - lastAt < BROADCAST_INTERVAL_MS) continue;
 
 		lastBroadcastAtMs.set(factionId, nowMs);

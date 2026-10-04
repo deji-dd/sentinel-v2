@@ -854,9 +854,11 @@ export function getPanelHtml(): string {
 								<span id="satf-opp-name" class="satf-score-lbl">Opponent</span>
 							</div>
 						</div>
-						<!-- Future scorecard detail rows land here -->
+						<!-- Future scorecard detail rows land here. The wrapper starts
+						     hidden; the span inside must NOT carry its own inline
+						     display:none or it stays invisible once the wrapper opens. -->
 						<div id="satf-war-details" class="satf-war-details" style="display: none;">
-							<span id="satf-user-hit-count" class="satf-hitcount" style="display: none;"></span>
+							<span id="satf-user-hit-count" class="satf-hitcount"></span>
 						</div>
 					</div>
 

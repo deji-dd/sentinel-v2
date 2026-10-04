@@ -113,6 +113,12 @@ export interface AttackWatermark {
 	lastAttackTimestamp: number;
 	/** Backfill cursor walking back through history; null when caught up. */
 	backfillCursor: number | null;
+	/**
+	 * War start timestamp whose history has already been walked. Records that the
+	 * one-time per-war reconciliation is done, so a war that began before
+	 * ingestion existed is only ever walked once.
+	 */
+	backfilledWarStart: number | null;
 	updatedAt: string;
 }
 
@@ -146,6 +152,10 @@ export async function getAttackWatermark(
 						typeof data.backfillCursor === "number"
 							? data.backfillCursor
 							: null,
+					backfilledWarStart:
+						typeof data.backfilledWarStart === "number"
+							? data.backfilledWarStart
+							: null,
 					updatedAt: data.updatedAt ?? new Date().toISOString(),
 				};
 				inMemoryWatermarks.set(stateId, watermark);
@@ -166,7 +176,10 @@ export async function saveAttackWatermark(
 	updates: Partial<
 		Pick<
 			AttackWatermark,
-			"lastAttackId" | "lastAttackTimestamp" | "backfillCursor"
+			| "lastAttackId"
+			| "lastAttackTimestamp"
+			| "backfillCursor"
+			| "backfilledWarStart"
 		>
 	>,
 ): Promise<void> {
@@ -175,6 +188,7 @@ export async function saveAttackWatermark(
 		lastAttackId: 0,
 		lastAttackTimestamp: 0,
 		backfillCursor: null,
+		backfilledWarStart: null,
 		updatedAt: new Date().toISOString(),
 	};
 
@@ -186,6 +200,10 @@ export async function saveAttackWatermark(
 			updates.backfillCursor === undefined
 				? current.backfillCursor
 				: updates.backfillCursor,
+		backfilledWarStart:
+			updates.backfilledWarStart === undefined
+				? current.backfilledWarStart
+				: updates.backfilledWarStart,
 		updatedAt: new Date().toISOString(),
 	};
 	inMemoryWatermarks.set(stateId, watermark);
@@ -332,18 +350,32 @@ async function ingestFaction(
 	const watermark = await getAttackWatermark(key.factionId);
 	const nowSec = Math.floor(Date.now() / 1000);
 
-	const warStart = getEngagedWarContext(key.factionId)?.start ?? null;
+	const warContext = getEngagedWarContext(key.factionId);
+	const warStart = warContext?.start ?? null;
 	const backfillSeconds =
 		warStart !== null ? WAR_BACKFILL_SECONDS : BACKFILL_SECONDS;
+
+	// A war that began before ingestion existed still needs a one-time walk back
+	// to its start, otherwise every member's tally is understated from the moment
+	// the war opened. `backfilledWarStart` records that this has been done, so it
+	// happens exactly once per war and never again on routine cycles.
+	const warNeedsBackfill =
+		warStart !== null && watermark?.backfilledWarStart !== warStart;
+
+	// Walk to the war start, not past it: everything before the war opened is not
+	// part of the tally and paging into it would waste the whole rate-limit budget.
+	const historyFloor = warStart ?? nowSec - backfillSeconds;
 
 	// A live backfill cursor means we are still catching up on history.
 	let cursor =
 		watermark?.backfillCursor ??
-		(watermark && watermark.lastAttackTimestamp > 0
-			? watermark.lastAttackTimestamp
-			: nowSec - backfillSeconds);
+		(warNeedsBackfill && watermark
+			? historyFloor
+			: watermark && watermark.lastAttackTimestamp > 0
+				? watermark.lastAttackTimestamp
+				: historyFloor);
 
-	const isBackfilling = watermark?.backfillCursor != null;
+	const isBackfilling = watermark?.backfillCursor != null || warNeedsBackfill;
 	const pageBudget = isBackfilling
 		? WAR_BACKFILL_PAGES_PER_CYCLE
 		: MAX_PAGES_PER_CYCLE;
@@ -353,6 +385,9 @@ async function ingestFaction(
 	let page = 0;
 	let reachedStopPoint = false;
 	let stoppedOnShortPage = false;
+	/** Cursor could not advance; distinct from "caught up with history". */
+	let cursorStalled = false;
+	let reachedHistoryFloor = false;
 
 	while (page < pageBudget && cursor !== null && !reachedStopPoint) {
 		// No `filters` param: one call returns both directions.
@@ -392,15 +427,33 @@ async function ingestFaction(
 
 		const nextCursor = nextPageCursor(attacks[attacks.length - 1]);
 		// Guard against re-requesting the same cursor, which would loop forever.
-		if (nextCursor === null || nextCursor >= cursor) break;
+		// This is NOT a catch-up: treat it as stalled so we neither advance the
+		// newest-edge watermark nor clear the backfill cursor and lose history.
+		if (nextCursor === null || nextCursor >= cursor) {
+			cursorStalled = true;
+			break;
+		}
+
+		if (nextCursor <= historyFloor) {
+			// Everything back to the war start (or the window floor) is now read.
+			reachedHistoryFloor = true;
+			break;
+		}
+
 		cursor = nextCursor;
 		page++;
 
 		if (page < pageBudget) await delay(BURST_PAGE_DELAY_MS);
 	}
 
+	// A stall is not progress. Reporting it as caught up would advance the
+	// watermark past attacks we never read, which is exactly how merc hits and
+	// war tally entries go missing.
 	const caughtUp =
-		reachedStopPoint || stoppedOnShortPage || cursor === null || page === 0;
+		reachedStopPoint ||
+		stoppedOnShortPage ||
+		reachedHistoryFloor ||
+		(!isBackfilling && cursor === null);
 
 	// The newest-edge watermark only advances on a clean catch-up. If we bailed
 	// out early we would otherwise skip every attack between here and the stop.
@@ -421,11 +474,29 @@ async function ingestFaction(
 		}
 	}
 
+	if (cursorStalled) {
+		// Leave the cursor exactly where it is so the next cycle retries from the
+		// same point rather than starting the walk over.
+		logger.warn(
+			`Faction ${key.factionId}: attack feed cursor stalled at ${cursor}; leaving backfill position unchanged.`,
+		);
+	}
+
 	// Persist the backfill cursor so the next cycle resumes exactly here.
 	if (!caughtUp && cursor !== null) {
 		await saveAttackWatermark(key.factionId, { backfillCursor: cursor });
 	} else if (watermark?.backfillCursor != null) {
 		await saveAttackWatermark(key.factionId, { backfillCursor: null });
+	}
+
+	// Mark the war fully reconciled only when the walk actually reached its start.
+	// Doing it on a stall would strand the remainder of the war unread forever.
+	if (
+		warNeedsBackfill &&
+		warStart !== null &&
+		(reachedHistoryFloor || reachedStopPoint || stoppedOnShortPage)
+	) {
+		await saveAttackWatermark(key.factionId, { backfilledWarStart: warStart });
 	}
 
 	return { events, caughtUp };

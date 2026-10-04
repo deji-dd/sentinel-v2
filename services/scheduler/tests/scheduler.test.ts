@@ -142,4 +142,39 @@ describe("ScheduledRunner Engine", () => {
 		}
 		runner.stop();
 	});
+
+	test("holds the retry for the execution budget when a cycle times out", async () => {
+		let callCount = 0;
+		const runner = new ScheduledRunner({
+			worker: "test:timeout-retry",
+			schedule: { type: "interval", seconds: 1 },
+			timeoutMs: 2_000,
+			retryPolicy: {
+				maxRetries: 3,
+				initialBackoffMs: 200,
+				maxBackoffMs: 1000,
+			},
+			handler: async () => {
+				callCount++;
+				// Never resolves: forces the 2000ms execution timeout.
+				await new Promise(() => {});
+			},
+		});
+
+		runner.triggerNow();
+		// Wait past the timeout so the failure is recorded and rescheduled.
+		await new Promise((resolve) => setTimeout(resolve, 2_200));
+
+		const status = runner.getStatus();
+		expect(status.consecutiveFailures).toBe(1);
+		expect(status.lastError).toContain("timed out after 2000ms");
+		if (status.nextRunAt) {
+			const diff = status.nextRunAt - Date.now();
+			// Must not retry on the 1s cadence (which would race the orphaned
+			// handler) — it has to wait out the full 2000ms execution budget.
+			expect(diff).toBeGreaterThan(500);
+		}
+		expect(callCount).toBe(1);
+		runner.stop();
+	});
 });

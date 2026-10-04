@@ -1212,3 +1212,81 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 		});
 	});
 });
+
+describe("MercTargetManager - Batched BS estimate pre-warm", () => {
+	it("resolves a whole roster in a single upstream call, then serves cache hits", async () => {
+		const manager = new MercTargetManager();
+		getPlayerStatsSpy.mockClear();
+
+		const members = [
+			createMockMember({ id: 7001, level: 50 }),
+			createMockMember({ id: 7002, level: 60 }),
+			createMockMember({ id: 7003, level: 70 }),
+		];
+
+		const result = await manager.prewarmEstimatedBs(members);
+
+		// One batched call for all three members, not three single-ID calls.
+		expect(getPlayerStatsSpy).toHaveBeenCalledTimes(1);
+		expect(getPlayerStatsSpy.mock.calls[0]?.[0]).toEqual([7001, 7002, 7003]);
+		expect(result.requested).toBe(3);
+		expect(result.resolved).toBe(3);
+
+		// Per-member lookups are now pure cache hits: no further upstream calls.
+		for (const m of members) {
+			expect(await manager.resolveEstimatedBs(m.id, m.level)).toBe(150_000);
+		}
+		expect(getPlayerStatsSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("only requests uncached members on subsequent pre-warms", async () => {
+		const manager = new MercTargetManager();
+		const members = [
+			createMockMember({ id: 7101, level: 50 }),
+			createMockMember({ id: 7102, level: 60 }),
+		];
+
+		await manager.prewarmEstimatedBs(members);
+		getPlayerStatsSpy.mockClear();
+
+		// Roster gained one new member; only that one should hit upstream.
+		const grown = [...members, createMockMember({ id: 7103, level: 80 })];
+		const result = await manager.prewarmEstimatedBs(grown);
+
+		expect(getPlayerStatsSpy).toHaveBeenCalledTimes(1);
+		expect(getPlayerStatsSpy.mock.calls[0]?.[0]).toEqual([7103]);
+		expect(result.requested).toBe(1);
+	});
+
+	it("skips the upstream fetch entirely when already aborted", async () => {
+		const manager = new MercTargetManager();
+		getPlayerStatsSpy.mockClear();
+
+		const controller = new AbortController();
+		controller.abort();
+
+		const result = await manager.prewarmEstimatedBs(
+			[createMockMember({ id: 7201, level: 50 })],
+			controller.signal,
+		);
+
+		expect(getPlayerStatsSpy).toHaveBeenCalledTimes(0);
+		expect(result.resolved).toBe(0);
+	});
+
+	it("falls back to the level-based estimate when a member is missing upstream", async () => {
+		const manager = new MercTargetManager();
+		getPlayerStatsSpy.mockImplementation(
+			async () => [] as unknown as tornApiModule.FFScouterTargetResult[],
+		);
+
+		const result = await manager.prewarmEstimatedBs([
+			createMockMember({ id: 7301, level: 50 }),
+		]);
+
+		expect(result.requested).toBe(1);
+		expect(result.resolved).toBe(0);
+		// Preserved original fallback: max(10_000, level * 50_000)
+		expect(await manager.resolveEstimatedBs(7301, 50)).toBe(2_500_000);
+	});
+});

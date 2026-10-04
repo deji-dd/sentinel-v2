@@ -88,6 +88,8 @@ export class ScheduledRunner {
 	private activeTimer: NodeJS.Timeout | null = null;
 	private isExecuting = false;
 	private isStopped = false;
+	/** Timestamp of the last timeout where the handler may not have stopped. */
+	private orphanedHandlerDetectedAt: number | null = null;
 	/** Set when triggerNow() fires while a cycle is already executing. */
 	private forceRunQueued = false;
 	private schedule:
@@ -262,7 +264,19 @@ export class ScheduledRunner {
 
 		let customNextRunMs: number | undefined;
 		let executionFailed = false;
+		let timedOut = false;
 		const startTime = Date.now();
+
+		// Diagnostics: an orphaned handler that outlived its timeout will
+		// overlap the next cycle and contend for the DB pool / Torn API keys.
+		if (this.orphanedHandlerDetectedAt) {
+			const orphanedForMs = startTime - this.orphanedHandlerDetectedAt;
+			if (orphanedForMs < 60_000) {
+				this.logger.warn(
+					`Previous cycle's handler was still running ${Math.round(orphanedForMs / 1000)}s after its timeout — cycles are overlapping (handler does not observe the abort signal).`,
+				);
+			}
+		}
 
 		const timeoutMs = this.effectiveTimeoutMs;
 		const controller = new AbortController();
@@ -273,8 +287,10 @@ export class ScheduledRunner {
 				? new Promise<never>((_, reject) => {
 						timeoutTimer = setTimeout(() => {
 							const timeoutErr = new Error(
-								`Worker '${this.config.worker}' execution timed out after ${timeoutMs}ms`,
+								`Worker '${this.config.worker}' execution timed out after ${timeoutMs}ms (schedule=${JSON.stringify(this.schedule)})`,
 							);
+							timedOut = true;
+							this.orphanedHandlerDetectedAt = Date.now();
 							controller.abort(timeoutErr);
 							reject(timeoutErr);
 						}, timeoutMs);
@@ -334,8 +350,15 @@ export class ScheduledRunner {
 					} else {
 						const standardCadenceMs = this.schedule.seconds * 1000;
 						if (this.consecutiveFailures <= this.retryPolicy.maxRetries) {
-							// Active retry attempt: retry after backoffMs (or standard interval if shorter)
-							const retryDelayMs = Math.min(standardCadenceMs, backoffMs);
+							// Active retry attempt: retry after backoffMs (or standard interval if shorter).
+							// A timed-out cycle is the one case where the handler may still be running
+							// (it did not observe the abort signal), so hold the retry for at least the
+							// execution budget to avoid piling up overlapping cycles.
+							const minRetryDelayMs = timedOut && timeoutMs > 0 ? timeoutMs : 0;
+							const retryDelayMs = Math.max(
+								Math.min(standardCadenceMs, backoffMs),
+								minRetryDelayMs,
+							);
 							nextRunTimeMs = Date.now() + retryDelayMs;
 							this.logger.warn(
 								`Scheduling retry #${this.consecutiveFailures} in ${Math.round(retryDelayMs / 1000)}s (target: ${new Date(nextRunTimeMs).toISOString()})`,

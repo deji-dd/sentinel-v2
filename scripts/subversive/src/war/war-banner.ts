@@ -94,13 +94,19 @@ export function renderWarBanner(war: CurrentWarInfo | null): void {
 
 	// The viewer's own landed hits this war. Hidden until a count arrives so an
 	// unranked or not-yet-tracked war does not show a misleading zero.
+	//
+	// Both elements ship with an inline `display: none` in the template, so the
+	// span itself must be un-hidden as well as the wrapper. Revealing only the
+	// wrapper leaves the text written but permanently invisible.
 	if (userHitCountEl) {
 		const hits = (war as { userHitCount?: number }).userHitCount;
 		if (typeof hits === "number" && hits > 0) {
 			userHitCountEl.textContent = `${hits} ${hits === 1 ? "hit" : "hits"} this war`;
+			userHitCountEl.style.display = "";
 			if (warDetailsEl) warDetailsEl.style.display = "";
 		} else {
 			userHitCountEl.textContent = "";
+			userHitCountEl.style.display = "none";
 			if (warDetailsEl) warDetailsEl.style.display = "none";
 		}
 	}

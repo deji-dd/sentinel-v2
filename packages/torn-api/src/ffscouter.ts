@@ -9,7 +9,7 @@ const logger = new Logger("FFScouter");
 export const FF_SCOUTER_BATCH_SIZE = 200; // API maximum is 205; 200 provides safety margin
 export const FF_SCOUTER_RATE_LIMIT_MAX = 20;
 export const FF_SCOUTER_RATE_LIMIT_WINDOW_MS = 60_000;
-export const FF_SCOUTER_COALESCE_DELAY_MS = 50;
+export const FF_SCOUTER_COALESCE_DELAY_MS = 100;
 export const FF_SCOUTER_INITIAL_SERVICE_BACKOFF_MS = 30_000; // 30s base backoff on service outage
 export const FF_SCOUTER_MAX_SERVICE_BACKOFF_MS = 300_000; // 5 min max backoff
 
@@ -453,7 +453,7 @@ interface BatchState {
 /**
  * DataLoader-style Request Coalescer for FFScouter.
  * Automatically bundles multiple one-off or concurrent getPlayerStats() calls within
- * a short window (default: 50ms) into unified batched upstream requests, deduplicates player IDs,
+ * a short window (default: 100ms) into unified batched upstream requests, deduplicates player IDs,
  * chunks them to 200 items, and routes the specific matching results back to each requester.
  */
 export class FFScouterBatcher {

@@ -9,7 +9,6 @@
 	"scripts": {
 		"db:generate": "bun --filter @sentinel/database db:generate",
 		"db:migrate": "bun --filter @sentinel/database db:migrate",
-		"merc:recover": "bun run scripts/merc-prod-recovery.ts",
 		"merc:backfill": "bun run scripts/merc-backfill-hits.ts",
 		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
 		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
