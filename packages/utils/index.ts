@@ -8,6 +8,7 @@ export * from "./src/modules";
 export * from "./src/oil-rig";
 export * from "./src/oil-rig-advertising";
 export * from "./src/oil-rig-analysis";
+export * from "./src/oil-rig-benchmark";
 export * from "./src/oil-rig-brief-store";
 export * from "./src/oil-rig-briefing";
 export * from "./src/oil-rig-demand";

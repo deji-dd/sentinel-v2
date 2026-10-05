@@ -73,6 +73,12 @@ export interface OilRigDecisionBasis {
 	currentAdBudget: number;
 	/** Whole-day recorded revenue: the ad rank model's baseline. */
 	recordedDailyRevenue: number;
+	/**
+	 * Revenue the game reports for the week, taken from the record itself. The
+	 * briefing used to print "weekly revenue" as daily x 7, which is a fabricated
+	 * figure: it assumes every day matches the last one.
+	 */
+	recordedWeeklyRevenue: number;
 	recordedDailyWages: number;
 	recordedAdBudget: number;
 	recordedDailyProfit: number;
@@ -157,6 +163,8 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 	const dailySold = tick?.stock?.soldAmount ?? oilStock?.sold_amount ?? 0;
 	const recordedDailyRevenue =
 		tick?.dailyIncome ?? snapshot.profile.income.daily;
+	const recordedWeeklyRevenue =
+		tick?.weeklyIncome ?? snapshot.profile.income.weekly;
 	const recordedDailyWages =
 		tick?.dailyWages ??
 		snapshot.employees.reduce((sum, e) => sum + (e.wage ?? 0), 0);
@@ -167,14 +175,14 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 
 	if (!tick) {
 		warnings.push(
-			"No recorded daily tick exists yet, so every rate figure (sales, production, revenue) falls back to the live snapshot and may be a partial day. Advice is provisional until the first snapshot is recorded.",
+			"No recorded tick yet: rate figures fall back to a partial live day, so this advice is provisional.",
 		);
 	} else if (
 		input.tickAgeMinutes !== undefined &&
 		input.tickAgeMinutes > 36 * 60
 	) {
 		warnings.push(
-			`The most recent recorded tick is ${Math.round((input.tickAgeMinutes ?? 0) / 60)} hours old, so the rate figures behind this advice are that stale. Complying with a roster change cannot show up in them until the next tick.`,
+			`Rate figures come from a tick ${Math.round((input.tickAgeMinutes ?? 0) / 60)}h old; a change you make now will not show up in them until the next tick.`,
 		);
 	}
 
@@ -205,6 +213,9 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		previousState: input.previousState,
 		previousCritical: input.previousCritical,
 		history,
+		// The benchmark capture already knows how many rigs exist, so the ad model
+		// uses the measured field rather than the built-in assumption.
+		advertiserFieldSize: input.baseline?.fieldSize,
 		pendingSettingChange,
 		priceLever,
 		asOfSeconds,
@@ -237,26 +248,31 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 
 	if (stock.production.confidence === "none") {
 		warnings.push(
-			"Extraction could not be measured, so every drain and capacity conclusion below rests on unmeasured production.",
+			"Extraction is unmeasured, so no drain or capacity conclusion is drawn from it.",
 		);
 	} else if (stock.production.confidence === "low") {
 		warnings.push(
-			`Extraction rests on ${stock.production.samples} measured day, which is not enough to separate a real rate from one unusual day. Roster changes are not justified on it.`,
+			`Extraction rests on ${stock.production.samples} measured day, too few to separate a real rate from one unusual day; the roster is not restructured on it.`,
 		);
 	}
 	if (discarded.evidenceThin && regime.regime === "extraction_bound") {
 		warnings.push(
-			"The rig is in the extraction-bound regime but the discarded volume could not be measured from the recorded days, so the cost of the constraint is unknown even though the constraint itself is measured.",
+			"The constraint is real but its cost is unknown: discarded volume cannot be measured while storage is capped.",
 		);
 	}
 	if (!roster.blueprintSource.includes("benchmark")) {
 		warnings.push(
-			"No measured top-rig roster baseline is available, so the target lineup follows the built-in hand-written blueprint. Run the competitor benchmark to replace it with measured data.",
+			"Target lineup uses the built-in hand-written blueprint; no measured top-rig baseline yet (run the competitor benchmark).",
+		);
+	}
+	if (stock.adRankModel.fieldSize === policy.advertising.assumedFieldSize) {
+		warnings.push(
+			`The advertising rank step assumes ${policy.advertising.assumedFieldSize} companies; the real field size is not yet measured, so a probe may be sized too small.`,
 		);
 	}
 	if (stock.recommendedPrice.basis === "policy_band") {
 		warnings.push(
-			"The barrel price recommendation is a policy-band default, not a measured optimum: there is not yet enough recorded price variation to fit a demand curve.",
+			"Price advice is a policy-band default, not a measured optimum: too little recorded price variation to fit a demand curve.",
 		);
 	}
 
@@ -291,6 +307,7 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 			currentPrice,
 			currentAdBudget,
 			recordedDailyRevenue,
+			recordedWeeklyRevenue,
 			recordedDailyWages,
 			recordedAdBudget,
 			recordedDailyProfit,

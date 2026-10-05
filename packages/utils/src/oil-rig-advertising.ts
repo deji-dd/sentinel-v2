@@ -98,11 +98,26 @@ export function rankForAdBonusPct(
 export function buildAdRankModel(input: {
 	/** Stable revenue baseline; must NOT be a value the ad budget itself moves. */
 	referenceDailyRevenue: number;
+	/**
+	 * Measured number of same-type companies in the industry, when the competitor
+	 * benchmark has been run. Only the companies CARRYING an ad budget compete for
+	 * rank, and that count is not visible, so the total is used: it is an upper
+	 * bound on the advertiser count, which makes the implied step (40% / N) a LOWER
+	 * bound on what a rank is worth. Erring small under-funds a probe, and
+	 * over-spending on advertising is the riskier mistake.
+	 */
+	fieldSize?: number;
 	policy?: OilRigAdPolicy;
 }): AdRankModel {
 	const policy = input.policy ?? OIL_RIG_POLICY.advertising;
 	const revenue = Math.max(0, input.referenceDailyRevenue);
-	const stepPct = policy.maxBonusPct / policy.assumedFieldSize;
+	const measuredSize =
+		input.fieldSize !== undefined && input.fieldSize > 0
+			? input.fieldSize
+			: undefined;
+	const fieldSize: number = measuredSize ?? policy.assumedFieldSize;
+	const measured = measuredSize !== undefined;
+	const stepPct = policy.maxBonusPct / fieldSize;
 	const revenuePerRankStepPerDay = Math.round((stepPct / 100) * revenue);
 	const maxJustifiedSpendPerDay = Math.round(
 		(policy.maxBonusPct / 100) * revenue,
@@ -115,13 +130,17 @@ export function buildAdRankModel(input: {
 	);
 
 	return {
-		fieldSize: policy.assumedFieldSize,
+		fieldSize,
 		maxBonusPct: policy.maxBonusPct,
 		stepPct: Number(stepPct.toFixed(4)),
 		revenuePerRankStepPerDay,
 		maxJustifiedSpendPerDay,
 		operationalCapPerDay,
-		rationale: `Advertising pays by rank, not by amount: the wiki caps the base effect at ${policy.maxBonusPct}% and awards it in steps of ${policy.maxBonusPct}% ÷ ${policy.assumedFieldSize} = ${stepPct.toFixed(2)}% of revenue per rank, worth about $${revenuePerRankStepPerDay.toLocaleString()}/day at this rig's revenue. A budget increase only pays if it overtakes another advertiser.`,
+		rationale: `Advertising pays by rank, not by amount: the wiki caps the base effect at ${policy.maxBonusPct}% and awards it in steps of ${policy.maxBonusPct}% ÷ ${fieldSize} = ${stepPct.toFixed(2)}% of revenue per rank, worth about $${revenuePerRankStepPerDay.toLocaleString()}/day at this rig's revenue. A budget increase only pays if it overtakes another advertiser. ${
+			measured
+				? `The field of ${fieldSize} companies is the measured industry listing; the number actually advertising is smaller, so this step is a lower bound.`
+				: `The field of ${fieldSize} companies is an assumption, not a measurement: run the competitor benchmark to replace it with the real listing.`
+		}`,
 	};
 }
 
@@ -359,6 +378,8 @@ export interface AdRecommendationInput {
 	extractionBound: boolean;
 	history: OilRigHistoryRecord[];
 	policy?: OilRigAdPolicy;
+	/** Measured industry field size, when the benchmark has been run. */
+	fieldSize?: number;
 	/** Live setting differs from the recorded tick; a change is already in flight. */
 	pendingSettingChange?: boolean;
 	/** Analysis time in epoch seconds; injected so the engine stays deterministic. */
@@ -396,6 +417,7 @@ export function recommendAdBudget(
 	const current = Math.max(0, input.currentAdBudget);
 	const rankModel = buildAdRankModel({
 		referenceDailyRevenue: input.referenceDailyRevenue,
+		fieldSize: input.fieldSize,
 		policy,
 	});
 	const response = estimateAdResponse(input.history, {

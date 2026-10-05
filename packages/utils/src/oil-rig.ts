@@ -295,54 +295,123 @@ export const OIL_RIG_ROLE_ORDER: OilRigRoleName[] = [
 ];
 
 /**
- * Turns a measured benchmark capture into a usable baseline.
+ * Turns measured benchmark captures into a usable baseline.
  *
- * Returns undefined rather than a default when the capture is missing or stale:
- * an out-of-date picture of the top rigs is not obviously better than the
+ * Accepts several captures and takes the MEDIAN share per role across them. A
+ * single capture reads only a handful of rigs, and the daily refresh means a new
+ * sample arrives every day: without smoothing, one day's slightly different sample
+ * would move a role share across a rounding boundary and demand a seat move in the
+ * target lineup. The blueprint is supposed to be the stable long-run target, so it
+ * is measured over several captures and only changes when the industry itself
+ * moves.
+ *
+ * Returns undefined rather than a default when nothing usable exists: an
+ * out-of-date picture of the top rigs is not obviously better than the
  * hand-written blueprint, and silently substituting one for the other would make
- * the advice change for reasons the director cannot see.
- *
- * An override is not applied silently either - the caller records
- * `baseline.source` so the brief can state which blueprint it steered toward.
+ * the advice change for reasons the director cannot see. The chosen source is
+ * always reported so the brief can say which blueprint it steered toward.
  */
 export function deriveRosterBaseline(
-	row: RosterBaselineRow | undefined | null,
-	options?: { maxAgeDays?: number; asOfSeconds?: number },
+	rows: RosterBaselineRow | RosterBaselineRow[] | undefined | null,
+	options?: {
+		maxAgeDays?: number;
+		asOfSeconds?: number;
+		/** Most recent captures to smooth over. */
+		smoothingCaptures?: number;
+	},
 ): RosterBaseline | undefined {
-	if (!row) return undefined;
+	const candidates = (Array.isArray(rows) ? rows : rows ? [rows] : [])
+		.map((row) => {
+			const capturedAt = toEpochSeconds(row.capturedAt);
+			return Number.isFinite(capturedAt) ? { row, capturedAt } : undefined;
+		})
+		.filter((entry): entry is { row: RosterBaselineRow; capturedAt: number } =>
+			Boolean(entry),
+		)
+		.filter((entry) => Object.keys(entry.row.roleShares ?? {}).length > 0);
+	if (candidates.length === 0) return undefined;
+
 	const maxAgeDays = options?.maxAgeDays ?? 45;
-	const capturedAt =
-		row.capturedAt instanceof Date
-			? Math.floor(row.capturedAt.getTime() / 1000)
-			: typeof row.capturedAt === "number"
-				? row.capturedAt
-				: Math.floor(new Date(row.capturedAt).getTime() / 1000);
-	if (!Number.isFinite(capturedAt)) return undefined;
-
 	const asOf = options?.asOfSeconds ?? Math.floor(Date.now() / 1000);
-	if (asOf - capturedAt > maxAgeDays * 86_400) return undefined;
+	const fresh = candidates
+		.filter((entry) => asOf - entry.capturedAt <= maxAgeDays * 86_400)
+		.sort((a, b) => b.capturedAt - a.capturedAt);
+	if (fresh.length === 0) return undefined;
 
-	const entries = Object.entries(row.roleShares ?? {}).filter(
-		([role, share]) =>
-			role in OIL_RIG_ROLES && Number.isFinite(share) && share > 0,
-	);
-	const total = entries.reduce((sum, [, share]) => sum + share, 0);
-	if (entries.length === 0 || total <= 0) return undefined;
+	const window = fresh.slice(0, Math.max(1, options?.smoothingCaptures ?? 5));
+
+	// Median share per role across the window, so one unusual sample cannot move
+	// the blueprint.
+	const roles = new Set<string>();
+	for (const { row } of window) {
+		for (const [role, share] of Object.entries(row.roleShares ?? {})) {
+			if (role in OIL_RIG_ROLES && Number.isFinite(share) && share > 0) {
+				roles.add(role);
+			}
+		}
+	}
+	if (roles.size === 0) return undefined;
 
 	const roleShares: Record<string, number> = {};
-	for (const [role, share] of entries) {
-		roleShares[role] = share / total;
+	for (const role of roles) {
+		const samples = window
+			.map(({ row }) => row.roleShares?.[role] ?? 0)
+			.filter((share) => Number.isFinite(share) && share > 0);
+		const smoothed = medianOf(samples);
+		if (smoothed > 0) roleShares[role] = smoothed;
 	}
 
+	// Renormalise: per-role medians need not sum to one, and the quota scaler
+	// relies on the shares describing a whole roster.
+	const total = Object.values(roleShares).reduce(
+		(sum, share) => sum + share,
+		0,
+	);
+	if (total <= 0) return undefined;
+	for (const role of Object.keys(roleShares)) {
+		roleShares[role] = (roleShares[role] ?? 0) / total;
+	}
+
+	const newest = window[0];
+	if (!newest) return undefined;
+	const rating = medianOf(window.map(({ row }) => row.rating));
+	const fieldSize = medianOf(
+		window.map(({ row }) => row.fieldSize).filter((size) => size > 0),
+	);
+	const sampleSize = window.reduce((sum, { row }) => sum + row.sampleSize, 0);
+	const averageWeekly = window
+		.map(({ row }) => row.avgWeeklyRevenue)
+		.filter((value): value is number => typeof value === "number");
+
 	return {
-		source: `top-${row.rating}★ rig benchmark captured ${new Date(capturedAt * 1000).toISOString().slice(0, 10)} across ${row.sampleSize} rig${row.sampleSize === 1 ? "" : "s"}`,
+		source:
+			window.length === 1
+				? `top-${rating}★ rig benchmark captured ${new Date(newest.capturedAt * 1000).toISOString().slice(0, 10)} across ${newest.row.sampleSize} rig${newest.row.sampleSize === 1 ? "" : "s"}`
+				: `top-${rating}★ rig benchmark, median of ${window.length} daily captures (newest ${new Date(newest.capturedAt * 1000).toISOString().slice(0, 10)}, ${sampleSize} rigs sampled in total)`,
 		roleShares,
-		rating: row.rating,
-		capturedAt,
-		sampleSize: row.sampleSize,
-		fieldSize: row.fieldSize,
-		avgWeeklyRevenue: row.avgWeeklyRevenue,
+		rating,
+		capturedAt: newest.capturedAt,
+		sampleSize,
+		fieldSize: fieldSize > 0 ? fieldSize : undefined,
+		avgWeeklyRevenue:
+			averageWeekly.length > 0 ? medianOf(averageWeekly) : undefined,
 	};
+}
+
+/** Median of a numeric sample; 0 for an empty sample rather than NaN. */
+function medianOf(values: number[]): number {
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	if (sorted.length % 2 === 1) return sorted[mid] ?? 0;
+	return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+}
+
+/** Accepts a Date, epoch seconds or an ISO string. */
+function toEpochSeconds(value: Date | number | string): number {
+	if (value instanceof Date) return Math.floor(value.getTime() / 1000);
+	if (typeof value === "number") return value;
+	return Math.floor(new Date(value).getTime() / 1000);
 }
 
 /**
@@ -1191,6 +1260,8 @@ export function analyzeStockAndPricing(params: {
 	pendingSettingChange?: boolean;
 	/** Whether price cuts have been measured to move volume on this rig. */
 	priceLever?: PriceLeverVerdict;
+	/** Measured industry field size, when the competitor benchmark has been run. */
+	advertiserFieldSize?: number;
 	asOfSeconds?: number;
 	policy?: OilRigPolicy;
 }): StockAnalysis {
@@ -1270,6 +1341,7 @@ export function analyzeStockAndPricing(params: {
 		extractionBound: isFillingUp || warehouseCritical,
 		history,
 		policy: policy.advertising,
+		fieldSize: params.advertiserFieldSize,
 		pendingSettingChange: params.pendingSettingChange,
 		asOfSeconds: params.asOfSeconds,
 	});
@@ -1307,15 +1379,17 @@ export function analyzeStockAndPricing(params: {
 	let structuralAdvice: string | undefined;
 	if (state === "surplus") {
 		if (warehouseCritical) {
+			// Deliberately terse: the capacity section already states the storage level
+			// and the discard. This says only what price and advertising CANNOT do.
 			structuralAdvice = isFillingUp
-				? `Storage is full (${fillPct}% of ${storageCap.toLocaleString()} bbl) while extraction still matches or outpaces sales, so barrels produced beyond the sales rate are discarded. Price and ad changes cannot clear this and the binding constraint is sell-through capacity; extra storage would only postpone the cap.${
+				? `The binding constraint is sell-through capacity: neither price nor advertising can clear it, and extra storage only postpones the cap.${
 						priceLever === "does_not_work"
-							? " Price has been measured to be ineffective on this rig, which confirms it is not the constraint."
+							? " Price has been measured ineffective on this rig, confirming it is not the constraint."
 							: priceLever === "works"
-								? " Price does move volume on this rig, but cutting it cannot remove a cap imposed by how fast the rig can sell."
+								? " Price does move volume here, but no price removes a cap set by how fast the rig sells."
 								: ""
 					}`
-				: `Storage is full (${fillPct}% of ${storageCap.toLocaleString()} bbl). Confirm extraction volume against the sales rate; any production above it is being discarded. Raise sell-through capacity rather than adding storage.`;
+				: `Confirm extraction against the sales rate; raising sell-through capacity helps, adding storage does not.`;
 		} else if (isFillingUp) {
 			structuralAdvice =
 				"Extraction currently matches or outpaces sales, so the warehouse will keep filling until it hits the storage limit. Raise sell-through capacity (Sales Executives, customer volume); more storage would only delay the same outcome.";
@@ -2151,10 +2225,20 @@ export function buildBottleneckQuotas(
 
 export type CapacityRegimeName = "balanced" | "extraction_bound";
 
+/** What changed since the previous brief, if anything. */
+export type CapacityRegimeTransition = "entered" | "released" | "held" | "none";
+
 export interface CapacityRegime {
 	regime: CapacityRegimeName;
 	/** True when the regime was carried over from the previous brief. */
 	held: boolean;
+	/**
+	 * The actual transition. `held` alone cannot express this: with no previous
+	 * brief there is nothing to hold or release, and inferring a release from
+	 * `held === false` made the first brief of a run announce that a constraint had
+	 * been lifted when none had ever been detected.
+	 */
+	transition: CapacityRegimeTransition;
 	/** Consecutive recorded days supporting the current reading. */
 	dwellDays: number;
 	/** Measured days in the window where extraction matched or beat sales. */
@@ -2163,7 +2247,10 @@ export interface CapacityRegime {
 	drainingDays: number;
 	/** Epoch seconds the current regime began. */
 	since: number;
+	/** Full explanation, for the dashboard and the audit trail. */
 	reason: string;
+	/** One-clause form for the briefing, so the brief stays readable. */
+	shortReason: string;
 }
 
 /**
@@ -2290,14 +2377,36 @@ export function assessCapacityRegime(input: {
 			: `Extraction-bound regime ${why}.`;
 	}
 
+	const transition: CapacityRegimeTransition =
+		previous === "extraction_bound" && regime === "extraction_bound"
+			? "held"
+			: previous === "extraction_bound" && regime === "balanced"
+				? "released"
+				: regime === "extraction_bound"
+					? "entered"
+					: "none";
+
+	const shortReason =
+		regime === "extraction_bound"
+			? transition === "held"
+				? `storage at ${input.fillPct}%; exits after ${policy.exitConsecutiveDrainDays} draining days with storage at or below ${policy.exitMaxFillPct}%`
+				: `storage at ${input.fillPct}%, where output above the sales rate cannot be stored`
+			: transition === "released"
+				? trailingDraining > 0
+					? `sales outpaced extraction for ${trailingDraining} recorded day${trailingDraining === 1 ? "" : "s"} and storage is back at ${input.fillPct}%`
+					: `storage is back at ${input.fillPct}% and extraction is no longer outpacing sales`
+				: "extraction and sell-through balanced";
+
 	return {
 		regime,
 		held,
+		transition,
 		dwellDays,
 		fillingDays,
 		drainingDays,
 		since,
 		reason,
+		shortReason,
 	};
 }
 
@@ -2333,6 +2442,11 @@ export interface CapacityRebalancePlan {
 	summary: string;
 	/** The exact condition under which the rebalance should be undone. */
 	revertCondition: string;
+	/**
+	 * `revertCondition` without the leading imperative, so a renderer can say
+	 * "Holds until ..." rather than "Revert once ..." in the middle of a sentence.
+	 */
+	holdCondition: string;
 	regime: CapacityRegime;
 }
 
@@ -2407,7 +2521,8 @@ export function planCapacityRebalance(
 			policy,
 		});
 
-	const revertCondition = `Revert once sales outpace extraction for ${policy.exitConsecutiveDrainDays} consecutive recorded days with storage at or below ${policy.exitMaxFillPct}% full.`;
+	const holdCondition = `sales outpace extraction for ${policy.exitConsecutiveDrainDays} consecutive recorded days with storage at or below ${policy.exitMaxFillPct}% full`;
+	const revertCondition = `Revert once ${holdCondition}.`;
 
 	if (!extractionBound) {
 		return {
@@ -2423,6 +2538,7 @@ export function planCapacityRebalance(
 			summary:
 				"Extraction and sell-through are balanced, so no rebalancing is needed.",
 			revertCondition,
+			holdCondition,
 			regime,
 		};
 	}
@@ -2509,10 +2625,13 @@ export function planCapacityRebalance(
 		});
 	}
 
+	// `evidenceNote` deliberately does NOT appear here: the renderer prints the
+	// discarded evidence as its own line, and repeating it made the brief state the
+	// same fact once per section.
 	const summary =
 		state === "holding"
-			? `Extraction outruns sell-through, and the roster already carries the sell-through weight this calls for (${salesTarget} of ${salesTarget} target seats${countsKnown ? `, currently ${salesCurrent ?? 0}` : ""}). No seat change is outstanding. ${evidenceNote} ${revertCondition}`
-			: `Extraction outruns sell-through, so ${seatsStillRequired} seat${seatsStillRequired > 1 ? "s" : ""} still need to move into ${SELL_THROUGH_ROLE}. ${evidenceNote} ${revertCondition}`;
+			? `The roster already carries the sell-through weight this needs (${salesCurrent ?? salesTarget} of ${salesTarget} seats), so no seat change is outstanding. ${revertCondition}`
+			: `${seatsStillRequired} seat${seatsStillRequired > 1 ? "s" : ""} still need to move into ${SELL_THROUGH_ROLE}. ${evidenceNote} ${revertCondition}`;
 
 	return {
 		extractionBound: true,
@@ -2526,6 +2645,7 @@ export function planCapacityRebalance(
 		actions,
 		summary,
 		revertCondition,
+		holdCondition,
 		regime,
 	};
 }

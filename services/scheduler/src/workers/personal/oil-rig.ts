@@ -1,6 +1,10 @@
 import { db, oilRigSnapshots } from "@sentinel/database";
-import { tornApi } from "@sentinel/torn-api";
-import { generateAndSendDirectorBriefing, Logger } from "@sentinel/utils";
+import { getPersonalKey, tornApi } from "@sentinel/torn-api";
+import {
+	generateAndSendDirectorBriefing,
+	Logger,
+	refreshRosterBenchmark,
+} from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
@@ -313,6 +317,12 @@ export async function recordOilRigSnapshot(
 	}
 }
 
+/** Torn v2 schema path keys. See the cast in the benchmark adapter below. */
+type TornV2Path = Parameters<typeof tornApi.getPersonal>[0];
+
+/** Torn's company type id for Oil Rigs. */
+const OIL_RIG_COMPANY_TYPE_ID = 28;
+
 /**
  * Registers real-time event listener for post-company-tick events.
  * Listens for company_pay_received (emitted when Torn log 6222/6221 is detected in stream).
@@ -324,6 +334,44 @@ export function startOilRigCollector(_options?: WorkerStartOptions): void {
 		);
 		runSubscriber("oil_rig_snapshot", async () => {
 			const entry = await recordOilRigSnapshot();
+
+			// Refresh the measured roster baseline BEFORE briefing, so today's brief
+			// steers toward today's measurement. Awaiting it inside runSubscriber gives
+			// both the ordering and the failure accounting: a benchmark failure is
+			// counted in /health and logged, and can never stop the brief from being
+			// sent. The refresh itself skips when a capture is still fresh, so a
+			// re-detected tick does not spend another nine API calls re-measuring a
+			// number that moves over weeks.
+			await runSubscriber("oil_rig_benchmark", async () => {
+				// `getPersonal`, NOT `tornApi.client.get` and NOT `getRaw`.
+				//
+				// `getPersonal` delegates to the manager's v2 `get`, which awaits the
+				// shared per-user sliding-window limiter and the cooldown manager before
+				// every request and records key health. Both alternatives are wrong:
+				// `tornApi.client` is the bare client, and the manager constructs it
+				// WITHOUT injecting a rate-limit tracker, so it bypasses all local rate
+				// limiting; and `getRaw` targets the v1 base URL
+				// (`https://api.torn.com`), so a v2 endpoint through it is the wrong
+				// API entirely and fails at runtime rather than at compile time.
+				//
+				// The cast is because the benchmark hands us v2 schema path keys as
+				// runtime strings, which the generic overload cannot infer.
+				const key = await getPersonalKey();
+				const result = await refreshRosterBenchmark({
+					client: {
+						get: (path, options) =>
+							tornApi.getPersonal(path as TornV2Path, {
+								pathParams: options?.pathParams as never,
+							}) as Promise<unknown>,
+					},
+					apiKey: key?.apiKey ?? process.env.TORN_API_KEY ?? "",
+					companyTypeId: OIL_RIG_COMPANY_TYPE_ID,
+					ourCompanyId: entry?.companyId,
+					minAgeHours: 20,
+				});
+				logger.info(`Roster benchmark: ${result.reason}`);
+			});
+
 			if (entry) {
 				logger.info("Snapshot recorded. Triggering daily director briefing...");
 				await generateAndSendDirectorBriefing({

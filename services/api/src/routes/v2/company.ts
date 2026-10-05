@@ -11,9 +11,9 @@ import {
 	buildWeekToDateLogEntries,
 	deriveRosterBaseline,
 	getMondayOfWeek,
-	loadLatestRosterBaselineRow,
 	loadLatestSnapshotFromDb,
 	loadPreviousBriefState,
+	loadRecentRosterBaselineRows,
 	loadRollingHistory,
 	type OilRigHistoryRecord,
 } from "@sentinel/utils";
@@ -86,9 +86,14 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 		const previousState = await loadPreviousBriefState(
 			SUCCESSION_OIL_COMPANY_ID,
 		);
-		const baseline = deriveRosterBaseline(await loadLatestRosterBaselineRow(), {
-			asOfSeconds,
-		});
+		// Several captures, smoothed, so the dashboard and the briefing agree on the
+		// blueprint and neither wobbles with one day's eight-rig sample.
+		const baseline = deriveRosterBaseline(
+			await loadRecentRosterBaselineRows(5),
+			{
+				asOfSeconds,
+			},
+		);
 
 		// ---- Analyse --------------------------------------------------------
 		// ONE pipeline. This handler used to re-implement the engine order

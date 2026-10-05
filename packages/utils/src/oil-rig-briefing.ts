@@ -12,8 +12,8 @@ import { analyzeOilRig, type OilRigAnalysis } from "./oil-rig-analysis";
 import {
 	attributeBriefOutcome,
 	type BriefOutcome,
-	loadLatestRosterBaselineRow,
 	loadPreviousBriefState,
+	loadRecentRosterBaselineRows,
 	type PreviousBriefState,
 	persistBrief,
 	recordBriefOutcome,
@@ -23,6 +23,7 @@ import {
 	renderCompanyDetails,
 	renderDeterministicBriefing,
 	renderProvenance,
+	splitDiscordMessages,
 	validateAnalystNotes,
 } from "./oil-rig-render";
 import type { CompanySnapshot } from "./oil-rig-snapshot";
@@ -59,8 +60,18 @@ export interface DirectorBriefingOptions {
 	baseline?: RosterBaseline;
 	companyId?: number;
 	asOfSeconds?: number;
-	/** Skip reading and writing the brief tables. Used by tests. */
-	skipPersistence?: boolean;
+	/**
+	 * Read and write nothing in the brief or benchmark tables.
+	 *
+	 * Named for what it actually does, because it is not merely "do not persist":
+	 * it also skips READING the hysteresis state and the measured roster baseline,
+	 * which changes the analysis rather than only whether it is recorded. A caller
+	 * who wanted "analyse but do not store" and used a flag called
+	 * `skipPersistence` would silently lose personal hysteresis and steer toward
+	 * the built-in blueprint instead of the measured one. Set it only to isolate a
+	 * test from whatever happens to be in the database.
+	 */
+	isolateFromDatabase?: boolean;
 	/** Skip the Discord DM. Used by tests and by the API. */
 	skipDelivery?: boolean;
 }
@@ -106,6 +117,58 @@ export async function sendDiscordDm(
 	if (!msgRes.ok) {
 		const text = await msgRes.text();
 		throw new Error(`Failed to send DM message: ${text}`);
+	}
+}
+
+/**
+ * Sends markdown bodies to a user's DMs, creating the DM channel once.
+ *
+ * The previous implementation created a fresh DM channel per embed, which is two
+ * extra API round trips per message and a rate-limit risk at four messages.
+ */
+export async function sendDiscordContent(
+	userId: string,
+	token: string,
+	messages: string[],
+): Promise<void> {
+	if (messages.length === 0) return;
+
+	const channelRes = await fetch(
+		"https://discord.com/api/v10/users/@me/channels",
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bot ${token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ recipient_id: userId }),
+		},
+	);
+
+	if (!channelRes.ok) {
+		throw new Error(`Failed to create DM channel: ${await channelRes.text()}`);
+	}
+	const channel = (await channelRes.json()) as { id: string };
+
+	for (const content of messages) {
+		const res = await fetch(
+			`https://discord.com/api/v10/channels/${channel.id}/messages`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bot ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ content }),
+			},
+		);
+		if (!res.ok) {
+			// Fail loudly: a dropped half of the brief is worse than a visible error,
+			// because the advice would arrive incomplete with no indication.
+			throw new Error(
+				`Failed to send DM message (${content.length} chars): ${await res.text()}`,
+			);
+		}
 	}
 }
 
@@ -375,6 +438,8 @@ export interface BriefingResult {
 	outcome?: BriefOutcome;
 	persistedId?: string;
 	rejectedNotes: Array<{ bullet: string; reason: string }>;
+	/** The exact Discord message bodies, so nothing is hidden behind delivery. */
+	discordMessages: string[];
 }
 
 /**
@@ -424,12 +489,14 @@ export async function generateDirectorBriefing(
 	let baseline: RosterBaseline | undefined = options?.baseline;
 	const companyId = options?.companyId ?? snap.profile.id ?? DEFAULT_COMPANY_ID;
 
-	if (!options?.skipPersistence) {
+	if (!options?.isolateFromDatabase) {
 		if (!previous) {
 			previous = await loadPreviousBriefState(companyId);
 		}
 		if (!baseline) {
-			baseline = deriveRosterBaseline(await loadLatestRosterBaselineRow(), {
+			// Several captures, not just the newest: a single capture reads only a
+			// handful of rigs, and the blueprint must not wobble with the sample.
+			baseline = deriveRosterBaseline(await loadRecentRosterBaselineRows(5), {
 				asOfSeconds,
 			});
 		}
@@ -452,7 +519,7 @@ export async function generateDirectorBriefing(
 	let outcome: BriefOutcome | undefined;
 	if (previous) {
 		outcome = attributeBriefOutcome(previous, analysis);
-		if (!options?.skipPersistence) {
+		if (!options?.isolateFromDatabase) {
 			await recordBriefOutcome(previous, outcome);
 		}
 	}
@@ -467,9 +534,12 @@ export async function generateDirectorBriefing(
 	});
 
 	const wtd = buildWeekToDateLogEntries({ history });
-	const companyDetails = renderCompanyDetails(analysis);
+	const companyDetails = renderCompanyDetails(analysis, snap.profile);
 	const provenanceText = renderProvenance(analysis);
-	const wtdSummaryText = formatWeekToDateSummary(wtd);
+	// With no recorded days in the current week the summary is a wall of zeroes
+	// that reads like a failure; the table already says nothing is recorded.
+	const wtdSummaryText =
+		wtd.entries.length > 0 ? formatWeekToDateSummary(wtd) : "";
 	const wtdTable = formatWeekToDateTable(wtd);
 
 	// ---- Analyst notes ------------------------------------------------------
@@ -494,7 +564,9 @@ export async function generateDirectorBriefing(
 				.replace(/^#{1,6}.*$/gm, "")
 				.replace(/^\*\*(Analyst Notes|Analysis):?\*\*$/gim, "")
 				.trim()
-				.slice(0, 1600);
+				// The prompt asks for 700 characters; the cap is headroom, not a
+				// target, because a long analysis is the wordiness being fixed.
+				.slice(0, 900);
 			const validated = validateAnalystNotes({
 				notes: cleaned,
 				allowedNumbers,
@@ -540,73 +612,44 @@ export async function generateDirectorBriefing(
 	logger.info("====================================================");
 
 	// ---- Deliver ------------------------------------------------------------
+	// Plain markdown messages rather than one embed: an embed description is capped
+	// at 4096 characters, and the previous delivery sliced the advice at 4000, which
+	// silently cut the brief off mid-sentence and dropped the rest of the analysis.
+	// Messages are chunked on line boundaries instead, so nothing is ever lost.
 	const discordToken = process.env.DISCORD_TOKEN;
 	const discordUserId = process.env.DISCORD_USER_ID;
 	const rating = snap.profile.rating;
+	const header = `## Succession Oil (${rating}★) — Operations Brief\n_${new Date(analysis.decision.asOfSeconds * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC · ${analysis.provenance.dataBasis} settings + ${analysis.provenance.tickIsoDate ? `recorded tick ${analysis.provenance.tickIsoDate}` : "no recorded tick"}${deterministic.changed ? "" : " · no change"}_`;
+
+	const streamed = [
+		header,
+		deterministic.advice,
+		notesText ? `### Analyst Notes\n${notesText}` : "",
+		companyDetails,
+		provenanceText,
+		outcome ? `_Since the last brief: ${outcome.summary}_` : "",
+		`### Week To Date\n${wtdTable}${wtdSummaryText ? `\n${wtdSummaryText}` : ""}`,
+	]
+		.filter((section) => section.length > 0)
+		.join("\n\n");
+
+	const discordMessages = splitDiscordMessages(streamed);
 
 	if (discordToken && discordUserId && !options?.skipDelivery) {
-		logger.info(`Sending Discord DMs to user ${discordUserId}...`);
-
-		await sendDiscordDm(discordUserId, discordToken, {
-			embeds: [
-				{
-					title: `Succession Oil (${rating}★) — Operations Advice (Part 1/2)`,
-					description: advisorText.slice(0, 4000),
-					color: deterministic.changed ? 0xf59e0b : 0x64748b,
-					footer: {
-						text: `Sentinel • Strategic Operational Advisory${deterministic.changed ? "" : " • no change"}`,
-					},
-					timestamp: new Date().toISOString(),
-				},
-			],
-		});
-
-		await sendDiscordDm(discordUserId, discordToken, {
-			embeds: [
-				{
-					title: `Succession Oil (${rating}★) — Company Details (Part 2/2)`,
-					description: `Current operational telemetry and daily financials for **${snap.profile.name}**.`,
-					color: 0x3b82f6,
-					fields: [
-						{
-							name: "Financials (recorded tick)",
-							value: `Daily Rev: **$${analysis.decision.recordedDailyRevenue.toLocaleString()}**\nDaily Wages: **$${analysis.decision.recordedDailyWages.toLocaleString()}**\nDaily Ad: **$${analysis.decision.recordedAdBudget.toLocaleString()}**\nDaily Profit: **${analysis.decision.recordedDailyProfit >= 0 ? "+" : ""}$${analysis.decision.recordedDailyProfit.toLocaleString()}**\nWTD Profit: **${wtd.totalProfit >= 0 ? "+" : ""}$${wtd.totalProfit.toLocaleString()}**`,
-							inline: true,
-						},
-						{
-							name: "Stock & Production",
-							value: `Price: **$${analysis.decision.currentPrice}**/barrel\nStock: **${analysis.decision.inStock.toLocaleString()}** (${analysis.decision.fillPct}%)\nSold: **${analysis.decision.dailySold.toLocaleString()}** bbl/day\nProduced: **${analysis.stock.production.dailyProduced !== undefined ? `${analysis.stock.production.dailyProduced.toLocaleString()} bbl/day` : "unmeasurable"}** (${analysis.stock.production.confidence} confidence)\nAd: **$${analysis.decision.currentAdBudget.toLocaleString()}**/day`,
-							inline: true,
-						},
-						{
-							name: "Operational Health & Regime",
-							value: `Efficiency: **${snap.profile.efficiency}%** | Environment: **${snap.profile.environment}%**\nPopularity: **${snap.profile.popularity}%** | Staff: **${snap.profile.employees.hired}/${snap.profile.employees.capacity}**\nInventory: **${analysis.stock.state}**${analysis.stock.stateHeld ? " (held)" : ""} | Capacity: **${analysis.regime.regime}**${analysis.regime.held ? " (held)" : ""}\nPrice lever: **${analysis.stock.priceLever.replace(/_/g, " ")}**`,
-							inline: false,
-						},
-						{
-							name: "Data Basis",
-							value: `${analysis.provenance.dataBasis}${analysis.provenance.tickIsoDate ? ` | tick ${analysis.provenance.tickIsoDate}` : ""}${analysis.provenance.tickAgeMinutes !== undefined ? ` (${Math.round(analysis.provenance.tickAgeMinutes / 60)}h old)` : ""}\nSold/Revenue ← recorded whole day; Stock/Price/Ad/Roster ← live${
-								analysis.warnings.length > 0
-									? `\n**Warnings:** ${analysis.warnings.length} (see Part 1 / console)`
-									: ""
-							}`,
-							inline: false,
-						},
-					],
-					footer: { text: "Sentinel • Succession Oil Operations" },
-					timestamp: new Date().toISOString(),
-				},
-			],
-		});
-
-		logger.info("Discord DMs successfully delivered (2 parts)!");
+		logger.info(
+			`Sending Discord DMs to user ${discordUserId} (${discordMessages.length} message(s))...`,
+		);
+		await sendDiscordContent(discordUserId, discordToken, discordMessages);
+		logger.info(
+			`Discord DMs successfully delivered (${discordMessages.length} message(s))!`,
+		);
 	} else if (!options?.skipDelivery) {
 		logger.warn("Discord credentials missing. Skipping DM.");
 	}
 
 	// ---- Record -------------------------------------------------------------
 	let persistedId: string | undefined;
-	if (!options?.skipPersistence) {
+	if (!options?.isolateFromDatabase) {
 		persistedId = await persistBrief({
 			companyId,
 			analysis,
@@ -615,9 +658,9 @@ export async function generateDirectorBriefing(
 		});
 	}
 
-	const text = [advisorText, detailsBlock, wtdTable, wtdSummaryText].join(
-		"\n\n",
-	);
+	const text = [advisorText, detailsBlock, wtdTable, wtdSummaryText]
+		.filter((part) => part.length > 0)
+		.join("\n\n");
 
 	return {
 		analysis,
@@ -629,6 +672,7 @@ export async function generateDirectorBriefing(
 		outcome,
 		persistedId,
 		rejectedNotes,
+		discordMessages,
 	};
 }
 

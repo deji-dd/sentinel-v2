@@ -23,7 +23,9 @@ import { OIL_RIG_POLICY } from "../src/oil-rig-policy";
 import {
 	adviceSignature,
 	buildAnalystPrompt,
+	DISCORD_MESSAGE_LIMIT,
 	renderDeterministicBriefing,
+	splitDiscordMessages,
 	validateAnalystNotes,
 } from "../src/oil-rig-render";
 import type { CompanySnapshot } from "../src/oil-rig-snapshot";
@@ -79,8 +81,36 @@ describe("Advertising rank model (wiki curve)", () => {
 		expect(rankForAdBonusPct(0.5, 80)).toBe(80);
 	});
 
+	it("uses a measured field size when the benchmark has supplied one", () => {
+		// Succession Oil's industry lists 100 rigs. Only the ones advertising
+		// compete for rank, so the total is an upper bound on the advertiser count
+		// and 40%/100 is a LOWER bound on what a rank is worth. Erring small
+		// under-funds the probe, and over-spending is the riskier mistake.
+		const measured = buildAdRankModel({
+			referenceDailyRevenue: 50_000_000,
+			fieldSize: 100,
+		});
+		expect(measured.fieldSize).toBe(100);
+		expect(measured.stepPct).toBe(0.4);
+		expect(measured.revenuePerRankStepPerDay).toBe(200_000);
+		expect(measured.rationale).toContain("measured industry listing");
+
+		// Without a benchmark the assumption is used, and says so.
+		const assumed = buildAdRankModel({ referenceDailyRevenue: 50_000_000 });
+		expect(assumed.fieldSize).toBe(OIL_RIG_POLICY.advertising.assumedFieldSize);
+		expect(assumed.rationale).toContain("assumption, not a measurement");
+		// A smaller field means a bigger step, so the assumption funds a larger
+		// probe than the measurement does - which is why the measurement is safer.
+		expect(assumed.revenuePerRankStepPerDay).toBeGreaterThan(
+			measured.revenuePerRankStepPerDay,
+		);
+	});
+
 	it("prices one rank step and caps spend at what the whole band is worth", () => {
-		const model = buildAdRankModel({ referenceDailyRevenue: 50_000_000 });
+		const model = buildAdRankModel({
+			referenceDailyRevenue: 50_000_000,
+			fieldSize: 80,
+		});
 		// 0.5% of $50M/day is $250k/day: what a single rank is worth.
 		expect(model.revenuePerRankStepPerDay).toBe(250_000);
 		// The whole 40% band is worth at most $20M/day, so no recommendation may
@@ -931,5 +961,434 @@ describe("Brief outcome attribution", () => {
 		const outcome = attributeBriefOutcome(previous, analysis());
 		expect(Number.isFinite(outcome.fillPctChange)).toBe(true);
 		expect(outcome.summary.length).toBeGreaterThan(0);
+	});
+});
+
+/**
+ * Delivery must never lose content. The brief used to be sliced at 4,000
+ * characters for an embed description, which cut the advice off mid-sentence and
+ * silently dropped the rest of the analysis.
+ */
+describe("Discord message chunking", () => {
+	it("keeps every message inside the platform limit", () => {
+		const text = Array.from(
+			{ length: 120 },
+			(_, i) => `• Line ${i} with some padding to make it a realistic length.`,
+		).join("\n");
+		const messages = splitDiscordMessages(text);
+		expect(messages.length).toBeGreaterThan(1);
+		for (const message of messages) {
+			expect(message.length).toBeLessThanOrEqual(DISCORD_MESSAGE_LIMIT);
+		}
+	});
+
+	it("loses nothing across the split", () => {
+		const lines = Array.from(
+			{ length: 200 },
+			(_, i) => `• Directive number ${i} must survive delivery.`,
+		);
+		const messages = splitDiscordMessages(lines.join("\n"));
+		const rejoined = messages.join("\n");
+		for (const line of lines) {
+			expect(rejoined).toContain(line);
+		}
+	});
+
+	it("closes and reopens a code fence rather than corrupting the table", () => {
+		const table = `\`\`\`\n${Array.from({ length: 200 }, (_, i) => `2026-10-${(i % 28) + 1}  Mon  $${i},000  row ${i}`).join("\n")}\n\`\`\``;
+		const messages = splitDiscordMessages(table);
+		expect(messages.length).toBeGreaterThan(1);
+		for (const message of messages) {
+			// Every chunk must have balanced fences, or Discord renders the rest of
+			// the brief as code.
+			const fences = (message.match(/^```/gm) ?? []).length;
+			expect(fences % 2).toBe(0);
+			expect(message.length).toBeLessThanOrEqual(DISCORD_MESSAGE_LIMIT);
+		}
+		expect(messages.join("\n")).toContain("row 199");
+	});
+
+	it("hard-splits a single line that cannot fit", () => {
+		const monster = "x".repeat(5000);
+		const messages = splitDiscordMessages(monster);
+		expect(messages.length).toBeGreaterThan(2);
+		for (const message of messages) {
+			expect(message.length).toBeLessThanOrEqual(DISCORD_MESSAGE_LIMIT);
+		}
+		expect(messages.join("").length).toBe(5000);
+	});
+
+	it("returns a single message when everything fits", () => {
+		expect(splitDiscordMessages("short brief")).toEqual(["short brief"]);
+	});
+});
+
+/**
+ * The brief is read on a phone. Stating the same fact once per section is what
+ * made it unreadable, not the length of any individual line.
+ */
+describe("Briefing is compact and non-repetitive", () => {
+	const snapshot: CompanySnapshot = {
+		profile: {
+			id: 90288,
+			name: "Succession Oil",
+			rating: 4,
+			funds: 400_000_000,
+			efficiency: 96,
+			environment: 100,
+			popularity: 30,
+			income: { daily: 49_973_792, weekly: 349_816_544 },
+			customers: { daily: 2, weekly: 14 },
+			employees: { hired: 4, capacity: 21 },
+			upgrades: { storage_capacity: 750_000 },
+			advertisement_budget: 5_000_000,
+		},
+		stock: [
+			{
+				name: "Crude Oil",
+				price: 173,
+				in_stock: 750_000,
+				sold_amount: 283_942,
+				sold_worth: 49_121_966,
+			},
+		],
+		employees: [],
+	};
+
+	/**
+	 * Six recorded days mirroring production: storage fills from 74% to the cap,
+	 * so the earlier days can be sized and the last two only prove a lower bound.
+	 */
+	const fullWarehouse = Array.from({ length: 6 }, (_, i) => {
+		const sold = 269_102 + i * 2_968;
+		const fillPct = [74, 86.5, 94.5, 100, 100, 100][i] ?? 100;
+		return record({
+			timestamp: FIXED_NOW - (6 - i) * DAY,
+			producedMeasured: i !== 0,
+			dailyProduced: sold + 94_517,
+			dailyIncome: 49_973_792,
+			dailyWages: 42_014_500,
+			dailyProfit: 49_973_792 - 42_014_500 - 5_000_000,
+			adBudget: 5_000_000,
+			stock: {
+				barrelPrice: 173,
+				inStock: Math.round((fillPct / 100) * 750_000),
+				soldAmount: sold,
+				fillPct,
+			},
+		});
+	});
+
+	const brief = renderDeterministicBriefing(
+		analyzeOilRig({
+			snapshot,
+			history: fullWarehouse,
+			dataBasis: "live",
+			tickAgeMinutes: 22 * 60,
+			asOfSeconds: FIXED_NOW,
+		}),
+	);
+
+	it("states the discarded volume exactly once", () => {
+		const occurrences = (brief.advice.match(/94,517/g) ?? []).length;
+		expect(occurrences).toBe(1);
+	});
+
+	it("states the storage level once per section that needs it", () => {
+		// "100%" may appear in the capacity line; it must not be repeated by a
+		// separate structural-constraint sentence.
+		const occurrences = (brief.advice.match(/100% full/g) ?? []).length;
+		expect(occurrences).toBeLessThanOrEqual(1);
+		expect(brief.advice).not.toContain("Storage Status");
+		expect(brief.advice).not.toContain("Rebalance Holding");
+	});
+
+	it("collapses singleton roles onto one lineup line", () => {
+		// Four lines carry what six verbose ones did.
+		const lineup = brief.advice.split("### Target Lineup")[1] ?? "";
+		const bulletLines = lineup.split("\n").filter((l) => l.startsWith("• "));
+		expect(bulletLines.length).toBeLessThanOrEqual(4);
+	});
+
+	it("keeps the whole advice well inside one Discord message on real data", () => {
+		// The production state that was truncated: full warehouse, one transfer.
+		expect(brief.advice.length).toBeLessThan(1900);
+	});
+});
+
+/**
+ * The analyst model is fenced, but the fence must not reject honest reasoning:
+ * a validator that drops genuine analysis is as wrong as one that accepts
+ * invented statistics.
+ */
+describe("Analyst fences tolerate legitimate analysis", () => {
+	it("accepts a difference derived from two supplied figures", () => {
+		const analysis = analyzeOilRig({
+			snapshot: {
+				profile: {
+					id: 90288,
+					name: "Succession Oil",
+					rating: 4,
+					funds: 400_000_000,
+					efficiency: 96,
+					environment: 100,
+					popularity: 30,
+					income: { daily: 49_973_792, weekly: 349_816_544 },
+					customers: { daily: 2, weekly: 14 },
+					employees: { hired: 4, capacity: 21 },
+					upgrades: { storage_capacity: 750_000 },
+					advertisement_budget: 5_000_000,
+				},
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 173,
+						in_stock: 750_000,
+						sold_amount: 283_942,
+						sold_worth: 49_121_966,
+					},
+				],
+				employees: [],
+			},
+			history: Array.from({ length: 4 }, (_, i) =>
+				record({
+					timestamp: FIXED_NOW - (4 - i) * DAY,
+					producedMeasured: i !== 0,
+					dailyProduced: 310_655,
+					stock: {
+						barrelPrice: 173,
+						inStock: 750_000,
+						soldAmount: 283_942,
+						fillPct: 100,
+					},
+				}),
+			),
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+
+		const { allowedNumbers } = buildAnalystPrompt({
+			analysis,
+			history: [],
+			actionText: "none",
+		});
+		// 310,655 - 283,942 = 26,713, a derivation from supplied figures.
+		const result = validateAnalystNotes({
+			notes: "• Extraction exceeds sales by roughly 26,700 bbl/day.",
+			allowedNumbers,
+			directives: analysis.directives,
+		});
+		expect(result.rejected).toEqual([]);
+		expect(result.accepted.length).toBe(1);
+	});
+
+	it("still rejects an invented external reference figure", () => {
+		const analysis = analyzeOilRig({
+			snapshot: {
+				profile: {
+					id: 90288,
+					name: "Succession Oil",
+					rating: 4,
+					funds: 400_000_000,
+					efficiency: 96,
+					environment: 100,
+					popularity: 30,
+					income: { daily: 49_973_792, weekly: 349_816_544 },
+					customers: { daily: 2, weekly: 14 },
+					employees: { hired: 4, capacity: 21 },
+					upgrades: { storage_capacity: 750_000 },
+					advertisement_budget: 5_000_000,
+				},
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 173,
+						in_stock: 750_000,
+						sold_amount: 283_942,
+						sold_worth: 49_121_966,
+					},
+				],
+				employees: [],
+			},
+			history: [],
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		const { allowedNumbers } = buildAnalystPrompt({
+			analysis,
+			history: [],
+			actionText: "none",
+		});
+		const result = validateAnalystNotes({
+			notes: "• Top rigs average $1,163,000,000 per week.",
+			allowedNumbers,
+			directives: analysis.directives,
+		});
+		expect(result.accepted).toEqual([]);
+		expect(result.rejected[0]?.reason).toContain("does not appear");
+	});
+
+	it("catches a rebalance proposal phrased as 'rebalancing'", () => {
+		const analysis = analyzeOilRig({
+			snapshot: {
+				profile: {
+					id: 90288,
+					name: "Succession Oil",
+					rating: 4,
+					funds: 400_000_000,
+					efficiency: 96,
+					environment: 100,
+					popularity: 30,
+					income: { daily: 49_973_792, weekly: 349_816_544 },
+					customers: { daily: 2, weekly: 14 },
+					employees: { hired: 4, capacity: 21 },
+					upgrades: { storage_capacity: 750_000 },
+					advertisement_budget: 5_000_000,
+				},
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 173,
+						in_stock: 400_000,
+						sold_amount: 200_000,
+						sold_worth: 34_600_000,
+					},
+				],
+				employees: [],
+			},
+			history: [],
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		// The plan is balanced here, so a rebalance proposal is unauthorised.
+		expect(analysis.directives.capacityRebalance.state).toBe("balanced");
+		const result = validateAnalystNotes({
+			notes: "• Further rebalancing of the extraction side is warranted.",
+			allowedNumbers: new Set<string>(),
+			directives: analysis.directives,
+		});
+		expect(result.accepted).toEqual([]);
+		expect(result.rejected[0]?.reason).toContain("rebalance");
+	});
+});
+
+/**
+ * The analyst model must understand the rig's accounting, or it invents meaning
+ * for empty figures. It reported a "$0" week-to-date as a "reset or specific
+ * accounting period" instead of recognising a week with no recorded days.
+ */
+describe("Analyst prompt explains the accounting", () => {
+	const snapshot: CompanySnapshot = {
+		profile: {
+			id: 90288,
+			name: "Succession Oil",
+			rating: 4,
+			funds: 400_000_000,
+			efficiency: 96,
+			environment: 100,
+			popularity: 30,
+			income: { daily: 49_973_792, weekly: 359_900_391 },
+			customers: { daily: 2, weekly: 14 },
+			employees: { hired: 4, capacity: 21 },
+			upgrades: { storage_capacity: 750_000 },
+			advertisement_budget: 5_000_000,
+		},
+		stock: [
+			{
+				name: "Crude Oil",
+				price: 173,
+				in_stock: 750_000,
+				sold_amount: 283_942,
+				sold_worth: 49_121_966,
+			},
+		],
+		employees: [],
+	};
+
+	/** Recorded days in a PREVIOUS accounting week, so this week is empty. */
+	const lastWeek = Array.from({ length: 4 }, (_, i) => {
+		const ts = FIXED_NOW - (12 - i) * DAY;
+		return record({
+			timestamp: ts,
+			producedMeasured: i !== 0,
+			dailyProduced: 310_655,
+			dailyIncome: 49_973_792,
+			// The record's own weekly figure. Daily x 7 would be 349,816,544, so this
+			// also proves the prompt quotes the record rather than multiplying.
+			weeklyIncome: 359_900_391,
+			dailyWages: 42_014_500,
+			dailyProfit: 3_459_292,
+			adBudget: 4_500_000,
+			stock: {
+				barrelPrice: 176,
+				inStock: 750_000,
+				soldAmount: 283_942,
+				fillPct: 100,
+			},
+		});
+	});
+
+	const build = () => {
+		const analysis = analyzeOilRig({
+			snapshot,
+			history: lastWeek,
+			dataBasis: "live",
+			tickAgeMinutes: 22 * 60,
+			asOfSeconds: FIXED_NOW,
+		});
+		return buildAnalystPrompt({
+			analysis,
+			history: lastWeek,
+			actionText: "none",
+		}).prompt;
+	};
+
+	it("states that an empty week is unknown rather than zero", () => {
+		const prompt = build();
+		expect(prompt).toContain("NO DAYS RECORDED IN THIS WINDOW YET");
+		expect(prompt).toContain("unknown, not zero");
+		// The speculative reading of an empty week must be ruled out explicitly.
+		expect(prompt).toContain("do not describe it as a reset");
+	});
+
+	it("defines daily as the last recorded day, not today", () => {
+		const prompt = build();
+		expect(prompt).toContain("most recent RECORDED day");
+		expect(prompt).toContain("It is NOT today");
+	});
+
+	it("never fabricates a weekly revenue figure from the daily one", () => {
+		const prompt = build();
+		// The record reports $359,900,391. Daily x 7 would be $349,816,544.
+		expect(prompt).toContain("359,900,391");
+		expect(prompt).not.toContain("349,816,544");
+	});
+
+	it("quotes the recorded barrel price, not the live setting, beside recorded sales", () => {
+		const prompt = build();
+		expect(prompt).toContain("283,942 at $176/barrel");
+		expect(prompt).toContain("barrel price $173");
+	});
+
+	it("accepts k/M/B shorthand for a figure it was shown", () => {
+		const analysis = analyzeOilRig({
+			snapshot,
+			history: lastWeek,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		const { allowedNumbers } = buildAnalystPrompt({
+			analysis,
+			history: lastWeek,
+			actionText: "none",
+		});
+		// $3.46M is how a model writes the supplied $3,459,292.
+		const result = validateAnalystNotes({
+			notes: "• Daily profit was about $3.46M for the last recorded day.",
+			allowedNumbers,
+			directives: analysis.directives,
+		});
+		expect(result.rejected).toEqual([]);
+		expect(result.accepted.length).toBe(1);
 	});
 });

@@ -124,13 +124,21 @@ export interface CompanyCapacityRegime {
 	regime: CompanyCapacityRegimeName;
 	/** True when the regime was carried over rather than freshly entered. */
 	held: boolean;
+	/**
+	 * What actually changed since the previous brief. `held` cannot express this,
+	 * because a first brief has nothing to hold or release.
+	 */
+	transition: "entered" | "released" | "held" | "none";
 	/** Consecutive recorded days supporting the current reading. */
 	dwellDays: number;
 	fillingDays: number;
 	drainingDays: number;
 	/** When the current regime began. */
 	sinceIso: string;
+	/** Full explanation, for the dashboard. */
 	reason: string;
+	/** One-clause form for the briefing, which is read on a phone. */
+	shortReason: string;
 }
 
 /**
@@ -164,6 +172,8 @@ export interface CompanyCapacityRebalance {
 	summary: string;
 	/** The exact condition under which the rebalance should be undone. */
 	revertCondition: string;
+	/** The same condition without the imperative, for inline rendering. */
+	holdCondition: string;
 	regime: CompanyCapacityRegime;
 }
 

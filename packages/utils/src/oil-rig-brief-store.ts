@@ -85,6 +85,7 @@ export async function loadPreviousBriefState(
 				fillingDays?: number;
 				drainingDays?: number;
 				reason?: string;
+				shortReason?: string;
 			};
 		};
 
@@ -97,11 +98,15 @@ export async function loadPreviousBriefState(
 			regime: {
 				regime: regimeName,
 				held: true,
+				// Restored state is a continuation, never a fresh transition.
+				transition: "held",
 				dwellDays: analysis.regime?.dwellDays ?? 0,
 				fillingDays: analysis.regime?.fillingDays ?? 0,
 				drainingDays: analysis.regime?.drainingDays ?? 0,
 				since: Math.floor(row.regimeSince.getTime() / 1000),
 				reason: analysis.regime?.reason ?? "restored from the previous brief",
+				shortReason:
+					analysis.regime?.shortReason ?? "restored from the previous brief",
 			},
 			inventoryState: isInventoryState(row.inventoryState)
 				? row.inventoryState
@@ -308,6 +313,7 @@ export async function persistBrief(
 						fillingDays: analysis.regime.fillingDays,
 						drainingDays: analysis.regime.drainingDays,
 						reason: analysis.regime.reason,
+						shortReason: analysis.regime.shortReason,
 					},
 				} as unknown as Record<string, unknown>,
 			})
@@ -322,6 +328,46 @@ export async function persistBrief(
 }
 
 /** The most recent measured top-rig roster baseline, as a plain row. */
+/**
+ * The most recent captures, newest first.
+ *
+ * More than one is wanted because a single capture reads only a handful of rigs,
+ * and a blueprint derived from one small sample would wobble enough to demand a
+ * seat move every time it was refreshed. The baseline is smoothed across these.
+ */
+export async function loadRecentRosterBaselineRows(limit = 5): Promise<
+	Array<{
+		capturedAt: Date;
+		rating: number;
+		fieldSize: number;
+		sampleSize: number;
+		roleShares: Record<string, number>;
+		avgWeeklyRevenue?: number;
+	}>
+> {
+	try {
+		const { db, desc, oilRigBenchmarks } = await import("../../database");
+		const rows = await db
+			.select()
+			.from(oilRigBenchmarks)
+			.orderBy(desc(oilRigBenchmarks.capturedAt))
+			.limit(limit);
+		return rows.map((row) => ({
+			capturedAt: row.capturedAt,
+			rating: row.rating,
+			fieldSize: row.fieldSize,
+			sampleSize: row.sampleSize,
+			roleShares: row.roleShares as Record<string, number>,
+			avgWeeklyRevenue: row.avgWeeklyRevenue,
+		}));
+	} catch (err) {
+		logger.warn(
+			`Could not load roster benchmark captures: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		return [];
+	}
+}
+
 export async function loadLatestRosterBaselineRow(): Promise<
 	| {
 			capturedAt: Date;

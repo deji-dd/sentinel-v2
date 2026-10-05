@@ -386,7 +386,7 @@ describe("Oil Rig Domain & Solver Engine", () => {
 
 		// Rig where employees are already in target positions, price 181 is maintained, ad budget maintained
 		const briefing = await generateAndSendDirectorBriefing({
-			skipPersistence: true,
+			isolateFromDatabase: true,
 			customSnapshot: {
 				profile: {
 					name: "Succession Oil",
@@ -541,7 +541,7 @@ describe("Oil Rig Domain & Solver Engine", () => {
 
 		// Live data has employee wages changed to 10M, but profit should still show DB snapshot profit (+48.5M)!
 		const briefing = await generateAndSendDirectorBriefing({
-			skipPersistence: true,
+			isolateFromDatabase: true,
 			customSnapshot: {
 				profile: {
 					name: "Succession Oil",
@@ -761,7 +761,7 @@ describe("Oil Rig stock & pricing advice is idempotent", () => {
 		expect(advice.warehouseCritical).toBe(true);
 		expect(advice.daysOfSales).toBe(INFINITE_DAYS_OF_SALES);
 		expect(advice.structuralAdvice).toContain("sell-through capacity");
-		expect(advice.structuralAdvice).toContain("cannot remove a cap");
+		expect(advice.structuralAdvice).toContain("no price removes a cap");
 	});
 
 	it("holds an inventory state across the deadband instead of chattering", () => {
@@ -952,7 +952,7 @@ describe("Director briefing loops regression", () => {
 		);
 
 		const briefing = await generateAndSendDirectorBriefing({
-			skipPersistence: true,
+			isolateFromDatabase: true,
 			customSnapshot: fullWarehouseSnapshot,
 			fetchHistory: async () => FULL_WAREHOUSE_HISTORY,
 		});
@@ -962,8 +962,8 @@ describe("Director briefing loops regression", () => {
 		expect(briefing).not.toContain("**Ad Budget:**");
 		expect(briefing).not.toContain("**Pricing:**");
 		// ...but the real blocker must be stated.
-		expect(briefing).toContain("Structural Constraint");
-		expect(briefing).toContain("Storage is full");
+		expect(briefing).toContain("Cannot drain");
+		expect(briefing).toContain("sell-through capacity");
 	});
 
 	it("delivers advice plus details only, and keeps the model out of the action list", async () => {
@@ -977,9 +977,7 @@ describe("Director briefing loops regression", () => {
 			DISCORD_USER_ID: process.env.DISCORD_USER_ID,
 			GEMINI_API_KEY: process.env.GEMINI_API_KEY,
 		};
-		const payloads: Array<{
-			embeds: Array<{ title?: string }>;
-		}> = [];
+		const payloads: Array<{ content?: string }> = [];
 		let prompt = "";
 
 		process.env.DISCORD_TOKEN = "test-token";
@@ -1015,23 +1013,28 @@ describe("Director briefing loops regression", () => {
 
 		try {
 			const briefing = await generateAndSendDirectorBriefing({
-				skipPersistence: true,
+				isolateFromDatabase: true,
 				customSnapshot: fullWarehouseSnapshot,
 				fetchHistory: async () => FULL_WAREHOUSE_HISTORY,
 			});
 
-			// Two messages: advice, then company details. Week-to-date logs are
-			// deliberately not delivered.
-			const titles = payloads.flatMap((p) =>
-				p.embeds.map((e) => e.title ?? ""),
-			);
-			expect(titles.length).toBe(2);
-			expect(titles.join(" | ")).not.toContain("Week-To-Date");
+			// Plain markdown messages, chunked so nothing is truncated. The previous
+			// delivery sliced the advice at 4,000 characters for an embed description,
+			// which silently cut the brief off mid-sentence.
+			expect(payloads.length).toBeGreaterThanOrEqual(1);
+			const delivered = payloads.map((p) => p.content ?? "");
+			for (const message of delivered) {
+				expect(message.length).toBeLessThanOrEqual(2000);
+				expect(message.length).toBeGreaterThan(0);
+			}
+			const wholeDelivery = delivered.join("\n");
+			expect(wholeDelivery).toContain("Operations Brief");
+			expect(wholeDelivery).toContain("• Analyst bullet.");
 
 			// The model's output is additive analysis, never the authoritative list.
 			expect(briefing).toContain("### Analyst Notes");
 			expect(briefing).toContain("• Analyst bullet.");
-			expect(briefing.indexOf("### Immediate Action Items")).toBeLessThan(
+			expect(briefing.indexOf("### Do This")).toBeLessThan(
 				briefing.indexOf("### Analyst Notes"),
 			);
 
@@ -1231,7 +1234,7 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 		}));
 
 		const briefing = await generateAndSendDirectorBriefing({
-			skipPersistence: true,
+			isolateFromDatabase: true,
 			customSnapshot: {
 				profile: {
 					name: "Succession Oil",
@@ -1261,8 +1264,8 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 		});
 
 		// The capacity section must appear, with the rebalance as the lead action.
-		expect(briefing).toContain("**Capacity Rebalance:**");
-		expect(briefing).toContain("Rebalance Roster");
+		expect(briefing).toContain("### Capacity");
+		expect(briefing).toContain("**Rebalance:**");
 		expect(briefing).toContain("2 seats move into Sales Executive (4 ➔ 6)");
 
 		// ...and the target lineup must show exactly the shifted sell-through
@@ -1279,7 +1282,7 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 		);
 
 		const briefing = await generateAndSendDirectorBriefing({
-			skipPersistence: true,
+			isolateFromDatabase: true,
 			customSnapshot: {
 				profile: {
 					name: "Succession Oil",
@@ -1308,8 +1311,7 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 			fetchHistory: async () => [],
 		});
 
-		expect(briefing).not.toContain("**Capacity Rebalance:**");
-		expect(briefing).not.toContain("Rebalance Roster");
+		expect(briefing).not.toContain("**Rebalance:**");
 	});
 });
 
@@ -1865,7 +1867,7 @@ describe("The single analysis pipeline", () => {
 
 		expect(analysis.stock.production.confidence).not.toBe("high");
 		expect(analysis.stock.production.summary).toContain("not enough");
-		expect(analysis.warnings.some((w) => w.includes("not justified"))).toBe(
+		expect(analysis.warnings.some((w) => w.includes("not restructured"))).toBe(
 			true,
 		);
 	});

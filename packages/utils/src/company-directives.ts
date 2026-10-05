@@ -80,14 +80,17 @@ export function buildCompanyDirectives(
 		actions: plan.actions,
 		summary: plan.summary,
 		revertCondition: plan.revertCondition,
+		holdCondition: plan.holdCondition,
 		regime: {
 			regime: plan.regime.regime,
 			held: plan.regime.held,
+			transition: plan.regime.transition,
 			dwellDays: plan.regime.dwellDays,
 			fillingDays: plan.regime.fillingDays,
 			drainingDays: plan.regime.drainingDays,
 			sinceIso: new Date(plan.regime.since * 1000).toISOString(),
 			reason: plan.regime.reason,
+			shortReason: plan.regime.shortReason,
 		},
 	};
 

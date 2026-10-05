@@ -65,12 +65,18 @@ export function recordSubscriberFailure(module: string, error: unknown): void {
  * personal ledger subscribers: identical error containment, but the failure is
  * also counted so `/health` can surface a subscriber that is failing every
  * event. Never rejects, so it stays safe to call from an emitter listener.
+ *
+ * The promise is returned so a caller that genuinely needs ordering can await it -
+ * the daily oil rig handler refreshes the roster benchmark before briefing, so the
+ * brief uses the baseline measured moments earlier. Callers that do not care keep
+ * ignoring the return value, and because it never rejects there is no unhandled
+ * rejection to guard against.
  */
 export function runSubscriber(
 	module: string,
 	work: () => Promise<unknown>,
-): void {
-	void (async () => {
+): Promise<void> {
+	return (async () => {
 		try {
 			await work();
 			recordSubscriberSuccess(module);
