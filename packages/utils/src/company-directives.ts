@@ -5,11 +5,13 @@ import type {
 	CompanyStockVerdict,
 } from "../../schemas/src/company";
 import {
-	analyzeSellThroughResponse,
-	estimateDiscardedBarrels,
+	type CapacityRegime,
+	type DiscardedBarrelsEstimate,
 	type OilRigHistoryRecord,
 	type OptimalRosterResult,
 	planCapacityRebalance,
+	type RosterBaseline,
+	type SellThroughResponseAnalysis,
 	type StockAnalysis,
 } from "./oil-rig";
 
@@ -21,52 +23,86 @@ import {
  * consumer - Discord DM, dashboard, in-page userscript badges - reads the
  * directives this function produces.
  *
- * It is pure: pass in the engine outputs, get back the shared contract type.
+ * It is pure and it takes the engines' outputs as already-computed inputs. The
+ * engines have to run in a particular order and the capacity plan depends on the
+ * roster, so the ordering lives in `analyzeOilRig`; this function only assembles.
+ * Pass in the engine outputs, get back the shared contract type.
  */
-export function buildCompanyDirectives(inputs: {
+export interface CompanyDirectiveInputs {
 	roster: OptimalRosterResult;
 	stock: StockAnalysis;
 	history: OilRigHistoryRecord[];
+	/** Hysteretic capacity regime the roster was solved against. */
+	regime: CapacityRegime;
+	discarded: DiscardedBarrelsEstimate;
+	sellThrough: SellThroughResponseAnalysis;
 	currentAdBudget: number;
 	barrelPrice: number;
 	openSeats: number;
 	/** Staff count the blueprint quotas are derived from. */
 	staffCount: number;
-}): CompanyDirectives {
-	const sellThrough = analyzeSellThroughResponse(inputs.history);
-	const discarded = estimateDiscardedBarrels(inputs.history);
+	baseline?: RosterBaseline;
+	asOfSeconds?: number;
+}
 
+export function buildCompanyDirectives(
+	inputs: CompanyDirectiveInputs,
+): CompanyDirectives {
+	// The capacity plan is built here rather than in the analysis because it is the
+	// one engine that needs BOTH the stock state and the solved roster: it reports
+	// only the seats still outstanding, which is what makes the advice idempotent.
 	const plan = planCapacityRebalance({
 		staffCount: inputs.staffCount,
 		stock: inputs.stock,
 		barrelPrice: inputs.barrelPrice,
 		openSeats: inputs.openSeats,
-		discardedBarrelsPerDay: discarded.medianSurplus,
+		discardedBarrelsPerDay: inputs.discarded.medianSurplus,
+		currentCounts: inputs.roster.currentCounts,
+		regime: inputs.regime,
+		baseline: inputs.baseline,
+		discardedEvidenceThin: inputs.discarded.evidenceThin,
+		asOfSeconds: inputs.asOfSeconds,
 	});
 
 	const capacityRebalance: CompanyCapacityRebalance = {
 		extractionBound: plan.extractionBound,
+		state: plan.state,
+		countsKnown: plan.countsKnown,
 		discardedBarrelsPerDay: plan.discardedBarrelsPerDay,
-		discardedPeakPerDay: discarded.peakSurplus,
-		discardedSamples: discarded.samples,
+		discardedPeakPerDay: inputs.discarded.peakSurplus,
+		discardedSamples: inputs.discarded.samples,
 		discardedValuePerDay: plan.discardedValuePerDay,
+		discardedCappedLowerBound: inputs.discarded.cappedLowerBound,
+		discardedEvidenceThin: inputs.discarded.evidenceThin,
 		hires: plan.hires,
 		quotaShifts: plan.quotaShifts,
+		seatDeltas: plan.seatDeltas,
 		actions: plan.actions,
 		summary: plan.summary,
+		revertCondition: plan.revertCondition,
+		regime: {
+			regime: plan.regime.regime,
+			held: plan.regime.held,
+			dwellDays: plan.regime.dwellDays,
+			fillingDays: plan.regime.fillingDays,
+			drainingDays: plan.regime.drainingDays,
+			sinceIso: new Date(plan.regime.since * 1000).toISOString(),
+			reason: plan.regime.reason,
+		},
 	};
 
 	const sellThroughResponse: CompanySellThroughResponse = {
-		verdict: sellThrough.verdict,
-		summary: sellThrough.summary,
-		samples: sellThrough.samples,
-		priceChangePct: sellThrough.priceChangePct,
-		volumeChangePct: sellThrough.volumeChangePct,
-		revenueChangePct: sellThrough.revenueChangePct,
+		verdict: inputs.sellThrough.verdict,
+		summary: inputs.sellThrough.summary,
+		samples: inputs.sellThrough.samples,
+		priceChangePct: inputs.sellThrough.priceChangePct,
+		volumeChangePct: inputs.sellThrough.volumeChangePct,
+		revenueChangePct: inputs.sellThrough.revenueChangePct,
 	};
 
 	const stock: CompanyStockVerdict = {
 		state: inputs.stock.state,
+		stateHeld: inputs.stock.stateHeld,
 		stateDescription: inputs.stock.stateDescription,
 		fillPct: inputs.stock.fillPct,
 		daysOfSales: inputs.stock.daysOfSales,
@@ -75,11 +111,26 @@ export function buildCompanyDirectives(inputs: {
 		netDrainPerDay: inputs.stock.netDrainPerDay,
 		netFillPerDay: inputs.stock.netFillPerDay,
 		structuralAdvice: inputs.stock.structuralAdvice,
+		production: {
+			dailyProduced: inputs.stock.production.dailyProduced,
+			samples: inputs.stock.production.samples,
+			confidence: inputs.stock.production.confidence,
+			capped: inputs.stock.production.capped,
+			summary: inputs.stock.production.summary,
+		},
+		priceLever: inputs.stock.priceLever,
+		demand: {
+			usable: inputs.stock.demand.usable,
+			samples: inputs.stock.demand.samples,
+			r2: inputs.stock.demand.r2,
+			revenueMaxPrice: inputs.stock.demand.revenueMaxPrice,
+			reason: inputs.stock.demand.reason,
+		},
 	};
 
+	const hasRoleTransfers = inputs.roster.activeTransfers.length > 0;
 	const hasPriceSuggestion = inputs.stock.recommendedPrice.changeNeeded;
 	const hasAdSuggestion = inputs.stock.recommendedAdSpend.changeNeeded;
-	const hasRoleTransfers = inputs.roster.activeTransfers.length > 0;
 	const t1 = inputs.roster.rehabTiers.tier1;
 	const t2 = inputs.roster.rehabTiers.tier2;
 	const t3 = inputs.roster.rehabTiers.tier3;
@@ -100,22 +151,30 @@ export function buildCompanyDirectives(inputs: {
 			amount: inputs.stock.recommendedAdSpend.amount,
 			formatted: inputs.stock.recommendedAdSpend.formatted,
 			isChanged: hasAdSuggestion,
+			basis: inputs.stock.recommendedAdSpend.basis,
+			rankStepValuePerDay: inputs.stock.adRankModel.revenuePerRankStepPerDay,
+			operationalCapPerDay: inputs.stock.adRankModel.operationalCapPerDay,
 		},
 		pricing: {
 			action: inputs.stock.recommendedPrice.action,
 			exact: inputs.stock.recommendedPrice.exact,
 			formatted: inputs.stock.recommendedPrice.formatted,
 			isChanged: hasPriceSuggestion,
+			basis: inputs.stock.recommendedPrice.basis,
+			confidence: inputs.stock.recommendedPrice.confidence,
 		},
 		rehabTiers: { tier1: t1, tier2: t2, tier3: t3 },
-		// A capacity rebalance counts: a rig that cannot clear its output is not
-		// in an optimal state, however well the price and ad settings are tuned.
+		// "Optimal" means nothing is being asked of the director. A rig that still
+		// cannot clear its output is not optimal, but a rig whose roster already
+		// carries the sell-through weight the bottleneck requires has nothing
+		// outstanding - that state is reported as "holding" by the plan, not as a
+		// repeated demand and not as an all-clear.
 		allOptimal:
 			!hasRoleTransfers &&
 			!hasPriceSuggestion &&
 			!hasAdSuggestion &&
 			t1.length + t2.length + t3.length === 0 &&
-			!capacityRebalance.extractionBound,
+			plan.state === "balanced",
 	};
 }
 

@@ -129,11 +129,14 @@ export class CompanyTab {
 			return;
 		}
 
-		const { kpis, directives } = this.state;
+		const { kpis, directives, analysis } = this.state;
 
 		this.container.innerHTML = `
 			<!-- 1. Directives & Action Items Card -->
 			${this.renderDirectivesCard(directives)}
+
+			<!-- 1b. Data caveats behind that advice -->
+			${this.renderAnalysisWarnings(analysis)}
 
 			<!-- 2. Minimal KPI Cards -->
 			${this.renderKpiCards(kpis, directives)}
@@ -186,12 +189,27 @@ export class CompanyTab {
 		// Capacity first: when the warehouse cannot clear, the roster - not price
 		// or advertising - is what stands between the rig and its output.
 		const rebalance = directives.capacityRebalance;
-		const capacityActions =
-			rebalance.extractionBound && rebalance.actions.length > 0
-				? rebalance.actions
-				: [];
+		const planState = rebalance.state;
+		const regimeLabel = `${rebalance.regime.regime.replace(/_/g, " ")}${rebalance.regime.held ? ", held" : ""}`;
+
+		// `action_required` is the ONLY capacity state that asks for a seat move.
+		// A rig that already carries the sell-through weight this bottleneck calls
+		// for still reports `extractionBound`, which is what the badge used to key
+		// off - so it demanded a rebalance that had already been done. `holding` is
+		// a steady state with an exit condition, not an alert.
+		const seatChangeRequired = rebalance.actions.some(
+			(action) => action.kind === "rebalance",
+		);
+
+		// The engine's holding summary ends with this exact sentence, so it is
+		// lifted into its own row below rather than printed twice.
+		const holdingExplanation = rebalance.summary
+			.replace(rebalance.revertCondition, "")
+			.trim();
+
 		const structuralAdvice = directives.stock.structuralAdvice;
 		const insight = directives.sellThrough;
+		const production = directives.stock.production;
 
 		// `allOptimal` is computed server-side and already accounts for the
 		// capacity rebalance, so the tab never claims "optimal" during a storage
@@ -209,6 +227,17 @@ export class CompanyTab {
 			`;
 		}
 
+		// Anything here is a demand on the director. A holding rebalance, an
+		// optional hire and a "storage will not fix this" note are deliberately
+		// not: none of them is a seat change that is outstanding.
+		const hasRequiredWork =
+			seatChangeRequired ||
+			hasTransfers ||
+			hasPrice ||
+			hasAd ||
+			hasRehab ||
+			Boolean(structuralAdvice);
+
 		const row = (tagClass: string, tag: string, text: string) => `
 			<div class="directive-row">
 				<span class="directive-tag ${tagClass}">${tag}</span>
@@ -216,18 +245,22 @@ export class CompanyTab {
 			</div>
 		`;
 
+		const basisLabel = (basis: string) => basis.replace(/_/g, " ");
+
 		let itemsHtml = "";
 
-		// 1. Capacity rebalance (roster re-arrangement)
-		if (capacityActions.length > 0) {
-			if (rebalance.discardedBarrelsPerDay > 0) {
-				itemsHtml += row(
-					"tag-capacity",
-					"Output",
-					`<strong>${formatNumber(rebalance.discardedBarrelsPerDay)}</strong> bbl/day (~${formatMoney(rebalance.discardedValuePerDay)}/day) produced beyond what the rig clears and discarded while storage is full.`,
-				);
-			}
-			for (const action of capacityActions) {
+		// 1. Capacity plan: the state first, because it is the field that says
+		//    whether anything is being asked for, then the regime behind it.
+		if (rebalance.extractionBound && rebalance.discardedBarrelsPerDay > 0) {
+			itemsHtml += row(
+				"tag-capacity",
+				"Output",
+				`<strong>${formatNumber(rebalance.discardedBarrelsPerDay)}</strong> bbl/day (~${formatMoney(rebalance.discardedValuePerDay)}/day) produced beyond what the rig clears and discarded while storage is full.`,
+			);
+		}
+
+		if (planState === "action_required") {
+			for (const action of rebalance.actions) {
 				const label =
 					action.kind === "rebalance"
 						? "Rebalance"
@@ -239,6 +272,30 @@ export class CompanyTab {
 					: "";
 				itemsHtml += row("tag-capacity", label, `${action.reason}${revert}`);
 			}
+		} else if (planState === "holding") {
+			// Neutral by design: the seats are already where they need to be, so
+			// this reports the state and what would end it, never a demand.
+			itemsHtml += row(
+				"tag-insight",
+				"Holding",
+				`${holdingExplanation} <span style="color: #94a3b8;">Regime: ${regimeLabel}.</span>`,
+			);
+			itemsHtml += row("tag-insight", "Exit", rebalance.revertCondition);
+			// Unfilled seats are still offered while holding: that is growth
+			// capacity rather than a correction, and the engine words it that way.
+			for (const action of rebalance.actions) {
+				itemsHtml += row(
+					"tag-insight",
+					action.kind === "hire" ? "Optional" : "Storage",
+					action.reason,
+				);
+			}
+		} else {
+			itemsHtml += row(
+				"tag-insight",
+				"Balanced",
+				`${rebalance.summary} <span style="color: #94a3b8;">Regime: ${regimeLabel}.</span>`,
+			);
 		}
 
 		// 2. Structural constraint: why price and ads cannot fix it.
@@ -259,23 +316,48 @@ export class CompanyTab {
 				.join("");
 		}
 
-		// 4. Price / ad
-		if (hasPrice) {
-			itemsHtml += row(
-				"tag-price",
-				"Price",
-				`Adjust Barrel Price: <strong>${directives.pricing.formatted}</strong>`,
-			);
-		}
-		if (hasAd) {
-			itemsHtml += row(
-				"tag-ad",
-				"Ad Spend",
-				`Adjust Ad Budget: <strong>${directives.adSpend.formatted}</strong>`,
-			);
-		}
+		// 4. Price. The basis and confidence travel with the recommendation whether
+		//    or not a change is being asked for: "maintain" is only worth anything
+		//    if the reader can see what it rests on.
+		itemsHtml += row(
+			hasPrice ? "tag-price" : "tag-insight",
+			hasPrice ? "Price" : "Pricing",
+			`${
+				hasPrice
+					? `Adjust Barrel Price: <strong>${directives.pricing.formatted}</strong>`
+					: directives.pricing.formatted
+			} <em style="color: #94a3b8;">(basis: ${basisLabel(directives.pricing.basis)}, ${directives.pricing.confidence} confidence)</em>`,
+		);
 
-		// 5. Price-response insight: measured, not assumed.
+		// 5. Advertising, with what one rank step is worth, so the number can be
+		//    judged rather than taken on faith.
+		itemsHtml += row(
+			hasAd ? "tag-ad" : "tag-insight",
+			hasAd ? "Ad Spend" : "Advertising",
+			`${
+				hasAd
+					? `Adjust Ad Budget: <strong>${directives.adSpend.formatted}</strong>`
+					: directives.adSpend.formatted
+			} <em style="color: #94a3b8;">(basis: ${basisLabel(directives.adSpend.basis)}; one rank step ≈ ${formatMoney(directives.adSpend.rankStepValuePerDay)}/day, cap ${formatMoney(directives.adSpend.operationalCapPerDay)}/day)</em>`,
+		);
+
+		// 6. Extraction. The figure is only actionable to the degree it could be
+		//    measured, so the confidence is never shown apart from it.
+		itemsHtml += row(
+			"tag-insight",
+			"Extraction",
+			`${
+				production.dailyProduced !== undefined
+					? `<strong>${formatNumber(production.dailyProduced)}</strong> bbl/day`
+					: "<strong>unmeasurable</strong>"
+			} <em style="color: #94a3b8;">(${production.confidence} confidence, ${production.samples} measured day${production.samples === 1 ? "" : "s"})</em>${
+				production.confidence === "low" || production.confidence === "none"
+					? ` <span style="color: #94a3b8;">${production.summary}</span>`
+					: ""
+			}`,
+		);
+
+		// 7. Price-response insight: measured, not assumed.
 		if (
 			insight.verdict === "unresponsive" ||
 			insight.verdict === "partially_responsive"
@@ -283,7 +365,7 @@ export class CompanyTab {
 			itemsHtml += row("tag-insight", "Measured", insight.summary);
 		}
 
-		// 6. Swiss rehab
+		// 8. Swiss rehab
 		if (hasRehab) {
 			if (t1.length > 0) {
 				const names = t1
@@ -299,13 +381,53 @@ export class CompanyTab {
 			}
 		}
 
+		const title = hasRequiredWork
+			? "Immediate Action Items"
+			: planState === "holding"
+				? "Operations Status: Rebalance Holding, Nothing Outstanding"
+				: "Operations Status: No Change Required";
+
 		return `
-			<div class="directives-card warning">
+			<div class="directives-card${hasRequiredWork ? " warning" : ""}">
 				<div class="directives-header">
-					<span class="directives-title">Immediate Action Items</span>
+					<span class="directives-title">${title}</span>
 				</div>
 				<div class="directives-list" style="margin-top: 8px;">
 					${itemsHtml}
+				</div>
+			</div>
+		`;
+	}
+
+	/**
+	 * The conditions the analysis says should lower a reader's confidence in its
+	 * own advice, printed rather than swallowed: they are the difference between
+	 * "the rig is fine" and "the rig looks fine because the data cannot tell".
+	 */
+	private renderAnalysisWarnings(
+		analysis: CompanyStateResponse["analysis"],
+	): string {
+		const warnings = analysis?.warnings ?? [];
+		if (warnings.length === 0) return "";
+
+		const rows = warnings
+			.map(
+				(warning) => `
+			<div class="directive-row">
+				<span class="directive-tag tag-insight">Caveat</span>
+				<span class="directive-text" style="color: #94a3b8;">${warning}</span>
+			</div>
+		`,
+			)
+			.join("");
+
+		return `
+			<div class="directives-card" style="margin-top: 10px;">
+				<div class="directives-header">
+					<span class="directives-title">Data Caveats (${warnings.length})</span>
+				</div>
+				<div class="directives-list" style="margin-top: 8px;">
+					${rows}
 				</div>
 			</div>
 		`;
@@ -388,11 +510,17 @@ export class CompanyTab {
 						<span style="color: #38bdf8; font-weight: 700;">Profit: ${sign}${formatMoney(item.profit)}</span>
 					`;
 				} else {
+					// `producedEstimated` flags a day whose figure was filled in for
+					// display because extraction could not be measured from a stock
+					// delta; the chart says so instead of presenting it as extraction.
+					const producedLabel = item.producedEstimated
+						? `Produced: ${formatNumber(item.produced)} bbl (est.)`
+						: `Produced: ${formatNumber(item.produced)} bbl`;
 					scrubStrip.innerHTML = `
 						<span style="color: #f8fafc; font-weight: 700;">${dateFormatted}</span>
 						<span style="color: #a855f7;">Stock: ${formatNumber(item.stock)} bbl</span>
 						<span style="color: #f59e0b;">Sold: ${formatNumber(item.sold)} bbl</span>
-						<span style="color: #38bdf8; font-weight: 700;">Produced: ${formatNumber(item.produced)} bbl</span>
+						<span style="color: #38bdf8; font-weight: 700;">${producedLabel}</span>
 					`;
 				}
 			},

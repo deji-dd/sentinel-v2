@@ -328,6 +328,9 @@ export function startOilRigCollector(_options?: WorkerStartOptions): void {
 				logger.info("Snapshot recorded. Triggering daily director briefing...");
 				await generateAndSendDirectorBriefing({
 					useLiveData: false,
+					// Pass the id explicitly so the brief's hysteresis state and its
+					// recorded outcome are keyed to this company rather than a default.
+					companyId: entry.companyId,
 					customSnapshot: {
 						profile: {
 							name: entry.name,
