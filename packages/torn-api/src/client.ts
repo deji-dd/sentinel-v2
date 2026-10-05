@@ -20,11 +20,13 @@ export class TornApiClient {
 	private rateLimitTracker?: RateLimitTracker;
 	private onInvalidKey?: (apiKey: string, errorCode: number) => Promise<void>;
 	private timeout: number;
+	private maxAttempts: number;
 
 	constructor(config: TornApiConfig = {}) {
 		this.rateLimitTracker = config.rateLimitTracker;
 		this.onInvalidKey = config.onInvalidKey;
 		this.timeout = config.timeout ?? REQUEST_TIMEOUT;
+		this.maxAttempts = Math.max(1, config.maxAttempts ?? 3);
 	}
 
 	private replacePath(
@@ -45,6 +47,8 @@ export class TornApiClient {
 			apiKey: string;
 			pathParams?: OperationPathParams<PathOperation<P>>;
 			queryParams?: OperationQueryParams<PathOperation<P>>;
+			maxAttempts?: number;
+			rateLimitKey?: string | number;
 		},
 	): Promise<OperationResponse<PathOperation<P>>>;
 
@@ -54,6 +58,8 @@ export class TornApiClient {
 			apiKey: string;
 			pathParams?: Record<string, string | number>;
 			queryParams?: Record<string, unknown>;
+			maxAttempts?: number;
+			rateLimitKey?: string | number;
 		},
 	): Promise<T>;
 
@@ -66,12 +72,30 @@ export class TornApiClient {
 			apiKey: string;
 			pathParams?: Record<string, unknown>;
 			queryParams?: Record<string, unknown>;
+			/**
+			 * Per-call retry override. Use 1 for opportunistic requests inside a
+			 * sequential loop: a rate-limited retry sleeps `5000 * attempt` ms, so
+			 * a couple of them can consume an entire cycle budget and get the
+			 * cycle killed. Skipping and retrying on a later cycle is cheaper.
+			 */
+			maxAttempts?: number;
+			/**
+			 * Identifier this request is accounted against in the configured
+			 * `rateLimitTracker`. Defaults to the API key itself.
+			 *
+			 * Callers should pass the owning Torn user id instead: it is stable
+			 * across key rotation and, unlike the raw key, is safe to appear in the
+			 * limiter's rate-limit warnings.
+			 */
+			rateLimitKey?: string | number;
 		},
 	): Promise<OperationResponse<PathOperation<P>> | T> {
 		const { apiKey, pathParams, queryParams } = options;
+		const maxAttempts = Math.max(1, options.maxAttempts ?? this.maxAttempts);
+		const rateLimitKey = options.rateLimitKey ?? apiKey;
 
 		if (this.rateLimitTracker) {
-			await this.rateLimitTracker.waitIfNeeded(apiKey);
+			await this.rateLimitTracker.waitIfNeeded(String(rateLimitKey));
 		}
 
 		const targetPath = this.replacePath(
@@ -97,9 +121,7 @@ export class TornApiClient {
 			}
 		}
 
-		const maxAttempts = 3;
 		let lastError: unknown = null;
-
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
 				const response = await fetch(url.toString(), {
@@ -129,7 +151,7 @@ export class TornApiClient {
 				}
 
 				if (this.rateLimitTracker) {
-					await this.rateLimitTracker.recordRequest(apiKey);
+					await this.rateLimitTracker.recordRequest(String(rateLimitKey));
 				}
 
 				return data as OperationResponse<PathOperation<P>> | T;
@@ -151,7 +173,10 @@ export class TornApiClient {
 					throw error;
 				}
 
-				const delay = isRateLimit ? 5000 * attempt : 200 * attempt;
+				// Jittered so concurrent workers failing on the same key/rate-limit
+				// window do not retry in lockstep and re-collide.
+				const baseDelay = isRateLimit ? 5000 * attempt : 200 * attempt;
+				const delay = baseDelay + Math.floor(Math.random() * 250);
 				await new Promise((resolve) => setTimeout(resolve, delay));
 			}
 		}
@@ -164,12 +189,15 @@ export class TornApiClient {
 		options: {
 			apiKey: string;
 			queryParams?: Record<string, unknown>;
+			/** See `TornApiClient.get` — defaults to the API key itself. */
+			rateLimitKey?: string | number;
 		},
 	): Promise<T> {
 		const { apiKey, queryParams } = options;
+		const rateLimitKey = options.rateLimitKey ?? apiKey;
 
 		if (this.rateLimitTracker) {
-			await this.rateLimitTracker.waitIfNeeded(apiKey);
+			await this.rateLimitTracker.waitIfNeeded(String(rateLimitKey));
 		}
 
 		const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -214,7 +242,7 @@ export class TornApiClient {
 		}
 
 		if (this.rateLimitTracker) {
-			await this.rateLimitTracker.recordRequest(apiKey);
+			await this.rateLimitTracker.recordRequest(String(rateLimitKey));
 		}
 
 		return data as T;

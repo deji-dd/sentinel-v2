@@ -6,6 +6,7 @@ import {
 	ShieldAlert,
 	Smile,
 	Target,
+	TrendingUp,
 	UserCheck,
 	UserPlus,
 } from "lucide-react";
@@ -103,6 +104,18 @@ export function getNavSections({
 							icon: Smile,
 							accent: "text-warning",
 						},
+				// Faction-only: stock alerts are routed per family faction, so
+				// non-faction servers have nothing to configure here.
+				...(isFaction
+					? [
+							{
+								label: "Stocks",
+								subPath: "/stocks",
+								icon: TrendingUp,
+								accent: "text-primary",
+							},
+						]
+					: []),
 			];
 
 	const sections: NavSection[] = [

@@ -21,6 +21,7 @@ import { MercContractsPage } from "../pages/MercContractsPage";
 import ReactionRolesPage from "../pages/ReactionRolesPage";
 import { RecruitmentPage } from "../pages/RecruitmentPage";
 import { RwChannelsPage } from "../pages/RwChannelsPage";
+import { StocksPage } from "../pages/StocksPage";
 import TerritoryPage from "../pages/TerritoryPage";
 import VerificationPage from "../pages/VerificationPage";
 import { useRouter } from "../router";
@@ -176,6 +177,12 @@ export default function GuildShell() {
 			return <RecruitmentPage guildId={guildId} />;
 		if (subPath === "/rw-channels") return <RwChannelsPage guildId={guildId} />;
 		if (subPath === "/dibs") return <DibsConfigPage guildId={guildId} />;
+		if (subPath === "/stocks") {
+			// Stock alerts are routed per Subversive family faction, which only
+			// exists on the faction server.
+			if (!isFaction) return <NotFound />;
+			return <StocksPage guildId={guildId} />;
+		}
 		if (subPath === "/reaction-roles") {
 			if (isFaction) return <NotFound />;
 			return <ReactionRolesPage guildId={guildId} />;

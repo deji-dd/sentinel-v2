@@ -1,5 +1,9 @@
 # Multi-stage optimized Bun Dockerfile for Sentinel v2 Monorepo
-FROM oven/bun:latest AS base
+# Bun is pinned rather than `latest`: the runtime version determines GC, Intl and
+# crypto behaviour that the scheduler's hot paths are tuned against, so an
+# upgrade should be a deliberate change. Bump this together with the
+# `bun-version` in .github/workflows/deploy.yml.
+FROM oven/bun:1.4.2 AS base
 WORKDIR /app
 
 # Install build dependencies & curl for healthchecks

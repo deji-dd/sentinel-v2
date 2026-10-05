@@ -49,6 +49,7 @@ import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { updateRwPrimaryDisplays } from "../rw-primary-displays";
 import { updateRwTravelingDisplays } from "../rw-traveling-displays";
+import { handleSubversiveStockAlerts } from "../stock-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
 
 type PendingRequest = {
@@ -252,8 +253,6 @@ export const workerIpcClient = new IpcClient<IpcMessage>(
 
 export const ipcClient = workerIpcClient;
 
-import { Logger } from "@sentinel/utils";
-
 // Bot Socket Server listening for direct incoming requests on bot.sock
 export const botIpcServer = new IpcServer<IpcMessage>(
 	IPC_SOCKET_PATHS.bot,
@@ -267,14 +266,6 @@ export const botIpcServer = new IpcServer<IpcMessage>(
 		}
 	},
 );
-
-// Stream live logs to IPC subscribers
-Logger.addLogSink((entry) => {
-	botIpcServer.broadcast({
-		action: "log_event",
-		data: entry,
-	});
-});
 
 if (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) {
 	botIpcServer.start().catch((err) => {
@@ -381,6 +372,8 @@ export function setupBotIpcListeners(client: Client): void {
 			}
 		} else if (message.action === "subversive_recruitment_alert") {
 			void handleSubversiveRecruitmentAlert(client, message.data);
+		} else if (message.action === "subversive_stock_alerts" && message.data) {
+			void handleSubversiveStockAlerts(client, message.data);
 		} else if (
 			message.action === "subversive_rw_displays_update" &&
 			message.data

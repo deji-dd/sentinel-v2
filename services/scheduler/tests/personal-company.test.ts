@@ -254,19 +254,23 @@ describe("Personal Company Sync Worker", () => {
 		startCompanySync();
 
 		// Emit live logs stream with log 6222
-		schedulerEvents.emit("logs_inserted", [
-			{
-				id: "test_company_log_1",
-				timestamp: Math.floor(Date.now() / 1000),
-				details: {
-					id: 6222,
-					title: "Company director pay",
-					category: "Company",
+		schedulerEvents.emit(
+			"logs_inserted",
+			[
+				{
+					id: "test_company_log_1",
+					timestamp: Math.floor(Date.now() / 1000),
+					details: {
+						id: 6222,
+						title: "Company director pay",
+						category: "Company",
+					},
+					data: {},
+					params: {},
 				},
-				data: {},
-				params: {},
-			},
-		]);
+			],
+			{ source: "forward" },
+		);
 
 		const start = Date.now();
 		while (Date.now() - start < 3000) {

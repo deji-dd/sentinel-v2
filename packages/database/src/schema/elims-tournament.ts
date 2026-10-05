@@ -65,27 +65,41 @@ export const elimsTeamPlayers = pgTable("elims_team_players", {
 		.notNull(),
 });
 
-export const elimsTeamSnapshots = pgTable("elims_team_snapshots", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => crypto.randomUUID()),
-	teamId: integer("team_id").notNull(),
-	score: integer("score").default(0).notNull(),
-	attacks: integer("attacks").default(0).notNull(),
-	membersCount: integer("members_count").default(0).notNull(),
-	activeCount: integer("active_count").default(0).notNull(),
-	lives: integer("lives").default(50).notNull(),
-	position: integer("position").default(0).notNull(),
-	eliminated: boolean("eliminated").default(false).notNull(),
-	hourTct: integer("hour_tct").notNull(), // 0-23 TCT hour
-	isMock: boolean("is_mock").default(false).notNull(),
-	capturedAt: timestamp("captured_at", {
-		withTimezone: true,
-		mode: "date",
-	})
-		.defaultNow()
-		.notNull(),
-});
+export const elimsTeamSnapshots = pgTable(
+	"elims_team_snapshots",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		teamId: integer("team_id").notNull(),
+		score: integer("score").default(0).notNull(),
+		attacks: integer("attacks").default(0).notNull(),
+		membersCount: integer("members_count").default(0).notNull(),
+		activeCount: integer("active_count").default(0).notNull(),
+		lives: integer("lives").default(50).notNull(),
+		position: integer("position").default(0).notNull(),
+		eliminated: boolean("eliminated").default(false).notNull(),
+		hourTct: integer("hour_tct").notNull(), // 0-23 TCT hour
+		isMock: boolean("is_mock").default(false).notNull(),
+		capturedAt: timestamp("captured_at", {
+			withTimezone: true,
+			mode: "date",
+		})
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// This table previously had no secondary index at all while serving the
+		// dashboard's per-team history charts, which produced a very high
+		// sequential-scan count against a 100MB+ table. These cover the two query
+		// shapes: one team's history over time, and a whole-round snapshot.
+		index("elims_team_snapshots_team_captured_idx").on(
+			table.teamId,
+			table.capturedAt,
+		),
+		index("elims_team_snapshots_captured_idx").on(table.capturedAt),
+	],
+);
 
 export const elimsMemberStats = pgTable("elims_member_stats", {
 	id: text("id")

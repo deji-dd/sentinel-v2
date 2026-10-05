@@ -1,11 +1,13 @@
+import { buildCompanyDirectives } from "./company-directives";
 import { Logger } from "./logger";
 import {
 	analyzeStockAndPricing,
 	buildWeekToDateLogEntries,
+	estimateDailyProduced,
 	formatHistoryTable,
 	formatWeekToDateSummary,
 	formatWeekToDateTable,
-	getCompetitorBenchmarkContext,
+	latestMeasuredProduction,
 	type OilRigHistoryRecord,
 	solveOptimalRoster,
 } from "./oil-rig";
@@ -122,7 +124,9 @@ export async function callGemini(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
-					generationConfig: { temperature: 0.2, maxOutputTokens: 3500 },
+					// Analysis only: a few bullets, so a tight cap keeps latency and
+					// cost down without risking truncation of the answer.
+					generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
 				}),
 			});
 
@@ -254,12 +258,18 @@ export async function loadRollingHistory(
 
 				let dailyProduced: number | undefined;
 				const prev = idx > 0 ? chronological[idx - 1] : undefined;
-				if (prev && r.barrelsSold >= 0) {
-					const delta = r.barrelsInStock - prev.barrelsInStock;
-					const est = delta + r.barrelsSold;
-					if (est >= 0) {
-						dailyProduced = est;
-					}
+				if (prev) {
+					dailyProduced = estimateDailyProduced({
+						current: {
+							inStock: r.barrelsInStock,
+							sold: r.barrelsSold,
+							timestamp: Math.floor(r.timestamp.getTime() / 1000),
+						},
+						previous: {
+							inStock: prev.barrelsInStock,
+							timestamp: Math.floor(prev.timestamp.getTime() / 1000),
+						},
+					});
 				}
 				if (dailyProduced === undefined && r.barrelsSold > 0) {
 					dailyProduced = r.barrelsSold;
@@ -357,7 +367,6 @@ export async function generateAndSendDirectorBriefing(
 	}
 
 	const historyTable = formatHistoryTable(history);
-	const competitorBenchmark = getCompetitorBenchmarkContext();
 
 	const discordToken = process.env.DISCORD_TOKEN;
 	const discordUserId = process.env.DISCORD_USER_ID;
@@ -379,22 +388,33 @@ export async function generateAndSendDirectorBriefing(
 	const dailyWages =
 		latestDbRecord?.dailyWages ??
 		snap.employees.reduce((sum, e) => sum + (e.wage ?? 0), 0);
-	const dailyAdBudget =
-		latestDbRecord?.adBudget ?? snap.profile.advertisement_budget;
+
+	// The ad budget is an operator *setting*, not an accounting fact. The
+	// recommendation engine must compare its target against the setting that is
+	// actually live right now, otherwise a target derived from the live value is
+	// compared against a stale recorded one and can never be satisfied. The
+	// recorded tick value is kept separately for profit accounting only.
+	const recordedTickAdBudget = latestDbRecord?.adBudget;
+	const liveAdBudget = Number(snap.profile.advertisement_budget ?? 0);
+	const currentAdBudget =
+		liveAdBudget > 0 ? liveAdBudget : (recordedTickAdBudget ?? 0);
+	const dailyAdBudget = recordedTickAdBudget ?? currentAdBudget;
 	const dailyProfit =
 		latestDbRecord?.dailyProfit ?? dailyRevenue - dailyWages - dailyAdBudget;
 
-	let dailyProduced: number | undefined = latestDbRecord?.dailyProduced;
-	if (dailyProduced === undefined && history.length >= 2) {
-		const prev = history[history.length - 2];
-		if (latestDbRecord && prev && latestDbRecord.stock.soldAmount >= 0) {
-			const delta = latestDbRecord.stock.inStock - prev.stock.inStock;
-			const est = delta + latestDbRecord.stock.soldAmount;
-			if (est >= 0) {
-				dailyProduced = est;
-			}
-		}
-	}
+	// State the setting the director actually controls, and only mention the
+	// recorded tick value when the two have drifted apart.
+	const adBudgetTelemetry =
+		recordedTickAdBudget !== undefined &&
+		recordedTickAdBudget !== currentAdBudget
+			? `$${currentAdBudget.toLocaleString()}/day (current setting; the last recorded tick spent $${recordedTickAdBudget.toLocaleString()})`
+			: `$${currentAdBudget.toLocaleString()}/day`;
+
+	// Only a *measured* extraction rate may drive the drain model. The rolling
+	// loader fills an unmeasurable first day with that day's sales for display,
+	// and treating that estimate as measured would wrongly declare the warehouse
+	// unable to drain and trigger a capacity rebalance.
+	const dailyProduced = latestMeasuredProduction(history);
 	const producedValue =
 		dailyProduced !== undefined ? dailyProduced * currentPrice : undefined;
 
@@ -426,25 +446,79 @@ export async function generateAndSendDirectorBriefing(
 		.join("\n");
 	const employeeTable = `| Name | Current Role | MAN | INT | END | Settle | Addiction | Work Score |\n|---|---|---|---|---|---|---|---|\n${employeeRows}`;
 
-	// Run dynamic domain engines
-	const rosterAnalysis = solveOptimalRoster(snap.employees);
+	// Run dynamic domain engines. Order matters: the stock analysis identifies the
+	// bottleneck, that bottleneck re-shapes the roster quotas, and one assignment
+	// then solves the lineup - so the rebalance advice and the target lineup can
+	// never contradict each other.
 	const stockAnalysis = analyzeStockAndPricing({
 		inStock,
 		storageCap,
 		dailySold,
 		dailyProduced,
 		currentPrice,
-		adBudget: snap.profile.advertisement_budget,
+		adBudget: currentAdBudget,
 		dailyIncome: snap.profile.income.daily,
 	});
 
-	const hasRoleTransfers = rosterAnalysis.activeTransfers.length > 0;
-	const hasPriceSuggestion =
-		stockAnalysis.recommendedPrice.action !== "maintain" &&
-		stockAnalysis.recommendedPrice.exact !== currentPrice;
-	const hasAdSuggestion =
-		stockAnalysis.recommendedAdSpend.action !== "maintain" &&
-		stockAnalysis.recommendedAdSpend.amount !== dailyAdBudget;
+	// Smart re-arrangement. When the warehouse is full because extraction outruns
+	// sell-through, the roster is in the wrong shape: moving capacity into sales
+	// beats changing price or ads, because a discarded barrel earns nothing while
+	// a cleared barrel earns its full sale price (wages are committed either way).
+	// The stock analysis identifies the bottleneck, and that bottleneck re-shapes
+	// the roster quotas, so one assignment solves the lineup.
+	const rosterAnalysis = solveOptimalRoster(snap.employees, {
+		bottleneck: {
+			extractionBound:
+				stockAnalysis.isFillingUp || stockAnalysis.warehouseCritical,
+		},
+	});
+
+	// ---- Shared directive set ------------------------------------------------
+	// The same builder feeds the Discord briefing and the v2 API dashboard, so
+	// the two surfaces can never hand out different instructions.
+	const directives = buildCompanyDirectives({
+		roster: rosterAnalysis,
+		stock: stockAnalysis,
+		history,
+		currentAdBudget,
+		barrelPrice: currentPrice,
+		openSeats: Math.max(
+			0,
+			snap.profile.employees.capacity - snap.profile.employees.hired,
+		),
+		staffCount: snap.employees.length,
+	});
+
+	const capacityPlan = directives.capacityRebalance;
+	const sellThrough = directives.sellThrough;
+
+	// The engine decides whether a change is actually required; re-deriving this
+	// from action names or raw value comparisons is what let the briefing demand
+	// the same change on every fetch.
+	const hasRoleTransfers = directives.roleTransfers.length > 0;
+	const hasPriceSuggestion = stockAnalysis.recommendedPrice.changeNeeded;
+	const hasAdSuggestion = stockAnalysis.recommendedAdSpend.changeNeeded;
+
+	const wageSharePct =
+		dailyRevenue > 0 ? ((dailyWages / dailyRevenue) * 100).toFixed(1) : "0.0";
+
+	const performanceDigest = [
+		`• Price response: ${sellThrough.summary}`,
+		`• Capacity: extraction ${dailyProduced !== undefined ? `${dailyProduced.toLocaleString()} bbl/day` : "unknown"} vs ${dailySold.toLocaleString()} bbl/day sold -> ${
+			stockAnalysis.isFillingUp
+				? `extraction matches or beats sales, so stock cannot drain${
+						stockAnalysis.warehouseCritical
+							? " and the measured rate is capped by full storage, so true extraction is higher"
+							: ""
+					}`
+				: stockAnalysis.netDrainPerDay !== undefined
+					? `draining ${stockAnalysis.netDrainPerDay.toLocaleString()} bbl/day`
+					: "no drain detected"
+		}`,
+		`• Discarded output: median ${capacityPlan.discardedBarrelsPerDay.toLocaleString()} bbl/day, peak ${capacityPlan.discardedPeakPerDay.toLocaleString()} bbl/day, measured across ${capacityPlan.discardedSamples} day(s) where storage was not yet full`,
+		`• Wage efficiency: $${dailyWages.toLocaleString()}/day = ${wageSharePct}% of revenue; net ${dailyProfit >= 0 ? "+" : ""}$${dailyProfit.toLocaleString()}/day ($${(dailyProfit / Math.max(1, dailySold)).toFixed(2)}/bbl)`,
+		`• Sell-through per day: ${dailySold.toLocaleString()} bbl at $${currentPrice} = $${(dailySold * currentPrice).toLocaleString()}`,
+	].join("\n");
 
 	// Dynamically format active transfers and target lineup
 	let transfersFormatted = "";
@@ -516,203 +590,162 @@ export async function generateAndSendDirectorBriefing(
 			`• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}`,
 		);
 	}
+	// A full warehouse that extraction still outruns cannot be cleared by any
+	// price or ad setting, so say what actually has to change.
+	if (stockAnalysis.structuralAdvice) {
+		stockVerdictBullets.push(
+			`• **Structural Constraint:** ${stockAnalysis.structuralAdvice}`,
+		);
+	}
 
-	// Action item rules for LLM
-	const actionItemRules: string[] = [];
+	// Capacity rebalance bullets: the re-arrangement alternative to price/ads.
+	const capacityBullets: string[] = [];
+	if (capacityPlan.extractionBound) {
+		if (capacityPlan.discardedBarrelsPerDay > 0) {
+			capacityBullets.push(
+				`• **Discarded Output:** about ${capacityPlan.discardedBarrelsPerDay.toLocaleString()} bbl/day (~$${capacityPlan.discardedValuePerDay.toLocaleString()}/day) is produced beyond what the rig clears, and is lost while storage is full.`,
+			);
+		}
+		for (const action of capacityPlan.actions) {
+			const label =
+				action.kind === "rebalance"
+					? "Rebalance Roster"
+					: action.kind === "hire"
+						? `Hire ${capacityPlan.hires} x Sales Executive`
+						: "Storage Is Not The Fix";
+			const revert = action.temporary
+				? " Revert once storage is back inside the 35%–75% buffer."
+				: "";
+			capacityBullets.push(`• **${label}:** ${action.reason}${revert}`);
+		}
+	}
+
+	// The action list is rendered deterministically from the engines above. The
+	// model is deliberately NOT asked to reproduce it: asking an LLM to copy
+	// pre-computed facts is what previously needed six regex passes to undo.
+	const actionParts: string[] = [];
 	if (hasRoleTransfers) {
-		actionItemRules.push(
-			`- Under "### Immediate Action Items", start directly with "**Role Transfers:**" (one concise bullet per transfer: "• **Employee** (KeyStat): CurrentRole ➔ **TargetRole**").`,
-			`- Follow with "**Target Lineup:**" (one line summary per role: "• **RoleName** (Count): Name1, Name2, ...").`,
-		);
-	} else {
-		actionItemRules.push(
-			`- IMPORTANT: All employees are currently locked in their optimal target positions. STRICTLY DO NOT output any "**Role Transfers:**" or "**Target Lineup:**" sections.`,
-		);
+		actionParts.push(`**Role Transfers:**\n${transfersFormatted}`);
+		actionParts.push(`**Target Lineup:**\n${lineupFormatted}`);
 	}
-	actionItemRules.push(
-		`- For Swiss Rehab: Output concise tier bullets with employee names and penalties (or state zero debuffs).`,
-	);
-
-	if (hasPriceSuggestion) {
-		actionItemRules.push(
-			`- For Pricing: Output "• **Pricing:** ${stockAnalysis.recommendedPrice.formatted}"`,
-		);
-	} else {
-		actionItemRules.push(
-			`- IMPORTANT: Pricing is already optimal. STRICTLY DO NOT output any Pricing bullet.`,
+	actionParts.push(`**Mandatory Swiss Rehab:**\n${rehabFormatted}`);
+	if (capacityBullets.length > 0) {
+		actionParts.push(`**Capacity Rebalance:**\n${capacityBullets.join("\n")}`);
+	}
+	if (!hasRoleTransfers && !hasAddiction && capacityBullets.length === 0) {
+		actionParts.push(
+			"• **All operations optimal** — roster is aligned with the target blueprint, all staff are clean, and stock is inside the healthy buffer.",
 		);
 	}
 
-	if (hasAdSuggestion) {
-		actionItemRules.push(
-			`- For Ad Budget: Output "• **Ad Budget:** ${stockAnalysis.recommendedAdSpend.formatted}"`,
-		);
-	} else {
-		actionItemRules.push(
-			`- IMPORTANT: Ad budget is already optimal. STRICTLY DO NOT output any Ad Budget bullet.`,
+	const deterministicSections: string[] = [
+		`### Immediate Action Items\n\n${actionParts.join("\n\n")}`,
+	];
+	if (stockVerdictBullets.length > 0) {
+		deterministicSections.push(
+			`### Stock & Pricing Verdict\n${stockVerdictBullets.join("\n")}`,
 		);
 	}
-	actionItemRules.push(
-		`- IMPORTANT: STRICTLY DO NOT output any "10★ Progression Roadmap" section.`,
-	);
+	const deterministicBriefing = deterministicSections.join("\n\n");
 
+	// The model is used for what it is actually good at: reading the numbers and
+	// explaining what they mean. Everything numerically actionable is computed
+	// above, so the model can no longer corrupt it or need sanitising.
 	const prompt = `
 You are the Chief Operations Advisor for Succession Oil, a Torn City Oil Rig.
-Conduct a concise strategic operational evaluation. You are provided with:
-1. Live Telemetry & Rig Profile
-2. Employee Roster Matrix
-3. Rolling 7–14 Day History Table
-4. Competitor & Market Benchmark
-5. Torn Oil Rig Economic Principles & Calculated Baselines
+All figures below are computed from this rig's own recorded daily snapshots.
+Your job is ANALYSIS: explain what the numbers mean and what to watch next.
 
-FORMATTING & STYLE RULES:
-- Output MUST be concise, punchy, and formatted strictly as actionable bullet points. No long paragraphs, essays, or wordy explanations.
-${actionItemRules.join("\n")}
-- Do NOT use any emojis anywhere in your output. Keep all text completely emoji-free.
-- Do NOT output any memo header, greeting, or preamble (NO "TO:", "FROM:", "DATE:", "SUBJECT:", or "EXECUTIVE BRIEFING").
-- Start directly with the first section header: "### Immediate Action Items".
-- Use clean title-case headers ("### Immediate Action Items", "### Stock & Pricing Verdict"). Never use all-caps headers.
-- Total character count MUST be under 1,500 characters so nothing ever truncates.
+HARD RULES:
+- Use ONLY the figures supplied. Never invent a benchmark, competitor statistic, price range or target.
+- If the data cannot support a conclusion, say so plainly rather than guessing.
+- Output 3 to 5 bullets, each starting with "• ", 900 characters maximum in total.
+- Do NOT repeat or reformat the action list; the director already has it verbatim.
+- No emojis, no headers, no preamble, no tables, no sign-off.
 
 ---
-### DATA BLOCK 1: LIVE RIG TELEMETRY
+### LIVE TELEMETRY
 • Rating: ${snap.profile.rating}★
 • Daily Revenue: $${dailyRevenue.toLocaleString()} | Weekly Revenue: $${snap.profile.income.weekly.toLocaleString()}
 • Daily Profit: ${dailyProfit >= 0 ? "+" : ""}$${dailyProfit.toLocaleString()} | WTD Profit: ${wtdProfit >= 0 ? "+" : ""}$${wtdProfit.toLocaleString()}
-• Stock in Storage: ${inStock.toLocaleString()} / ${storageCap.toLocaleString()} barrels (${fillPct}% full)
-• Daily Sales: ${dailySold.toLocaleString()} barrels at $${currentPrice}/barrel
-• Daily Ad Budget: $${dailyAdBudget.toLocaleString()}/day (Daily customers: ${snap.profile.customers.daily})
-• Current Staff: ${snap.profile.employees.hired}/${snap.profile.employees.capacity}
-• Overall Efficiency: ${snap.profile.efficiency}% | Environment: ${snap.profile.environment}%
+• Stock: ${inStock.toLocaleString()} / ${storageCap.toLocaleString()} bbl (${fillPct}% full)
+• Daily Sales: ${dailySold.toLocaleString()} bbl at $${currentPrice}/bbl
+• Ad Budget: ${adBudgetTelemetry} | Daily customers reported: ${snap.profile.customers.daily}
+• Staff: ${snap.profile.employees.hired}/${snap.profile.employees.capacity} | Efficiency: ${snap.profile.efficiency}% | Environment: ${snap.profile.environment}% | Popularity: ${snap.profile.popularity}%
 
 ---
-### DATA BLOCK 2: EMPLOYEE ROSTER MATRIX
+### COMPUTED ANALYSIS (authoritative — do not contradict)
+${performanceDigest}
+• Inventory state: ${stockAnalysis.state.toUpperCase()} — ${stockAnalysis.stateDescription}
+${stockAnalysis.structuralAdvice ? `• Structural constraint: ${stockAnalysis.structuralAdvice}` : "• Structural constraint: none detected."}
+
+---
+### ROSTER TARGETS
+${hasRoleTransfers ? `• Transfers required:\n${transfersFormatted}` : "• Roster is already in its target roles."}
+• Quotas for ${snap.employees.length} staff: ${Object.entries(
+		rosterAnalysis.targetQuotas,
+	)
+		.map(([role, count]) => `${role} ${count}`)
+		.join(", ")}
+
+---
+### ROSTER MATRIX
 ${employeeTable}
 
 ---
-### DATA BLOCK 3: ROLLING 7–14 DAY HISTORY
+### RECORDED HISTORY
 ${historyTable}
 
 ---
-### DATA BLOCK 4: COMPETITOR & MARKET BENCHMARK
-${competitorBenchmark}
+### ACTIONS ALREADY ISSUED (do not repeat these)
+${actionParts.join("\n")}
+${stockVerdictBullets.join("\n")}
 
 ---
-### DATA BLOCK 5: ECONOMIC RULES & SOLVER BASELINES
-${hasRoleTransfers ? `• Role Transfer Solution:\n${transfersFormatted}\n• Finalized Target Lineup:\n${lineupFormatted}` : "• Roster: 100% optimal. All employees in target roles. 0 transfers needed."}
-• Addiction Debuff Priorities:
-${rehabFormatted}
-• Inventory State & Recommendation: ${stockAnalysis.state.toUpperCase()} (${stockAnalysis.stateDescription})
-• Pricing Engine Baseline: Action: ${stockAnalysis.recommendedPrice.action.toUpperCase()} | Exact: $${stockAnalysis.recommendedPrice.exact} | Suggested: ${hasPriceSuggestion ? "YES" : "NO"}
-• Ad Spend Baseline: Action: ${stockAnalysis.recommendedAdSpend.action.toUpperCase()} | Amount: $${stockAnalysis.recommendedAdSpend.amount.toLocaleString()}/day | Suggested: ${hasAdSuggestion ? "YES" : "NO"}
+Write the analysis bullets now.`;
 
----
-### YOUR ADVISORY MANDATE:
-Output the briefing strictly following this compact, actionable bullet structure (start directly with ### Immediate Action Items, NO introductory sentence):
-
-### Immediate Action Items
-${hasRoleTransfers ? `\n**Role Transfers:**\n${transfersFormatted}\n\n**Target Lineup:**\n${lineupFormatted}\n` : ""}
-**Mandatory Swiss Rehab:**
-${rehabFormatted}
-${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdictBullets.join("\n")}` : ""}
-`;
-
-	let advisorText = "";
+	// The deterministic section is always delivered as-is; the model only appends
+	// analysis. There is nothing left to sanitise, and no fallback path to keep in
+	// sync, because the model never produced the authoritative content.
+	let advisorText = deterministicBriefing;
 	if (geminiApiKey) {
 		const llmOutput = await callGemini(prompt, geminiApiKey);
 		if (llmOutput) {
-			advisorText = llmOutput;
-			// Strip 10★ Progression Roadmap completely if generated
-			advisorText = advisorText.replace(
-				/###\s*10[★*]\s*Progression Roadmap[\s\S]*?(?=###|$)/gi,
-				"",
-			);
-			advisorText = advisorText.replace(
-				/\n• \*\*10[★*] Milestone:\*\*.*$/gm,
-				"",
-			);
-
-			// If no role transfers, enforce stripping Role Transfers and Target Lineup
-			if (!hasRoleTransfers) {
-				advisorText = advisorText.replace(
-					/\*\*Role Transfers:\*\*[\s\S]*?(?=\*\*(?:Target Lineup|Mandatory Swiss Rehab|Staff Health):\*\*|###|$)/gi,
-					"",
-				);
-				advisorText = advisorText.replace(
-					/\*\*Target Lineup:\*\*[\s\S]*?(?=\*\*(?:Mandatory Swiss Rehab|Staff Health):\*\*|###|$)/gi,
-					"",
-				);
+			const notes = llmOutput
+				.replace(/^#{1,6}.*$/gm, "") // drop any header the model adds anyway
+				.replace(/^\*\*(Analyst Notes|Analysis):?\*\*$/gim, "")
+				.trim()
+				.slice(0, 1200);
+			if (notes) {
+				advisorText = `${deterministicBriefing}\n\n### Analyst Notes\n${notes}`;
 			}
-
-			// If no price suggestion, strip pricing bullet
-			if (!hasPriceSuggestion) {
-				advisorText = advisorText.replace(
-					/[•\-*]\s*\*\*Pricing:\*\*.*$/gim,
-					"",
-				);
-			}
-
-			// If no ad suggestion, strip ad budget bullet
-			if (!hasAdSuggestion) {
-				advisorText = advisorText.replace(
-					/[•\-*]\s*\*\*Ad Budget:\*\*.*$/gim,
-					"",
-				);
-			}
-
-			// If stock verdict is empty or has no bullets, strip the header
-			advisorText = advisorText.replace(
-				/###\s*Stock & Pricing Verdict\s*(?=(?:###|$))/gi,
-				"",
+		} else {
+			logger.warn(
+				"No analyst notes returned; delivering the deterministic briefing only.",
 			);
-
-			// Strip bracketed rationale after target role
-			advisorText = advisorText.replace(
-				/(• \*\*.+?\*\* \([^\n)]+\): [^\n➔]+ ➔ \*\*[^\n*]+\*\*) \([^)\n]+\)/g,
-				"$1",
-			);
-
-			advisorText = advisorText.trim();
 		}
 	}
 
-	// Comprehensive deterministic fallback if LLM is offline or output was empty
-	if (!advisorText) {
-		const actionParts: string[] = [];
-		if (hasRoleTransfers) {
-			actionParts.push(`**Role Transfers:**\n${transfersFormatted}`);
-			actionParts.push(`**Target Lineup:**\n${lineupFormatted}`);
-		}
-		actionParts.push(`**Mandatory Swiss Rehab:**\n${rehabFormatted}`);
+	const signDaily = dailyProfit >= 0 ? "+" : "";
+	const signWtd = wtdProfit >= 0 ? "+" : "";
+	const prodText =
+		dailyProduced !== undefined
+			? `${dailyProduced.toLocaleString()} bbl`
+			: "N/A";
+	const prodValText =
+		producedValue !== undefined ? `$${producedValue.toLocaleString()}` : "N/A";
 
-		if (!hasRoleTransfers && !hasAddiction) {
-			actionParts.push(
-				"• **All operations optimal** — Roster is fully aligned with target blueprint and all staff are clean.",
-			);
-		}
-
-		const sections: string[] = [
-			`### Immediate Action Items\n\n${actionParts.join("\n\n")}`,
-		];
-
-		if (stockVerdictBullets.length > 0) {
-			sections.push(
-				`### Stock & Pricing Verdict\n${stockVerdictBullets.join("\n")}`,
-			);
-		}
-
-		advisorText = sections.join("\n\n");
-	}
+	// Single source for the telemetry summary, reused by the console output, the
+	// Discord embed and the returned value so all three always agree.
+	const detailsLine = `Daily Rev: $${dailyRevenue.toLocaleString()} | Daily Wages: $${dailyWages.toLocaleString()} | Daily Ad: $${dailyAdBudget.toLocaleString()} | Daily Profit: ${signDaily}$${dailyProfit.toLocaleString()} | WTD Profit: ${signWtd}$${wtdProfit.toLocaleString()}`;
+	const stockLine = `Stock: ${inStock.toLocaleString()}/${storageCap.toLocaleString()} (${fillPct}%) | Sold: ${dailySold.toLocaleString()} bbl | Produced: ${dailyProduced?.toLocaleString() ?? "N/A"} bbl`;
+	const companyDetailsText = `${detailsLine}\n${stockLine}`;
 
 	logger.info("================ EXECUTIVE BRIEFING ================");
 	console.log(advisorText);
 	console.log("\n================ COMPANY DETAILS ================");
-	console.log(
-		`Daily Rev: $${dailyRevenue.toLocaleString()} | Daily Wages: $${dailyWages.toLocaleString()} | Daily Ad: $${dailyAdBudget.toLocaleString()} | Daily Profit: ${dailyProfit >= 0 ? "+" : ""}$${dailyProfit.toLocaleString()} | WTD Profit: ${wtdProfit >= 0 ? "+" : ""}$${wtdProfit.toLocaleString()}`,
-	);
-	console.log(
-		`Stock: ${inStock.toLocaleString()}/${storageCap.toLocaleString()} (${fillPct}%) | Sold: ${dailySold.toLocaleString()} bbl | Produced: ${dailyProduced?.toLocaleString() ?? "N/A"} bbl`,
-	);
+	console.log(detailsLine);
+	console.log(stockLine);
 	console.log(
 		"\n================ WEEK-TO-DATE LOGS (MON–SUN) ================",
 	);
@@ -720,7 +753,7 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 	console.log(wtdSummaryText);
 	logger.info("====================================================");
 
-	// Send Discord DMs as 3 distinct messages (Advice, Company Details, WTD Logs)
+	// Send Discord DMs as 2 messages: advice, then details plus week-to-date logs.
 	if (discordToken && discordUserId) {
 		logger.info(`Sending Discord DMs to user ${discordUserId}...`);
 
@@ -733,17 +766,6 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 				0,
 			),
 		);
-
-		const signDaily = dailyProfit >= 0 ? "+" : "";
-		const signWtd = wtdProfit >= 0 ? "+" : "";
-		const prodText =
-			dailyProduced !== undefined
-				? `${dailyProduced.toLocaleString()} bbl`
-				: "N/A";
-		const prodValText =
-			producedValue !== undefined
-				? `$${producedValue.toLocaleString()}`
-				: "N/A";
 
 		// Message 1: All Advice in one embed
 		await sendDiscordDm(discordUserId, discordToken, {
@@ -797,5 +819,7 @@ ${stockVerdictBullets.length > 0 ? `\n### Stock & Pricing Verdict\n${stockVerdic
 		logger.warn("Discord credentials missing. Skipping DM.");
 	}
 
-	return `${advisorText}\n\n${wtdTable}\n\n${wtdSummaryText}`;
+	return [advisorText, companyDetailsText, wtdTable, wtdSummaryText].join(
+		"\n\n",
+	);
 }

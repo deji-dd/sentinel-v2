@@ -1,4 +1,4 @@
-import { db, territoryBlueprints } from "@sentinel/database";
+import { db, sql, territoryBlueprints } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -43,40 +43,41 @@ async function fetchAndDumpData(): Promise<void> {
 			`Fetched ${territories.length} territory blueprints across ${offsets.length} parallel requests. Dumping to SQLite...`,
 		);
 
-		// Bulk database transaction in chunks of 500
+		// Bulk upsert in chunks, one multi-row statement per chunk. The previous
+		// per-row loop issued up to 4,500 sequential round trips per run, which on
+		// a 2-vCPU host held a pool connection and spiked the database long enough
+		// to starve other workers sharing the box.
 		const chunkSize = 500;
 		const now = new Date();
 
 		for (let i = 0; i < territories.length; i += chunkSize) {
 			const chunk = territories.slice(i, i + chunkSize);
 
-			await db.transaction(async (tx) => {
-				for (const item of chunk) {
-					await tx
-						.insert(territoryBlueprints)
-						.values({
-							id: item.id,
-							sector: item.sector,
-							size: item.size,
-							density: item.density,
-							slots: item.slots,
-							data: item,
-							createdAt: now,
-							updatedAt: now,
-						})
-						.onConflictDoUpdate({
-							target: territoryBlueprints.id,
-							set: {
-								sector: item.sector,
-								size: item.size,
-								density: item.density,
-								slots: item.slots,
-								data: item,
-								updatedAt: now,
-							},
-						});
-				}
-			});
+			await db
+				.insert(territoryBlueprints)
+				.values(
+					chunk.map((item) => ({
+						id: item.id,
+						sector: item.sector,
+						size: item.size,
+						density: item.density,
+						slots: item.slots,
+						data: item,
+						createdAt: now,
+						updatedAt: now,
+					})),
+				)
+				.onConflictDoUpdate({
+					target: territoryBlueprints.id,
+					set: {
+						sector: sql`excluded.sector`,
+						size: sql`excluded.size`,
+						density: sql`excluded.density`,
+						slots: sql`excluded.slots`,
+						data: sql`excluded.data`,
+						updatedAt: sql`excluded.updated_at`,
+					},
+				});
 		}
 
 		logger.info(

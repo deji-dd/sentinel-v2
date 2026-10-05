@@ -436,7 +436,8 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 			},
 		} as unknown as UserLog;
 
-		schedulerEvents.emit("logs_inserted", [eventLog]);
+		// Simulates the live forward poll; subscribers gate live API calls on this.
+		schedulerEvents.emit("logs_inserted", [eventLog], { source: "forward" });
 
 		// Wait for async event listener to finish writing to DB (poll up to 3s)
 		let record: typeof battlestatsLedgers.$inferSelect | undefined;

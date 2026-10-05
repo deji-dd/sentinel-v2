@@ -309,6 +309,34 @@
 			"when": 1791152485985,
 			"tag": "0043_legal_shadowcat",
 			"breakpoints": true
+		},
+		{
+			"idx": 44,
+			"version": "7",
+			"when": 1791188442633,
+			"tag": "0044_dizzy_vulcan",
+			"breakpoints": true
+		},
+		{
+			"idx": 45,
+			"version": "7",
+			"when": 1791191994428,
+			"tag": "0045_hot_shadow_king",
+			"breakpoints": true
+		},
+		{
+			"idx": 46,
+			"version": "7",
+			"when": 1791194315415,
+			"tag": "0046_thick_exiles",
+			"breakpoints": true
+		},
+		{
+			"idx": 47,
+			"version": "7",
+			"when": 1791196904269,
+			"tag": "0047_lying_elektra",
+			"breakpoints": true
 		}
 	]
 }

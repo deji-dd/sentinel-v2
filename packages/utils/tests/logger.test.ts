@@ -59,7 +59,10 @@ describe("logger utility", () => {
 		const logger = new Logger("TimerContext");
 		const stopTimer = logger.time();
 
-		expect(warnSpy).toHaveBeenCalled();
+		// The start of a timed span is diagnostics, not a warning: production
+		// should emit one line per timed cycle, not a WARN followed by an INFO.
+		expect(debugSpy).toHaveBeenCalled();
+		expect(warnSpy).not.toHaveBeenCalled();
 		await new Promise((r) => setTimeout(r, 10));
 
 		stopTimer();

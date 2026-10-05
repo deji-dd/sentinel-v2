@@ -17,8 +17,9 @@ import {
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { extractItemMarketPrice, Logger } from "@sentinel/utils";
-import { schedulerEvents } from "../../lib/events";
+import { type LogIngestSource, schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
 const STATE_ID = "personal:stocks_ledger";
@@ -386,6 +387,7 @@ export async function parseStockGainLog(log: UserLog): Promise<boolean> {
  */
 export async function processStockLogsBatch(
 	logs: UserLog[],
+	source: LogIngestSource = "forward",
 ): Promise<{ processed: number; skipped: number }> {
 	if (logs.length === 0) return { processed: 0, skipped: 0 };
 
@@ -417,6 +419,13 @@ export async function processStockLogsBatch(
 	}
 
 	if (hasActivityLogs) {
+		// A historical activity log says nothing about the *current* position, and
+		// `parseStockActivityLog` performs a live `/user/stocks` fetch. During a
+		// backfill burst this fired for years-old logs, adding pointless upstream
+		// requests to a cycle that was already rate-limit constrained.
+		if (source !== "forward") {
+			return { processed, skipped };
+		}
 		parseStockActivityLog().catch((err) => {
 			logger.error("Error running debounced stock activity log sync:", err);
 		});
@@ -617,10 +626,15 @@ export async function runStocksLedgerSync(): Promise<void> {
  */
 export function startStocksLedger(_options?: WorkerStartOptions): void {
 	// Live stream processing
-	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
-		processStockLogsBatch(logs).catch((err) => {
-			logger.error("Error processing real-time stock logs batch:", err);
-		});
-	});
+	schedulerEvents.on(
+		"logs_inserted",
+		(logs: UserLog[], meta: { source: LogIngestSource }) => {
+			// `source` is forwarded so the batch can skip live API work for
+			// historical pages. Indexing itself still runs for every source.
+			runSubscriber("stocks_ledger", () =>
+				processStockLogsBatch(logs, meta.source),
+			);
+		},
+	);
 	logger.info("Stocks Ledger live event listener registered.");
 }

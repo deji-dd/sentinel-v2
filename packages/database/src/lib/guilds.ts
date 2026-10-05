@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { and, desc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db } from "../../index";
 import {
 	guildConfigs,
@@ -1468,6 +1468,26 @@ export async function getMercContractHits(contractId: string) {
 		.from(mercContractHits)
 		.where(eq(mercContractHits.contractId, contractId))
 		.orderBy(desc(mercContractHits.timestamp));
+}
+
+/**
+ * Total payout recorded against a contract, computed in SQL.
+ *
+ * Equivalent to `getMercContractSummary(...).totalPayout` but without loading
+ * every hit row into the process — the auto-stop check runs on the 1-second
+ * worker cycle and only needs this one number.
+ */
+export async function getMercContractTotalPayout(
+	contractId: string,
+): Promise<number> {
+	const [row] = await db
+		.select({
+			total: sql<number>`coalesce(sum(${mercContractHits.payoutValue}), 0)::int`,
+		})
+		.from(mercContractHits)
+		.where(eq(mercContractHits.contractId, contractId));
+
+	return Number(row?.total ?? 0);
 }
 
 export interface MercPayoutSummary {

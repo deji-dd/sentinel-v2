@@ -1,0 +1,2 @@
+CREATE INDEX "elims_team_snapshots_team_captured_idx" ON "elims_team_snapshots" USING btree ("team_id","captured_at");--> statement-breakpoint
+CREATE INDEX "elims_team_snapshots_captured_idx" ON "elims_team_snapshots" USING btree ("captured_at");

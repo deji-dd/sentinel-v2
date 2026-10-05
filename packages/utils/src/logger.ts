@@ -68,45 +68,21 @@ const LEVEL_COLORS: Record<string, string> = {
 
 export type LogLevel = "info" | "warn" | "error" | "debug";
 
-export interface LogEntry {
-	id: string;
-	timestamp: string;
-	service: "api" | "bot" | "scheduler";
-	context: string;
-	subContext?: string;
-	level: LogLevel;
-	message: string;
-}
+const pad2 = (value: number): string =>
+	value < 10 ? `0${value}` : String(value);
 
-let logCounter = 0;
-const MAX_RECENT_LOGS = 100;
-const ringBuffer: LogEntry[] = [];
-const logSinks = new Set<(entry: LogEntry) => void>();
-
-function inferService(context: string): "api" | "bot" | "scheduler" {
-	const c = context.toLowerCase();
-	if (
-		c.includes("bot") ||
-		c.includes("reaction") ||
-		c.includes("guild") ||
-		c.includes("discord") ||
-		c.includes("alert")
-	) {
-		return "bot";
-	}
-	if (
-		c.includes("worker") ||
-		c.includes("scheduler") ||
-		c.includes("cron") ||
-		c.includes("alliances") ||
-		c.includes("stock") ||
-		c.includes("territory") ||
-		c.includes("verification") ||
-		c.includes("job")
-	) {
-		return "scheduler";
-	}
-	return "api";
+/**
+ * Builds a sortable `YYYY-MM-DD HH:MM:SS` wall-clock timestamp.
+ *
+ * Deliberately manual rather than `toLocaleString`/`toLocaleTimeString`: the
+ * `Intl` path costs ~64us per call for the options-object form and ~2us without,
+ * against ~0.3us here, and it is paid on every log line of every service.
+ * The timestamp is only ever displayed, never parsed.
+ */
+function formatTimestamp(now: Date): string {
+	return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(
+		now.getDate(),
+	)} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
 }
 
 export class Logger {
@@ -114,6 +90,8 @@ export class Logger {
 	readonly subContext?: string;
 	private parentColor: string;
 	private childColor?: string;
+	/** Precomputed ANSI prefix for the context/sub-context tags. */
+	private readonly tagPrefix: string;
 
 	constructor(
 		context: string,
@@ -132,6 +110,12 @@ export class Logger {
 				this.childColor = getChildColor(this.context, this.subContext);
 			}
 		}
+
+		const subTag =
+			this.subContext && this.childColor
+				? `${this.childColor}[${this.subContext}] ${RESET}`
+				: "";
+		this.tagPrefix = `${this.parentColor}[${this.context}] ${subTag}`;
 	}
 
 	/**
@@ -145,68 +129,20 @@ export class Logger {
 		return childLogger;
 	}
 
-	private recordLog(
-		level: LogLevel,
-		rawMessage: string,
-		...meta: unknown[]
-	): void {
-		const now = new Date();
-		const timestamp = now.toLocaleTimeString("en-US", { hour12: false });
-		let message = rawMessage;
-
-		if (meta.length > 0) {
-			const metaStrings = meta.map((m) =>
-				typeof m === "object" && m !== null ? JSON.stringify(m) : String(m),
-			);
-			message = `${rawMessage} ${metaStrings.join(" ")}`;
-		}
-
-		const entry: LogEntry = {
-			id: `log-${Date.now()}-${++logCounter}`,
-			timestamp,
-			service: inferService(this.context),
-			context: this.context,
-			subContext: this.subContext,
-			level,
-			message,
-		};
-
-		if (ringBuffer.length >= MAX_RECENT_LOGS) {
-			ringBuffer.shift();
-		}
-		ringBuffer.push(entry);
-
-		for (const sink of logSinks) {
-			try {
-				sink(entry);
-			} catch {
-				// sink listener errors should never break main execution
-			}
-		}
-	}
-
 	private formatMessage(level: string, message: string): string {
-		const timestamp = new Date().toLocaleString();
 		const LEVEL_COLOR = LEVEL_COLORS[level] ?? RESET;
-		const subTag =
-			this.subContext && this.childColor
-				? `${this.childColor}[${this.subContext}] ${RESET}`
-				: "";
-		return `[${timestamp}] ${LEVEL_COLOR}[${level}] ${RESET}${this.parentColor}[${this.context}] ${subTag}${RESET}${message}`;
+		return `[${formatTimestamp(new Date())}] ${LEVEL_COLOR}[${level}] ${RESET}${this.tagPrefix}${RESET}${message}`;
 	}
 
 	info(message: string, ...meta: unknown[]): void {
-		this.recordLog("info", message, ...meta);
 		console.log(this.formatMessage("INFO", message), ...meta);
 	}
 
 	warn(message: string, ...meta: unknown[]): void {
-		this.recordLog("warn", message, ...meta);
 		console.warn(this.formatMessage("WARN", message), ...meta);
 	}
 
 	error(message: string, error?: unknown): void {
-		this.recordLog("error", message, error);
 		if (error !== undefined) {
 			console.error(this.formatMessage("ERROR", message), error);
 		} else {
@@ -216,13 +152,18 @@ export class Logger {
 
 	debug(message: string, ...meta: unknown[]): void {
 		if (process.env.NODE_ENV !== "production") {
-			this.recordLog("debug", message, ...meta);
 			console.debug(this.formatMessage("DEBUG", message), ...meta);
 		}
 	}
 
-	time(): () => void {
-		this.warn("Starting");
+	/**
+	 * Times a unit of work and logs a single completion line.
+	 *
+	 * The start line is `debug` so production emits one line per timed cycle
+	 * rather than a spurious WARN followed by an INFO.
+	 */
+	time(label = "Starting"): () => void {
+		this.debug(label);
 		const start = performance.now();
 		return () => {
 			const durationMs = performance.now() - start;
@@ -238,14 +179,5 @@ export class Logger {
 
 			this.info(`Completed in ${formattedDuration}`);
 		};
-	}
-
-	static addLogSink(sink: (entry: LogEntry) => void): () => void {
-		logSinks.add(sink);
-		return () => logSinks.delete(sink);
-	}
-
-	static getRecentLogs(limit = 40): LogEntry[] {
-		return ringBuffer.slice(-limit);
 	}
 }

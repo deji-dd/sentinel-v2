@@ -106,12 +106,5 @@ export async function setupSchedulerIpc(): Promise<IpcServer<IpcMessage>> {
 
 	setActiveIpcServer(ipcServer);
 
-	Logger.addLogSink((entry) => {
-		ipcServer.broadcast({
-			action: "log_event",
-			data: entry,
-		});
-	});
-
 	return ipcServer;
 }

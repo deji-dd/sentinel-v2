@@ -1,4 +1,5 @@
 export * from "./src/battlestats";
+export * from "./src/company-directives";
 export * from "./src/crimes";
 export * from "./src/format";
 export * from "./src/guilds";

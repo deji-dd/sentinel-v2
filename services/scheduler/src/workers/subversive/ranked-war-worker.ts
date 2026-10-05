@@ -6,7 +6,12 @@ import {
 	type RwDisplaysUpdate,
 	type RwTravelingUpdate,
 } from "@sentinel/schemas";
-import { getPlayerStats, TornApiClient, TornError } from "@sentinel/torn-api";
+import {
+	getPlayerStats,
+	TornApiClient,
+	TornError,
+	tornApi,
+} from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import type { IpcServer } from "@sentinel/utils/ipc";
 import { schedulerEvents } from "../../lib/events";
@@ -17,9 +22,11 @@ import {
 } from "../../lib/rw-channel-config";
 import { classifyOpponentsIntoRwBuckets } from "../../lib/rw-opponent-buckets";
 import {
+	buildOpponentFingerprint,
 	clearRwDisplaysBroadcastState,
 	hasRwDisplaysBroadcastState,
 	shouldBroadcastRwDisplays,
+	shouldReclassifyRwDisplays,
 } from "../../lib/rw-primary-displays";
 import { classifyTravelingOpponents } from "../../lib/rw-traveling-buckets";
 import {
@@ -154,11 +161,28 @@ interface TornFactionMembersResponse {
 	}>;
 }
 
-// In-memory stat cache for opponent members to avoid repeated DB/FFScouter lookups
+// In-memory stat cache for opponent members to avoid repeated DB/FFScouter lookups.
+// Bounded and evicted in insertion order: it previously grew for the process
+// lifetime across every war ever seen, on a long-running scheduler.
 const opponentStatsCache = new Map<
 	number,
 	{ estimatedBs: number; estimatedScore: number }
 >();
+const MAX_OPPONENT_STATS_ENTRIES = 5_000;
+
+function setOpponentStats(
+	memberId: number,
+	value: { estimatedBs: number; estimatedScore: number },
+): void {
+	if (
+		!opponentStatsCache.has(memberId) &&
+		opponentStatsCache.size >= MAX_OPPONENT_STATS_ENTRIES
+	) {
+		const oldest = opponentStatsCache.keys().next().value;
+		if (oldest !== undefined) opponentStatsCache.delete(oldest);
+	}
+	opponentStatsCache.set(memberId, value);
+}
 
 async function batchResolveOpponentStats(
 	members: Array<{ id: number; name: string; level: number }>,
@@ -182,7 +206,7 @@ async function batchResolveOpponentStats(
 
 		for (const row of dbRows) {
 			if (row.estimatedScore > 0) {
-				opponentStatsCache.set(row.targetId, {
+				setOpponentStats(row.targetId, {
 					estimatedBs: row.estimatedBs,
 					estimatedScore: row.estimatedScore,
 				});
@@ -225,7 +249,7 @@ async function batchResolveOpponentStats(
 						Math.sqrt(Math.max(0, dex));
 				}
 
-				opponentStatsCache.set(res.player_id, {
+				setOpponentStats(res.player_id, {
 					estimatedBs: res.bs_estimate,
 					estimatedScore: score,
 				});
@@ -279,7 +303,7 @@ async function resolveOpponentStats(
 				estimatedBs: ffResult.bs_estimate,
 				estimatedScore: score,
 			};
-			opponentStatsCache.set(memberId, res);
+			setOpponentStats(memberId, res);
 			return res;
 		}
 	} catch {}
@@ -316,6 +340,13 @@ const warCacheByFaction = new Map<number, FactionWarCache>();
 const WARS_CACHE_TTL_MS = 10_000; // Cache war metadata for 10s during active wars
 
 /**
+ * Heartbeat for the war-state IPC broadcast, so a subscriber that restarted
+ * mid-war still receives a full snapshot even if nothing changed.
+ */
+const WAR_BROADCAST_HEARTBEAT_MS = 30_000;
+let lastWarBroadcastSignature = "";
+let lastWarBroadcastAt = 0;
+/**
  * Resolves the faction currently ranked-warred with a family faction.
  * Returns null when no war is engaged, which callers treat as "no retal set".
  */
@@ -325,6 +356,32 @@ export function getWarOpponentFactionId(factionId: number): number | null {
 	const state = entry.war.state;
 	if (state !== "active" && state !== "scheduled") return null;
 	return entry.war.opponent?.id ?? null;
+}
+
+/**
+ * Opponent-id index for the current roster, memoised per roster array instance.
+ *
+ * `isCurrentWarOpponent` is called once per live attacker when the retal tracker
+ * rebuilds its set, so a linear `.some()` scan made that O(attackers x roster).
+ * The cache is keyed by the array identity and the roster is replaced wholesale
+ * on every refresh, so this rebuilds exactly once per refreshed roster and the
+ * lookup becomes O(1). A WeakMap keeps the index from pinning old rosters.
+ */
+const opponentIdIndexCache = new WeakMap<
+	readonly RankedWarOpponent[],
+	Set<number>
+>();
+
+function getOpponentIdIndex(
+	opponents: readonly RankedWarOpponent[],
+): Set<number> {
+	let index = opponentIdIndexCache.get(opponents);
+	if (!index) {
+		index = new Set<number>();
+		for (const opp of opponents) index.add(opp.id);
+		opponentIdIndexCache.set(opponents, index);
+	}
+	return index;
 }
 
 /**
@@ -339,7 +396,7 @@ export function isCurrentWarOpponent(
 	if (opponentFactionId === null) return false;
 	const entry = warCacheByFaction.get(factionId);
 	if (!entry) return false;
-	return entry.opponents.some((opp) => opp.id === playerId);
+	return getOpponentIdIndex(entry.opponents).has(playerId);
 }
 
 /**
@@ -436,6 +493,7 @@ async function refreshFactionWar(
 	try {
 		const warsRes = (await client.get("/faction/{id}/wars", {
 			apiKey: keyObj.apiKey,
+			rateLimitKey: keyObj.userId,
 			pathParams: { id: factionId },
 		})) as TornFactionWarsResponse;
 
@@ -518,6 +576,7 @@ async function refreshFactionOpponents(
 	try {
 		const membersRes = (await client.get("/faction/{id}/members", {
 			apiKey: oppKey.apiKey,
+			rateLimitKey: oppKey.userId,
 			pathParams: { id: oppFactionId },
 		})) as TornFactionMembersResponse;
 
@@ -583,7 +642,12 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 		return Date.now() + 30_000;
 	}
 
-	const client = new TornApiClient();
+	// Shares the managed client's limiter so the 1s war cycle is counted against
+	// the same per-key budget as every `tornApi.*` call. This is the highest-rate
+	// consumer of the shared subversive key pool.
+	const client = new TornApiClient({
+		rateLimitTracker: tornApi.rateLimiter,
+	});
 	const nowSec = Math.floor(Date.now() / 1000);
 
 	const wars: Record<
@@ -622,13 +686,30 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 		}
 	}
 
-	// 4. Broadcast war updates to Sentinel API over Unix Domain Socket IPC
+	// 4. Broadcast war updates to Sentinel API over Unix Domain Socket IPC.
+	//
+	// Change-gated: this cycle runs every second while a war is active and the
+	// payload carries every opponent for every family faction. Previously it was
+	// pushed unconditionally, which meant a full snapshot serialised and written
+	// to every subscriber each second, and on the API side a full-roster
+	// hospital-queue evaluation per message. Subscribers that need a guaranteed
+	// repaint (a restarted API holds these counts in memory only) are covered by
+	// the heartbeat, mirroring the display broadcasts below.
 	const ipcServer = getActiveIpcServer();
 	if (ipcServer) {
-		ipcServer.broadcast({
-			action: "subversive_war_updated",
-			data: { wars },
-		});
+		const warPayloadSignature = JSON.stringify(wars);
+		const warPayloadChanged = warPayloadSignature !== lastWarBroadcastSignature;
+		const warPayloadStale =
+			nowSec * 1000 - lastWarBroadcastAt >= WAR_BROADCAST_HEARTBEAT_MS;
+
+		if (!lastWarBroadcastSignature || warPayloadChanged || warPayloadStale) {
+			lastWarBroadcastSignature = warPayloadSignature;
+			lastWarBroadcastAt = nowSec * 1000;
+			ipcServer.broadcast({
+				action: "subversive_war_updated",
+				data: { wars },
+			});
+		}
 
 		await broadcastRwPrimaryDisplays(ipcServer, wars, nowSec);
 		await broadcastRwTravelingDisplays(ipcServer, wars);
@@ -704,6 +785,19 @@ async function broadcastRwPrimaryDisplays(
 		// An engaged war with no resolvable opposing faction cannot be rendered;
 		// the next cycle will refresh the war metadata and try again.
 		if (!opponent) continue;
+
+		// Skip the five-array-copy/sort classification when the roster fingerprint
+		// is unchanged and the heartbeat has not elapsed; the result would only be
+		// discarded by the broadcast gate below.
+		if (
+			!shouldReclassifyRwDisplays(
+				factionId,
+				buildOpponentFingerprint(snapshot.opponents),
+				nowMs,
+			)
+		) {
+			continue;
+		}
 
 		const buckets = classifyOpponentsIntoRwBuckets(snapshot.opponents, nowSec);
 

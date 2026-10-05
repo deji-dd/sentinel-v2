@@ -1,6 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
 	boolean,
 	doublePrecision,
+	index,
 	integer,
 	jsonb,
 	pgTable,
@@ -55,27 +57,39 @@ export const territoryStates = pgTable("territory_states", {
 		.notNull(),
 });
 
-export const warLedgers = pgTable("war_ledgers", {
-	id: text("id").primaryKey(),
-	tt: text("tt").notNull(),
-	assaultingFaction: integer("assaulting_faction").notNull(),
-	defendingFaction: integer("defending_faction").notNull(),
-	victorFaction: integer("victor_faction"),
-	startTime: timestamp("start_time", {
-		withTimezone: true,
-		mode: "date",
-	}).notNull(),
-	endTime: timestamp("end_time", {
-		withTimezone: true,
-		mode: "date",
-	}),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
+export const warLedgers = pgTable(
+	"war_ledgers",
+	{
+		id: text("id").primaryKey(),
+		tt: text("tt").notNull(),
+		assaultingFaction: integer("assaulting_faction").notNull(),
+		defendingFaction: integer("defending_faction").notNull(),
+		victorFaction: integer("victor_faction"),
+		startTime: timestamp("start_time", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		endTime: timestamp("end_time", {
+			withTimezone: true,
+			mode: "date",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// The territory engine reads open wars (`end_time IS NULL`) on every cycle.
+		// A partial index stays tiny while the table accumulates every war forever.
+		index("idx_war_ledgers_open")
+			.on(table.endTime)
+			.where(sql`${table.endTime} IS NULL`),
+		// Retention pruning deletes by end_time; without this it seq-scans.
+		index("idx_war_ledgers_end_time").on(table.endTime),
+	],
+);
 
 export const tornItems = pgTable("torn_items", {
 	id: text("id").primaryKey(),

@@ -6,6 +6,7 @@ import {
 import { Logger } from "@sentinel/utils";
 import { setupSchedulerIpc } from "./src/lib/ipc";
 import { getAllRunnerStatuses, stopAllRunners } from "./src/lib/scheduler";
+import { getSubscriberHealth } from "./src/lib/subscriber-health";
 import { registerPersonalLogSubscribers } from "./src/workers/personal/subscribers";
 import { startRegisteredWorkers } from "./src/workers/registry";
 
@@ -44,13 +45,19 @@ async function main() {
 			const url = new URL(req.url);
 			if (url.pathname === "/health" || url.pathname === "/") {
 				const runners = getAllRunnerStatuses();
+				const subscribers = getSubscriberHealth();
 				const hasFailures = runners.some((r) => r.consecutiveFailures > 0);
+				// A subscriber failing on every event is otherwise invisible: it is
+				// invoked fire-and-forget by the event emitter, so it never reaches
+				// the runner's failure counters.
+				const hasSubscriberFailures = subscribers.some((s) => s.failed > 0);
 				return Response.json({
-					status: hasFailures ? "degraded" : "ok",
+					status: hasFailures || hasSubscriberFailures ? "degraded" : "ok",
 					service: "sentinel-scheduler",
 					uptime: process.uptime(),
 					workerCount,
 					activeRunnersCount: runners.length,
+					subscribers,
 					runners: runners.map((r) => ({
 						worker: r.worker,
 						schedule: r.schedule,
@@ -61,6 +68,7 @@ async function main() {
 						lastSuccessAt: r.lastSuccessAt
 							? new Date(r.lastSuccessAt).toISOString()
 							: null,
+						lastDurationMs: r.lastDurationMs,
 						nextRunAt: r.nextRunAt ? new Date(r.nextRunAt).toISOString() : null,
 					})),
 				});

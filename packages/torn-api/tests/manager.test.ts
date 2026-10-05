@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { apiKeys, db, eq, inArray } from "../../database";
 import {
+	clearSystemKeyPoolCache,
 	getPersonalKey,
 	getSystemKeyPool,
 	hashApiKey,
@@ -17,6 +18,9 @@ describe("Torn API Manager - Key Pool Manager", () => {
 	let savedPersonalKeys: (typeof apiKeys.$inferSelect)[] = [];
 
 	beforeEach(async () => {
+		// The system key pool is memoised with a short TTL; these tests rewrite the
+		// api_keys table directly, so drop the cache to read the seeded fixtures.
+		clearSystemKeyPoolCache();
 		savedPersonalKeys = await db.query.apiKeys.findMany({
 			where: eq(apiKeys.keyType, "personal"),
 		});
@@ -195,6 +199,9 @@ describe("ManagedTornApiClient - System Key Failover", () => {
 	let savedSystemKeys: (typeof apiKeys.$inferSelect)[] = [];
 
 	beforeEach(async () => {
+		// Tests rewrite the system key set directly in the DB; drop the memoised
+		// pool so key resolution reads these fixtures.
+		clearSystemKeyPoolCache();
 		savedSystemKeys = await db.query.apiKeys.findMany({
 			where: eq(apiKeys.keyType, "system"),
 		});

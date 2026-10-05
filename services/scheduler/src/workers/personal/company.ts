@@ -8,8 +8,9 @@ import {
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
-import { schedulerEvents } from "../../lib/events";
+import { type LogIngestSource, schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
 export const COMPANY_LOG_IDS = [6222, 6221];
@@ -305,26 +306,36 @@ export async function syncCompanyDailyProfit(): Promise<{
  */
 export function startCompanySync(_options?: WorkerStartOptions): void {
 	schedulerEvents.on("company_pay_received", () => {
-		syncCompanyDailyProfit().catch((err) => {
-			logger.error("Error running company daily profit sync:", err);
-		});
+		runSubscriber("company_profit", () => syncCompanyDailyProfit());
 	});
 
-	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
-		const hasCompanyPayLog = logs.some((l) => {
-			const logDetails = (l.details ?? {}) as { id?: number };
-			const rawLogCode = (l as unknown as { log?: number }).log;
-			const logTypeCode = logDetails.id ?? rawLogCode ?? 0;
-			return COMPANY_LOG_ID_SET.has(logTypeCode);
-		});
+	schedulerEvents.on(
+		"logs_inserted",
+		(logs: UserLog[], meta: { source: LogIngestSource }) => {
+			// Only a *live* company pay log should trigger the immediate sync.
+			// A backfill page can contain a pay log from years ago, and reacting to
+			// it fetches /company twice (company + oil-rig both listen) and posts a
+			// Discord director briefing describing today's company state as if that
+			// historical event had just happened.
+			if (meta.source !== "forward") {
+				return;
+			}
 
-		if (hasCompanyPayLog) {
-			logger.info(
-				"Detected company pay/director log in live stream. Triggering immediate company daily profit sync...",
-			);
-			schedulerEvents.emit("company_pay_received");
-		}
-	});
+			const hasCompanyPayLog = logs.some((l) => {
+				const logDetails = (l.details ?? {}) as { id?: number };
+				const rawLogCode = (l as unknown as { log?: number }).log;
+				const logTypeCode = logDetails.id ?? rawLogCode ?? 0;
+				return COMPANY_LOG_ID_SET.has(logTypeCode);
+			});
+
+			if (hasCompanyPayLog) {
+				logger.info(
+					"Detected company pay/director log in live stream. Triggering immediate company daily profit sync...",
+				);
+				schedulerEvents.emit("company_pay_received");
+			}
+		},
+	);
 
 	logger.info("Company Sync live event listener registered.");
 }

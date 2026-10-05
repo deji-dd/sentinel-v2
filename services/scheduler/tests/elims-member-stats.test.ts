@@ -7,6 +7,7 @@ import {
 	playerStatCache,
 } from "@sentinel/database";
 import * as ffscouterModule from "@sentinel/torn-api";
+import { clearPlayerStatMemo } from "@sentinel/torn-api";
 import * as botIpc from "../src/lib/ipc/listener";
 import {
 	runElimsMemberStatsCycle,
@@ -22,6 +23,11 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 	const ORIGINAL_FF_KEY = process.env.FF_SCOUTER_KEY;
 
 	beforeEach(async () => {
+		// This suite deletes the `player_stat_cache` row below to force a fresh
+		// FFScouter fetch. The worker memoises positive DB-cache hits in-process
+		// for 60s, so that memo must be dropped too or the deletion has no effect
+		// on the value served.
+		clearPlayerStatMemo();
 		await db
 			.insert(apiKeys)
 			.values({
@@ -42,6 +48,7 @@ describe("Elims Member Stats & FFScouter Integration", () => {
 	});
 
 	afterEach(async () => {
+		clearPlayerStatMemo();
 		fetchSpy?.mockRestore();
 		botSpy?.mockRestore();
 		cacheSpy?.mockRestore();

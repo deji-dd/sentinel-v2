@@ -58,12 +58,15 @@ export const TORN_ERROR_CODES: Record<number, string> = {
 };
 
 /**
- * Pluggable rate limit tracker interface for callers requiring rate-limiting integration
+ * Pluggable rate limit tracker interface for callers requiring rate-limiting integration.
+ *
+ * Implementations may compute the count synchronously (`UserRateLimiter` does),
+ * so the return type accepts either; `await`-ing a plain number is a no-op.
  */
 export type RateLimitTracker = {
 	waitIfNeeded(apiKey: string): Promise<void>;
 	recordRequest(apiKey: string): Promise<void>;
-	getRequestCount?(apiKey: string): Promise<number>;
+	getRequestCount?(apiKey: string): number | Promise<number>;
 };
 
 /**
@@ -73,6 +76,14 @@ export type TornApiConfig = {
 	rateLimitTracker?: RateLimitTracker;
 	timeout?: number;
 	onInvalidKey?: (apiKey: string, errorCode: number) => Promise<void>;
+	/**
+	 * Retry attempts for transient failures (network, timeout, rate limit).
+	 * Defaults to 3. Set to 1 for opportunistic work that can be skipped and
+	 * retried on a later cycle: retrying a rate-limited call sleeps
+	 * `5000 * attempt` ms, which inside a sequential loop can consume a whole
+	 * cycle budget and get the cycle killed.
+	 */
+	maxAttempts?: number;
 };
 
 /**

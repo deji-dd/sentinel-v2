@@ -142,16 +142,30 @@ export class IpcServer<T = unknown> {
 
 	/**
 	 * Broadcasts a JSON message to all connected clients.
+	 *
+	 * Returns early when nothing is listening so callers that build large
+	 * payloads never pay the serialisation cost for a message nobody receives.
+	 *
+	 * `socket.write` is a no-op when the socket is destroyed, and a `false`
+	 * return means the kernel buffer is full and the payload is now buffered
+	 * in-process; that is logged at debug rather than silently ignored.
 	 */
 	broadcast(payload: T): void {
+		if (this.activeSockets.size === 0) return;
+
 		const data = `${JSON.stringify(payload)}\n`;
 		for (const socket of this.activeSockets) {
-			if (socket.writable && !socket.destroyed) {
-				socket.write(data, (err) => {
-					if (err && (err as { code?: string }).code !== "EPIPE") {
-						logger.debug(`IPC broadcast write error: ${err.message}`);
-					}
-				});
+			if (!socket.writable || socket.destroyed) continue;
+
+			const flushed = socket.write(data, (err) => {
+				if (err && (err as { code?: string }).code !== "EPIPE") {
+					logger.debug(`IPC broadcast write error: ${err.message}`);
+				}
+			});
+			if (!flushed) {
+				logger.debug(
+					"IPC broadcast backpressure: socket buffer full, payload queued in-process.",
+				);
 			}
 		}
 	}

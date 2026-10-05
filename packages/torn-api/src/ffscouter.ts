@@ -625,9 +625,36 @@ export async function flushFFScouterBatcher(): Promise<void> {
 }
 
 /**
+ * Process-wide memo of *positive* `player_stat_cache` hits.
+ *
+ * Six workers independently look up player stats (merc contract pre-warm,
+ * ranked-war opponent resolution, bounty finder, recruitment, target finder and
+ * elims member stats). Each keeps its own in-memory cache, so the same player id
+ * could previously cost a `player_stat_cache` round trip from several workers
+ * within the same minute.
+ *
+ * Only positive hits are memoised, and only for a minute: a row present in the
+ * 30-day DB cache stays present, so this can never serve anything the DB query
+ * would not also have returned. Negative results are deliberately NOT memoised,
+ * because a newly fetched stat is written back by whichever caller fetched it and
+ * must remain visible to the others.
+ */
+const playerStatMemo = new Map<
+	number,
+	{ result: Record<string, unknown>; cachedAt: number }
+>();
+const PLAYER_STAT_MEMO_TTL_MS = 60_000;
+const MAX_PLAYER_STAT_MEMO_ENTRIES = 20_000;
+
+/** Test seam: drops the process-wide positive stat memo. */
+export function clearPlayerStatMemo(): void {
+	playerStatMemo.clear();
+}
+
+/**
  * Centralised entry point for FFScouter player stats with smart coalescing and 30-day DB cache.
  *
- * 1. Checks the `player_stat_cache` table for non-expired entries.
+ * 1. Checks a process-wide memo, then the `player_stat_cache` table, for non-expired entries.
  * 2. Returns cached results immediately for fresh IDs.
  * 3. Transparently coalesces stale/missing IDs across callers within 50ms into batched queries (<=200 IDs).
  * 4. Enforces IP rate limiting (20 req/min) and exponential backoff retries.
@@ -657,27 +684,50 @@ export async function getPlayerStats(
 		return [];
 	}
 
-	// 1. Batch-check the DB cache for all requested IDs
-	let cacheHits = new Map<number, Record<string, unknown>>();
-	try {
-		cacheHits = await getPlayerStatCacheRaw(uniqueIds);
-	} catch (cacheErr) {
-		logger.warn("Failed to check database cache for player stats:", cacheErr);
-	}
-
+	// 1. Serve any ids this process looked up recently without touching the DB.
+	const memoNow = Date.now();
 	const cachedResults: FFScouterTargetResult[] = [];
-	const staleIds: number[] = [];
+	const idsNeedingDbCheck: number[] = [];
 
 	for (const id of uniqueIds) {
+		const memoised = playerStatMemo.get(id);
+		if (memoised && memoNow - memoised.cachedAt < PLAYER_STAT_MEMO_TTL_MS) {
+			cachedResults.push(memoised.result as unknown as FFScouterTargetResult);
+		} else {
+			if (memoised) playerStatMemo.delete(id);
+			idsNeedingDbCheck.push(id);
+		}
+	}
+
+	// 2. Batch-check the DB cache for the remaining IDs
+	let cacheHits = new Map<number, Record<string, unknown>>();
+	if (idsNeedingDbCheck.length > 0) {
+		try {
+			cacheHits = await getPlayerStatCacheRaw(idsNeedingDbCheck);
+		} catch (cacheErr) {
+			logger.warn("Failed to check database cache for player stats:", cacheErr);
+		}
+	}
+
+	const staleIds: number[] = [];
+
+	for (const id of idsNeedingDbCheck) {
 		const hit = cacheHits.get(id);
 		if (hit) {
+			if (playerStatMemo.size >= MAX_PLAYER_STAT_MEMO_ENTRIES) {
+				const oldest = playerStatMemo.keys().next().value;
+				if (oldest !== undefined) playerStatMemo.delete(oldest);
+			}
+			playerStatMemo.set(id, { result: hit, cachedAt: memoNow });
 			cachedResults.push(hit as unknown as FFScouterTargetResult);
 		} else {
 			staleIds.push(id);
 		}
 	}
 
-	logger.info(
+	// Per-call diagnostics are `debug`: as `info` this emitted several lines a
+	// minute from the polling workers for a routine cache statistic.
+	logger.debug(
 		`Player stats cache: ${cachedResults.length} hit(s), ${staleIds.length} miss(es) out of ${uniqueIds.length} requested.`,
 	);
 
@@ -710,7 +760,14 @@ export async function getPlayerStats(
 		);
 	}
 
-	// 4. Return merged results (cached + fresh)
+	// 4. Drop memo entries for ids this call just refreshed: the batcher persists
+	//    the new values, so a later caller must re-read the DB rather than be
+	//    served whatever this process had memoised before the refresh.
+	for (const id of staleIds) {
+		playerStatMemo.delete(id);
+	}
+
+	// 5. Return merged results (cached + fresh)
 	return [...cachedResults, ...freshResults];
 }
 

@@ -1,6 +1,7 @@
 import {
 	boolean,
 	doublePrecision,
+	index,
 	integer,
 	jsonb,
 	pgTable,
@@ -74,20 +75,27 @@ export const deviceControls = pgTable("device_controls", {
 		.notNull(),
 });
 
-export const systemMetrics = pgTable("system_metrics", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => crypto.randomUUID()),
-	serviceId: text("service_id").notNull(),
-	serviceName: text("service_name").notNull(),
-	status: text("status").notNull(),
-	cpuUsage: doublePrecision("cpu_usage").notNull(),
-	memoryRssBytes: doublePrecision("memory_rss_bytes").notNull(),
-	memoryHeapUsedBytes: doublePrecision("memory_heap_used_bytes").notNull(),
-	memoryHeapTotalBytes: doublePrecision("memory_heap_total_bytes").notNull(),
-	latencyMs: integer("latency_ms").notNull(),
-	uptimeSeconds: integer("uptime_seconds").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
+export const systemMetrics = pgTable(
+	"system_metrics",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		serviceId: text("service_id").notNull(),
+		serviceName: text("service_name").notNull(),
+		status: text("status").notNull(),
+		cpuUsage: doublePrecision("cpu_usage").notNull(),
+		memoryRssBytes: doublePrecision("memory_rss_bytes").notNull(),
+		memoryHeapUsedBytes: doublePrecision("memory_heap_used_bytes").notNull(),
+		memoryHeapTotalBytes: doublePrecision("memory_heap_total_bytes").notNull(),
+		latencyMs: integer("latency_ms").notNull(),
+		uptimeSeconds: integer("uptime_seconds").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// Retention pruning deletes by created_at in batches.
+		index("idx_system_metrics_created_at").on(table.createdAt),
+	],
+);

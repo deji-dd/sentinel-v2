@@ -1,5 +1,6 @@
 import {
 	doublePrecision,
+	index,
 	integer,
 	jsonb,
 	pgTable,
@@ -7,23 +8,33 @@ import {
 	timestamp,
 } from "drizzle-orm/pg-core";
 
-export const personalLogs = pgTable("personal_logs", {
-	id: text("id").primaryKey(),
-	log: integer("log").notNull(),
-	title: text("title"),
-	timestamp: timestamp("timestamp", {
-		withTimezone: true,
-		mode: "date",
-	}).notNull(),
-	category: text("category"),
-	data: jsonb("data").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
+export const personalLogs = pgTable(
+	"personal_logs",
+	{
+		id: text("id").primaryKey(),
+		log: integer("log").notNull(),
+		title: text("title"),
+		timestamp: timestamp("timestamp", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		category: text("category"),
+		data: jsonb("data").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// The ledger reconciliation sweeps filter on `log IN (...)` and order by
+		// `timestamp` (crimes/battlestats/stocks anti-joins, gym-unlock scan, and
+		// the wealth range query). Without this the whole table is seq-scanned and
+		// sorted on every sweep, with cost growing as log history accumulates.
+		index("idx_personal_logs_log_timestamp").on(table.log, table.timestamp),
+	],
+);
 
 export const battlestatsLedgers = pgTable("gym_ledgers", {
 	id: text("id").primaryKey(),

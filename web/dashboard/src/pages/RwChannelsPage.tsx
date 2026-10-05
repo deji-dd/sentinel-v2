@@ -168,11 +168,7 @@ export function RwChannelsPage({
 	if (loading) {
 		return (
 			<PageShell>
-				<PageHeader
-					title="Channel Selections"
-					description="Designate the channels ranked-war displays are posted to."
-					icon={Hash}
-				/>
+				<PageHeader title="Channel Selections" icon={Hash} />
 				<Skeleton className="h-10 w-full max-w-lg rounded-xl" />
 				<Skeleton className="h-72 w-full rounded-xl" />
 			</PageShell>
@@ -181,11 +177,7 @@ export function RwChannelsPage({
 
 	return (
 		<PageShell>
-			<PageHeader
-				title="Channel Selections"
-				description="Designate the channels ranked-war displays are posted to."
-				icon={Hash}
-			/>
+			<PageHeader title="Channel Selections" icon={Hash} />
 
 			{/* Faction switcher. Two long faction names cannot share a phone row
 			    comfortably, so the list stretches and each label truncates. */}

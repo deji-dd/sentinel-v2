@@ -1,8 +1,17 @@
 import { db, desc, oilRigSnapshots } from "@sentinel/database";
+import type {
+	CompanyEmployee,
+	CompanyHistoryResponse,
+	CompanyStateResponse,
+	CompanyWeeklyLogsResponse,
+} from "@sentinel/schemas";
 import {
 	analyzeStockAndPricing,
+	buildCompanyDirectives,
+	buildTargetRoleMap,
 	buildWeekToDateLogEntries,
 	getMondayOfWeek,
+	latestMeasuredProduction,
 	loadRollingHistory,
 	solveOptimalRoster,
 } from "@sentinel/utils";
@@ -99,20 +108,9 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 		const dailyAdBudget = latestRow.adBudget;
 		const dailyProfit = dailyRevenue - dailyWages - dailyAdBudget;
 
-		// Solve lineup and stock recommendations
-		const rosterAnalysis = solveOptimalRoster(employeesSnapshot);
-
-		// Determine latest produced barrels from history
-		let dailyProduced: number | undefined;
-		if (history.length >= 2) {
-			const latestH = history[history.length - 1];
-			const prevH = history[history.length - 2];
-			if (latestH && prevH && latestH.stock.soldAmount >= 0) {
-				const delta = latestH.stock.inStock - prevH.stock.inStock;
-				const est = delta + latestH.stock.soldAmount;
-				if (est >= 0) dailyProduced = est;
-			}
-		}
+		// Only a measured extraction rate may drive the drain model; see
+		// latestMeasuredProduction for why one snapshot cannot measure it.
+		const dailyProduced = latestMeasuredProduction(history);
 
 		const stockAnalysis = analyzeStockAndPricing({
 			inStock,
@@ -124,60 +122,75 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 			dailyIncome: dailyRevenue,
 		});
 
+		// The stock analysis identifies the bottleneck, and that bottleneck
+		// re-shapes the roster quotas, so the dashboard's lineup matches the
+		// briefing rather than arguing with it.
+		const rosterAnalysis = solveOptimalRoster(employeesSnapshot, {
+			bottleneck: {
+				extractionBound:
+					stockAnalysis.isFillingUp || stockAnalysis.warehouseCritical,
+			},
+		});
+
 		// Build current WTD
 		const wtdSummary = buildWeekToDateLogEntries({ history });
 
-		const hasRoleTransfers = rosterAnalysis.activeTransfers.length > 0;
-		const hasPriceSuggestion =
-			stockAnalysis.recommendedPrice.action !== "maintain" &&
-			stockAnalysis.recommendedPrice.exact !== currentPrice;
-		const hasAdSuggestion =
-			stockAnalysis.recommendedAdSpend.action !== "maintain" &&
-			stockAnalysis.recommendedAdSpend.amount !== dailyAdBudget;
+		// One shared builder assembles every directive, so the dashboard, the
+		// in-page userscript badges and the Discord briefing all read the same
+		// analysis. Nothing here re-derives "is a change needed".
+		const directives = buildCompanyDirectives({
+			roster: rosterAnalysis,
+			stock: stockAnalysis,
+			history,
+			currentAdBudget: dailyAdBudget,
+			barrelPrice: currentPrice,
+			openSeats: Math.max(
+				0,
+				Number(
+					(profile.employees as { capacity?: number } | undefined)?.capacity ??
+						21,
+				) - employeesSnapshot.length,
+			),
+			staffCount: employeesSnapshot.length,
+		});
 
 		const t1 = rosterAnalysis.rehabTiers.tier1;
 		const t2 = rosterAnalysis.rehabTiers.tier2;
 		const t3 = rosterAnalysis.rehabTiers.tier3;
-		const hasAddiction = t1.length > 0 || t2.length > 0 || t3.length > 0;
-
-		const allOptimal =
-			!hasRoleTransfers &&
-			!hasPriceSuggestion &&
-			!hasAdSuggestion &&
-			!hasAddiction;
 
 		// Map employees with optimal targets and rehab tiers
-		const transferMap = new Map<string, string>();
-		for (const t of rosterAnalysis.activeTransfers) {
-			transferMap.set(t.name, t.toRole);
-		}
+		const transferMap = buildTargetRoleMap(directives);
 
 		const tierMap = new Map<string, 1 | 2 | 3>();
 		for (const e of t1) tierMap.set(e.name, 1);
 		for (const e of t2) tierMap.set(e.name, 2);
 		for (const e of t3) tierMap.set(e.name, 3);
 
-		const enrichedEmployees = employeesSnapshot.map((emp) => {
-			const targetRole = transferMap.get(emp.name);
-			const rehabTier = tierMap.get(emp.name);
-			return {
-				id: emp.id,
-				name: emp.name,
-				positionName: emp.position.name,
-				wage: emp.wage,
-				addiction: emp.effectiveness.addiction,
-				stats: {
-					manualLabor: emp.stats.manual_labor,
-					intelligence: emp.stats.intelligence,
-					endurance: emp.stats.endurance,
-				},
-				targetRole,
-				isOptimal: !targetRole,
-				rehabTier,
-			};
-		});
+		const enrichedEmployees: CompanyEmployee[] = employeesSnapshot.map(
+			(emp) => {
+				const targetRole = transferMap.get(emp.name);
+				const rehabTier = tierMap.get(emp.name);
+				return {
+					id: emp.id,
+					name: emp.name,
+					// Unnamed positions used to leak through as `undefined` and render
+					// literally in the userscript; use the same label as the briefing.
+					positionName: emp.position.name?.trim() || "Unassigned",
+					wage: emp.wage,
+					addiction: emp.effectiveness.addiction,
+					stats: {
+						manualLabor: emp.stats.manual_labor,
+						intelligence: emp.stats.intelligence,
+						endurance: emp.stats.endurance,
+					},
+					targetRole,
+					isOptimal: !targetRole,
+					rehabTier,
+				};
+			},
+		);
 
-		return {
+		const response: CompanyStateResponse = {
 			success: true,
 			profile: {
 				name: String(profile.name ?? "Succession Oil"),
@@ -211,29 +224,11 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 				dailySold,
 				dailyProduced,
 			},
-			directives: {
-				roleTransfers: rosterAnalysis.activeTransfers,
-				adSpend: {
-					action: stockAnalysis.recommendedAdSpend.action,
-					amount: stockAnalysis.recommendedAdSpend.amount,
-					formatted: stockAnalysis.recommendedAdSpend.formatted,
-					isChanged: hasAdSuggestion,
-				},
-				pricing: {
-					action: stockAnalysis.recommendedPrice.action,
-					exact: stockAnalysis.recommendedPrice.exact,
-					formatted: stockAnalysis.recommendedPrice.formatted,
-					isChanged: hasPriceSuggestion,
-				},
-				rehabTiers: {
-					tier1: t1,
-					tier2: t2,
-					tier3: t3,
-				},
-				allOptimal,
-			},
+			directives,
 			employees: enrichedEmployees,
 		};
+
+		return response;
 	})
 	.get(
 		"/weekly-logs",
@@ -294,7 +289,7 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 			const endD = targetSunday.getUTCDate();
 			const weekLabel = `${startM} ${startD} - ${endM} ${endD}, ${targetMonday.getUTCFullYear()}`;
 
-			return {
+			const response: CompanyWeeklyLogsResponse = {
 				success: true,
 				offset,
 				hasPrev,
@@ -325,6 +320,8 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 					avgPrice,
 				},
 			};
+
+			return response;
 		},
 		{
 			query: t.Object({
@@ -339,15 +336,19 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 			const history = await loadRollingHistory(days);
 
 			const timeline = history.map((h) => {
-				const expenses = (h.dailyWages ?? 0) + (h.adBudget ?? 0);
+				const wages = h.dailyWages ?? 0;
+				const adBudget = h.adBudget ?? 0;
 				return {
 					isoDate: h.isoDate,
 					timestamp: h.timestamp,
 					income: h.dailyIncome,
-					wages: h.dailyWages ?? 0,
-					adBudget: h.adBudget ?? 0,
-					expenses,
-					profit: h.dailyProfit,
+					wages,
+					adBudget,
+					expenses: wages + adBudget,
+					// Older snapshots may predate stored profit; fall back to the same
+					// arithmetic the week-to-date builder uses so the chart never
+					// receives an undefined point.
+					profit: h.dailyProfit ?? h.dailyIncome - wages - adBudget,
 					sold: h.stock.soldAmount,
 					produced: h.dailyProduced ?? 0,
 					stock: h.stock.inStock,
@@ -356,10 +357,12 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 				};
 			});
 
-			return {
+			const response: CompanyHistoryResponse = {
 				success: true,
 				timeline,
 			};
+
+			return response;
 		},
 		{
 			query: t.Object({

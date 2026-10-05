@@ -51,6 +51,8 @@ export type RunnerStatus = {
 	lastError: string | null;
 	lastRunAt: number | null;
 	lastSuccessAt: number | null;
+	/** Wall-clock duration of the most recent cycle in milliseconds. */
+	lastDurationMs: number | null;
 	nextRunAt: number | null;
 };
 
@@ -102,7 +104,10 @@ export class ScheduledRunner {
 	private lastError: string | null = null;
 	private lastSuccessAt: number | null = null;
 	private lastRunAt: number | null = null;
+	private lastDurationMs: number | null = null;
 	private nextRunAt: number | null = null;
+	/** Set once a suspiciously-immediate reschedule has been reported. */
+	private hasWarnedAboutImmediateReschedule = false;
 	private retryPolicy: Required<RetryPolicy>;
 
 	constructor(config: EventRunnerConfig) {
@@ -178,6 +183,14 @@ export class ScheduledRunner {
 			return this.schedule.seconds;
 		}
 		return this.config.defaultCadenceSeconds ?? 86400;
+	}
+
+	/**
+	 * Configured cadence in seconds, used to judge whether a reschedule delay is
+	 * suspiciously short for this worker.
+	 */
+	private get configuredCadenceSeconds(): number {
+		return this.effectiveCadenceSeconds;
 	}
 
 	/**
@@ -323,6 +336,7 @@ export class ScheduledRunner {
 			}
 			this.isExecuting = false;
 			this.lastRunAt = startTime;
+			this.lastDurationMs = Date.now() - startTime;
 
 			if (!this.isStopped) {
 				let nextRunTimeMs: number;
@@ -425,6 +439,23 @@ export class ScheduledRunner {
 				}
 
 				const nextDelayMs = Math.max(0, nextRunTimeMs - Date.now());
+
+				// A handler that returns a count/small number instead of an epoch-ms
+				// timestamp makes the runner reschedule immediately and spin. That is
+				// silent by construction, so report it once per runner for any worker
+				// whose configured cadence is comfortably longer than instant.
+				if (
+					!this.hasWarnedAboutImmediateReschedule &&
+					customNextRunMs !== undefined &&
+					nextDelayMs < 100 &&
+					this.configuredCadenceSeconds >= 15
+				) {
+					this.hasWarnedAboutImmediateReschedule = true;
+					this.logger.error(
+						`Handler returned ${customNextRunMs} as the next-run time, which is ${nextDelayMs}ms away while the configured cadence is ${this.configuredCadenceSeconds}s. A numeric handler result must be an absolute epoch-ms timestamp, not a count — this worker is spinning.`,
+					);
+				}
+
 				this.scheduleNext(nextDelayMs);
 			}
 		}
@@ -489,6 +520,7 @@ export class ScheduledRunner {
 			lastError: this.lastError,
 			lastRunAt: this.lastRunAt,
 			lastSuccessAt: this.lastSuccessAt,
+			lastDurationMs: this.lastDurationMs,
 			nextRunAt: this.nextRunAt,
 		};
 	}
@@ -510,10 +542,21 @@ const activeRunners = new Map<string, ScheduledRunner>();
 
 /**
  * Helper function to instantiate and start a scheduled runner.
+ *
+ * Idempotent per worker id: starting a worker that is already running stops the
+ * existing runner first. Without this, a second start (e.g. a repeated
+ * "start workers" IPC command) overwrote the registry entry while leaving the
+ * original timer live, permanently doubling that worker's cycle rate and
+ * orphaning a runner that could no longer be stopped by name.
  */
 export function startEventDrivenRunner(
 	config: EventRunnerConfig,
 ): ScheduledRunner {
+	const existing = activeRunners.get(config.worker);
+	if (existing) {
+		existing.stop();
+	}
+
 	const runner = new ScheduledRunner(config);
 	activeRunners.set(config.worker, runner);
 	runner.start();

@@ -27,17 +27,51 @@ let systemKeyIndex = 0;
 const guildKeyIndexMap = new Map<string, number>();
 
 /**
+ * TTL for the memoised decrypted system key pool.
+ *
+ * Every implicit-key `get`/`getRaw` resolves the pool, and polling workers call
+ * those in bursts (the territory engine issues 11 requests per cycle), so an
+ * uncached pool meant a full SELECT plus an AES-GCM decrypt per key on every
+ * request — twice per request, because `getNextSystemKey` resolved it again.
+ *
+ * Kept well under the API-key disable cooldown so a revoked key stops being
+ * handed out promptly; the health filter is applied *after* the cache read, so
+ * per-key disable state stays live regardless.
+ */
+const SYSTEM_KEY_POOL_TTL_MS = 30_000;
+
+let cachedSystemKeyPool: ManagedApiKey[] | null = null;
+let cachedSystemKeyPoolAt = 0;
+
+/** Drops the memoised system key pool (test seam, and for key-mutation paths). */
+export function clearSystemKeyPoolCache(): void {
+	cachedSystemKeyPool = null;
+	cachedSystemKeyPoolAt = 0;
+}
+
+/**
  * Fetches all active system API keys in the database (keyType = 'system').
  * Isolates personal keys so they are never consumed by general background tasks.
+ *
+ * Results are memoised for `SYSTEM_KEY_POOL_TTL_MS` to keep key resolution off
+ * the hot path of every API call.
  */
 export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
+	const now = Date.now();
+	if (
+		cachedSystemKeyPool &&
+		now - cachedSystemKeyPoolAt < SYSTEM_KEY_POOL_TTL_MS
+	) {
+		return cachedSystemKeyPool;
+	}
+
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 	const keysInDb = await db.query.apiKeys.findMany({
 		where: and(eq(apiKeys.isValid, true), eq(apiKeys.keyType, "system")),
 	});
 
 	if (keysInDb.length > 0) {
-		return keysInDb.map((k) => ({
+		const pool = keysInDb.map((k) => ({
 			apiKey:
 				k.apiKeyEncrypted.length > 16 && masterKey
 					? decryptApiKey(k.apiKeyEncrypted, masterKey)
@@ -45,6 +79,10 @@ export async function getSystemKeyPool(): Promise<ManagedApiKey[]> {
 			userId: k.userId,
 			keyType: k.keyType,
 		}));
+
+		cachedSystemKeyPool = pool;
+		cachedSystemKeyPoolAt = now;
+		return pool;
 	}
 
 	throw new Error("No valid system API keys available in database.");
@@ -76,11 +114,44 @@ export async function getNextSystemKey(): Promise<ManagedApiKey> {
 }
 
 /**
+ * TTL for the memoised decrypted per-guild key pool.
+ *
+ * `getNextGuildKey` calls this on every failover attempt, and the elims
+ * user-resolver calls it an extra time just to test whether the pool is empty —
+ * so a single key resolution could issue three selects against three tables plus
+ * a decrypt per key, repeated up to four times.
+ *
+ * The rows are ordered by `lastUsedAt` for least-recently-used selection, so the
+ * TTL is kept short: within the window that ordering is slightly stale, but
+ * round-robin selection still spreads load via the per-guild index.
+ */
+const GUILD_KEY_POOL_TTL_MS = 30_000;
+const guildKeyPoolCache = new Map<
+	string,
+	{ pool: ManagedApiKey[]; cachedAt: number }
+>();
+
+/** Drops memoised guild key pools (test seam, and for key-mutation paths). */
+export function clearGuildKeyPoolCache(guildId?: string): void {
+	if (guildId === undefined) {
+		guildKeyPoolCache.clear();
+		return;
+	}
+	guildKeyPoolCache.delete(guildId);
+}
+
+/**
  * Fetches all active tournament guild API keys in the database for a specific guild (`elimsApiKeys` table).
  */
 export async function getGuildKeyPool(
 	guildId: string,
 ): Promise<ManagedApiKey[]> {
+	const cached = guildKeyPoolCache.get(guildId);
+	const now = Date.now();
+	if (cached && now - cached.cachedAt < GUILD_KEY_POOL_TTL_MS) {
+		return cached.pool;
+	}
+
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 	const [guildKeys, elimsKeys, subversiveKeys] = await Promise.all([
 		db
@@ -131,9 +202,11 @@ export async function getGuildKeyPool(
 			}
 		}
 
+		guildKeyPoolCache.set(guildId, { pool: result, cachedAt: now });
 		return result;
 	}
 
+	guildKeyPoolCache.set(guildId, { pool: [], cachedAt: now });
 	return [];
 }
 
@@ -387,6 +460,9 @@ export class ManagedTornApiClient {
 		this.client = new TornApiClient({
 			onInvalidKey: async (apiKey, errorCode) => {
 				await this.keyHealthManager.handleInvalidKey(apiKey, errorCode);
+				// `handleInvalidKey` persists key validity, so the memoised pool is
+				// now stale and must be re-read rather than serving the dead key.
+				clearSystemKeyPoolCache();
 			},
 		});
 	}
@@ -394,9 +470,15 @@ export class ManagedTornApiClient {
 	/**
 	 * Selects the next available system key, filtering out keys currently in temporary disable cooldown.
 	 * If all system keys are temporarily disabled, falls back to available keys with a warning.
+	 *
+	 * @param excludeKeys - Keys already tried for this request.
+	 * @param resolvedPool - Pool the caller already resolved, to avoid a second lookup.
 	 */
-	async getNextSystemKey(excludeKeys?: Set<string>): Promise<ManagedApiKey> {
-		const pool = await getSystemKeyPool();
+	async getNextSystemKey(
+		excludeKeys?: Set<string>,
+		resolvedPool?: ManagedApiKey[],
+	): Promise<ManagedApiKey> {
+		const pool = resolvedPool ?? (await getSystemKeyPool());
 		let candidates = pool.filter(
 			(k) =>
 				!this.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey) &&
@@ -464,6 +546,8 @@ export class ManagedTornApiClient {
 			apiKey?: string;
 			pathParams?: OperationPathParams<PathOperation<P>>;
 			queryParams?: OperationQueryParams<PathOperation<P>>;
+			/** Per-call retry override; see `TornApiConfig.maxAttempts`. */
+			maxAttempts?: number;
 		},
 	): Promise<OperationResponse<PathOperation<P>>> {
 		const isSpecificKey = options?.apiKey !== undefined;
@@ -481,6 +565,7 @@ export class ManagedTornApiClient {
 			const result = await this.client.get(path, {
 				apiKey: decryptedKey,
 				pathParams: options.pathParams,
+				maxAttempts: options.maxAttempts,
 				queryParams: {
 					comment: "Sentinel",
 					...options.queryParams,
@@ -497,7 +582,7 @@ export class ManagedTornApiClient {
 		let lastError: unknown = null;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			const systemKey = await this.getNextSystemKey(triedKeys);
+			const systemKey = await this.getNextSystemKey(triedKeys, pool);
 			const apiKey = systemKey.apiKey;
 			const userId = systemKey.userId;
 			triedKeys.add(apiKey);
@@ -585,7 +670,7 @@ export class ManagedTornApiClient {
 		let lastError: unknown = null;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			const systemKey = await this.getNextSystemKey(triedKeys);
+			const systemKey = await this.getNextSystemKey(triedKeys, pool);
 			const apiKey = systemKey.apiKey;
 			const userId = systemKey.userId;
 			triedKeys.add(apiKey);

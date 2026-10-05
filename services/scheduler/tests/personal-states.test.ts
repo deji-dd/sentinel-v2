@@ -199,13 +199,23 @@ describe("Personal State Sync Worker", () => {
 		await expect(runPersonalStateSync()).resolves.toBeUndefined();
 	});
 
-	test("handles API errors gracefully without crashing", async () => {
+	test("surfaces API errors to the runner instead of reporting a false success", async () => {
 		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
 			(async () => {
 				throw new Error("Network timeout or connection reset");
 			}) as unknown as typeof tornApi.getPersonal,
 		);
 
-		await expect(runPersonalStateSync()).resolves.toBeUndefined();
+		// The cycle must reject so `ScheduledRunner` records the failure, applies
+		// its backoff and reports `degraded` on /health. Previously the error was
+		// swallowed inside the handler, so this worker reported success on every
+		// cycle while never actually syncing.
+		//
+		// "Graceful" is now the runner's job: it catches this rejection, so the
+		// process still does not crash — that containment is covered by the
+		// scheduler runner's own tests.
+		await expect(runPersonalStateSync()).rejects.toThrow(
+			"Network timeout or connection reset",
+		);
 	});
 });

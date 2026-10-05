@@ -19,8 +19,12 @@ import { startSubversiveRankedWarWorker } from "./subversive/ranked-war-worker";
 import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
 import { startRetalTracker } from "./subversive/retal-tracker";
 import { startSubversiveSnapshotIngestionWorker } from "./subversive/snapshot-ingestion-worker";
+import { startSubversiveStockAlerts } from "./subversive/stock-alerts";
 import { startSubversiveTargetFinderWorker } from "./subversive/target-finder-worker";
-import { startSystemMaintenance } from "./system/maintenance";
+import {
+	startSystemMaintenance,
+	startSystemRetention,
+} from "./system/maintenance";
 import { startTornAbroadStocks } from "./torn/abroad-stocks";
 import { startTornReferences } from "./torn/references";
 import { startTornTerritoryActivity } from "./torn/territory-activity";
@@ -48,8 +52,14 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 	{
 		id: "system:maintenance",
 		description:
-			"Daily table retention pruning and personal ledger historical reconciliation sweeps",
+			"Daily 04:00 UTC off-peak sweeps: personal ledger historical reconciliations and guild/module reconciliation",
 		start: startSystemMaintenance,
+	},
+	{
+		id: "system:retention",
+		description:
+			"Six-hourly bounded table retention pruning (war ledgers, verification logs, faction attacks, elims history, metrics, travel stock history)",
+		start: startSystemRetention,
 	},
 	{
 		id: "torn:territory_data",
@@ -150,6 +160,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Daily Torn active players snapshot CSV ingestion and filtering engine",
 		start: startSubversiveSnapshotIngestionWorker,
+	},
+	{
+		id: "subversive:stock_alerts",
+		description:
+			"5-minute Torn stock market scanner: 24-hour and all-time highs/lows plus significant price moves for the Subversive family factions",
+		start: startSubversiveStockAlerts,
 	},
 	{
 		id: "merc:contract_worker",

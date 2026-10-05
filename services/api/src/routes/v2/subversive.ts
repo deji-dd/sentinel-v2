@@ -40,6 +40,10 @@ import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
 } from "../../lib/scheduler-ipc";
+import {
+	StockAlertConfigError,
+	subversiveStockAlertManager,
+} from "../../lib/stock-alert-config-manager";
 import { hasActiveSubversiveKeys } from "../../lib/subversive-key-pool";
 import { authPlugin } from "../../middleware/auth";
 import { verifyGuildAdmin } from "./guilds";
@@ -98,6 +102,9 @@ const INVALID_DIBS_FACTION_ERROR =
 
 const INVALID_RW_CHANNELS_FACTION_ERROR =
 	"Invalid factionId: ranked-war channels are only available for the Subversive family factions.";
+
+const INVALID_STOCK_ALERTS_FACTION_ERROR =
+	"Invalid factionId: stock alerts are only available for the Subversive family factions.";
 
 /**
  * Validates an optional faction id coming from a request and resolves it to a
@@ -1345,6 +1352,141 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				summary: "Update Subversive Ranked-War Channel Selections",
 				description:
 					"Routes ranked-war tooling channels for one family faction. The primary and secondary selections must differ.",
+			},
+		},
+	)
+
+	// ─── GET /api/v1/subversive/stock-alert-config ────────────────────────────
+	.get(
+		"/stock-alert-config",
+		async ({ user, set, query }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(query?.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_STOCK_ALERTS_FACTION_ERROR };
+			}
+
+			const config = await subversiveStockAlertManager.getConfig(factionId);
+			return {
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config,
+			};
+		},
+		{
+			query: t.Object({
+				factionId: t.Optional(t.Numeric()),
+			}),
+			detail: {
+				summary: "Get Subversive Stock Alert Configuration",
+				description:
+					"Returns the Torn stock-market alert settings for one family faction: alert channel, notable-move rules, high/low windows and cooldown.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/subversive/stock-alert-config ────────────────────────────
+	.put(
+		"/stock-alert-config",
+		async ({ body, user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(body.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_STOCK_ALERTS_FACTION_ERROR };
+			}
+
+			const { factionId: _ignored, ...patch } = body;
+			try {
+				const updated = await subversiveStockAlertManager.updateConfig(
+					patch,
+					user?.username ?? "admin",
+					factionId,
+				);
+				return {
+					success: true,
+					factionId,
+					factionName: getSubversiveFactionName(factionId),
+					config: updated,
+				};
+			} catch (err) {
+				// Only an unhonourable configuration is a client mistake. Anything
+				// else is a genuine failure and must not be reported as a bad request.
+				if (err instanceof StockAlertConfigError) {
+					set.status = 400;
+					return { error: err.message };
+				}
+				throw err;
+			}
+		},
+		{
+			body: t.Object({
+				factionId: t.Optional(t.Numeric()),
+				enabled: t.Optional(t.Boolean()),
+				channelId: t.Optional(t.Nullable(t.String())),
+				changeRules: t.Optional(
+					t.Array(
+						t.Object({
+							windowMinutes: t.Number(),
+							thresholdPct: t.Number(),
+						}),
+					),
+				),
+				highLowWindows: t.Optional(t.Array(t.String())),
+				cooldownMinutes: t.Optional(t.Number()),
+			}),
+			detail: {
+				summary: "Update Subversive Stock Alert Configuration",
+				description:
+					"Routes stock-market alerts for one family faction and sets the notable-move rules, high/low windows and cooldown they are throttled by.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/subversive/stock-alerts/run-now ─────────────────────────
+	.post(
+		"/stock-alerts/run-now",
+		async ({ user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const hasKeys = await hasActiveSubversiveKeys();
+			if (!hasKeys) {
+				set.status = 400;
+				return {
+					error:
+						"No active Torn API keys available in the Subversive script key pool. Please ensure at least one active user or system key is available.",
+				};
+			}
+
+			const delivered = await notifySchedulerForceRun(
+				"subversive:stock_alerts",
+			);
+
+			return {
+				success: true,
+				message: delivered
+					? "Stock alert check triggered immediately via scheduler IPC."
+					: "Scheduler IPC unreachable; the check will execute on the next 5-minute cycle.",
+			};
+		},
+		{
+			detail: {
+				summary: "Trigger Immediate Stock Alert Check",
+				description:
+					"Instructs the scheduler background worker to poll the Torn stock market immediately and evaluate stock alerts.",
 			},
 		},
 	)

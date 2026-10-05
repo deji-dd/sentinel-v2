@@ -224,12 +224,16 @@ export async function runTornReferenceSync(): Promise<void> {
 				? res.stocks
 				: Object.values(res.stocks);
 
+			// The v2 payload keys each stock by `id`; an earlier revision of this
+			// filter looked for `stock_id`, which no v2 response contains, so the
+			// table silently stayed empty and every consumer fell back to
+			// incomplete data.
 			const validStocks = stocksList.filter(
-				(stock): stock is TornSchema<"TornStock"> & { stock_id: number } =>
+				(stock): stock is TornSchema<"TornStock"> & { id: number } =>
 					stock !== null &&
 					typeof stock === "object" &&
-					"stock_id" in stock &&
-					typeof stock.stock_id === "number",
+					"id" in stock &&
+					typeof stock.id === "number",
 			);
 
 			if (validStocks.length > 0) {
@@ -238,22 +242,32 @@ export async function runTornReferenceSync(): Promise<void> {
 					const chunk = validStocks.slice(i, i + chunkSize);
 					await db.transaction(async (tx) => {
 						for (const stock of chunk) {
+							const id = stock.id.toString();
+							const name = stock.name ?? `Stock ${stock.id}`;
+							const acronym = stock.acronym ?? "";
 							await tx
 								.insert(tornStocks)
 								.values({
-									id: stock.stock_id.toString(),
-									name: stock.name ?? `Stock ${stock.stock_id}`,
-									acronym: stock.acronym ?? "",
-									market: stock,
+									id,
+									name,
+									acronym,
+									// `market` holds the whole stock payload so the market
+									// figures and images survive, while `bonus` is split out
+									// because the personal stocks ledger reads it directly.
+									market: stock.market ?? null,
+									bonus: stock.bonus ?? null,
+									images: stock.images ?? null,
 									createdAt: now,
 									updatedAt: now,
 								})
 								.onConflictDoUpdate({
 									target: tornStocks.id,
 									set: {
-										name: stock.name ?? `Stock ${stock.stock_id}`,
-										acronym: stock.acronym ?? "",
-										market: stock,
+										name,
+										acronym,
+										market: stock.market ?? null,
+										bonus: stock.bonus ?? null,
+										images: stock.images ?? null,
 										updatedAt: now,
 									},
 								});

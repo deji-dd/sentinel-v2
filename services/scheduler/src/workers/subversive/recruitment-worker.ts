@@ -3,6 +3,7 @@ import {
 	desc,
 	eq,
 	gte,
+	inArray,
 	subversiveRankedWars,
 	subversiveRecruitmentCandidates,
 	systemStates,
@@ -374,16 +375,24 @@ export async function runRecruitmentCycle(options?: {
 
 	const excludedFactionSet = new Set(config.excludedFactionIds ?? []);
 
+	// Resolve which wars are already stored in one query instead of one SELECT
+	// per war inside the loop (up to MAX_RECRUITMENT_PAGES x page limit reads).
+	const existingWarRows = await db
+		.select({ id: subversiveRankedWars.id })
+		.from(subversiveRankedWars)
+		.where(
+			inArray(
+				subversiveRankedWars.id,
+				allWarsToEvaluate.map((war) => war.id),
+			),
+		);
+	const alreadyStoredWarIds = new Set(existingWarRows.map((row) => row.id));
+
 	for (const war of allWarsToEvaluate) {
 		evaluatedWarIds.add(war.id);
 
-		// Double-check DB in case of multiple replicas
-		const [alreadyInDb] = await db
-			.select({ id: subversiveRankedWars.id })
-			.from(subversiveRankedWars)
-			.where(eq(subversiveRankedWars.id, war.id));
-
-		if (alreadyInDb) {
+		// Double-check the snapshot in case of multiple replicas
+		if (alreadyStoredWarIds.has(war.id)) {
 			continue;
 		}
 

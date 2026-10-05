@@ -64,6 +64,7 @@ const BROADCAST_HEARTBEAT_MS = 30_000;
 /** Test seam: clears all broadcast suppression state. */
 export function resetRwDisplaysBroadcastState(): void {
 	lastSentByFaction.clear();
+	lastClassifiedByFaction.clear();
 }
 
 /**
@@ -104,6 +105,77 @@ export function shouldBroadcastRwDisplays(
  */
 export function hasRwDisplaysBroadcastState(factionId: number): boolean {
 	return lastSentByFaction.has(factionId);
+}
+
+/** Minimal shape needed to fingerprint a roster without classifying it. */
+export type FingerprintableOpponent = {
+	id: number;
+	estimatedBs?: number | null;
+	status?: { state?: string | null; until?: number | null } | null;
+	lastAction?: { status?: string | null; timestamp?: number | null } | null;
+};
+
+/**
+ * Cheap fingerprint of an opponent roster.
+ *
+ * Deliberately computed straight from the raw roster so it can be compared
+ * *before* the expensive classification pass (five array copies and sorts per
+ * faction per tick). It covers every field the buckets are derived from, so an
+ * unchanged fingerprint guarantees an unchanged bucket set; it may occasionally
+ * over-report (a field that does not affect buckets changing), which costs one
+ * redundant classify rather than a missed update.
+ */
+export function buildOpponentFingerprint(
+	opponents: readonly FingerprintableOpponent[],
+): string {
+	const parts: string[] = [];
+	for (const o of opponents) {
+		parts.push(
+			`${o.id}.${o.estimatedBs ?? 0}.${o.status?.state ?? ""}.${o.status?.until ?? 0}.${o.lastAction?.status ?? ""}.${o.lastAction?.timestamp ?? 0}`,
+		);
+	}
+	return parts.join(",");
+}
+
+interface RwReclassifyState {
+	fingerprint: string;
+	lastClassifiedAtMs: number;
+}
+
+const lastClassifiedByFaction = new Map<number, RwReclassifyState>();
+
+/**
+ * Whether the roster needs re-classifying this tick.
+ *
+ * Classification is the expensive half of the display path and its result is
+ * usually discarded by `shouldBroadcastRwDisplays`, so gate it on a roster
+ * fingerprint first. The heartbeat keeps the bucket signature fresh even on a
+ * static roster, which is what `shouldBroadcastRwDisplays` needs to decide
+ * whether to re-send.
+ */
+export function shouldReclassifyRwDisplays(
+	factionId: number,
+	fingerprint: string,
+	nowMs: number,
+): boolean {
+	const prev = lastClassifiedByFaction.get(factionId);
+	if (!prev) {
+		lastClassifiedByFaction.set(factionId, {
+			fingerprint,
+			lastClassifiedAtMs: nowMs,
+		});
+		return true;
+	}
+
+	const changed = fingerprint !== prev.fingerprint;
+	const stale = nowMs - prev.lastClassifiedAtMs >= BROADCAST_HEARTBEAT_MS;
+	if (!changed && !stale) return false;
+
+	lastClassifiedByFaction.set(factionId, {
+		fingerprint,
+		lastClassifiedAtMs: nowMs,
+	});
+	return true;
 }
 
 /**

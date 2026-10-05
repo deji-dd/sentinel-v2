@@ -4,6 +4,7 @@ import {
 	eq,
 	getMercChannelConfig,
 	getMercContractSummary,
+	getMercContractTotalPayout,
 	guildConfigs,
 	inArray,
 	type MercContract,
@@ -11,7 +12,12 @@ import {
 	mercContracts,
 } from "@sentinel/database";
 import type { FactionMember } from "@sentinel/schemas";
-import { getPlayerStats, TornApiClient, TornError } from "@sentinel/torn-api";
+import {
+	getPlayerStats,
+	TornApiClient,
+	TornError,
+	tornApi,
+} from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
@@ -53,6 +59,9 @@ export interface MercActiveTargetAlert {
 }
 
 export const OFFLINE_JITTER_SECONDS = 10;
+
+/** Upper bound on cached BS estimates, evicted in insertion order. */
+const MAX_STATS_CACHE_ENTRIES = 5_000;
 
 /**
  * Explicit execution budget for the contract worker. The 1s cadence default floors
@@ -286,6 +295,37 @@ export class MercTargetManager {
 				this.offlineTracker.delete(key);
 			}
 		}
+
+		// Per-contract tracker state that would otherwise be retained forever:
+		// revivables signatures are keyed `${guildId}:${contractId}`, and the
+		// auto-stop/perf-log stamps are keyed by contract id.
+		const contractSuffix = `:${contractId}`;
+		for (const key of revivablesUpdateTracker.keys()) {
+			if (key.endsWith(contractSuffix)) {
+				revivablesUpdateTracker.delete(key);
+			}
+		}
+		autoStopCheckedAt.delete(contractId);
+		perfLogAt.delete(contractId);
+	}
+
+	/**
+	 * Records a BS estimate, keeping the cache bounded.
+	 *
+	 * The cache is keyed by member id and shared across contracts, so it is not
+	 * pruned per contract; instead it evicts in insertion order once it exceeds
+	 * `MAX_STATS_CACHE_ENTRIES`. Estimates are approximate by nature, so dropping
+	 * the oldest entry costs at most one extra batched FFScouter lookup.
+	 */
+	private setCachedBs(memberId: number, value: number): void {
+		if (
+			!this.statsCache.has(memberId) &&
+			this.statsCache.size >= MAX_STATS_CACHE_ENTRIES
+		) {
+			const oldest = this.statsCache.keys().next().value;
+			if (oldest !== undefined) this.statsCache.delete(oldest);
+		}
+		this.statsCache.set(memberId, value);
 	}
 
 	async resolveEstimatedBs(memberId: number, level: number): Promise<number> {
@@ -298,7 +338,7 @@ export class MercTargetManager {
 			const [ffResult] = await getPlayerStats([memberId]);
 			this.bsFetchMs += Date.now() - fetchStartedAt;
 			if (ffResult?.bs_estimate && ffResult.bs_estimate > 0) {
-				this.statsCache.set(memberId, ffResult.bs_estimate);
+				this.setCachedBs(memberId, ffResult.bs_estimate);
 				return ffResult.bs_estimate;
 			}
 		} catch (err) {
@@ -309,7 +349,7 @@ export class MercTargetManager {
 		}
 
 		const approxBs = Math.max(10_000, level * 50_000);
-		this.statsCache.set(memberId, approxBs);
+		this.setCachedBs(memberId, approxBs);
 		return approxBs;
 	}
 
@@ -369,14 +409,14 @@ export class MercTargetManager {
 			const id = Number(r?.player_id);
 			if (!Number.isInteger(id) || id <= 0) continue;
 			if (r?.bs_estimate && r.bs_estimate > 0) {
-				this.statsCache.set(id, r.bs_estimate);
+				this.setCachedBs(id, r.bs_estimate);
 				resolved++;
 			} else {
 				// Preserve the existing level-based fallback, cached so the
 				// per-member path stays a pure cache hit afterwards.
 				const level = levelById.get(id);
 				if (level !== undefined) {
-					this.statsCache.set(id, Math.max(10_000, level * 50_000));
+					this.setCachedBs(id, Math.max(10_000, level * 50_000));
 				}
 			}
 		}
@@ -641,10 +681,14 @@ export class MercTargetManager {
 		}
 
 		// 4. Target is valid! Check if alert needs to be posted, updated, or reposted
-		const estimatedBs = await this.resolveEstimatedBs(m.id, m.level);
 		const isStrickenEligible = Boolean(effectiveTerms?.strickenHits);
 
 		if (!existingAlert) {
+			// Only the fresh-alert path needs the BS estimate; every update/repost
+			// below reuses `existingAlert.estimatedBs`, so resolving it per member
+			// per tick was a wasted await on the hot path.
+			const estimatedBs = await this.resolveEstimatedBs(m.id, m.level);
+
 			// Create fresh alert
 			const newAlert: MercActiveTargetAlert = {
 				contractId: contract.id,
@@ -867,10 +911,63 @@ interface TornFactionMembersResponse {
 let lastTrackedSummaryKey = "";
 let lastTrackedLogTime = 0;
 let lastExpiredTokenCheck = 0;
+let lastContractsQueryLogTime = 0;
 const revivablesUpdateTracker = new Map<
 	string,
 	{ signature: string; lastSentAt: number }
 >();
+/** Last time the per-contract performance diagnostic line was emitted. */
+const perfLogAt = new Map<string, number>();
+/** Contracts whose targets have already been cleaned for the current pause. */
+const cleanedPausedContracts = new Set<string>();
+
+/**
+ * Minimum gap between two auto-stop threshold checks per contract.
+ *
+ * The validator already enforces auto-stop event-driven immediately after each
+ * credited hit, so this per-cycle check is only a safety net — recomputing the
+ * full payout aggregate every second bought nothing and cost an unbounded read.
+ */
+const AUTO_STOP_CHECK_INTERVAL_MS = 15_000;
+const autoStopCheckedAt = new Map<string, number>();
+
+/**
+ * Cached per-guild configuration, keyed by guild id. Guild/channel config
+ * changes on human timescales (an admin renaming a channel), so re-reading it
+ * on every 1-second cycle was pure overhead.
+ */
+const GUILD_CONFIG_TTL_MS = 60_000;
+const guildConfigCache = new Map<
+	string,
+	{ value: Awaited<ReturnType<typeof loadGuildConfig>>; cachedAt: number }
+>();
+
+async function loadGuildConfig(guildId: string): Promise<{
+	mercRoleId: string | null | undefined;
+	channelConfig: Awaited<ReturnType<typeof getMercChannelConfig>>;
+}> {
+	const [guildConfig] = await db
+		.select()
+		.from(guildConfigs)
+		.where(eq(guildConfigs.guildId, guildId));
+
+	return {
+		mercRoleId: guildConfig?.mercRoleId,
+		channelConfig: await getMercChannelConfig(guildId),
+	};
+}
+
+async function getCachedGuildConfig(guildId: string) {
+	const cached = guildConfigCache.get(guildId);
+	const now = Date.now();
+	if (cached && now - cached.cachedAt < GUILD_CONFIG_TTL_MS) {
+		return cached.value;
+	}
+
+	const value = await loadGuildConfig(guildId);
+	guildConfigCache.set(guildId, { value, cachedAt: now });
+	return value;
+}
 
 /**
  * Runs a single cycle of the Mercenary Contract Worker.
@@ -896,9 +993,14 @@ export async function runMercContractTrackingCycle(
 		.where(
 			and(inArray(mercContracts.status, ["active", "upcoming", "paused"])),
 		);
-	logger.info(
-		`[perf] contracts query: ${Date.now() - contractsQueryStart}ms (${rows.length} row(s))`,
-	);
+
+	// Diagnostics only: throttled to one line per minute instead of one per cycle.
+	if (nowMs >= lastContractsQueryLogTime + 60_000) {
+		lastContractsQueryLogTime = nowMs;
+		logger.info(
+			`[perf] contracts query: ${Date.now() - contractsQueryStart}ms (${rows.length} row(s))`,
+		);
+	}
 
 	if (rows.length === 0) {
 		return Date.now() + 15_000;
@@ -918,23 +1020,35 @@ export async function runMercContractTrackingCycle(
 	for (const contract of contracts) {
 		// If contract is paused, ensure any active targets are removed and skip processing
 		if (contract.status === "paused") {
-			mercTargetManager.cleanContractTargets(contract.id);
+			// Clean once per pause transition rather than re-scanning the alert,
+			// hospital and offline maps every cycle for the whole pause duration.
+			if (!cleanedPausedContracts.has(contract.id)) {
+				cleanedPausedContracts.add(contract.id);
+				mercTargetManager.cleanContractTargets(contract.id);
+			}
 			continue;
 		}
+		cleanedPausedContracts.delete(contract.id);
 
 		const startMs = new Date(contract.startTime).getTime();
 		const endMs = contract.endTime
 			? new Date(contract.endTime).getTime()
 			: null;
 
-		// Check if active contract has reached autoStopPrice
+		// Check if active contract has reached autoStopPrice. Throttled: the
+		// validator enforces auto-stop event-driven right after each credited hit,
+		// so this aggregate is a safety net rather than the primary path.
 		if (
 			contract.status === "active" &&
 			contract.autoStopPrice &&
-			contract.autoStopPrice > 0
+			contract.autoStopPrice > 0 &&
+			nowMs >=
+				(autoStopCheckedAt.get(contract.id) ?? 0) + AUTO_STOP_CHECK_INTERVAL_MS
 		) {
-			const summary = await getMercContractSummary(contract.id);
-			if (summary.totalPayout >= contract.autoStopPrice) {
+			autoStopCheckedAt.set(contract.id, nowMs);
+			const totalPayout = await getMercContractTotalPayout(contract.id);
+			if (totalPayout >= contract.autoStopPrice) {
+				const summary = await getMercContractSummary(contract.id);
 				logger.info(
 					`Mercenary contract ${contract.id} (${contract.factionName}) reached auto-stop price ($${contract.autoStopPrice.toLocaleString()} - total payout: $${summary.totalPayout.toLocaleString()}). Concluding contract.`,
 				);
@@ -1053,7 +1167,11 @@ export async function runMercContractTrackingCycle(
 	}
 
 	// 2. Process each contract's target faction members
-	const apiClient = new TornApiClient();
+	// Shares the managed client's limiter so this worker's requests are counted
+	// against the same per-key budget as every `tornApi.*` call.
+	const apiClient = new TornApiClient({
+		rateLimitTracker: tornApi.rateLimiter,
+	});
 
 	for (const contract of relevantContracts) {
 		if (signal?.aborted) {
@@ -1063,14 +1181,10 @@ export async function runMercContractTrackingCycle(
 			return Date.now() + 1_000;
 		}
 
-		const [guildConfig] = await db
-			.select()
-			.from(guildConfigs)
-			.where(eq(guildConfigs.guildId, contract.guildId));
-
-		const channelConfig = await getMercChannelConfig(contract.guildId);
+		const { mercRoleId, channelConfig } = await getCachedGuildConfig(
+			contract.guildId,
+		);
 		const targetsChannel = channelConfig.targets || "targets";
-		const mercRoleId = guildConfig?.mercRoleId;
 
 		const tornFetchStart = Date.now();
 		const keyPoolStart = Date.now();
@@ -1086,6 +1200,7 @@ export async function runMercContractTrackingCycle(
 		try {
 			const membersRes = (await apiClient.get("/faction/{id}/members", {
 				apiKey: keyObj.apiKey,
+				rateLimitKey: keyObj.userId,
 				pathParams: { id: contract.factionId },
 			})) as TornFactionMembersResponse;
 			const tornFetchMs = Date.now() - tornFetchStart;
@@ -1125,9 +1240,14 @@ export async function runMercContractTrackingCycle(
 			}
 			const processMs = Date.now() - processStart;
 
-			logger.info(
-				`[perf] contract=${contract.id} faction=${contract.factionId} keyPool=${keyPoolMs}ms tornFetch=${tornFetchMs}ms bsPrewarm=${prewarm.fetchMs}ms (${prewarm.resolved}/${prewarm.requested} resolved) memberProcess=${processMs}ms members=${members.length} bsMisses=${mercTargetManager.getBsStats().misses} bsFetchMs=${mercTargetManager.getBsStats().fetchMs}ms`,
-			);
+			// Diagnostics only: one line per contract per minute, not per second.
+			const lastPerfLogAt = perfLogAt.get(contract.id) ?? 0;
+			if (nowMs >= lastPerfLogAt + 60_000) {
+				perfLogAt.set(contract.id, nowMs);
+				logger.info(
+					`[perf] contract=${contract.id} faction=${contract.factionId} keyPool=${keyPoolMs}ms tornFetch=${tornFetchMs}ms bsPrewarm=${prewarm.fetchMs}ms (${prewarm.resolved}/${prewarm.requested} resolved) memberProcess=${processMs}ms members=${members.length} bsMisses=${mercTargetManager.getBsStats().misses} bsFetchMs=${mercTargetManager.getBsStats().fetchMs}ms`,
+				);
+			}
 
 			if (channelConfig.revivables) {
 				const revivables = members

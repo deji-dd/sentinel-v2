@@ -2,7 +2,7 @@ import { db, eq, personalLogs, sql, systemStates } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
-import { schedulerEvents } from "../../lib/events";
+import { type LogIngestSource, schedulerEvents } from "../../lib/events";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
@@ -207,7 +207,7 @@ async function processResyncBurst(
 				break;
 			}
 
-			await saveLogsToDatabase(logs);
+			await saveLogsToDatabase(logs, "resync");
 
 			let oldestTimestamp = logs[0]?.timestamp ?? currentTo;
 			for (const log of logs) {
@@ -338,9 +338,29 @@ async function persistStateToDb(): Promise<void> {
 }
 
 /**
- * Inserts or updates an array of raw user logs into the SQLite personal_logs table.
+ * Inserts or updates an array of raw user logs into the personal_logs table.
+ *
+ * Rows are written with a single multi-row upsert per chunk rather than one
+ * awaited statement per row: the previous per-row loop issued up to 100
+ * sequential round trips per page (and up to ~1,300 per burst cycle) while
+ * holding one of the pool's 10 connections.
  */
-async function saveLogsToDatabase(logs: UserLog[]): Promise<void> {
+const PERSONAL_LOG_INSERT_CHUNK = 500;
+
+/**
+ * The row count is a display statistic, so it is recomputed at most once a
+ * minute instead of after every single page (which meant up to a 13 full-table
+ * COUNT(*) scans per cycle on the largest table in the schema). Between
+ * recounts the counter is advanced by the batch size, so drift is bounded by
+ * one minute of writes and is corrected by the next recount.
+ */
+const TOTAL_LOGS_RECOUNT_INTERVAL_MS = 60_000;
+let lastTotalLogsRecountAt = 0;
+
+async function saveLogsToDatabase(
+	logs: UserLog[],
+	source: LogIngestSource,
+): Promise<void> {
 	if (logs.length === 0) return;
 
 	const now = new Date();
@@ -364,33 +384,40 @@ async function saveLogsToDatabase(logs: UserLog[]): Promise<void> {
 
 	await db.transaction(
 		async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-			for (const row of rows) {
+			for (let i = 0; i < rows.length; i += PERSONAL_LOG_INSERT_CHUNK) {
+				const chunk = rows.slice(i, i + PERSONAL_LOG_INSERT_CHUNK);
 				await tx
 					.insert(personalLogs)
-					.values(row)
+					.values(chunk)
 					.onConflictDoUpdate({
 						target: personalLogs.id,
 						set: {
-							log: row.log,
-							title: row.title,
-							timestamp: row.timestamp,
-							category: row.category,
-							data: row.data,
-							updatedAt: row.updatedAt,
+							log: sql`excluded.log`,
+							title: sql`excluded.title`,
+							timestamp: sql`excluded.timestamp`,
+							category: sql`excluded.category`,
+							data: sql`excluded.data`,
+							updatedAt: sql`excluded.updated_at`,
 						},
 					});
 			}
 		},
 	);
 
-	const [stats] = await db
-		.select({ count: sql<number>`count(${personalLogs.id})::int` })
-		.from(personalLogs);
-	if (stats?.count !== undefined && stats.count !== null) {
-		inMemoryState.totalLogsRecorded = Number(stats.count);
+	const nowMs = Date.now();
+	if (nowMs - lastTotalLogsRecountAt >= TOTAL_LOGS_RECOUNT_INTERVAL_MS) {
+		lastTotalLogsRecountAt = nowMs;
+		const [stats] = await db
+			.select({ count: sql<number>`count(${personalLogs.id})::int` })
+			.from(personalLogs);
+		if (stats?.count !== undefined && stats.count !== null) {
+			inMemoryState.totalLogsRecorded = Number(stats.count);
+		}
+	} else {
+		inMemoryState.totalLogsRecorded += rows.length;
 	}
 
-	schedulerEvents.emit("logs_inserted", logs);
+	schedulerEvents.emit("logs_inserted", logs, { source });
 }
 
 /**
@@ -422,7 +449,7 @@ export async function syncForwardLogs(options?: {
 			if (logs.length === 0) break;
 
 			totalFetched += logs.length;
-			await saveLogsToDatabase(logs);
+			await saveLogsToDatabase(logs, "forward");
 
 			let pageMaxTimestamp = currentFrom;
 			for (const log of logs) {
@@ -525,7 +552,7 @@ export async function syncHistoricalBackfill(
 			}
 
 			totalFetched += logs.length;
-			await saveLogsToDatabase(logs);
+			await saveLogsToDatabase(logs, "backfill");
 
 			let oldestInBatch = currentTo ?? Math.floor(Date.now() / 1000);
 			let newestInBatch = 0;
@@ -549,7 +576,12 @@ export async function syncHistoricalBackfill(
 				inMemoryState.newestTimestampReached = newestInBatch;
 			}
 
-			currentTo = oldestInBatch - 1;
+			// Torn v2's `to` is EXCLUSIVE (see the note in processResyncBurst), so
+			// passing the oldest timestamp of this page as the next exclusive upper
+			// bound walks one page further back without skipping it. The previous
+			// `oldestInBatch - 1` dropped every log stamped exactly
+			// `oldestInBatch - 1` — one lost second per page.
+			currentTo = oldestInBatch;
 		}
 
 		inMemoryState.lastBackfillCheckedAt = Math.floor(Date.now() / 1000);
@@ -607,9 +639,18 @@ export async function runLogSyncCycle(): Promise<number | undefined> {
 			!inMemoryState.lastForwardCheckedAt ||
 			nowSec - inMemoryState.lastForwardCheckedAt >= CADENCE_SEC;
 
-		const forwardPromise = shouldPollForward
-			? syncForwardLogs({ maxPages: 3 })
-			: Promise.resolve({ fetched: 0, newLogs: 0 });
+		// The forward poll is the only latency-sensitive branch here: it is what
+		// makes a live event visible. All three branches share one per-user
+		// sliding-window limiter (50 req/60s), and backfill plus a queued resync
+		// can together demand ~60 req/min, so running them concurrently let the
+		// bursts queue ahead of the live poll and delay detection.
+		//
+		// Running forward first guarantees it always claims its requests before
+		// the burst branches contend for the window. The burst branches then run
+		// concurrently with each other, as before.
+		const forwardResult = shouldPollForward
+			? await syncForwardLogs({ maxPages: 3 })
+			: { fetched: 0, newLogs: 0 };
 
 		// 2. Run Historical Backfill (Burst of older historical events) if not yet completed
 		const backfillPromise =
@@ -624,9 +665,8 @@ export async function runLogSyncCycle(): Promise<number | undefined> {
 		// 3. Process any pending/running manual range resync job
 		const resyncPromise = processResyncBurst(RESYNC_BURST_PAGES);
 
-		// Execute both alongside each other
-		const [forwardResult, backfillResult, resyncFetched] = await Promise.all([
-			forwardPromise,
+		// Execute the burst branches alongside each other
+		const [backfillResult, resyncFetched] = await Promise.all([
 			backfillPromise,
 			resyncPromise,
 		]);
@@ -666,6 +706,10 @@ export async function runLogSyncCycle(): Promise<number | undefined> {
 		inMemoryState.lastError = errorMessage;
 		logger.error("Failed log sync cycle execution:", error);
 		await persistStateToDb();
+		// Propagate so the runner records the failure, applies its backoff and
+		// surfaces it on `/health`. Swallowing it meant a persistently failing
+		// ingestion engine reported as healthy for as long as it stayed broken.
+		throw error;
 	} finally {
 		isCycleRunning = false;
 	}
@@ -781,7 +825,7 @@ export async function resyncLogsRange(
 		if (logs.length === 0) break;
 
 		totalFetched += logs.length;
-		await saveLogsToDatabase(logs);
+		await saveLogsToDatabase(logs, "resync");
 
 		let minTimestamp = logs[0]?.timestamp ?? currentTo;
 		for (const log of logs) {

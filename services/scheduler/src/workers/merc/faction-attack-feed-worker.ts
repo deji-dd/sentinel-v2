@@ -1,12 +1,16 @@
 import {
+	and,
 	db,
+	desc,
 	eq,
 	type FactionAttackLogRow,
 	factionAttackLogs,
+	gte,
 	type NewFactionAttackLogRow,
+	sql,
 	systemStates,
 } from "@sentinel/database";
-import { TornApiClient, TornError } from "@sentinel/torn-api";
+import { TornApiClient, TornError, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import {
 	cadenceForActivity,
@@ -401,6 +405,10 @@ async function ingestFaction(
 		// No `filters` param: one call returns both directions.
 		const response = (await client.get("/faction/attacks", {
 			apiKey: key.apiKey,
+			// Accounted against the owning user, not the raw key: the managed
+			// client's limiter is keyed by user id, so this keeps every path in one
+			// counter (and keeps API keys out of rate-limit warnings).
+			rateLimitKey: key.tornId,
 			queryParams,
 		})) as TornFactionAttacksResponse;
 
@@ -564,19 +572,32 @@ async function persistAttacks(
 /**
  * Loads attacks from the durable store for consumers that boot after ingestion
  * has already run (e.g. a restarted retal tracker rebuilding its window).
+ *
+ * The time window is applied in SQL and the rows are ordered newest-first. The
+ * previous form filtered in JS over an unordered `.limit(2000)`, which returned
+ * an arbitrary slice of the faction's 7-day history rather than the most recent
+ * attacks — so a restart could rebuild the window from the wrong rows.
  */
 export async function loadRecentAttacks(
 	factionId: number,
 	sinceSec: number,
 ): Promise<FactionAttackLogRow[]> {
-	const rows = await db
+	// `endedAt` is null for an attack still in progress, which counts, so the
+	// predicate coalesces to `startedAt` exactly as the old JS filter did.
+	return await db
 		.select()
 		.from(factionAttackLogs)
-		.where(eq(factionAttackLogs.factionId, factionId))
+		.where(
+			and(
+				eq(factionAttackLogs.factionId, factionId),
+				gte(
+					sql`coalesce(${factionAttackLogs.endedAt}, ${factionAttackLogs.startedAt})`,
+					sinceSec,
+				),
+			),
+		)
+		.orderBy(desc(factionAttackLogs.endedAt))
 		.limit(2000);
-
-	// `endedAt === null` means the attack is still in progress, so it counts.
-	return rows.filter((row) => (row.endedAt ?? row.startedAt ?? 0) >= sinceSec);
 }
 
 function handleKeyError(err: unknown, apiKey: string, factionId: number): void {
@@ -611,7 +632,13 @@ export async function runFactionAttackFeedCycle(): Promise<number> {
 		return Date.now() + cadenceMs;
 	}
 
-	const client = new TornApiClient();
+	// Shares the managed client's limiter so this worker's requests are counted
+	// against the same per-key budget as every `tornApi.*` call. Built as a bare
+	// client (it needs a specific family master key), which otherwise bypasses
+	// local rate limiting entirely.
+	const client = new TornApiClient({
+		rateLimitTracker: tornApi.rateLimiter,
+	});
 	const collected: FactionAttackEvent[] = [];
 	let anyCatchingUp = false;
 

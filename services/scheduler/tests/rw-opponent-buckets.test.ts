@@ -101,13 +101,14 @@ describe("classifyOpponentsIntoRwBuckets", () => {
 	});
 
 	/**
-	 * Regression guard for the semantics that live API testing overturned.
-	 * A real 99-member opposing roster returned 40 members with `is_revivable`
-	 * set while exactly one was in hospital, and zero overlapped. Treating the
-	 * flag alone as "revivable" would have listed 40 healthy players as downed.
+	 * `is_revivable` is Torn's standing "this member allows revives" permission
+	 * flag, verified live against the key's own faction: it is true for exactly
+	 * the members whose `revive_setting` is "Everyone" or "Friends & faction",
+	 * and false for every "No one" member. The bucket mirrors the flag alone so
+	 * the embed's count agrees with what the API reports for the same roster.
 	 */
 	describe("revivable bucket", () => {
-		it("does NOT include healthy players who merely allow revives", () => {
+		it("includes healthy players who allow revives", () => {
 			const buckets = classifyOpponentsIntoRwBuckets(
 				[
 					opponent({
@@ -125,16 +126,40 @@ describe("classifyOpponentsIntoRwBuckets", () => {
 				],
 				NOW_SEC,
 			);
-			expect(buckets.revivable).toHaveLength(0);
+			expect(buckets.revivable).toHaveLength(1);
+			expect(buckets.revivable[0]?.id).toBe(100);
+			// Healthy players still belong to their own status bucket too.
+			expect(buckets.offlineOkay).toHaveLength(1);
 		});
 
-		it("includes only players who are both downed and allow revives", () => {
+		it("includes downed players who allow revives", () => {
 			const buckets = classifyOpponentsIntoRwBuckets(
 				[inHospital(NOW_SEC + 600, true)],
 				NOW_SEC,
 			);
 			expect(buckets.revivable).toHaveLength(1);
 			expect(buckets.revivable[0]?.id).toBe(1);
+		});
+
+		it("includes flagged players in states outside hospital and okay", () => {
+			const buckets = classifyOpponentsIntoRwBuckets(
+				["Traveling", "Abroad", "Federal", "Jail"].map((state, i) =>
+					opponent({
+						id: i + 1,
+						name: state,
+						isRevivable: true,
+						status: {
+							description: "",
+							details: null,
+							state,
+							color: "grey",
+							until: null,
+						},
+					}),
+				),
+				NOW_SEC,
+			);
+			expect(buckets.revivable).toHaveLength(4);
 		});
 
 		it("excludes downed players who have revives turned off", () => {
@@ -147,21 +172,43 @@ describe("classifyOpponentsIntoRwBuckets", () => {
 			expect(buckets.hospital).toHaveLength(1);
 		});
 
-		it("is a subset of the hospital bucket", () => {
+		it("excludes healthy players who have revives turned off", () => {
 			const buckets = classifyOpponentsIntoRwBuckets(
-				[
-					inHospital(NOW_SEC + 120, true),
-					inHospital(NOW_SEC + 60, false),
-					inHospital(NOW_SEC + 30, true),
-				].map((o, i) => ({ ...o, id: i + 1 })),
+				[opponent({ id: 7, name: "NoRevives", isRevivable: false })],
 				NOW_SEC,
 			);
-			const hospitalIds = new Set(buckets.hospital.map((l) => l.id));
-			for (const line of buckets.revivable) {
-				expect(hospitalIds.has(line.id)).toBe(true);
-			}
-			expect(buckets.hospital).toHaveLength(3);
-			expect(buckets.revivable).toHaveLength(2);
+			expect(buckets.revivable).toHaveLength(0);
+		});
+
+		it("orders downed players first by soonest exit, then the rest by last seen", () => {
+			const buckets = classifyOpponentsIntoRwBuckets(
+				[
+					opponent({
+						id: 1,
+						name: "StaleHealthy",
+						isRevivable: true,
+						lastAction: {
+							status: "Offline",
+							timestamp: NOW_SEC - 9000,
+							relative: "",
+						},
+					}),
+					opponent({
+						id: 2,
+						name: "FreshHealthy",
+						isRevivable: true,
+						lastAction: {
+							status: "Offline",
+							timestamp: NOW_SEC - 30,
+							relative: "",
+						},
+					}),
+					{ ...inHospital(NOW_SEC + 1800, true), id: 3, name: "DownLater" },
+					{ ...inHospital(NOW_SEC + 120, true), id: 4, name: "DownSooner" },
+				],
+				NOW_SEC,
+			);
+			expect(buckets.revivable.map((l) => l.id)).toEqual([4, 3, 2, 1]);
 		});
 	});
 

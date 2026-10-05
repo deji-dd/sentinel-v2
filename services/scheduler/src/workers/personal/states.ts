@@ -312,6 +312,10 @@ export async function runPersonalStateSync(): Promise<void> {
 		finishSync();
 	} catch (error) {
 		logger.error("Failed to execute personal state sync:", error);
+		// Propagate so the runner records the failure: without this the worker
+		// reported success on every cycle, so no backoff engaged and `/health`
+		// stayed green while the sync was failing.
+		throw error;
 	}
 }
 

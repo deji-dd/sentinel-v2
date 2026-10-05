@@ -9,7 +9,6 @@ import type {
 	CompanyDirectives,
 	CompanyHistoryEntry,
 	CompanyKPIs,
-	CompanyProfile,
 	CompanyStateResponse,
 	CompanyWeeklyLogsResponse,
 } from "../types";
@@ -130,14 +129,14 @@ export class CompanyTab {
 			return;
 		}
 
-		const { profile, kpis, directives } = this.state;
+		const { kpis, directives } = this.state;
 
 		this.container.innerHTML = `
 			<!-- 1. Directives & Action Items Card -->
-			${this.renderDirectivesCard(directives, profile)}
+			${this.renderDirectivesCard(directives)}
 
 			<!-- 2. Minimal KPI Cards -->
-			${this.renderKpiCards(kpis)}
+			${this.renderKpiCards(kpis, directives)}
 
 			<!-- 3. Historical Chart Card -->
 			<div class="chart-card" style="margin-top: 14px;">
@@ -174,10 +173,7 @@ export class CompanyTab {
 		this.renderChartOnly();
 	}
 
-	private renderDirectivesCard(
-		directives: CompanyDirectives | null,
-		_profile: CompanyProfile | null,
-	): string {
+	private renderDirectivesCard(directives: CompanyDirectives | null): string {
 		if (!directives) return "";
 
 		const hasTransfers = directives.roleTransfers.length > 0;
@@ -187,81 +183,119 @@ export class CompanyTab {
 		const t2 = directives.rehabTiers.tier2;
 		const hasRehab = t1.length > 0 || t2.length > 0;
 
-		const isAllOptimal = !hasTransfers && !hasPrice && !hasAd && !hasRehab;
+		// Capacity first: when the warehouse cannot clear, the roster - not price
+		// or advertising - is what stands between the rig and its output.
+		const rebalance = directives.capacityRebalance;
+		const capacityActions =
+			rebalance.extractionBound && rebalance.actions.length > 0
+				? rebalance.actions
+				: [];
+		const structuralAdvice = directives.stock.structuralAdvice;
+		const insight = directives.sellThrough;
 
-		if (isAllOptimal) {
+		// `allOptimal` is computed server-side and already accounts for the
+		// capacity rebalance, so the tab never claims "optimal" during a storage
+		// crisis. Do not re-derive it here.
+		if (directives.allOptimal) {
 			return `
 				<div class="directives-card optimal">
 					<div class="directives-header">
 						<span class="directives-title">Operations Status: All Systems Optimal</span>
 					</div>
 					<div class="directives-body" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
-						Roster is fully aligned with blueprint, pricing and advertising spend are at equilibrium, and all staff are healthy.
+						Roster is aligned with the target blueprint, extraction is matched to sell-through, pricing and advertising spend are at their targets, and all staff are healthy.
 					</div>
 				</div>
 			`;
 		}
+
+		const row = (tagClass: string, tag: string, text: string) => `
+			<div class="directive-row">
+				<span class="directive-tag ${tagClass}">${tag}</span>
+				<span class="directive-text">${text}</span>
+			</div>
+		`;
 
 		let itemsHtml = "";
 
-		// Role transfers
+		// 1. Capacity rebalance (roster re-arrangement)
+		if (capacityActions.length > 0) {
+			if (rebalance.discardedBarrelsPerDay > 0) {
+				itemsHtml += row(
+					"tag-capacity",
+					"Output",
+					`<strong>${formatNumber(rebalance.discardedBarrelsPerDay)}</strong> bbl/day (~${formatMoney(rebalance.discardedValuePerDay)}/day) produced beyond what the rig clears and discarded while storage is full.`,
+				);
+			}
+			for (const action of capacityActions) {
+				const label =
+					action.kind === "rebalance"
+						? "Rebalance"
+						: action.kind === "hire"
+							? "Hire"
+							: "Storage";
+				const revert = action.temporary
+					? ' <em style="color: #94a3b8;">(revert once stock normalises)</em>'
+					: "";
+				itemsHtml += row("tag-capacity", label, `${action.reason}${revert}`);
+			}
+		}
+
+		// 2. Structural constraint: why price and ads cannot fix it.
+		if (structuralAdvice) {
+			itemsHtml += row("tag-structural", "Blocker", structuralAdvice);
+		}
+
+		// 3. Role transfers
 		if (hasTransfers) {
-			const transfersList = directives.roleTransfers
-				.map(
-					(t) => `
-					<div class="directive-row">
-						<span class="directive-tag tag-role">Role</span>
-						<span class="directive-text"><strong>${t.name}</strong> (${t.statsStr}): ${t.fromRole} ➔ <strong>${t.toRole}</strong></span>
-					</div>
-				`,
+			itemsHtml += directives.roleTransfers
+				.map((t) =>
+					row(
+						"tag-role",
+						"Role",
+						`<strong>${t.name}</strong> (${t.statsStr}): ${t.fromRole} ➔ <strong>${t.toRole}</strong>`,
+					),
 				)
 				.join("");
-			itemsHtml += transfersList;
 		}
 
-		// Price adjustment
+		// 4. Price / ad
 		if (hasPrice) {
-			itemsHtml += `
-				<div class="directive-row">
-					<span class="directive-tag tag-price">Price</span>
-					<span class="directive-text">Adjust Barrel Price: <strong>${directives.pricing.formatted}</strong></span>
-				</div>
-			`;
+			itemsHtml += row(
+				"tag-price",
+				"Price",
+				`Adjust Barrel Price: <strong>${directives.pricing.formatted}</strong>`,
+			);
 		}
-
-		// Ad budget adjustment
 		if (hasAd) {
-			itemsHtml += `
-				<div class="directive-row">
-					<span class="directive-tag tag-ad">Ad Spend</span>
-					<span class="directive-text">Adjust Ad Budget: <strong>${directives.adSpend.formatted}</strong></span>
-				</div>
-			`;
+			itemsHtml += row(
+				"tag-ad",
+				"Ad Spend",
+				`Adjust Ad Budget: <strong>${directives.adSpend.formatted}</strong>`,
+			);
 		}
 
-		// Swiss rehab
+		// 5. Price-response insight: measured, not assumed.
+		if (
+			insight.verdict === "unresponsive" ||
+			insight.verdict === "partially_responsive"
+		) {
+			itemsHtml += row("tag-insight", "Measured", insight.summary);
+		}
+
+		// 6. Swiss rehab
 		if (hasRehab) {
 			if (t1.length > 0) {
 				const names = t1
 					.map((e) => `<strong>${e.name}</strong> (${e.penalty} pts)`)
 					.join(" • ");
-				itemsHtml += `
-					<div class="directive-row">
-						<span class="directive-tag tag-rehab">Tier 1 Rehab</span>
-						<span class="directive-text">Send Today: ${names}</span>
-					</div>
-				`;
+				itemsHtml += row("tag-rehab", "Tier 1", `Send Today: ${names}`);
 			}
 			if (t2.length > 0) {
 				const names = t2
 					.map((e) => `<strong>${e.name}</strong> (${e.penalty} pts)`)
 					.join(" • ");
-				itemsHtml += `
-					<div class="directive-row">
-						<span class="directive-tag tag-rehab-sub">Tier 2 Rehab</span>
-						<span class="directive-text">Send Next: ${names}</span>
-					</div>
-				`;
+				itemsHtml += row("tag-rehab-sub", "Tier 2", `Send Next: ${names}`);
 			}
 		}
 
@@ -277,7 +311,12 @@ export class CompanyTab {
 		`;
 	}
 
-	private renderKpiCards(kpis: CompanyKPIs): string {
+	private renderKpiCards(
+		kpis: CompanyKPIs,
+		directives: CompanyDirectives | null,
+	): string {
+		const discarded = directives?.capacityRebalance.discardedBarrelsPerDay ?? 0;
+
 		return `
 			<div class="kpi-grid" style="grid-template-columns: 1fr; margin-top: 12px;">
 				<!-- Stock -->
@@ -287,6 +326,19 @@ export class CompanyTab {
 						${formatCompactNumber(kpis.inStock, 0)} • ${kpis.fillPct}%
 					</div>
 				</div>
+				${
+					discarded > 0
+						? `
+				<!-- Discarded output: barrels produced that the rig cannot clear -->
+				<div class="kpi-card" style="border-color: rgba(244, 63, 94, 0.4);">
+					<div class="kpi-label">Discarded Output</div>
+					<div class="kpi-value negative">
+						${formatCompactNumber(discarded, 0)} bbl/day
+					</div>
+				</div>
+				`
+						: ""
+				}
 			</div>
 		`;
 	}
@@ -366,13 +418,9 @@ export class CompanyTab {
 						.map((e) => {
 							const profitSign = e.profit >= 0 ? "+" : "";
 							const profitClass = e.profit >= 0 ? "profit-pos" : "profit-neg";
-							const prodVal =
-								e.producedBarrels !== undefined && e.producedBarrels > 0
-									? e.producedBarrels
-									: e.soldBarrels > 0
-										? e.soldBarrels
-										: 0;
-							const prodStr = formatCompactNumber(prodVal, 0);
+							// `producedBarrels` already arrives fully computed from
+							// buildWeekToDateLogEntries; do not re-derive a fallback here.
+							const prodStr = formatCompactNumber(e.producedBarrels ?? 0, 0);
 							return `
 								<tr>
 									<td class="td-day">${e.dayOfWeek}</td>

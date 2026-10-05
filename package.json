@@ -12,6 +12,7 @@
 		"merc:backfill": "bun run scripts/merc-backfill-hits.ts",
 		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
 		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
+		"scheduler:prod-profile": "NODE_ENV=production DISABLED_WORKERS=\"elims:team_tracker,elims:member_stats_worker\" bun run services/scheduler/index.ts",
 		"bot:start": "NODE_ENV=production bun run services/bot/index.ts",
 		"bot:dev": "NODE_ENV=development bun --watch run services/bot/index.ts",
 		"api:start": "NODE_ENV=production bun run services/api/index.ts",

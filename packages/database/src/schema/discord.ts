@@ -144,23 +144,33 @@ export const verifiedUsers = pgTable("verified_users", {
 		.notNull(),
 });
 
-export const verificationLogs = pgTable("verification_logs", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => crypto.randomUUID()),
-	guildId: text("guild_id").notNull(),
-	discordId: text("discord_id").notNull(),
-	status: text("status").notNull(),
-	triggeredBy: text("triggered_by").default("user").notNull(),
-	rolesAdded: jsonb("roles_added").$type<string[]>().default([]).notNull(),
-	rolesRemoved: jsonb("roles_removed").$type<string[]>().default([]).notNull(),
-	oldNickname: text("old_nickname"),
-	newNickname: text("new_nickname"),
-	error: text("error"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
+export const verificationLogs = pgTable(
+	"verification_logs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		guildId: text("guild_id").notNull(),
+		discordId: text("discord_id").notNull(),
+		status: text("status").notNull(),
+		triggeredBy: text("triggered_by").default("user").notNull(),
+		rolesAdded: jsonb("roles_added").$type<string[]>().default([]).notNull(),
+		rolesRemoved: jsonb("roles_removed")
+			.$type<string[]>()
+			.default([])
+			.notNull(),
+		oldNickname: text("old_nickname"),
+		newNickname: text("new_nickname"),
+		error: text("error"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// Retention pruning and the recent-logs lookup both filter by created_at.
+		index("idx_verification_logs_created_at").on(table.createdAt),
+	],
+);
 
 export const guildMonitoredFactions = pgTable(
 	"guild_monitored_factions",

@@ -191,138 +191,33 @@ export interface EfficiencyDataPayload {
 	};
 }
 
-export interface CompanyProfile {
-	name: string;
-	rating: number;
-	funds: number;
-	efficiency: number;
-	environment: number;
-	popularity: number;
-	employees: { hired: number; capacity: number };
-	storageCapacity: number;
-}
-
-export interface CompanyKPIs {
-	wtdProfit: number;
-	wtdRevenue: number;
-	wtdExpenses: number;
-	dailyIncome: number;
-	dailyWages: number;
-	dailyAdBudget: number;
-	dailyExpenses: number;
-	dailyProfit: number;
-	inStock: number;
-	storageCapacity: number;
-	fillPct: number;
-	barrelPrice: number;
-	dailySold: number;
-	dailyProduced?: number;
-}
-
-export interface CompanyDirectives {
-	roleTransfers: Array<{
-		name: string;
-		fromRole: string;
-		toRole: string;
-		statsStr: string;
-	}>;
-	adSpend: {
-		action: string;
-		amount: number;
-		formatted: string;
-		isChanged: boolean;
-	};
-	pricing: {
-		action: string;
-		exact: number;
-		formatted: string;
-		isChanged: boolean;
-	};
-	rehabTiers: {
-		tier1: Array<{ name: string; penalty: number }>;
-		tier2: Array<{ name: string; penalty: number }>;
-		tier3: Array<{ name: string; penalty: number }>;
-	};
-	allOptimal: boolean;
-}
-
-export interface CompanyEmployee {
-	id: number;
-	name: string;
-	positionName: string;
-	wage: number;
-	addiction: number;
-	stats: {
-		manualLabor: number;
-		intelligence: number;
-		endurance: number;
-	};
-	targetRole?: string;
-	isOptimal: boolean;
-	rehabTier?: 1 | 2 | 3;
-}
-
-export interface CompanyStateResponse {
-	success: boolean;
-	profile: CompanyProfile | null;
-	kpis: CompanyKPIs | null;
-	directives: CompanyDirectives | null;
-	employees: CompanyEmployee[];
-	message?: string;
-}
-
-export interface WeeklyLogEntry {
-	dayOfWeek: string;
-	isoDate: string;
-	revenue: number;
-	wages: number;
-	adBudget: number;
-	expenses: number;
-	profit: number;
-	soldBarrels: number;
-	producedBarrels?: number;
-	barrelPrice: number;
-}
-
-export interface WeeklyTotals {
-	totalRevenue: number;
-	totalWages: number;
-	totalAd: number;
-	totalExpenses: number;
-	totalProfit: number;
-	totalSold: number;
-	totalProduced: number;
-	avgPrice: number;
-}
-
-export interface CompanyWeeklyLogsResponse {
-	success: boolean;
-	offset: number;
-	hasPrev: boolean;
-	hasNext: boolean;
-	mondayIso: string;
-	sundayIso: string;
-	weekLabel: string;
-	entries: WeeklyLogEntry[];
-	totals: WeeklyTotals;
-}
-
-export interface CompanyHistoryEntry {
-	isoDate: string;
-	timestamp: number;
-	income: number;
-	wages: number;
-	adBudget: number;
-	expenses: number;
-	profit: number;
-	sold: number;
-	produced: number;
-	stock: number;
-	fillPct: number;
-	barrelPrice: number;
-}
-
-export interface CompanyHistoryResponse {
-	success: boolean;
-	timeline: CompanyHistoryEntry[];
-}
+/**
+ * Company / Oil Rig API payloads.
+ *
+ * These are re-exported from the shared contract in `packages/schemas` that the
+ * API itself is typed against, so the dashboard, the in-page badges and the
+ * Discord briefing cannot drift apart. This is a type-only import: nothing from
+ * the schemas package (or its dependencies) reaches the userscript bundle.
+ */
+export type {
+	CompanyCapacityAction,
+	CompanyCapacityActionKind,
+	CompanyCapacityRebalance,
+	CompanyDirectives,
+	CompanyEmployee,
+	CompanyHistoryEntry,
+	CompanyHistoryResponse,
+	CompanyInventoryState,
+	CompanyKPIs,
+	CompanyProfile,
+	CompanyQuotaShift,
+	CompanyRehabTier,
+	CompanyRoleTransfer,
+	CompanySellThroughResponse,
+	CompanySellThroughVerdict,
+	CompanyStateResponse,
+	CompanyStockVerdict,
+	CompanyWeeklyLogsResponse,
+	WeeklyLogEntry,
+	WeeklyTotals,
+} from "../../../packages/schemas/src/company";

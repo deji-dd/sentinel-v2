@@ -12,8 +12,32 @@ const logger = new Logger("Scheduler", "Verification");
 /**
  * Periodically checks for guilds with `verifyCron` enabled and triggers verification runs.
  */
-export async function runVerificationWorker(): Promise<void> {
+/**
+ * Execution budget for one hourly verification cycle.
+ *
+ * Each due guild costs a blocking IPC round trip to the bot (10s timeout with 2
+ * retries, so ~34.5s worst case) followed by a full member sweep, and guilds are
+ * processed sequentially. The runner's 5-minute cron default is too tight for
+ * several guilds, and on timeout it would retry while this handler was still
+ * running.
+ */
+export const VERIFICATION_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Point at which a cycle stops starting new guild sweeps.
+ *
+ * Guilds left over are picked up by the next hourly run. Stopping cleanly is
+ * strictly better than being killed mid-sweep: `lastVerifyCronAt` is only
+ * updated after the roster arrives, so an abandoned guild simply retries, while
+ * a killed cycle also discards the progress broadcasting for the running guild.
+ */
+const VERIFICATION_CYCLE_BUDGET_MS = 12 * 60_000;
+
+export async function runVerificationWorker(
+	signal?: AbortSignal,
+): Promise<void> {
 	const finishLog = logger.time();
+	const cycleStartedAtMs = Date.now();
 
 	try {
 		const guilds = await db.query.guildConfigs.findMany({
@@ -36,6 +60,20 @@ export async function runVerificationWorker(): Promise<void> {
 		const now = new Date();
 
 		for (const guild of activeGuilds) {
+			if (signal?.aborted) {
+				logger.warn(
+					`Verification cycle aborted before guild ${guild.guildId}; remaining guilds run next cycle.`,
+				);
+				break;
+			}
+
+			if (Date.now() - cycleStartedAtMs >= VERIFICATION_CYCLE_BUDGET_MS) {
+				logger.warn(
+					`Verification cycle budget (${VERIFICATION_CYCLE_BUDGET_MS}ms) reached; remaining guilds deferred to the next hourly run.`,
+				);
+				break;
+			}
+
 			const intervalHours = guild.verifyCronInterval || 24;
 			const intervalMs = intervalHours * 60 * 60 * 1000;
 			const lastRun = guild.lastVerifyCronAt?.getTime() || 0;
@@ -137,6 +175,8 @@ export async function runVerificationWorker(): Promise<void> {
 		finishLog();
 	} catch (error) {
 		logger.error("Error running background verification worker:", error);
+		// Propagate so the runner records the failure and applies its backoff.
+		throw error;
 	}
 }
 
@@ -147,7 +187,10 @@ export function startVerification(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
 		schedule: { type: "cron", pattern: "0 * * * *", timezone: "Etc/UTC" },
+		timeoutMs: VERIFICATION_TIMEOUT_MS,
 		initialDelayMs: options?.initialDelayMs,
-		handler: runVerificationWorker,
+		handler: async (signal) => {
+			await runVerificationWorker(signal);
+		},
 	});
 }

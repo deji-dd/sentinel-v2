@@ -25,6 +25,7 @@ import {
 } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
 const STATE_ID = "personal:crimes_ledger";
@@ -147,6 +148,78 @@ export async function loadItemMarketPrices(): Promise<Map<string, number>> {
 }
 
 /**
+ * Cached crime-parsing reference data.
+ *
+ * The three inputs are static reference tables refreshed at most once a day by
+ * `torn:references`, yet the live ingest path re-read them — including a full
+ * `torn_items` scan plus a recompilation of every crime rule RegExp — on every
+ * ingested page. During a backfill burst that is up to five times per ten
+ * seconds, once per cron branch.
+ */
+interface CrimeReferenceData {
+	customMappingMap: Map<string, number>;
+	itemPrices: Map<string, number>;
+	dynamicRules: ReturnType<typeof buildCrimeRulesFromDefinitions>;
+}
+
+const CRIME_REFERENCE_TTL_MS = 5 * 60_000;
+let cachedCrimeReference: CrimeReferenceData | null = null;
+let cachedCrimeReferenceAt = 0;
+
+/** Test seam: drops the memoised crime reference data. */
+export function clearCrimeReferenceCache(): void {
+	cachedCrimeReference = null;
+	cachedCrimeReferenceAt = 0;
+}
+
+async function loadCrimeReferenceData(): Promise<CrimeReferenceData> {
+	const now = Date.now();
+	if (
+		cachedCrimeReference &&
+		now - cachedCrimeReferenceAt < CRIME_REFERENCE_TTL_MS
+	) {
+		return cachedCrimeReference;
+	}
+
+	const [customMappings, itemPrices, tornCrimesList] = await Promise.all([
+		db.select().from(crimeActionMappings),
+		loadItemMarketPrices(),
+		db
+			.select({
+				id: tornCrimes.id,
+				name: tornCrimes.name,
+				data: tornCrimes.data,
+			})
+			.from(tornCrimes),
+	]);
+
+	const customMappingMap = new Map<string, number>(
+		customMappings.map((m: CrimeActionMapping) => [
+			m.id.toLowerCase(),
+			m.crimeId,
+		]),
+	);
+
+	const dynamicRules = buildCrimeRulesFromDefinitions(
+		tornCrimesList.map((tc) => ({
+			id: Number(tc.id),
+			name: tc.name,
+			subcrimes:
+				(tc.data as { subcrimes?: Array<{ id: number; name: string }> })
+					?.subcrimes ?? [],
+		})),
+	);
+
+	cachedCrimeReference = {
+		customMappingMap,
+		itemPrices,
+		dynamicRules,
+	};
+	cachedCrimeReferenceAt = now;
+	return cachedCrimeReference;
+}
+
+/**
  * Ingests and parses an array of UserLog events directly into SQLite `crime_logs`.
  * Fully idempotent using SQLite insert on conflict update.
  */
@@ -167,34 +240,11 @@ export async function processCrimeLogsBatch(
 		return { processed: 0, skipped: logs.length };
 	}
 
-	// 2. Fetch custom crime action mappings for override resolution, item market prices & Torn crime definitions
-	const [customMappings, itemPrices, tornCrimesList] = await Promise.all([
-		db.select().from(crimeActionMappings),
-		loadItemMarketPrices(),
-		db
-			.select({
-				id: tornCrimes.id,
-				name: tornCrimes.name,
-				data: tornCrimes.data,
-			})
-			.from(tornCrimes),
-	]);
-	const customMappingMap = new Map<string, number>(
-		customMappings.map((m: CrimeActionMapping) => [
-			m.id.toLowerCase(),
-			m.crimeId,
-		]),
-	);
-
-	const dynamicRules = buildCrimeRulesFromDefinitions(
-		tornCrimesList.map((tc) => ({
-			id: Number(tc.id),
-			name: tc.name,
-			subcrimes:
-				(tc.data as { subcrimes?: Array<{ id: number; name: string }> })
-					?.subcrimes ?? [],
-		})),
-	);
+	// 2. Resolve the static reference data (custom action mappings, item market
+	// prices, Torn crime definitions) from a short-TTL cache rather than
+	// re-reading and recompiling it on every ingested page.
+	const { customMappingMap, itemPrices, dynamicRules } =
+		await loadCrimeReferenceData();
 
 	const now = new Date();
 	const rowsToUpsert: Array<{
@@ -376,33 +426,8 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 			return { replayed: 0 };
 		}
 
-		const [customMappings, itemPrices, tornCrimesList] = await Promise.all([
-			db.select().from(crimeActionMappings),
-			loadItemMarketPrices(),
-			db
-				.select({
-					id: tornCrimes.id,
-					name: tornCrimes.name,
-					data: tornCrimes.data,
-				})
-				.from(tornCrimes),
-		]);
-		const customMappingMap = new Map<string, number>(
-			customMappings.map((m: CrimeActionMapping) => [
-				m.id.toLowerCase(),
-				m.crimeId,
-			]),
-		);
-
-		const dynamicRules = buildCrimeRulesFromDefinitions(
-			tornCrimesList.map((tc) => ({
-				id: Number(tc.id),
-				name: tc.name,
-				subcrimes:
-					(tc.data as { subcrimes?: Array<{ id: number; name: string }> })
-						?.subcrimes ?? [],
-			})),
-		);
+		const { customMappingMap, itemPrices, dynamicRules } =
+			await loadCrimeReferenceData();
 
 		logger.info(
 			`Found ${logsToProcess.length} unindexed crime log records in personal_logs. Processing into crime_logs...`,
@@ -554,9 +579,7 @@ export async function runCrimesLedgerSync(): Promise<void> {
 export function startCrimesLedger(_options?: WorkerStartOptions): void {
 	// Live stream processing
 	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
-		processCrimeLogsBatch(logs).catch((err) => {
-			logger.error("Error processing real-time crime logs batch:", err);
-		});
+		runSubscriber("crimes_ledger", () => processCrimeLogsBatch(logs));
 	});
 	logger.info("Crimes Ledger live event listener registered.");
 }

@@ -7,6 +7,7 @@ import type {
 	IpcSubversiveRwDisplaysUpdateMessage,
 	IpcSubversiveRwTravelingUpdateMessage,
 } from "./rw-displays";
+import type { StockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
 
 export type IpcWarAction =
@@ -53,23 +54,6 @@ export type IpcTerritoryMessage = {
 };
 
 export type IpcBotMessage = IpcWarMessage | IpcTerritoryMessage;
-
-export type LogLevel = "info" | "warn" | "error" | "debug";
-
-export type LogEntry = {
-	id: string;
-	timestamp: string;
-	service: "api" | "bot" | "scheduler";
-	context: string;
-	subContext?: string;
-	level: LogLevel;
-	message: string;
-};
-
-export type IpcLogEventMessage = {
-	action: "log_event";
-	data: LogEntry;
-};
 
 export type IpcForceWorkerMessage = {
 	action: "force_run_worker";
@@ -548,6 +532,23 @@ export type IpcSubversiveRecruitmentAlertMessage = {
 	data: IpcSubversiveRecruitmentAlertPayload;
 };
 
+/**
+ * One batched stock-alert delivery for a single Discord channel.
+ *
+ * Batched rather than one message per event because a market-wide move can trip
+ * several stocks in the same cycle, and the bot renders the batch as one
+ * message with several embeds.
+ */
+export type IpcSubversiveStockAlertsPayload = {
+	notificationChannelId: string;
+	alerts: StockAlertEvent[];
+};
+
+export type IpcSubversiveStockAlertsMessage = {
+	action: "subversive_stock_alerts";
+	data: IpcSubversiveStockAlertsPayload;
+};
+
 export type IpcFetchFactionMembersRequestMessage = {
 	action: "fetch_faction_members_request";
 	requestId: string;
@@ -571,7 +572,6 @@ export type IpcFetchFactionMembersResponseMessage = {
  */
 export type IpcMessage =
 	| IpcBotMessage
-	| IpcLogEventMessage
 	| IpcForceWorkerMessage
 	| IpcResetLogManagerMessage
 	| IpcFetchFactionMembersRequestMessage
@@ -620,6 +620,7 @@ export type IpcMessage =
 	| IpcReinitializeWealthMessage
 	| IpcWealthStateUpdatedMessage
 	| IpcSubversiveRecruitmentAlertMessage
+	| IpcSubversiveStockAlertsMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage
 	| IpcSubversiveRetalUpdatedMessage

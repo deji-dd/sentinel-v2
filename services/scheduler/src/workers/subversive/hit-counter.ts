@@ -129,10 +129,15 @@ async function hydrateFromDatabase(): Promise<void> {
 		}
 
 		try {
+			// Aggregate in SQL rather than pulling every hit of the war into the
+			// process. Grouping by (attacker, result) keeps the exact same
+			// `isLandedHit` semantics while bounding the transferred rows to
+			// attackers x distinct results instead of growing all war long.
 			const rows = await db
 				.select({
 					attackerId: factionAttackLogs.attackerId,
 					result: factionAttackLogs.result,
+					hits: sql<number>`count(*)::int`,
 				})
 				.from(factionAttackLogs)
 				.where(
@@ -149,18 +154,20 @@ async function hydrateFromDatabase(): Promise<void> {
 							context.start,
 						),
 					),
-				);
+				)
+				.groupBy(factionAttackLogs.attackerId, factionAttackLogs.result);
 
 			// Rebuild from scratch: DB is the source of truth for this war.
 			const rebuilt = new Map<number, number>();
 			for (const row of rows) {
 				if (row.attackerId === null) continue;
 				if (!isLandedHit(row.result)) continue;
-				rebuilt.set(row.attackerId, (rebuilt.get(row.attackerId) ?? 0) + 1);
+				const hits = Number(row.hits ?? 0);
+				rebuilt.set(row.attackerId, (rebuilt.get(row.attackerId) ?? 0) + hits);
 			}
 			state.counts = rebuilt;
 
-			logger.info(
+			logger.debug(
 				`Hydrated ranked war hit counts for faction ${factionId}: ${state.counts.size} member(s), ${[...state.counts.values()].reduce((a, b) => a + b, 0)} total hit(s).`,
 			);
 		} catch (err) {
@@ -239,6 +246,25 @@ export function stopHitCounter(): void {
 
 let isSubscriptionActive = false;
 let broadcastTimer: ReturnType<typeof setInterval> | null = null;
+/** War ids already hydrated, so a 1 Hz war-state tick does not re-query. */
+const hydratedWarIds = new Map<number, number | null>();
+
+/** Hydrates only when the engaged war for a faction actually changed. */
+function hydrateIfWarChanged(): void {
+	let anyChanged = false;
+	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+		const context = getEngagedWarContext(factionId);
+		const warId = context?.warId ?? null;
+		if (hydratedWarIds.get(factionId) !== warId) {
+			hydratedWarIds.set(factionId, warId);
+			anyChanged = true;
+		}
+	}
+
+	if (anyChanged) {
+		void hydrateFromDatabase().then(() => broadcastHitCounts());
+	}
+}
 
 /**
  * Starts the ranked war hit counter: tracks how many landed ranked war hits each
@@ -256,14 +282,25 @@ export function startHitCounter(): void {
 		},
 	);
 
+	// The war worker emits this every second while a war is active. The tally is
+	// already incremented live by `recordAttacks`, so the DB rebuild is only a
+	// restart/backfill safety net and does not need to re-run on every tick —
+	// only when the engaged war actually changes.
 	schedulerEvents.on("ranked_war_updated", () => {
-		void hydrateFromDatabase().then(() => broadcastHitCounts());
+		hydrateIfWarChanged();
 	});
 
 	// The war worker learns about new wars on its own cycle, so re-check the
 	// engaged war periodically to catch a war starting (or ending) mid-flight.
 	void hydrateFromDatabase().then(() => broadcastHitCounts());
+	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+		hydratedWarIds.set(
+			factionId,
+			getEngagedWarContext(factionId)?.warId ?? null,
+		);
+	}
 
+	// Periodic full rebuild stays as a safety net in case live increments drift.
 	broadcastTimer = setInterval(() => {
 		void hydrateFromDatabase().then(() => broadcastHitCounts());
 	}, 60_000);

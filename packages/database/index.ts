@@ -3,6 +3,24 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./src/schema";
 
+/**
+ * Connection pool options.
+ *
+ * `idle_timeout` is deliberately 0 (never close an idle connection). postgres.js
+ * keeps its prepared-statement cache per connection and wipes it on every
+ * reconnect, so a short idle timeout made every worker on a 30s/60s/5min cadence
+ * reconnect into an empty cache and re-pay a Parse+Describe round trip per
+ * distinct query shape, on every cycle.
+ *
+ * `statement_timeout` bounds a pathological query so it can never pin one of the
+ * pool slots indefinitely.
+ */
+const POOL_OPTIONS = {
+	max: 10,
+	idle_timeout: 0,
+	connection: { statement_timeout: 30_000 },
+} as const;
+
 export function createSqlClient(): postgres.Sql {
 	const customUrl = process.env.DATABASE_URL;
 	const defaultHost = existsSync("/var/run/postgresql")
@@ -25,8 +43,7 @@ export function createSqlClient(): postgres.Sql {
 			: undefined;
 		return postgres(customUrl, {
 			...(socketHost ? { host: socketHost } : {}),
-			max: 10,
-			idle_timeout: 20,
+			...POOL_OPTIONS,
 		});
 	}
 
@@ -36,8 +53,7 @@ export function createSqlClient(): postgres.Sql {
 		database,
 		username,
 		password,
-		max: 10,
-		idle_timeout: 20,
+		...POOL_OPTIONS,
 	});
 }
 
@@ -72,6 +88,9 @@ export {
 	type SQL,
 	sql,
 } from "drizzle-orm";
+
+// Table/column type helpers for generic helpers (e.g. batched retention deletes)
+export type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 
 // Export schema for queries and types
 export * from "./src/lib/alerts";

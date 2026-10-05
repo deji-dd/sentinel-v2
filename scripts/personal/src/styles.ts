@@ -802,6 +802,24 @@ tr:hover td {
 	border: 1px solid rgba(251, 146, 60, 0.3);
 }
 
+.tag-capacity {
+	background: rgba(16, 185, 129, 0.15);
+	color: #34d399;
+	border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.tag-structural {
+	background: rgba(244, 63, 94, 0.15);
+	color: #fb7185;
+	border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.tag-insight {
+	background: rgba(148, 163, 184, 0.15);
+	color: #cbd5e1;
+	border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
 .directive-text {
 	color: #cbd5e1;
 	font-size: 12px;

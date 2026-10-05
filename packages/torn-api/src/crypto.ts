@@ -9,8 +9,26 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // 96 bits (NIST standard)
 const AUTH_TAG_LENGTH = 16; // 128 bits
 
+/**
+ * Memoised master-key derivation. `decryptApiKey` is called once per key per key
+ * pool resolution, and pool resolutions happen in hot polling loops, so the
+ * SHA-256 is cached rather than recomputed on every call. Bounded to a handful
+ * of entries because the master key is effectively a process-wide constant.
+ */
+const derivedKeyCache = new Map<string, Buffer>();
+const MAX_DERIVED_KEY_ENTRIES = 4;
+
 function deriveKeyFromMaster(masterKey: string): Buffer {
-	return createHash("sha256").update(masterKey).digest();
+	const cached = derivedKeyCache.get(masterKey);
+	if (cached) return cached;
+
+	const derived = createHash("sha256").update(masterKey).digest();
+	if (derivedKeyCache.size >= MAX_DERIVED_KEY_ENTRIES) {
+		const oldest = derivedKeyCache.keys().next().value;
+		if (oldest !== undefined) derivedKeyCache.delete(oldest);
+	}
+	derivedKeyCache.set(masterKey, derived);
+	return derived;
 }
 
 export function encryptApiKey(apiKey: string, masterKey: string): string {

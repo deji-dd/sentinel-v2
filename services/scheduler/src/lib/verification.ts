@@ -1,9 +1,12 @@
 import {
+	and,
 	db,
 	desc,
 	eq,
 	factionRoleMappings,
+	gte,
 	guildConfigs,
+	inArray,
 	tornUsers,
 	verificationLogs,
 	verifiedUsers,
@@ -31,20 +34,64 @@ type FactionResponse = TornSchema<"FactionBasicResponse"> &
 	TornSchema<"FactionMembersResponse">;
 
 /**
+ * Guild-scoped lookups that a bulk sweep already holds in memory. Passing them in avoids
+ * re-querying the same guild config and faction mappings once per member.
+ */
+type GuildVerificationContext = {
+	config: typeof guildConfigs.$inferSelect;
+	enabledMappings: (typeof factionRoleMappings.$inferSelect)[];
+};
+
+/**
+ * The `verified_users` columns a bulk sweep consults. Selecting them explicitly keeps the fetched
+ * payload to what is actually read instead of the whole record.
+ */
+const VERIFIED_USER_LOOKUP_COLUMNS = {
+	discordId: true,
+	tornId: true,
+	tornName: true,
+	factionId: true,
+	factionTag: true,
+	lastCheckedAt: true,
+} as const;
+
+type VerifiedUserLookupRow = {
+	discordId: string;
+	tornId: number;
+	tornName: string;
+	factionId: number | null;
+	factionTag: string | null;
+	lastCheckedAt: Date | null;
+};
+
+/**
+ * `inArray` binds one parameter per Discord ID, so the verified-user lookup is chunked to stay
+ * well clear of the PostgreSQL protocol parameter limit on very large guilds.
+ */
+const VERIFIED_USERS_QUERY_CHUNK_SIZE = 5000;
+
+/**
  * Runs verification for a single Discord member in a guild using Drizzle ORM.
  * Calculates roles to add, roles to remove, and nickname formatting.
  */
 export async function runVerificationJob(
 	job: VerificationRequest,
 	apiKeyOverride?: string,
+	prefetched?: GuildVerificationContext,
 ): Promise<VerificationSuccessResponse | VerificationFailureResponse> {
 	const finishLog = logger.time();
+	// Membership set for the member's current roles: `Array.prototype.includes` inside the
+	// role loops/filters below was a linear scan per role.
+	const jobRoleIds = new Set(job.currentRoleIds);
 
 	try {
-		// 1. Fetch Guild Configuration with Drizzle relational query
-		const config = await db.query.guildConfigs.findFirst({
-			where: eq(guildConfigs.guildId, job.guildId),
-		});
+		// 1. Fetch Guild Configuration with Drizzle relational query (reused from the caller's
+		// snapshot when a bulk sweep supplies one)
+		const config =
+			prefetched?.config ??
+			(await db.query.guildConfigs.findFirst({
+				where: eq(guildConfigs.guildId, job.guildId),
+			}));
 
 		if (!config) {
 			finishLog();
@@ -71,11 +118,13 @@ export async function runVerificationJob(
 		}
 
 		// Fetch enabled faction mappings for guild
-		const activeFactionMappings = await db.query.factionRoleMappings.findMany({
-			where: eq(factionRoleMappings.guildId, job.guildId),
-		});
-
-		const enabledMappings = activeFactionMappings.filter((m) => m.enabled);
+		const enabledMappings = prefetched
+			? prefetched.enabledMappings
+			: (
+					await db.query.factionRoleMappings.findMany({
+						where: eq(factionRoleMappings.guildId, job.guildId),
+					})
+				).filter((m) => m.enabled);
 
 		// 2. Compile Managed & Protected Roles
 		const managedRoles = new Set<string>();
@@ -115,7 +164,7 @@ export async function runVerificationJob(
 				errMsg.includes("linked")
 			) {
 				const rolesToRemove = Array.from(managedRoles).filter((roleId) =>
-					job.currentRoleIds.includes(roleId),
+					jobRoleIds.has(roleId),
 				);
 
 				await db
@@ -235,7 +284,7 @@ export async function runVerificationJob(
 		// Protected Roles logic: Keep protected roles IF user is in a mapped faction
 		if (isInMappedFaction) {
 			for (const roleId of config.protectedRoleIds) {
-				if (job.currentRoleIds.includes(roleId)) {
+				if (jobRoleIds.has(roleId)) {
 					targetRoles.add(roleId);
 				}
 			}
@@ -302,12 +351,11 @@ export async function runVerificationJob(
 
 		// 7. Calculate Diff
 		const rolesToAdd = Array.from(targetRoles).filter(
-			(roleId) => !job.currentRoleIds.includes(roleId),
+			(roleId) => !jobRoleIds.has(roleId),
 		);
 
 		const rolesToRemove = Array.from(managedRoles).filter(
-			(roleId) =>
-				!targetRoles.has(roleId) && job.currentRoleIds.includes(roleId),
+			(roleId) => !targetRoles.has(roleId) && jobRoleIds.has(roleId),
 		);
 
 		const newNickname =
@@ -387,6 +435,21 @@ export async function runBulkGuildVerification(
 }> {
 	const finishLog = logger.time();
 
+	// Changed members' verification logs are buffered and written as multi-row INSERTs at the
+	// existing 10-member progress boundary (so at most 10 rows per statement) instead of one INSERT
+	// per member. Declared outside the try so a sweep that aborts still persists what it queued.
+	// Failures stay swallowed exactly as before.
+	let pendingLogRows: (typeof verificationLogs.$inferInsert)[] = [];
+	const flushPendingLogs = async (): Promise<void> => {
+		if (pendingLogRows.length === 0) return;
+		const rows = pendingLogRows;
+		pendingLogRows = [];
+		await db
+			.insert(verificationLogs)
+			.values(rows)
+			.catch(() => {});
+	};
+
 	try {
 		const config = await db.query.guildConfigs.findFirst({
 			where: eq(guildConfigs.guildId, guildId),
@@ -413,6 +476,20 @@ export async function runBulkGuildVerification(
 					"Guild configuration not found for bulk verification of this guild.",
 			});
 			return { processed: 0, total: 0, updated: 0, errors: 1 };
+		}
+
+		// Faction lookup indexes for the per-member loop below: avoids an O(mappings) linear
+		// scan for every member. `find` semantics (first match wins) are preserved.
+		const enabledFactionIds = new Set<number>();
+		const enabledMappingsByFactionId = new Map<
+			number,
+			(typeof enabledMappings)[number]
+		>();
+		for (const mapping of enabledMappings) {
+			enabledFactionIds.add(mapping.factionId);
+			if (!enabledMappingsByFactionId.has(mapping.factionId)) {
+				enabledMappingsByFactionId.set(mapping.factionId, mapping);
+			}
 		}
 
 		// Compile Managed & Protected Roles for the guild
@@ -557,13 +634,30 @@ export async function runBulkGuildVerification(
 			return { processed: 0, total: 0, updated: 0, errors: 1 };
 		}
 
+		// Reverse faction index (Torn ID -> faction ID), built once from the rosters fetched above so
+		// the per-member loop does not scan every mapped faction. The first faction to claim a Torn
+		// ID wins, matching the previous break-on-first-match scan.
+		const tornIdToFactionId = new Map<number, number>();
+		for (const [factionId, membersSet] of factionMembersMap) {
+			for (const tornId of membersSet) {
+				if (!tornIdToFactionId.has(tornId)) {
+					tornIdToFactionId.set(tornId, factionId);
+				}
+			}
+		}
+
 		// Query recent verification logs for this guild (last 2 hours) to detect any protected roles
 		// that may have been stripped by a recent faulty sweep and need recovery.
+		// The 2-hour window is applied in SQL so the created_at index bounds the rows read; the
+		// in-memory check below is kept as a defensive no-op for the same window.
 		const recentlyRemovedRolesMap = new Map<string, Set<string>>();
 		try {
 			const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 			const recentLogs = await db.query.verificationLogs.findMany({
-				where: eq(verificationLogs.guildId, guildId),
+				where: and(
+					eq(verificationLogs.guildId, guildId),
+					gte(verificationLogs.createdAt, twoHoursAgo),
+				),
 				orderBy: [desc(verificationLogs.createdAt)],
 				limit: 1000,
 			});
@@ -586,19 +680,44 @@ export async function runBulkGuildVerification(
 			);
 		}
 
-		// Fetch all verified users in DB into a Map for O(1) lookups
-		const dbVerifiedUsers = await db.query.verifiedUsers.findMany();
-		const verifiedUsersMap = new Map<
-			string,
-			(typeof dbVerifiedUsers)[number]
-		>();
-		for (const u of dbVerifiedUsers) {
-			verifiedUsersMap.set(u.discordId, u);
-		}
-
 		const hasLiveDiscordInput = Boolean(
 			membersListInput && membersListInput.length > 0,
 		);
+
+		// Fetch the verified-user rows this sweep can consult into a Map for O(1) lookups.
+		// `verified_users` is global across guilds, so when a live Discord roster is supplied the
+		// lookup is bounded to those Discord IDs; the DB-fallback path needs every row because the
+		// fetched rows are also used as the member list itself.
+		let dbVerifiedUsers: VerifiedUserLookupRow[] = [];
+		if (hasLiveDiscordInput && membersListInput) {
+			const memberDiscordIds = [
+				...new Set(membersListInput.map((m) => m.discordId)),
+			];
+			for (
+				let i = 0;
+				i < memberDiscordIds.length;
+				i += VERIFIED_USERS_QUERY_CHUNK_SIZE
+			) {
+				const chunk = memberDiscordIds.slice(
+					i,
+					i + VERIFIED_USERS_QUERY_CHUNK_SIZE,
+				);
+				const rows = await db.query.verifiedUsers.findMany({
+					columns: VERIFIED_USER_LOOKUP_COLUMNS,
+					where: inArray(verifiedUsers.discordId, chunk),
+				});
+				dbVerifiedUsers.push(...rows);
+			}
+		} else {
+			dbVerifiedUsers = await db.query.verifiedUsers.findMany({
+				columns: VERIFIED_USER_LOOKUP_COLUMNS,
+			});
+		}
+
+		const verifiedUsersMap = new Map<string, VerifiedUserLookupRow>();
+		for (const u of dbVerifiedUsers) {
+			verifiedUsersMap.set(u.discordId, u);
+		}
 
 		// Determine target member list (all guild members passed in, or DB fallback)
 		const targetMembers: GuildMemberVerificationInput[] =
@@ -641,14 +760,20 @@ export async function runBulkGuildVerification(
 
 				// If user is not in DB or link check is stale (>7 days), do full Torn API verification
 				if (!userInDb || isStale) {
-					const res = await runVerificationJob({
-						guildId,
-						channelId: "",
-						discordId: member.discordId,
-						currentRoleIds: member.currentRoleIds,
-						currentNickname: member.currentNickname,
-						triggeredBy,
-					});
+					const res = await runVerificationJob(
+						{
+							guildId,
+							channelId: "",
+							discordId: member.discordId,
+							currentRoleIds: member.currentRoleIds,
+							currentNickname: member.currentNickname,
+							triggeredBy,
+						},
+						undefined,
+						// Reuse this sweep's guild config & faction mappings instead of re-querying
+						// them for every member that needs a full check.
+						{ config, enabledMappings },
+					);
 
 					if ("error" in res && res.error) {
 						errors++;
@@ -670,19 +795,16 @@ export async function runBulkGuildVerification(
 					}
 				} else {
 					// Fast in-memory verification using cached verified user data & pre-fetched faction maps
-					let userFactionId: number | null = null;
-					let isLeaderOrCoLeader = false;
+					// Membership set for this member's current roles (replaces per-role `includes` scans).
+					const memberRoleIds = new Set(member.currentRoleIds);
 
-					for (const [factionId, membersSet] of factionMembersMap) {
-						if (membersSet.has(userInDb.tornId)) {
-							userFactionId = factionId;
-							const leadersSet = factionLeadersMap.get(factionId);
-							if (leadersSet?.has(userInDb.tornId)) {
-								isLeaderOrCoLeader = true;
-							}
-							break;
-						}
-					}
+					// Faction membership is resolved from the reverse index built above instead of
+					// scanning every mapped faction's roster.
+					let userFactionId = tornIdToFactionId.get(userInDb.tornId) ?? null;
+					const isLeaderOrCoLeader = userFactionId
+						? (factionLeadersMap.get(userFactionId)?.has(userInDb.tornId) ??
+							false)
+						: false;
 
 					// SAFETY: If user was recorded in a mapped faction, but that specific faction's
 					// roster failed to load in this batch, retain their faction membership rather than stripping roles.
@@ -690,7 +812,7 @@ export async function runBulkGuildVerification(
 						!userFactionId &&
 						userInDb.factionId &&
 						!factionMembersMap.has(userInDb.factionId) &&
-						enabledMappings.some((m) => m.factionId === userInDb.factionId)
+						enabledFactionIds.has(userInDb.factionId)
 					) {
 						userFactionId = userInDb.factionId;
 					}
@@ -703,9 +825,7 @@ export async function runBulkGuildVerification(
 
 					let isInMappedFaction = false;
 					if (userFactionId) {
-						const mapping = enabledMappings.find(
-							(m) => m.factionId === userFactionId,
-						);
+						const mapping = enabledMappingsByFactionId.get(userFactionId);
 						if (mapping) {
 							isInMappedFaction = true;
 							for (const id of mapping.memberRoleIds) {
@@ -722,7 +842,7 @@ export async function runBulkGuildVerification(
 					// Protected roles: keep protected roles if user is in a mapped faction
 					if (isInMappedFaction) {
 						for (const roleId of config.protectedRoleIds) {
-							const hasRole = member.currentRoleIds.includes(roleId);
+							const hasRole = memberRoleIds.has(roleId);
 							const recentlyStripped = recentlyRemovedRolesMap
 								.get(member.discordId)
 								?.has(roleId);
@@ -759,14 +879,13 @@ export async function runBulkGuildVerification(
 					// member.currentRoleIds is empty and cannot be used to deduce diffs.
 					const rolesToAdd = hasLiveDiscordInput
 						? Array.from(targetRoles).filter(
-								(roleId) => !member.currentRoleIds.includes(roleId),
+								(roleId) => !memberRoleIds.has(roleId),
 							)
 						: [];
 					const rolesToRemove = hasLiveDiscordInput
 						? Array.from(managedRoles).filter(
 								(roleId) =>
-									!targetRoles.has(roleId) &&
-									member.currentRoleIds.includes(roleId),
+									!targetRoles.has(roleId) && memberRoleIds.has(roleId),
 							)
 						: [];
 					const newNickname = hasLiveDiscordInput
@@ -806,19 +925,18 @@ export async function runBulkGuildVerification(
 							newNickname,
 						});
 
-						await db
-							.insert(verificationLogs)
-							.values({
-								guildId,
-								discordId: member.discordId,
-								status: "success",
-								triggeredBy,
-								rolesAdded: rolesToAdd,
-								rolesRemoved: rolesToRemove,
-								oldNickname: member.currentNickname,
-								newNickname,
-							})
-							.catch(() => {});
+						// Queued rather than inserted here so the per-member writes become one
+						// multi-row INSERT at the progress boundary below.
+						pendingLogRows.push({
+							guildId,
+							discordId: member.discordId,
+							status: "success",
+							triggeredBy,
+							rolesAdded: rolesToAdd,
+							rolesRemoved: rolesToRemove,
+							oldNickname: member.currentNickname,
+							newNickname,
+						});
 					}
 				}
 			} catch (memberErr) {
@@ -831,6 +949,10 @@ export async function runBulkGuildVerification(
 
 			// Stream progress update every 10 users or upon reaching the end
 			if (processed % 10 === 0 || processed === total) {
+				// Flush queued log rows before the progress callback so a throwing callback cannot
+				// roll back writes that the previous per-member inserts would already have made.
+				await flushPendingLogs();
+
 				const actionsToSend =
 					pendingActions.length > 0 ? [...pendingActions] : undefined;
 				pendingActions = [];
@@ -869,6 +991,9 @@ export async function runBulkGuildVerification(
 			`Error in runBulkGuildVerification for guild ${guildId}:`,
 			err,
 		);
+		// Persist logs queued for members processed before the abort (the previous per-member
+		// inserts would already have been written at this point).
+		await flushPendingLogs();
 		await onProgress?.({
 			guildId,
 			processed: 0,

@@ -513,6 +513,9 @@ export async function runPersonalReferenceSync(): Promise<void> {
 		finishSync();
 	} catch (error) {
 		logger.error("Failed to execute personal reference sync:", error);
+		// Propagate so the runner records the failure and retries, instead of
+		// reporting a successful daily sync that never happened.
+		throw error;
 	}
 }
 
@@ -530,7 +533,10 @@ export function startPersonalReferenceSync(options?: WorkerStartOptions): void {
 
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
-		schedule: { type: "cron", pattern: "15 0 * * *", timezone: "Etc/UTC" },
+		// Offset from `torn:references`, which owns the 00:15 slot. Both used to
+		// fire in the same minute, so two full reference sweeps contended for the
+		// same tables and the shared API key pool on a two-core host.
+		schedule: { type: "cron", pattern: "40 0 * * *", timezone: "Etc/UTC" },
 		initialDelayMs: options?.initialDelayMs,
 		handler: async () => {
 			await runPersonalReferenceSync();

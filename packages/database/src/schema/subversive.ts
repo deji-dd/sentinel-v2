@@ -98,6 +98,9 @@ export const factionAttackLogs = pgTable(
 			table.direction,
 		),
 		index("idx_faction_attack_logs_ended_at").on(table.endedAt),
+		// Retention pruning deletes by created_at in batches; without this index
+		// each batch seq-scans the table holding 7 days of every faction's attacks.
+		index("idx_faction_attack_logs_created_at").on(table.createdAt),
 		index("idx_faction_attack_logs_attacker_id").on(table.attackerId),
 		index("idx_faction_attack_logs_defender_faction").on(
 			table.defenderFactionId,
@@ -193,7 +196,6 @@ export const subversiveApiKeys = pgTable(
 	(table) => [
 		index("idx_subversive_keys_guild_id").on(table.guildId),
 		index("idx_subversive_keys_torn_id").on(table.tornId),
-		index("idx_subversive_keys_is_valid").on(table.isValid),
 	],
 );
 
@@ -247,7 +249,6 @@ export const subversiveTargetFinderUsers = pgTable(
 	},
 	(table) => [
 		index("idx_subversive_tf_users_hash").on(table.apiKeyHash),
-		index("idx_subversive_tf_users_active").on(table.isActive),
 		index("idx_subversive_tf_users_faction").on(table.factionId),
 	],
 );
@@ -289,9 +290,12 @@ export const subversiveTargetFinderTargets = pgTable(
 	},
 	(table) => [
 		index("idx_subversive_tf_targets_score").on(table.estimatedScore),
+		// Single-column indexes on the low-cardinality boolean flags
+		// (`is_factionless`, `is_inactive`) used to live here too. `pg_stat_user_indexes`
+		// showed zero scans over the database's entire lifetime while this table takes
+		// millions of updates, so each one was pure write and vacuum cost. `in_hospital`
+		// is retained: it has measurable scans.
 		index("idx_subversive_tf_targets_hosp").on(table.inHospital),
-		index("idx_subversive_tf_targets_factionless").on(table.isFactionless),
-		index("idx_subversive_tf_targets_inactive").on(table.isInactive),
 		index("idx_subversive_tf_targets_level").on(table.level),
 	],
 );
@@ -449,3 +453,110 @@ export type SubversiveRwDisplayMessageRow =
 	typeof subversiveRwDisplayMessages.$inferSelect;
 export type NewSubversiveRwDisplayMessageRow =
 	typeof subversiveRwDisplayMessages.$inferInsert;
+
+/**
+ * Structural mirror of `StockAlertChangeRule` in `@sentinel/schemas`.
+ *
+ * Duplicated rather than imported because `@sentinel/database` does not depend
+ * on `@sentinel/schemas` — the same reason every other JSON column in this
+ * schema declares its shape inline.
+ */
+type StockAlertChangeRuleJson = {
+	windowMinutes: number;
+	thresholdPct: number;
+};
+
+/**
+ * Structural mirror of `StockAlertState` in `@sentinel/schemas`.
+ */
+type StockAlertStateJson = {
+	seeded: boolean;
+	lastPrice: number | null;
+	extremes: Partial<Record<"24h" | "all_time", { high: number; low: number }>>;
+	lastAlertAt: Record<string, number>;
+};
+
+/**
+ * Stock-market alert settings, one row per Subversive family faction
+ * (2013 / 27312).
+ *
+ * Each faction runs its own channel and sensitivity, so these settings are
+ * scoped like dibs and ranked-war channels rather than per Discord guild. A
+ * missing row means "never configured", which resolves to the factory defaults
+ * (disabled) instead of an error.
+ */
+export const subversiveStockAlertConfigs = pgTable(
+	"subversive_stock_alert_configs",
+	{
+		/** Family faction these settings apply to (2013 / 27312). */
+		factionId: integer("faction_id").primaryKey(),
+		/** Master switch. Posting also requires a `channelId`. */
+		enabled: boolean("enabled").default(false).notNull(),
+		/** Discord snowflake of the alert channel, or null when unrouted. */
+		channelId: text("channel_id"),
+		/**
+		 * Notable-move rules (`{ windowMinutes, thresholdPct }[]`). An empty
+		 * list disables change alerting while leaving high/low alerting active.
+		 */
+		changeRules: jsonb("change_rules")
+			.$type<StockAlertChangeRuleJson[]>()
+			.default([])
+			.notNull(),
+		/** High/low windows that raise an alert: `24h` and/or `all_time`. */
+		highLowWindows: jsonb("high_low_windows")
+			.$type<string[]>()
+			.default([])
+			.notNull(),
+		/** Minimum minutes between two alerts of the same kind for one stock. */
+		cooldownMinutes: integer("cooldown_minutes").default(30).notNull(),
+		updatedBy: text("updated_by"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+);
+
+export type SubversiveStockAlertConfigRow =
+	typeof subversiveStockAlertConfigs.$inferSelect;
+export type NewSubversiveStockAlertConfigRow =
+	typeof subversiveStockAlertConfigs.$inferInsert;
+
+/**
+ * Per-stock alerting memory, one row per faction and stock.
+ *
+ * Persisted rather than kept in RAM because it carries the two things a restart
+ * must not lose: the recorded extremes (so a restart does not re-announce a high
+ * the faction has already seen) and the cooldown timestamps (so a restart cannot
+ * be used to bypass throttling). The 24h and all-time baselines are seeded from
+ * Torn's own chart figures, so a cold start is immediately accurate instead of
+ * waiting for a locally-built price history.
+ */
+export const subversiveStockAlertStates = pgTable(
+	"subversive_stock_alert_states",
+	{
+		/** Family faction these baselines belong to (2013 / 27312). */
+		factionId: integer("faction_id").notNull(),
+		/** Torn stock id, as returned by `/torn/stocks`. */
+		stockId: integer("stock_id").notNull(),
+		/** `StockAlertState` — extremes, last price and per-key cooldowns. */
+		state: jsonb("state").$type<StockAlertStateJson>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.factionId, table.stockId] }),
+		index("idx_subversive_stock_alert_states_faction").on(table.factionId),
+	],
+);
+
+export type SubversiveStockAlertStateRow =
+	typeof subversiveStockAlertStates.$inferSelect;
+export type NewSubversiveStockAlertStateRow =
+	typeof subversiveStockAlertStates.$inferInsert;

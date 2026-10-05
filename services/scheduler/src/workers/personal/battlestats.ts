@@ -20,6 +20,7 @@ import {
 } from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
 const STATE_ID = "personal:battlestats_ledger";
@@ -135,7 +136,8 @@ export async function processBattlestatsLogsBatch(
 			continue;
 		}
 
-		logger.info(
+		// Per-record tracing only: `debug` keeps it off the production path.
+		logger.debug(
 			`Processing battlestats gain log #${log.id} (Log ID: ${logTypeCode})`,
 		);
 
@@ -292,7 +294,8 @@ export async function reconcileHistoricalBattlestatsLogs(options?: {
 			const rowsToUpsert: Array<typeof battlestatsLedgers.$inferInsert> = [];
 
 			for (const pLog of chunk) {
-				logger.info(
+				// Per-record tracing only: `debug` keeps it off the production path.
+				logger.debug(
 					`Processing historical battlestats log #${pLog.id} (Log ID: ${pLog.log})`,
 				);
 				const parsed = parseStatGainFromLog({
@@ -438,9 +441,9 @@ export async function runBattlestatsLedgerSync(): Promise<void> {
 export function startBattlestatsLedger(_options?: WorkerStartOptions): void {
 	// Live stream processing
 	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
-		processBattlestatsLogsBatch(logs).catch((err) => {
-			logger.error("Error processing real-time battlestats logs batch:", err);
-		});
+		runSubscriber("battlestats_ledger", () =>
+			processBattlestatsLogsBatch(logs),
+		);
 	});
 	logger.info("Battlestats Ledger live event listener registered.");
 }

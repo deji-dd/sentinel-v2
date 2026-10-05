@@ -36,6 +36,23 @@ const MIN_ACCOUNT_AGE_DAYS = 14;
 export const PROFILES_PER_KEY = 10;
 const BOUNTY_PAGE_SIZE = 100;
 
+/**
+ * Execution budget for one bounty cycle.
+ *
+ * A normal cycle profiles 100 candidates sequentially in ~9-10s. The overruns
+ * come from Torn rate-limit responses, each of which makes `TornApiClient` sleep
+ * `5000 * attempt` ms before retrying.
+ */
+export const BOUNTY_CYCLE_TIMEOUT_MS = 25_000;
+
+/**
+ * Portion of the cycle budget the profile loop may consume. The remainder
+ * covers bounty page fetches, target assembly, the DB persist and the IPC
+ * broadcast, so the cycle always finishes and publishes partial progress instead
+ * of being aborted mid-flight (which loses all of its work and triggers a retry).
+ */
+const PROFILE_LOOP_TIME_BUDGET_MS = 15_000;
+
 export const DEFAULT_FLOOR_PAGE_COUNT = 5;
 export const MIN_FLOOR_PAGE_COUNT = 1;
 export const MAX_FLOOR_PAGE_COUNT = 20;
@@ -293,6 +310,7 @@ export async function runBountyFinderCycle(
 	if (!isStateHydrated) {
 		await hydrateBountyStateFromDb();
 	}
+	const cycleStartedAtMs = Date.now();
 	const force = typeof signalOrForce === "boolean" ? signalOrForce : false;
 	const hasSubversiveKeys = await hasActiveSubversiveKeys();
 	const personalKey = await getPersonalKey();
@@ -666,6 +684,18 @@ export async function runBountyFinderCycle(
 		});
 
 		// 7. Profile queries throttled to safe budget (budgeted dynamically by 10 * key pool size)
+		//
+		// This loop is opportunistic: the profiling queue is re-sorted and refilled
+		// on every cycle, so a candidate skipped here is simply picked up next
+		// time. It is also the only place the cycle can overrun its 25s budget,
+		// because a Torn rate-limit response makes `TornApiClient` sleep
+		// `5000 * attempt` ms before retrying — two of those inside this strictly
+		// sequential loop consume the entire budget and the cycle is killed, which
+		// discards all of its work (no state persist, no IPC broadcast) and then
+		// triggers the runner's retry.
+		//
+		// Checking the elapsed time each iteration lets the cycle finish and
+		// publish partial progress instead of being aborted mid-flight.
 		const userKeys = await getSubversiveUserKeys();
 		const effectiveKeyCount = Math.max(1, userKeys.length);
 		const maxProfilesThisCycle = Math.min(
@@ -673,8 +703,19 @@ export async function runBountyFinderCycle(
 			Math.max(10, effectiveKeyCount * PROFILES_PER_KEY),
 		);
 		let profilesChecked = 0;
+		let profilesSkippedForBudget = 0;
+
 		for (const item of profilingQueue) {
 			if (profilesChecked >= maxProfilesThisCycle) {
+				break;
+			}
+
+			if (Date.now() - cycleStartedAtMs >= PROFILE_LOOP_TIME_BUDGET_MS) {
+				profilesSkippedForBudget =
+					profilingQueue.length - profilesChecked - profilesSkippedForBudget;
+				logger.warn(
+					`Profile loop stopped after ${profilesChecked} call(s) to stay inside the cycle budget (${PROFILE_LOOP_TIME_BUDGET_MS}ms of ${BOUNTY_CYCLE_TIMEOUT_MS}ms); ${profilesSkippedForBudget} candidate(s) deferred to the next cycle.`,
+				);
 				break;
 			}
 
@@ -687,6 +728,11 @@ export async function runBountyFinderCycle(
 					apiKey: key.apiKey,
 					userId: key.userId,
 					pathParams: { id: candidate.id },
+					// Opportunistic: this queue is refilled every cycle, so a
+					// rate-limited candidate is cheaper to skip than to retry.
+					// Retrying sleeps 5s then 10s, which is what repeatedly blew
+					// the 25s cycle budget.
+					maxAttempts: 1,
 				})) as UserProfileResponse;
 				recordSubversiveKeySuccess(key.apiKey);
 
@@ -979,7 +1025,7 @@ export function startSubversiveBountyFinder(
 			timezone: "Etc/UTC",
 		},
 		defaultCadenceSeconds: CADENCE_SEC,
-		timeoutMs: 25_000,
+		timeoutMs: BOUNTY_CYCLE_TIMEOUT_MS,
 		initialDelayMs: options?.initialDelayMs,
 		retryPolicy: {
 			maxRetries: 3,

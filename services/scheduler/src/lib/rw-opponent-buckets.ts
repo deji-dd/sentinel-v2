@@ -13,6 +13,8 @@ import type { RankedWarOpponent } from "../workers/subversive/ranked-war-worker"
 const STATE_HOSPITAL = "Hospital";
 /** Torn's `UserStatusStateEnum` value for a player free of any status. */
 const STATE_OKAY = "Okay";
+/** Torn's `UserStatusStateEnum` value for a dead account. */
+const STATE_FALLEN = "Fallen";
 /** Torn's `UserLastActionStatusEnum` values. */
 const ACTION_ONLINE = "Online";
 const ACTION_OFFLINE = "Offline";
@@ -59,6 +61,17 @@ function isOkay(opponent: RankedWarOpponent): boolean {
 }
 
 /**
+ * Whether the account is dead.
+ *
+ * `Fallen` opponents are excluded from every bucket even when they carry the
+ * revive flag: a dead account can never enter hospital for a revive, and Torn
+ * reports no usable timestamps for them.
+ */
+function isFallen(opponent: RankedWarOpponent): boolean {
+	return opponent.status?.state === STATE_FALLEN;
+}
+
+/**
  * Sorts by a numeric key descending, breaking ties on name so the ordering is
  * stable and readable rather than dependent on API response order.
  */
@@ -100,18 +113,26 @@ function byAsc<T extends { name: string }>(
  *
  * Notes on the semantics, each verified against the live Torn API:
  *
- * - Buckets are intentionally **not** disjoint. A player in hospital who
- *   allows revives appears in both `hospital` and `revivable`, because both are
- *   actionable views of the same opportunity.
- * - `revivable` is **not** `is_revivable` alone. Torn's `is_revivable` is a
- *   standing permission flag meaning "this player allows revives"; on a real
- *   99-member opposing roster 40 members carried it while only one was in
- *   hospital and none overlapped. Treating the flag alone as "revivable"
- *   would list 40 healthy players as downed. The genuine predicate is the flag
- *   **and** a live hospital timer.
- * - `Fallen` players are excluded everywhere. They carry a null `until`, and
- *   their last-seen timestamps run back years (one sampled at 2070 days), so
- *   any "recently seen" ordering would be meaningless for them.
+ * - `hospital` requires a live timer: Torn keeps reporting the Hospital state
+ *   for a moment after `until` has elapsed, and a player already out is not a
+ *   departure target.
+ * - `revivable` mirrors Torn's `is_revivable` flag itself, **not** the flag
+ *   filtered by a Hospital status. `is_revivable` is a standing permission
+ *   ("this player allows revives"), confirmed against the key's own faction
+ *   where it is true for exactly the members whose `revive_setting` is
+ *   "Everyone" or "Friends & faction" and false for every "No one" member.
+ *   Requiring a Hospital status on top of it emptied the bucket whenever no
+ *   flagged opponent happened to be down — a live roster reported 41 flagged
+ *   members while the embed claimed 0, which reads as a broken embed rather
+ *   than as a lull in revivable targets. The API number and the embed must
+ *   agree, so the flag alone decides membership.
+ * - `revivable` stays ordered for action: downed opponents first (soonest
+ *   hospital exit, matching `hospital`), then everyone else most recently
+ *   active first.
+ * - `Fallen` players are excluded everywhere, including from `revivable` even
+ *   when flagged. They carry a null `until`, and their last-seen timestamps run
+ *   back years (one sampled at 2070 days), so any "recently seen" ordering
+ *   would be meaningless for them.
  */
 export function classifyOpponentsIntoRwBuckets(
 	opponents: RankedWarOpponent[],
@@ -126,12 +147,7 @@ export function classifyOpponentsIntoRwBuckets(
 		const leavingHospital = isLeavingHospital(opponent, nowSec);
 
 		if (leavingHospital) {
-			const line = toLine(opponent);
-			hospital.push(line);
-			// Only players who allow revives are actionable while down.
-			if (opponent.isRevivable) {
-				revivable.push(line);
-			}
+			hospital.push(toLine(opponent));
 		} else if (isOkay(opponent)) {
 			const line = toLine(opponent);
 			const action = opponent.lastAction?.status;
@@ -143,7 +159,17 @@ export function classifyOpponentsIntoRwBuckets(
 			// Idle players are neither online nor offline to an operator, so
 			// they are intentionally absent from both buckets.
 		}
+
+		// Independent of the buckets above: membership here is the permission
+		// flag alone, so a flagged opponent appears whether they are down, okay,
+		// travelling or abroad.
+		if (opponent.isRevivable && !isFallen(opponent)) {
+			revivable.push(toLine(opponent));
+		}
 	}
+
+	const downed = revivable.filter((line) => line.hospitalUntil !== null);
+	const others = revivable.filter((line) => line.hospitalUntil === null);
 
 	return {
 		// Soonest departure first: that is the actionable end of the window.
@@ -155,10 +181,12 @@ export function classifyOpponentsIntoRwBuckets(
 		offlineOkay: byDesc(offlineOkay, (l) => l.lastSeenAt),
 		// Biggest targets first for the online list.
 		onlineOkay: byDesc(onlineOkay, (l) => l.estimatedBs),
-		// Same window as `hospital`, so the same ordering.
-		revivable: byAsc(
-			revivable,
-			(l) => l.hospitalUntil ?? Number.MAX_SAFE_INTEGER,
-		),
+		// Downed players lead on the same ordering as `hospital` — they are the
+		// immediately actionable revives — and the rest follow most recently
+		// active first.
+		revivable: [
+			...byAsc(downed, (l) => l.hospitalUntil ?? Number.MAX_SAFE_INTEGER),
+			...byDesc(others, (l) => l.lastSeenAt),
+		],
 	};
 }

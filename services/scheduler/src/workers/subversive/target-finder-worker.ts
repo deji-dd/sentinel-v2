@@ -6,6 +6,7 @@ import {
 	isNull,
 	lt,
 	or,
+	sql,
 	subversiveTargetFinderTargets,
 } from "@sentinel/database";
 
@@ -55,27 +56,56 @@ export async function enrichTargetStats(): Promise<number> {
 
 	try {
 		const results = await getPlayerStats(playerIds);
-		let enrichedCount = 0;
 		const now = new Date();
+
+		// Collected first, then written in one statement: every row shares the same
+		// `updatedAt`, so the only per-row values are the estimate and its score.
+		// That makes a single `UPDATE ... FROM (VALUES ...)` equivalent to the
+		// up-to-100 statements the old loop awaited — same rows, same values.
+		const enriched: Array<{
+			targetId: number;
+			estimatedBs: number;
+			estimatedScore: number;
+		}> = [];
 
 		for (const res of results) {
 			if (res.player_id && res.bs_estimate) {
-				const estimatedScore = computeScoreFromEstimate(
-					res.bs_estimate,
-					res.distribution,
-				);
-
-				await db
-					.update(subversiveTargetFinderTargets)
-					.set({
-						estimatedBs: res.bs_estimate,
-						estimatedScore,
-						updatedAt: now,
-					})
-					.where(eq(subversiveTargetFinderTargets.targetId, res.player_id));
-				enrichedCount++;
+				enriched.push({
+					targetId: res.player_id,
+					estimatedBs: res.bs_estimate,
+					estimatedScore: computeScoreFromEstimate(
+						res.bs_estimate,
+						res.distribution,
+					),
+				});
 			}
 		}
+
+		if (enriched.length > 0) {
+			const values = sql.join(
+				enriched.map(
+					(row) =>
+						sql`(${row.targetId}::integer, ${row.estimatedBs}::double precision, ${row.estimatedScore}::double precision)`,
+				),
+				sql`, `,
+			);
+
+			await db
+				.update(subversiveTargetFinderTargets)
+				.set({
+					estimatedBs: sql`v.estimated_bs`,
+					estimatedScore: sql`v.estimated_score`,
+					updatedAt: now,
+				})
+				.from(
+					sql`(values ${values}) as v(target_id, estimated_bs, estimated_score)`,
+				)
+				.where(eq(subversiveTargetFinderTargets.targetId, sql`v.target_id`));
+		}
+
+		// Counts the same rows the loop counted: one per usable FFScouter result,
+		// regardless of whether the target row still existed at write time.
+		const enrichedCount = enriched.length;
 
 		logger.info(
 			`Enriched ${enrichedCount}/${playerIds.length} targets with FFScouter stats.`,
@@ -150,6 +180,19 @@ export async function verifyReadyTargetsHospitalStatus(
 
 		const now = new Date();
 		let hospitalizedCount = 0;
+		// Collected first, then written in one statement: as in `enrichTargetStats`,
+		// only the per-row profile values differ, so a single
+		// `UPDATE ... FROM (VALUES ...)` replaces up to 60 awaited statements.
+		const verified: Array<{
+			targetId: number;
+			inHospital: boolean;
+			hospitalUntil: Date | null;
+			status: string;
+			lastAction: Date | null;
+			isInactive: boolean;
+			factionId: number | null;
+			isFactionless: boolean;
+		}> = [];
 
 		for (let i = 0; i < results.length; i++) {
 			const res = results[i];
@@ -178,24 +221,48 @@ export async function verifyReadyTargetsHospitalStatus(
 				const hospitalUntil =
 					untilSeconds > 0 ? new Date(untilSeconds * 1000) : null;
 
-				await db
-					.update(subversiveTargetFinderTargets)
-					.set({
-						inHospital,
-						hospitalUntil,
-						status: inHospital ? "hospital" : "okay",
-						lastAction: lastActionDate,
-						isInactive,
-						factionId,
-						isFactionless,
-						updatedAt: now,
-					})
-					.where(eq(subversiveTargetFinderTargets.targetId, target.targetId));
+				verified.push({
+					targetId: target.targetId,
+					inHospital,
+					hospitalUntil,
+					status: inHospital ? "hospital" : "okay",
+					lastAction: lastActionDate,
+					isInactive,
+					factionId,
+					isFactionless,
+				});
 
 				if (inHospital) {
 					hospitalizedCount++;
 				}
 			}
+		}
+
+		if (verified.length > 0) {
+			const values = sql.join(
+				verified.map(
+					(row) =>
+						sql`(${row.targetId}::integer, ${row.inHospital}::boolean, ${row.hospitalUntil?.toISOString() ?? null}::timestamptz, ${row.status}::text, ${row.lastAction?.toISOString() ?? null}::timestamptz, ${row.isInactive}::boolean, ${row.factionId}::integer, ${row.isFactionless}::boolean)`,
+				),
+				sql`, `,
+			);
+
+			await db
+				.update(subversiveTargetFinderTargets)
+				.set({
+					inHospital: sql`v.in_hospital`,
+					hospitalUntil: sql`v.hospital_until`,
+					status: sql`v.status`,
+					lastAction: sql`v.last_action`,
+					isInactive: sql`v.is_inactive`,
+					factionId: sql`v.faction_id`,
+					isFactionless: sql`v.is_factionless`,
+					updatedAt: now,
+				})
+				.from(
+					sql`(values ${values}) as v(target_id, in_hospital, hospital_until, status, last_action, is_inactive, faction_id, is_factionless)`,
+				)
+				.where(eq(subversiveTargetFinderTargets.targetId, sql`v.target_id`));
 		}
 
 		if (hospitalizedCount > 0) {
