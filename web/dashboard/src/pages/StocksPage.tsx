@@ -586,7 +586,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 								an ongoing move is reported once rather than repeatedly.
 							</span>
 						</div>
-						<div className="w-full sm:max-w-[10rem]">
+						<div className="w-full sm:max-w-40">
 							<Input
 								id={`stock-alert-cooldown-${factionId}`}
 								type="number"

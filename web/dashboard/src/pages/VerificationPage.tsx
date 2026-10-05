@@ -1339,7 +1339,7 @@ export default function VerificationPage({
 											Add
 										</Button>
 									</div>
-									<div className="flex flex-wrap gap-1.5 min-h-[28px] items-center pt-1">
+									<div className="flex flex-wrap gap-1.5 min-h-7 items-center pt-1">
 										{newMemberRoles.length === 0 ? (
 											<span className="text-[11px] text-muted-foreground italic">
 												No member roles added yet
@@ -1429,7 +1429,7 @@ export default function VerificationPage({
 											Add
 										</Button>
 									</div>
-									<div className="flex flex-wrap gap-1.5 min-h-[28px] items-center pt-1">
+									<div className="flex flex-wrap gap-1.5 min-h-7 items-center pt-1">
 										{newLeaderRoles.length === 0 ? (
 											<span className="text-[11px] text-muted-foreground italic">
 												No leader roles added yet
@@ -1534,7 +1534,7 @@ export default function VerificationPage({
 								<Table>
 									<TableHeader className="bg-muted/30">
 										<TableRow className="border-border/40 hover:bg-transparent">
-											<TableHead className="w-[240px] text-xs font-mono font-bold uppercase tracking-wider">
+											<TableHead className="w-60 text-xs font-mono font-bold uppercase tracking-wider">
 												Faction
 											</TableHead>
 											<TableHead className="text-xs font-mono font-bold uppercase tracking-wider">
@@ -1543,7 +1543,7 @@ export default function VerificationPage({
 											<TableHead className="text-xs font-mono font-bold uppercase tracking-wider">
 												Leader Roles
 											</TableHead>
-											<TableHead className="w-[120px] text-right text-xs font-mono font-bold uppercase tracking-wider">
+											<TableHead className="w-30 text-right text-xs font-mono font-bold uppercase tracking-wider">
 												Actions
 											</TableHead>
 										</TableRow>
@@ -1601,7 +1601,7 @@ export default function VerificationPage({
 															)}
 															<div className="min-w-0">
 																<div className="flex items-center gap-1.5 flex-wrap">
-																	<span className="font-semibold text-sm text-foreground truncate max-w-[180px]">
+																	<span className="font-semibold text-sm text-foreground truncate max-w-45">
 																		{mapping.factionName ||
 																			`Faction #${mapping.factionId}`}
 																	</span>
@@ -1980,7 +1980,7 @@ export default function VerificationPage({
 													Add
 												</Button>
 											</div>
-											<div className="flex flex-wrap gap-1.5 min-h-[36px] items-center p-2 rounded-xl bg-background/30 border border-border/40">
+											<div className="flex flex-wrap gap-1.5 min-h-9 items-center p-2 rounded-xl bg-background/30 border border-border/40">
 												{editingModalItem.memberRoleIds.length === 0 ? (
 													<span className="text-[11px] text-muted-foreground italic">
 														No member roles assigned
@@ -2093,7 +2093,7 @@ export default function VerificationPage({
 													Add
 												</Button>
 											</div>
-											<div className="flex flex-wrap gap-1.5 min-h-[36px] items-center p-2 rounded-xl bg-background/30 border border-border/40">
+											<div className="flex flex-wrap gap-1.5 min-h-9 items-center p-2 rounded-xl bg-background/30 border border-border/40">
 												{editingModalItem.leaderRoleIds.length === 0 ? (
 													<span className="text-[11px] text-muted-foreground italic">
 														No leader roles assigned

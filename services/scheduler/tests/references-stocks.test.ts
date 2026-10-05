@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	spyOn,
+	test,
+} from "bun:test";
 import { db, eq, tornStocks } from "@sentinel/database";
 import { runTornReferenceSync } from "../src/workers/torn/references";
+import { removeSystemApiKey, seedSystemApiKey } from "./helpers/system-api-key";
 
 /**
  * Regression coverage for the stock half of the reference sync.
@@ -29,6 +38,18 @@ const STOCK_PAYLOAD = {
 
 describe("Torn reference sync — stocks", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
+
+	beforeEach(async () => {
+		// The sync resolves a Torn key from the shared pool before each request, so
+		// without a key of its own it aborts before reaching the mocked `fetch` —
+		// on a database with no keys, which is every clean checkout and every CI
+		// run. Seeding one makes this file independent of the machine's data.
+		await seedSystemApiKey();
+	});
+
+	afterAll(async () => {
+		await removeSystemApiKey();
+	});
 
 	afterEach(async () => {
 		fetchSpy?.mockRestore();

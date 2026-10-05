@@ -15,7 +15,6 @@ import {
 	inArray,
 	subversiveStockAlertConfigs,
 	subversiveStockAlertStates,
-	subversiveTargetFinderUsers,
 } from "@sentinel/database";
 import type { IpcMessage } from "@sentinel/schemas";
 import {
@@ -36,12 +35,9 @@ import {
 	resetStockAlertWorkerState,
 	runStockAlertCycle,
 } from "../src/workers/subversive/stock-alerts";
+import { removeSystemApiKey, seedSystemApiKey } from "./helpers/system-api-key";
 
 const NOW_MS = 1_800_000_000_000; // fixed instant: every figure below is relative to it
-
-/** Test key enrolled in the Subversive pool so key acquisition always succeeds. */
-const TEST_KEY_TORN_ID = 9_000_001;
-const TEST_KEY = "abcdefghijklmnop";
 
 const TEST_FACTION_ID = 2013;
 const TEST_CHANNEL_ID = "111111111111111111";
@@ -487,22 +483,15 @@ describe("Stock alert worker", () => {
 	}
 
 	beforeAll(async () => {
-		await db
-			.delete(subversiveTargetFinderUsers)
-			.where(eq(subversiveTargetFinderUsers.tornId, TEST_KEY_TORN_ID));
-		await db.insert(subversiveTargetFinderUsers).values({
-			tornId: TEST_KEY_TORN_ID,
-			tornName: "Stock Alert Test Key",
-			apiKeyEncrypted: TEST_KEY,
-			apiKeyHash: `test-hash-${TEST_KEY_TORN_ID}`,
-			isActive: true,
-		});
+		// The worker acquires its Torn credentials from the shared key pool before
+		// it can reach the mocked `fetch`, so the pool has to hold a key even on a
+		// database that has never seen one. Enrolling a user key is not enough:
+		// that path is gated on `ENCRYPTION_KEY`, which CI does not have.
+		await seedSystemApiKey();
 	});
 
 	afterAll(async () => {
-		await db
-			.delete(subversiveTargetFinderUsers)
-			.where(eq(subversiveTargetFinderUsers.tornId, TEST_KEY_TORN_ID));
+		await removeSystemApiKey();
 		shutDownTestState();
 	});
 
