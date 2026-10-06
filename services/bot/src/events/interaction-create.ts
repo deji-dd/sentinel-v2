@@ -20,12 +20,14 @@ import {
 	handleStockAlertClearCancel,
 	handleStockAlertClearConfirm,
 	handleStockAlertModalSubmit,
+	handleStockAlertPageButton,
 	handleStockAlertRemoveSelect,
 	handleStockAlertStockSelect,
 	STOCK_ALERT_CLEAR_CANCEL_ID,
 	STOCK_ALERT_CLEAR_CONFIRM_ID,
 	STOCK_ALERT_MODAL_ID,
 	STOCK_ALERT_REMOVE_SELECT_ID,
+	STOCK_ALERT_STOCK_PAGE_ID,
 	STOCK_ALERT_STOCK_SELECT_ID,
 } from "../commands/stock-alerts";
 import {
@@ -154,6 +156,10 @@ export const interactionCreateEvent = {
 					await handleStockAlertClearConfirm(interaction);
 				} else if (interaction.customId === STOCK_ALERT_CLEAR_CANCEL_ID) {
 					await handleStockAlertClearCancel(interaction);
+				} else if (
+					interaction.customId.startsWith(`${STOCK_ALERT_STOCK_PAGE_ID}:`)
+				) {
+					await handleStockAlertPageButton(interaction);
 				}
 				return;
 			}
@@ -184,9 +190,7 @@ export const interactionCreateEvent = {
 					await handleMercReceiptSelect(interaction);
 				} else if (interaction.customId.startsWith("rw_traveling_select:")) {
 					await handleRwTravelingSelect(interaction);
-				} else if (
-					interaction.customId.startsWith(`${STOCK_ALERT_STOCK_SELECT_ID}:`)
-				) {
+				} else if (interaction.customId === STOCK_ALERT_STOCK_SELECT_ID) {
 					await handleStockAlertStockSelect(interaction);
 				} else if (interaction.customId === STOCK_ALERT_REMOVE_SELECT_ID) {
 					await handleStockAlertRemoveSelect(interaction);

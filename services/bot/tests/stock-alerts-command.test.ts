@@ -3,6 +3,7 @@ import { MessageFlags } from "discord.js";
 import {
 	buildAlertModal,
 	buildStockPicker,
+	buildStockPickerRows,
 	stockAlertsCommand,
 } from "../src/commands/stock-alerts";
 import type { StockOption } from "../src/lib/stock-alert-subscriptions";
@@ -61,54 +62,122 @@ describe("Stock picker option budget", () => {
 		const options = optionsForPage(25, 0);
 
 		expect(options).toHaveLength(25);
-		// Nothing is paged, so no paging entry is present and all 25 slots are stocks.
-		expect(options.some((option) => option.value === "page:next")).toBe(false);
 		expect(options.at(-1)?.value).toBe("25");
 	});
 
-	it("reserves a slot for the paging entry once the market needs a second page", () => {
-		// The exact regression: 26 stocks used to produce 25 options plus a paging
-		// entry, and the menu threw before it could be sent.
-		const firstPage = optionsForPage(26, 0);
+	it("gives every page its full 25 stock slots, reserving none for paging", () => {
+		// Paging moved to buttons precisely so a full page is 25 stocks, not 24.
+		const firstPage = optionsForPage(60, 0);
 
 		expect(firstPage).toHaveLength(25);
-		expect(firstPage.some((option) => option.value === "page:next")).toBe(true);
-		// 24 stocks plus the entry, rather than 25 plus the entry.
-		expect(
-			firstPage.filter((option) => option.value !== "page:next"),
-		).toHaveLength(24);
-
-		const secondPage = optionsForPage(26, 1);
-		expect(secondPage.length).toBeLessThanOrEqual(25);
-		expect(
-			secondPage.filter((option) => option.value !== "page:next"),
-		).toHaveLength(2);
+		expect(firstPage[0]?.value).toBe("1");
+		expect(firstPage.at(-1)?.value).toBe("25");
 	});
 
-	it("reaches every stock across its pages, with no gaps or repeats", () => {
-		const size = 57;
-		const seen: string[] = [];
-		const pages = Math.ceil(size / 24);
-
-		for (let page = 0; page < pages; page++) {
-			for (const option of optionsForPage(size, page)) {
-				if (option.value !== "page:next") seen.push(option.value);
-			}
+	it("renders a real page for an unparseable page number", () => {
+		// The reported production failure. The picker used to print "page NaN of 2"
+		// and list no stocks at all, because the page came back as NaN from a
+		// mis-parsed custom id and flowed straight into `slice(NaN, NaN)`.
+		const json = buildStockPicker(market(30), Number.NaN).toJSON();
+		const select = json.components[0];
+		if (!select || !("options" in select)) {
+			throw new Error("Expected a string select menu");
 		}
 
-		expect(seen).toHaveLength(size);
-		expect([...new Set(seen)]).toHaveLength(size);
-		expect(seen[0]).toBe("1");
-		expect(seen.at(-1)).toBe(String(size));
+		expect(select.placeholder).toBe("Pick a stock (page 1 of 2)");
+		expect(select.placeholder).not.toContain("NaN");
+		expect(select.options).toHaveLength(25);
 	});
 
-	it("carries the page in the custom id so the handler can page without state", () => {
+	it("clamps an out-of-range or fractional page into the market", () => {
+		const optionValues = (page: number) => {
+			const json = buildStockPicker(market(30), page).toJSON();
+			const select = json.components[0];
+			if (!select || !("options" in select)) {
+				throw new Error("Expected a string select menu");
+			}
+			return select.options.map((option) => option.value);
+		};
+
+		// Past the end lands on the last page rather than an empty list.
+		expect(optionValues(99)).toEqual(["26", "27", "28", "29", "30"]);
+		// Negative lands on the first.
+		expect(optionValues(-4)[0]).toBe("1");
+		// A fraction cannot slip between pages.
+		expect(optionValues(1.7)[0]).toBe("26");
+	});
+
+	it("keeps the page out of the select's custom id entirely", () => {
+		// Nothing page-shaped travels with the select any more, which is what makes
+		// the NaN regression impossible to reintroduce here.
 		const row = buildStockPicker(market(30), 1).toJSON();
 		const select = row.components[0];
 
 		expect(select && "custom_id" in select ? select.custom_id : null).toBe(
-			"stock_alert_stock_select:1",
+			"stock_alert_stock_select",
 		);
+	});
+
+	it("adds Previous/Next buttons carrying the target page", () => {
+		const rows = buildStockPickerRows(market(30), 0).map((row) => row.toJSON());
+		expect(rows).toHaveLength(2);
+
+		const buttons = rows[1]?.components ?? [];
+		expect(buttons).toHaveLength(2);
+		const [previous, next] = buttons;
+		expect(
+			previous && "custom_id" in previous ? previous.custom_id : null,
+		).toBe("stock_alert_stock_page:-1");
+		expect(next && "custom_id" in next ? next.custom_id : null).toBe(
+			"stock_alert_stock_page:1",
+		);
+		expect(previous && "label" in previous ? previous.label : null).toBe(
+			"Previous",
+		);
+		expect(next && "label" in next ? next.label : null).toBe("Next");
+	});
+
+	it("disables the paging button that would leave the market", () => {
+		const buttonsFor = (page: number) => {
+			const rows = buildStockPickerRows(market(30), page).map((row) =>
+				row.toJSON(),
+			);
+			return rows[1]?.components ?? [];
+		};
+
+		const [firstPrevious, firstNext] = buttonsFor(0);
+		expect(
+			firstPrevious && "disabled" in firstPrevious
+				? firstPrevious.disabled
+				: null,
+		).toBe(true);
+		expect(
+			firstNext && "disabled" in firstNext ? firstNext.disabled : null,
+		).toBe(false);
+
+		const [lastPrevious, lastNext] = buttonsFor(1);
+		expect(
+			lastPrevious && "disabled" in lastPrevious ? lastPrevious.disabled : null,
+		).toBe(false);
+		expect(lastNext && "disabled" in lastNext ? lastNext.disabled : null).toBe(
+			true,
+		);
+	});
+
+	it("omits the paging row when the whole market fits on one page", () => {
+		expect(buildStockPickerRows(market(25), 0)).toHaveLength(1);
+		expect(buildStockPickerRows(market(1), 0)).toHaveLength(1);
+	});
+
+	it("never exceeds 25 options per page with paging rows present", () => {
+		for (let size = 1; size <= 60; size++) {
+			const rows = buildStockPickerRows(market(size), 0).map((row) =>
+				row.toJSON(),
+			);
+			const select = rows[0]?.components[0];
+			const count = select && "options" in select ? select.options.length : 0;
+			expect(count).toBeLessThanOrEqual(DISCORD_SELECT_OPTION_LIMIT);
+		}
 	});
 
 	it("says which page is being shown when there is more than one", () => {

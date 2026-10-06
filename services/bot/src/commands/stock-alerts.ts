@@ -17,6 +17,7 @@ import {
 	ButtonStyle,
 	type ChatInputCommandInteraction,
 	type EmbedBuilder,
+	type MessageActionRowComponentBuilder,
 	MessageFlags,
 	ModalBuilder,
 	type ModalSubmitInteraction,
@@ -65,79 +66,120 @@ export const STOCK_ALERT_MODAL_ID = "stock_alert_config_modal";
 export const STOCK_ALERT_REMOVE_SELECT_ID = "stock_alert_remove_select";
 export const STOCK_ALERT_CLEAR_CONFIRM_ID = "stock_alert_clear_confirm";
 export const STOCK_ALERT_CLEAR_CANCEL_ID = "stock_alert_clear_cancel";
+/** Prefix for the picker's Previous/Next buttons; the target page follows the colon. */
+export const STOCK_ALERT_STOCK_PAGE_ID = "stock_alert_stock_page";
 
 const MODAL_CONDITION_FIELD = "condition";
 const MODAL_RANGE_FIELD = "range";
 const MODAL_AMOUNT_FIELD = "amount";
 
-/** Sentinel option value used to page through the stock list. */
-const NEXT_PAGE_VALUE = "page:next";
-
-/**
- * How many stocks one page of the picker may hold.
- *
- * One slot is reserved for the "show more" entry whenever the market does not fit
- * on a single page. That entry is itself an option, so a full page of 25 stocks
- * plus the paging entry is 26 options — a count Discord rejects outright, which
- * takes the whole command down rather than merely truncating the list. The market
- * is larger than 25 stocks, so this is the normal path, not an edge case.
- */
-function optionCapacity(total: number): number {
-	return total <= SELECT_OPTION_LIMIT
-		? SELECT_OPTION_LIMIT
-		: SELECT_OPTION_LIMIT - 1;
-}
-
 /**
  * Number of pages the market needs.
  *
- * Derived from `optionCapacity` rather than from the raw limit, so the page count
- * and the page contents can never disagree about how many stocks a page holds.
+ * Paging is done with buttons rather than a sentinel entry inside the list, so every
+ * page gets the full 25 slots for stocks. A "show more" option would have made a
+ * full page 26 options, which Discord rejects outright rather than truncating.
  */
 function pageCount(total: number): number {
-	return Math.max(1, Math.ceil(total / optionCapacity(total)));
+	return Math.max(1, Math.ceil(total / SELECT_OPTION_LIMIT));
 }
 
 function pageSlice(stocks: StockOption[], page: number): StockOption[] {
-	const capacity = optionCapacity(stocks.length);
-	const start = page * capacity;
-	return stocks.slice(start, start + capacity);
+	const start = page * SELECT_OPTION_LIMIT;
+	return stocks.slice(start, start + SELECT_OPTION_LIMIT);
+}
+
+/**
+ * Clamps a requested page into the range the market actually has.
+ *
+ * Page numbers come back from a button's `custom_id`, which is untrusted input: a
+ * stale message from before a redeploy, or a hand-crafted id, can name a page that
+ * does not exist or is not a number at all. Without this an unparseable page
+ * propagates silently — `slice(NaN, NaN)` yields no stocks at all and the
+ * placeholder renders "page NaN of 2" — so every page is clamped to something real
+ * before it is used.
+ */
+function clampPage(page: number, total: number): number {
+	if (!Number.isFinite(page)) return 0;
+	const lastPage = pageCount(total) - 1;
+	return Math.min(Math.max(Math.trunc(page), 0), lastPage);
 }
 
 /**
  * Builds the stock picker for one page.
  *
- * The page number lives in the `custom_id` rather than in the option values, so
- * selecting a stock always yields a plain numeric id no matter which page it came
- * from — the handler then has only one shape to parse.
+ * No page number travels in the `custom_id` any more: paging is handled by the
+ * Previous/Next buttons, so the select only ever reports which stock was chosen and
+ * the handler has no page to parse — and therefore no page to get wrong.
  */
 export function buildStockPicker(
 	stocks: StockOption[],
 	page: number,
 ): ActionRowBuilder<StringSelectMenuBuilder> {
-	const pageStocks = pageSlice(stocks, page);
+	const current = clampPage(page, stocks.length);
+	const total = pageCount(stocks.length);
+
 	const select = new StringSelectMenuBuilder()
-		.setCustomId(`${STOCK_ALERT_STOCK_SELECT_ID}:${page}`)
+		.setCustomId(STOCK_ALERT_STOCK_SELECT_ID)
 		.setPlaceholder(
-			pageCount(stocks.length) > 1
-				? `Pick a stock (page ${page + 1} of ${pageCount(stocks.length)})`
+			total > 1
+				? `Pick a stock (page ${current + 1} of ${total})`
 				: "Pick a stock",
 		)
 		.addOptions(
-			pageStocks.map((stock) => ({
+			pageSlice(stocks, current).map((stock) => ({
 				label: formatStockOption(stock).slice(0, 100),
 				value: String(stock.id),
 			})),
 		);
 
-	if (pageCount(stocks.length) > 1) {
-		select.addOptions({
-			label: "➡️ Show more stocks",
-			value: NEXT_PAGE_VALUE,
-		});
+	return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+}
+
+/**
+ * The picker plus its paging controls, as the rows a message needs.
+ *
+ * The buttons are disabled at the ends rather than wrapping around: with only two
+ * or three pages, a wrap makes it impossible to tell which page you are looking at
+ * from the controls alone.
+ */
+export function buildStockPickerRows(
+	stocks: StockOption[],
+	page: number,
+): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
+	const current = clampPage(page, stocks.length);
+	const total = pageCount(stocks.length);
+	const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [
+		buildStockPicker(stocks, current),
+	];
+
+	if (total > 1) {
+		rows.push(
+			new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+				new ButtonBuilder()
+					.setCustomId(`${STOCK_ALERT_STOCK_PAGE_ID}:${current - 1}`)
+					.setLabel("Previous")
+					.setStyle(ButtonStyle.Secondary)
+					.setDisabled(current === 0),
+				new ButtonBuilder()
+					.setCustomId(`${STOCK_ALERT_STOCK_PAGE_ID}:${current + 1}`)
+					.setLabel("Next")
+					.setStyle(ButtonStyle.Secondary)
+					.setDisabled(current === total - 1),
+			),
+		);
 	}
 
-	return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+	return rows;
+}
+
+/** The embed that sits above the picker, shared by every page of it. */
+export function buildPickerEmbed(): EmbedBuilder {
+	return createBaseEmbed(
+		"New Stock Alert",
+		"Pick the stock you want to watch. You will choose the condition on the next screen.",
+		EMBED_COLORS.PRIMARY,
+	);
 }
 
 /**
@@ -347,15 +389,9 @@ async function handleAdd(
 		return;
 	}
 
-	const embed = createBaseEmbed(
-		"New Stock Alert",
-		"Pick the stock you want to watch. You will choose the condition on the next screen.",
-		EMBED_COLORS.PRIMARY,
-	);
-
 	await interaction.editReply({
-		embeds: [embed],
-		components: [buildStockPicker(stocks, 0)],
+		embeds: [buildPickerEmbed()],
+		components: buildStockPickerRows(stocks, 0),
 	});
 }
 
@@ -471,42 +507,6 @@ async function handleClear(
 export async function handleStockAlertStockSelect(
 	interaction: StringSelectMenuInteraction,
 ): Promise<void> {
-	const page = Number(interaction.customId.split(":")[0]);
-
-	// "Show more stocks" pages the picker rather than choosing a stock, which is
-	// why the page lives in the custom id: the list can be re-rendered without
-	// keeping any server-side state.
-	if (interaction.values[0] === NEXT_PAGE_VALUE) {
-		const stocks = await fetchStockUniverse();
-		const total = pageCount(stocks.length);
-		if (stocks.length === 0) {
-			await interaction.update({
-				embeds: [
-					createErrorEmbed(
-						"Stock List Unavailable",
-						UNIVERSE_UNAVAILABLE_MESSAGE,
-					),
-				],
-				components: [],
-			});
-			return;
-		}
-
-		const nextPage = (Math.max(0, page) + 1) % total;
-
-		await interaction.update({
-			embeds: [
-				createBaseEmbed(
-					"New Stock Alert",
-					"Pick the stock you want to watch. You will choose the condition on the next screen.",
-					EMBED_COLORS.PRIMARY,
-				),
-			],
-			components: [buildStockPicker(stocks, nextPage)],
-		});
-		return;
-	}
-
 	const stockId = Number(interaction.values[0]);
 	if (!Number.isInteger(stockId) || stockId <= 0) {
 		await interaction.reply({
@@ -536,6 +536,41 @@ export async function handleStockAlertStockSelect(
 	}
 
 	await interaction.showModal(buildAlertModal(stock));
+}
+
+/**
+ * Previous/Next pressed: re-render the picker on the requested page.
+ *
+ * The target page travels in the button's `custom_id`, so the message can be
+ * rebuilt without keeping any state between interactions. The requested page is
+ * clamped rather than trusted: it arrives from Discord, but a message rendered
+ * before a redeploy could name a page that no longer exists.
+ */
+export async function handleStockAlertPageButton(
+	interaction: ButtonInteraction,
+): Promise<void> {
+	await interaction.deferUpdate();
+
+	const requested = Number(interaction.customId.split(":")[1]);
+	const stocks = await fetchStockUniverse();
+
+	if (stocks.length === 0) {
+		await interaction.editReply({
+			embeds: [
+				createErrorEmbed(
+					"Stock List Unavailable",
+					UNIVERSE_UNAVAILABLE_MESSAGE,
+				),
+			],
+			components: [],
+		});
+		return;
+	}
+
+	await interaction.editReply({
+		embeds: [buildPickerEmbed()],
+		components: buildStockPickerRows(stocks, requested),
+	});
 }
 
 /** Form submitted: validate, store, and confirm ephemerally. */
