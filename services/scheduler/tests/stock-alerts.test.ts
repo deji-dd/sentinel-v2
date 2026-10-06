@@ -12,16 +12,18 @@ import {
 import {
 	db,
 	eq,
+	guildStockAlertConfigs,
+	guildStockAlertStates,
 	inArray,
-	subversiveStockAlertConfigs,
-	subversiveStockAlertStates,
+	userStockAlerts,
 } from "@sentinel/database";
 import type { IpcMessage } from "@sentinel/schemas";
 import {
-	DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
+	buildUserStockAlertConditionKey,
+	DEFAULT_GUILD_STOCK_ALERT_CONFIG,
+	type GuildStockAlertConfig,
 	type StockAlertEvent,
 	type StockAlertState,
-	type SubversiveStockAlertConfig,
 } from "@sentinel/schemas";
 import { setActiveIpcServer } from "../src/lib/ipc/server";
 import {
@@ -39,13 +41,16 @@ import { removeSystemApiKey, seedSystemApiKey } from "./helpers/system-api-key";
 
 const NOW_MS = 1_800_000_000_000; // fixed instant: every figure below is relative to it
 
-const TEST_FACTION_ID = 2013;
-const TEST_CHANNEL_ID = "111111111111111111";
+const TEST_GUILD_ID = "111111111111111111";
+const TEST_GUILD_ID_2 = "222222222222222222";
+const TEST_CHANNEL_ID = "333333333333333333";
+const TEST_CHANNEL_ID_2 = "444444444444444444";
+const TEST_USER_ID = "555555555555555555";
 
 function config(
-	patch: Partial<SubversiveStockAlertConfig> = {},
-): SubversiveStockAlertConfig {
-	return { ...DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG, ...patch };
+	patch: Partial<GuildStockAlertConfig> = {},
+): GuildStockAlertConfig {
+	return { ...DEFAULT_GUILD_STOCK_ALERT_CONFIG, ...patch };
 }
 
 function snapshot(patch: Partial<StockAlertSnapshot> = {}): StockAlertSnapshot {
@@ -55,7 +60,11 @@ function snapshot(patch: Partial<StockAlertSnapshot> = {}): StockAlertSnapshot {
 		acronym: "TSB",
 		price: 1000,
 		performance: {
+			"1h": { changePct: 0, start: 1000, high: 1005, low: 995 },
 			"24h": { changePct: 0, start: 1000, high: 1010, low: 990 },
+			"7d": { changePct: 5, start: 950, high: 1060, low: 900 },
+			"30d": { changePct: 12, start: 890, high: 1100, low: 850 },
+			"1y": { changePct: 40, start: 700, high: 1300, low: 600 },
 			all_time: { changePct: 50, start: 500, high: 1200, low: 400 },
 		},
 		history: [],
@@ -257,7 +266,7 @@ describe("Stock alert rules", () => {
 						all_time: { changePct: 50, start: 500, high: 1200, low: 400 },
 					},
 				}),
-				config: config({ changeRules: [], highLowWindows: ["24h"] }),
+				config: config({ changeRules: [], highLowRanges: ["24h"] }),
 				state: seededState(),
 				nowMs: NOW_MS,
 			});
@@ -280,7 +289,7 @@ describe("Stock alert rules", () => {
 						all_time: { changePct: -24, start: 500, high: 1200, low: 380 },
 					},
 				}),
-				config: config({ changeRules: [], highLowWindows: ["all_time"] }),
+				config: config({ changeRules: [], highLowRanges: ["all_time"] }),
 				state: seededState(),
 				nowMs: NOW_MS,
 			});
@@ -303,7 +312,7 @@ describe("Stock alert rules", () => {
 						all_time: { changePct: 50, start: 500, high: 1200, low: 400 },
 					},
 				}),
-				config: config({ changeRules: [], highLowWindows: ["24h"] }),
+				config: config({ changeRules: [], highLowRanges: ["24h"] }),
 				state: seededState(),
 				nowMs: NOW_MS,
 			});
@@ -320,13 +329,159 @@ describe("Stock alert rules", () => {
 						all_time: { changePct: 160, start: 500, high: 1300, low: 400 },
 					},
 				}),
-				config: config({ changeRules: [], highLowWindows: ["24h"] }),
+				config: config({ changeRules: [], highLowRanges: ["24h"] }),
 				state: seededState(),
 				nowMs: NOW_MS,
 			});
 
 			expect(events).toHaveLength(1);
 			expect((events[0] as StockAlertEvent).alertKey).toBe("high:24h");
+		});
+	});
+
+	describe("configurable ranges", () => {
+		test("seeds a baseline for every range Torn published, not just the enabled ones", () => {
+			const { nextState } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({ changeRules: [], highLowRanges: ["24h"] }),
+				state: null,
+				nowMs: NOW_MS,
+			});
+
+			// Only 24h is enabled, but every published range is recorded — so turning
+			// 7d on later compares against Torn's own figures instead of alerting on
+			// the first high it happens to observe.
+			expect(nextState.extremes["7d"]).toEqual({ high: 1060, low: 900 });
+			expect(nextState.extremes["30d"]).toEqual({ high: 1100, low: 850 });
+			expect(nextState.extremes["1y"]).toEqual({ high: 1300, low: 600 });
+		});
+
+		test("raises a new-week-high alert for a range beyond the original two", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({ changeRules: [], highLowRanges: ["7d"] }),
+				state: seededState({
+					extremes: { "7d": { high: 1000, low: 900 } },
+				}),
+				nowMs: NOW_MS,
+			});
+
+			expect(events).toHaveLength(1);
+			const event = events[0] as StockAlertEvent;
+			expect(event.alertKey).toBe("high:7d");
+			expect(event.windowLabel).toBe("7 days");
+			expect(event.range).toBe("7d");
+			expect(event.extreme).toBe(1060);
+			expect(event.previousExtreme).toBe(1000);
+		});
+
+		test("raises a new-month-low alert", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({ changeRules: [], highLowRanges: ["30d"] }),
+				state: seededState({
+					extremes: { "30d": { high: 1100, low: 880 } },
+				}),
+				nowMs: NOW_MS,
+			});
+
+			expect(events).toHaveLength(1);
+			const event = events[0] as StockAlertEvent;
+			expect(event.alertKey).toBe("low:30d");
+			expect(event.range).toBe("30d");
+			expect(event.extreme).toBe(850);
+		});
+
+		test("reports only the ranges the guild tracks in the alert context", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({ changeRules: [], highLowRanges: ["7d", "1y"] }),
+				state: seededState({
+					extremes: {
+						"7d": { high: 1000, low: 900 },
+						"1y": { high: 1300, low: 600 },
+					},
+				}),
+				nowMs: NOW_MS,
+			});
+
+			const event = events[0] as StockAlertEvent;
+			expect(event.context.ranges.map((entry) => entry.range)).toEqual([
+				"7d",
+				"1y",
+			]);
+			expect(event.context.ranges[0]?.label).toBe("7 days");
+		});
+
+		test("does not alert for a selected range Torn did not publish", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot({
+					performance: {
+						"24h": { changePct: 0, start: 1000, high: 1010, low: 990 },
+					},
+				}),
+				config: config({ changeRules: [], highLowRanges: ["7d"] }),
+				state: seededState({ extremes: { "7d": { high: 1000, low: 900 } } }),
+				nowMs: NOW_MS,
+			});
+
+			expect(events).toEqual([]);
+		});
+	});
+
+	describe("long move windows", () => {
+		test("measures a weekly window from Torn's own weekly figures", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({
+					changeRules: [{ windowMinutes: 10_080, thresholdPct: 4 }],
+					highLowRanges: [],
+				}),
+				state: seededState(),
+				nowMs: NOW_MS,
+			});
+
+			expect(events).toHaveLength(1);
+			const event = events[0] as StockAlertEvent;
+			expect(event.alertKey).toBe("change:10080");
+			expect(event.windowLabel).toBe("7 days");
+			// The range behind the window, so the embed opens the weekly chart.
+			expect(event.range).toBe("7d");
+			expect(event.changePct).toBe(5);
+			expect(event.referencePrice).toBe(950);
+		});
+
+		test("does not fire a weekly rule on a move that is too small", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({
+					changeRules: [{ windowMinutes: 10_080, thresholdPct: 6 }],
+					highLowRanges: [],
+				}),
+				state: seededState(),
+				nowMs: NOW_MS,
+			});
+
+			expect(events).toEqual([]);
+		});
+
+		test("fires a monthly rule while an intraday rule stays quiet", () => {
+			const { events } = evaluateStockAlerts({
+				snapshot: snapshot(),
+				config: config({
+					changeRules: [
+						{ windowMinutes: 30, thresholdPct: 5 },
+						{ windowMinutes: 43_200, thresholdPct: 10 },
+					],
+					highLowRanges: [],
+				}),
+				state: seededState(),
+				nowMs: NOW_MS,
+			});
+
+			expect(events.map((event) => event.alertKey)).toEqual(["change:43200"]);
+			expect((events[0] as StockAlertEvent).windowLabel).toBe("30 days");
+			expect((events[0] as StockAlertEvent).range).toBe("30d");
 		});
 	});
 
@@ -482,15 +637,48 @@ describe("Stock alert worker", () => {
 		};
 	}
 
+	/**
+	 * The worker sweeps *every* guild with alerts enabled and every subscription,
+	 * so a single row left in the database by a developer or a previous run would
+	 * make these assertions meaningless. The tables are therefore emptied for the
+	 * duration of the suite and put back exactly as they were afterwards, rather
+	 * than being destroyed.
+	 */
+	let savedConfigs: Array<typeof guildStockAlertConfigs.$inferSelect> = [];
+	let savedStates: Array<typeof guildStockAlertStates.$inferSelect> = [];
+	let savedSubscriptions: Array<typeof userStockAlerts.$inferSelect> = [];
+
 	beforeAll(async () => {
 		// The worker acquires its Torn credentials from the shared key pool before
 		// it can reach the mocked `fetch`, so the pool has to hold a key even on a
 		// database that has never seen one. Enrolling a user key is not enough:
 		// that path is gated on `ENCRYPTION_KEY`, which CI does not have.
 		await seedSystemApiKey();
+
+		savedConfigs = await db.select().from(guildStockAlertConfigs);
+		savedStates = await db.select().from(guildStockAlertStates);
+		savedSubscriptions = await db.select().from(userStockAlerts);
+
+		await db.delete(guildStockAlertStates);
+		await db.delete(guildStockAlertConfigs);
+		await db.delete(userStockAlerts);
 	});
 
 	afterAll(async () => {
+		await db.delete(guildStockAlertStates);
+		await db.delete(guildStockAlertConfigs);
+		await db.delete(userStockAlerts);
+
+		if (savedConfigs.length > 0) {
+			await db.insert(guildStockAlertConfigs).values(savedConfigs);
+		}
+		if (savedStates.length > 0) {
+			await db.insert(guildStockAlertStates).values(savedStates);
+		}
+		if (savedSubscriptions.length > 0) {
+			await db.insert(userStockAlerts).values(savedSubscriptions);
+		}
+
 		await removeSystemApiKey();
 		shutDownTestState();
 	});
@@ -512,11 +700,11 @@ describe("Stock alert worker", () => {
 		setActiveIpcServer(fakeIpcServer);
 
 		await db
-			.delete(subversiveStockAlertStates)
-			.where(eq(subversiveStockAlertStates.factionId, TEST_FACTION_ID));
+			.delete(guildStockAlertStates)
+			.where(eq(guildStockAlertStates.guildId, TEST_GUILD_ID));
 		await db
-			.delete(subversiveStockAlertConfigs)
-			.where(eq(subversiveStockAlertConfigs.factionId, TEST_FACTION_ID));
+			.delete(guildStockAlertConfigs)
+			.where(eq(guildStockAlertConfigs.guildId, TEST_GUILD_ID));
 
 		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
 			input: string | URL | Request,
@@ -578,12 +766,12 @@ describe("Stock alert worker", () => {
 	});
 
 	test("makes no Torn requests when alerts are enabled without a channel", async () => {
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: null,
 			changeRules: [{ windowMinutes: 5, thresholdPct: 0.5 }],
-			highLowWindows: ["24h"],
+			highLowRanges: ["24h"],
 			cooldownMinutes: 0,
 		});
 
@@ -594,12 +782,12 @@ describe("Stock alert worker", () => {
 	});
 
 	test("seeds baselines on the first cycle and alerts on a later move", async () => {
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: TEST_CHANNEL_ID,
 			changeRules: [],
-			highLowWindows: ["24h", "all_time"],
+			highLowRanges: ["24h", "all_time"],
 			cooldownMinutes: 0,
 		});
 
@@ -609,8 +797,8 @@ describe("Stock alert worker", () => {
 		expect(first.alertsQueued).toBe(0);
 		expect(broadcasts).toEqual([]);
 
-		const seeded = await db.query.subversiveStockAlertStates.findFirst({
-			where: eq(subversiveStockAlertStates.factionId, TEST_FACTION_ID),
+		const seeded = await db.query.guildStockAlertStates.findFirst({
+			where: eq(guildStockAlertStates.guildId, TEST_GUILD_ID),
 		});
 		expect(seeded?.state.seeded).toBe(true);
 		expect(seeded?.state.extremes["24h"]).toEqual({ high: 1010, low: 990 });
@@ -638,12 +826,12 @@ describe("Stock alert worker", () => {
 	});
 
 	test("skips detail requests when the price has not moved", async () => {
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: TEST_CHANNEL_ID,
 			changeRules: [],
-			highLowWindows: ["24h"],
+			highLowRanges: ["24h"],
 			cooldownMinutes: 0,
 		});
 
@@ -662,12 +850,12 @@ describe("Stock alert worker", () => {
 	});
 
 	test("persists state so a restart does not re-announce an extreme", async () => {
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: TEST_CHANNEL_ID,
 			changeRules: [],
-			highLowWindows: ["24h", "all_time"],
+			highLowRanges: ["24h", "all_time"],
 			cooldownMinutes: 0,
 		});
 
@@ -691,22 +879,22 @@ describe("Stock alert worker", () => {
 		expect(broadcasts).toHaveLength(1);
 	});
 
-	test("merges two factions sharing a channel into a single delivery", async () => {
-		await db.insert(subversiveStockAlertConfigs).values([
+	test("evaluates each guild independently and delivers to its own channel", async () => {
+		await db.insert(guildStockAlertConfigs).values([
 			{
-				factionId: 2013,
+				guildId: TEST_GUILD_ID,
 				enabled: true,
 				channelId: TEST_CHANNEL_ID,
 				changeRules: [],
-				highLowWindows: ["24h", "all_time"],
+				highLowRanges: ["24h", "all_time"],
 				cooldownMinutes: 0,
 			},
 			{
-				factionId: 27312,
+				guildId: TEST_GUILD_ID_2,
 				enabled: true,
-				channelId: TEST_CHANNEL_ID,
+				channelId: TEST_CHANNEL_ID_2,
 				changeRules: [],
-				highLowWindows: ["24h", "all_time"],
+				highLowRanges: ["24h", "all_time"],
 				cooldownMinutes: 0,
 			},
 		]);
@@ -726,40 +914,185 @@ describe("Stock alert worker", () => {
 
 			const second = await runStockAlertCycle();
 
-			expect(broadcasts).toHaveLength(1);
-			const payload = broadcasts[0];
-			if (payload?.action !== "subversive_stock_alerts") {
-				throw new Error("Expected a stock alert broadcast");
+			// Two guilds, two channels, so two independent deliveries — and each one
+			// carries the same two extremes.
+			expect(second.channelsNotified).toBe(2);
+			expect(broadcasts).toHaveLength(2);
+			for (const payload of broadcasts) {
+				if (payload.action !== "subversive_stock_alerts") {
+					throw new Error("Expected a stock alert broadcast");
+				}
+				expect(payload.data.alerts).toHaveLength(2);
 			}
-			// Both factions raised the same two extremes; the shared channel gets
-			// one embed per event, not one per faction.
-			expect(payload.data.alerts).toHaveLength(2);
-			expect(second.channelsNotified).toBe(1);
+			expect(
+				broadcasts
+					.map((payload) =>
+						payload.action === "subversive_stock_alerts"
+							? payload.data.notificationChannelId
+							: null,
+					)
+					.sort(),
+			).toEqual([TEST_CHANNEL_ID, TEST_CHANNEL_ID_2].sort());
 
 			const rows = await db
 				.select()
-				.from(subversiveStockAlertStates)
-				.where(inArray(subversiveStockAlertStates.factionId, [2013, 27312]));
+				.from(guildStockAlertStates)
+				.where(
+					inArray(guildStockAlertStates.guildId, [
+						TEST_GUILD_ID,
+						TEST_GUILD_ID_2,
+					]),
+				);
 			expect(rows).toHaveLength(2);
 		} finally {
 			await db
-				.delete(subversiveStockAlertStates)
-				.where(inArray(subversiveStockAlertStates.factionId, [2013, 27312]));
+				.delete(guildStockAlertStates)
+				.where(
+					inArray(guildStockAlertStates.guildId, [
+						TEST_GUILD_ID,
+						TEST_GUILD_ID_2,
+					]),
+				);
 			await db
-				.delete(subversiveStockAlertConfigs)
-				.where(inArray(subversiveStockAlertConfigs.factionId, [2013, 27312]));
+				.delete(guildStockAlertConfigs)
+				.where(
+					inArray(guildStockAlertConfigs.guildId, [
+						TEST_GUILD_ID,
+						TEST_GUILD_ID_2,
+					]),
+				);
 		}
+	});
+
+	test("sweeps for personal alerts alone, with no guild configured", async () => {
+		await db.insert(userStockAlerts).values({
+			guildId: TEST_GUILD_ID,
+			discordUserId: TEST_USER_ID,
+			stockId: 1,
+			condition: "price_above",
+			rangeKey: null,
+			threshold: 1200,
+			conditionKey: buildUserStockAlertConditionKey({
+				stockId: 1,
+				condition: "price_above",
+				range: null,
+				threshold: 1200,
+			}),
+			enabled: true,
+			state: {
+				seeded: false,
+				wasTrue: null,
+				lastExtreme: null,
+				lastAlertAt: null,
+			},
+		});
+
+		// The guild tables are empty, so this proves the short-circuit no longer
+		// requires a channel — a member's own alert is enough to poll the market.
+		const first = await runStockAlertCycle();
+		expect(first.stocksPolled).toBe(1);
+		expect(first.detailsFetched).toBe(1);
+		// The seeding cycle records the baseline and stays silent.
+		expect(first.userAlertsQueued).toBe(0);
+		expect(broadcasts).toEqual([]);
+
+		market = {
+			listPrice: 1250,
+			high: 1250,
+			low: 990,
+			allTimeHigh: 1250,
+			allTimeLow: 400,
+		};
+
+		const second = await runStockAlertCycle();
+		expect(second.userAlertsQueued).toBe(1);
+		expect(second.alertsQueued).toBe(0);
+
+		const payload = broadcasts.find(
+			(message) => message.action === "user_stock_alerts",
+		);
+		if (payload?.action !== "user_stock_alerts") {
+			throw new Error("Expected a personal stock alert broadcast");
+		}
+		expect(payload.data.alerts).toHaveLength(1);
+		const alert = payload.data.alerts[0];
+		expect(alert?.discordUserId).toBe(TEST_USER_ID);
+		expect(alert?.condition).toBe("price_above");
+		expect(alert?.description).toContain("rose above");
+		expect(alert?.event.acronym).toBe("S1");
+
+		// The stored state advanced, so the crossing is not announced again.
+		const row = await db.query.userStockAlerts.findFirst({
+			where: eq(userStockAlerts.discordUserId, TEST_USER_ID),
+		});
+		expect(row?.state.wasTrue).toBe(true);
+		expect(row?.state.seeded).toBe(true);
+	});
+
+	test("delivers channel and personal alerts from one sweep", async () => {
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
+			enabled: true,
+			channelId: TEST_CHANNEL_ID,
+			changeRules: [],
+			highLowRanges: ["24h"],
+			cooldownMinutes: 0,
+		});
+		// Both sides are already seeded and both are watching the same figure, so a
+		// single cycle produces a channel post *and* a DM.
+		await db.insert(guildStockAlertStates).values({
+			guildId: TEST_GUILD_ID,
+			stockId: 1,
+			state: {
+				seeded: true,
+				lastPrice: 1000,
+				extremes: { "24h": { high: 1010, low: 995 } },
+				lastAlertAt: {},
+			},
+		});
+		await db.insert(userStockAlerts).values({
+			guildId: TEST_GUILD_ID,
+			discordUserId: TEST_USER_ID,
+			stockId: 1,
+			condition: "new_low",
+			rangeKey: "24h",
+			threshold: null,
+			conditionKey: buildUserStockAlertConditionKey({
+				stockId: 1,
+				condition: "new_low",
+				range: "24h",
+				threshold: null,
+			}),
+			enabled: true,
+			state: {
+				seeded: true,
+				wasTrue: null,
+				lastExtreme: 1000,
+				lastAlertAt: null,
+			},
+		});
+
+		const result = await runStockAlertCycle();
+
+		// One Torn sweep, two destinations: the guild's channel and the member's DM.
+		expect(result.detailsFetched).toBe(1);
+		expect(broadcasts.map((message) => message.action).sort()).toEqual([
+			"subversive_stock_alerts",
+			"user_stock_alerts",
+		]);
+		expect(result.alertsQueued).toBe(1);
+		expect(result.userAlertsQueued).toBe(1);
 	});
 
 	test("skips an unreachable stock without losing the rest of the sweep", async () => {
 		universeIds = [1, 2];
 		failingDetailIds = new Set([1]);
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: TEST_CHANNEL_ID,
 			changeRules: [],
-			highLowWindows: ["24h"],
+			highLowRanges: ["24h"],
 			cooldownMinutes: 0,
 		});
 
@@ -770,8 +1103,8 @@ describe("Stock alert worker", () => {
 
 		const rows = await db
 			.select()
-			.from(subversiveStockAlertStates)
-			.where(eq(subversiveStockAlertStates.factionId, TEST_FACTION_ID));
+			.from(guildStockAlertStates)
+			.where(eq(guildStockAlertStates.guildId, TEST_GUILD_ID));
 		// Only the healthy stock was recorded; the failing one keeps its previous
 		// state so the next cycle retries its detailed fetch.
 		expect(rows.map((row) => row.stockId)).toEqual([2]);
@@ -780,12 +1113,12 @@ describe("Stock alert worker", () => {
 	test("gives up on a sweep when the whole key pool is failing", async () => {
 		universeIds = [1, 2, 3, 4, 5, 6, 7];
 		failingDetailIds = new Set(universeIds);
-		await db.insert(subversiveStockAlertConfigs).values({
-			factionId: TEST_FACTION_ID,
+		await db.insert(guildStockAlertConfigs).values({
+			guildId: TEST_GUILD_ID,
 			enabled: true,
 			channelId: TEST_CHANNEL_ID,
 			changeRules: [],
-			highLowWindows: ["24h"],
+			highLowRanges: ["24h"],
 			cooldownMinutes: 0,
 		});
 
@@ -797,8 +1130,8 @@ describe("Stock alert worker", () => {
 
 		const rows = await db
 			.select()
-			.from(subversiveStockAlertStates)
-			.where(eq(subversiveStockAlertStates.factionId, TEST_FACTION_ID));
+			.from(guildStockAlertStates)
+			.where(eq(guildStockAlertStates.guildId, TEST_GUILD_ID));
 		expect(rows).toHaveLength(0);
 	});
 });

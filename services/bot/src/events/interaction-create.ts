@@ -1,6 +1,7 @@
 import {
 	getGuildModules,
 	isElimsGuildAsync,
+	isSubversiveGuildAsync,
 	isTargetGuild,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
@@ -15,6 +16,18 @@ import {
 	handleMercReceiptSelect,
 	MERC_RECEIPT_SELECT_ID,
 } from "../commands/receipt";
+import {
+	handleStockAlertClearCancel,
+	handleStockAlertClearConfirm,
+	handleStockAlertModalSubmit,
+	handleStockAlertRemoveSelect,
+	handleStockAlertStockSelect,
+	STOCK_ALERT_CLEAR_CANCEL_ID,
+	STOCK_ALERT_CLEAR_CONFIRM_ID,
+	STOCK_ALERT_MODAL_ID,
+	STOCK_ALERT_REMOVE_SELECT_ID,
+	STOCK_ALERT_STOCK_SELECT_ID,
+} from "../commands/stock-alerts";
 import {
 	handleTeamBreakdownSelect,
 	TEAM_BREAKDOWN_SELECT_ID,
@@ -137,6 +150,10 @@ export const interactionCreateEvent = {
 					await handleContractCreationButtonClick(interaction);
 				} else if (interaction.customId.startsWith("merc_archive_channel:")) {
 					await handleArchiveChannelButtonClick(interaction);
+				} else if (interaction.customId === STOCK_ALERT_CLEAR_CONFIRM_ID) {
+					await handleStockAlertClearConfirm(interaction);
+				} else if (interaction.customId === STOCK_ALERT_CLEAR_CANCEL_ID) {
+					await handleStockAlertClearCancel(interaction);
 				}
 				return;
 			}
@@ -167,6 +184,12 @@ export const interactionCreateEvent = {
 					await handleMercReceiptSelect(interaction);
 				} else if (interaction.customId.startsWith("rw_traveling_select:")) {
 					await handleRwTravelingSelect(interaction);
+				} else if (
+					interaction.customId.startsWith(`${STOCK_ALERT_STOCK_SELECT_ID}:`)
+				) {
+					await handleStockAlertStockSelect(interaction);
+				} else if (interaction.customId === STOCK_ALERT_REMOVE_SELECT_ID) {
+					await handleStockAlertRemoveSelect(interaction);
 				}
 				return;
 			}
@@ -194,6 +217,10 @@ export const interactionCreateEvent = {
 					interaction.customId.startsWith("elims_holder_reclaim_modal:")
 				) {
 					await handleStockHolderReclaimModalSubmit(interaction);
+				} else if (
+					interaction.customId.startsWith(`${STOCK_ALERT_MODAL_ID}:`)
+				) {
+					await handleStockAlertModalSubmit(interaction);
 				}
 				return;
 			}
@@ -249,6 +276,30 @@ export const interactionCreateEvent = {
 					createErrorEmbed(
 						"Command Unavailable",
 						"Elims tournament commands are not available on this server.",
+					),
+				],
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+
+		// Faction-only commands: deployment already keeps them out of other guilds'
+		// pickers, so reaching here means a stale registration left over from before
+		// the guild changed type. Refusing is still worth it — the data these
+		// commands touch is scoped to the faction guild.
+		//
+		// Checked asynchronously: the synchronous form answers from a cache that is
+		// still cold on the first interaction after a restart, which would reject a
+		// legitimate call in the faction guild.
+		if (
+			command.scope === "faction" &&
+			!(await isSubversiveGuildAsync(interaction.guildId))
+		) {
+			await interaction.reply({
+				embeds: [
+					createErrorEmbed(
+						"Command Unavailable",
+						"This command is only available in the faction server.",
 					),
 				],
 				flags: MessageFlags.Ephemeral,

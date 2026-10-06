@@ -17,6 +17,7 @@ import { oilBriefingCommand } from "./oil-briefing";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { receiptCommand } from "./receipt";
+import { stockAlertsCommand } from "./stock-alerts";
 import { targetFinderCommand } from "./target-finder";
 import { teamBreakdownCommand } from "./team-breakdown";
 import { ttSelectorCommand } from "./tt-selector";
@@ -26,6 +27,7 @@ import { verifyallCommand } from "./verifyall";
 export {
 	assignedStockCommand,
 	receiptCommand,
+	stockAlertsCommand,
 	targetFinderCommand,
 	teamBreakdownCommand,
 };
@@ -36,7 +38,14 @@ export type BotModule =
 	| "reaction_roles"
 	| "monitoring";
 
-export type BotCommandScope = "normal" | "elims" | "both";
+/**
+ * Where a command may be deployed and run.
+ *
+ * `faction` is the strictest: the command is only registered in the faction guild
+ * and refuses to run anywhere else. It exists for member-facing features whose
+ * data is scoped to that one server.
+ */
+export type BotCommandScope = "normal" | "elims" | "both" | "faction";
 
 export type BotCommandData =
 	| SlashCommandBuilder
@@ -67,6 +76,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...burnMapCommand, scope: "normal" },
 	{ ...targetFinderCommand, scope: "normal" },
 	{ ...oilBriefingCommand, scope: "both" },
+	{ ...stockAlertsCommand, scope: "faction" },
 ];
 
 // 2. Elims Commands (scoped strictly to the active tournament operations guild)

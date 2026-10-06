@@ -1,6 +1,7 @@
 import {
 	ensureTargetGuildConfigs,
 	getGuildModules,
+	getSubversiveGuildId,
 	getTargetGuildIds,
 	isElimsGuildAsync,
 } from "@sentinel/database";
@@ -41,7 +42,19 @@ export async function deployGuildCommands(
 	} else {
 		// 2. Standard Sentinel Guild — Normal Commands filtered by modules
 		const modules = await getGuildModules(guildId);
+		// Faction-only commands are registered in the faction guild and nowhere
+		// else, so they never appear in another server's picker at all. An
+		// unresolved faction guild therefore registers them nowhere, which is the
+		// safe default — but it is worth saying so, because the symptom would
+		// otherwise be a command that silently does not exist.
+		const factionGuildId = await getSubversiveGuildId();
+		if (!factionGuildId) {
+			logger.warn(
+				"No faction guild is configured, so faction-only commands are not being deployed anywhere.",
+			);
+		}
 		enabledCommands = normalCommandsList.filter((cmd) => {
+			if (cmd.scope === "faction" && guildId !== factionGuildId) return false;
 			if (!cmd.module) return true;
 			if (cmd.module === "verification") return modules.verification;
 			if (cmd.module === "territory") return modules.territory;

@@ -1,19 +1,27 @@
 import {
 	db,
+	eq,
+	guildStockAlertConfigs,
+	guildStockAlertStates,
 	inArray,
 	sql,
-	subversiveStockAlertConfigs,
-	subversiveStockAlertStates,
+	userStockAlerts,
 } from "@sentinel/database";
 import {
-	STOCK_ALERT_WINDOWS,
+	createEmptyUserStockAlertState,
+	type GuildStockAlertConfig,
+	isStockAlertRange,
+	isUserStockAlertCondition,
+	STOCK_ALERT_RANGES,
 	type StockAlertEvent,
+	type StockAlertRange,
 	type StockAlertState,
-	type SubversiveStockAlertConfig,
 	type TornSchema,
+	type UserStockAlertEvent,
+	type UserStockAlertSubscription,
 } from "@sentinel/schemas";
 import { type ManagedApiKey, TornError, tornApi } from "@sentinel/torn-api";
-import { Logger, SUBVERSIVE_FAMILY_FACTION_IDS } from "@sentinel/utils";
+import { Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
@@ -28,6 +36,10 @@ import {
 	markSubversiveKeyDisabled,
 	recordSubversiveKeySuccess,
 } from "./subversive-key-pool";
+import {
+	evaluateUserStockAlert,
+	normaliseUserStockAlertState,
+} from "./user-stock-alert-rules";
 
 const WORKER_NAME = "subversive:stock_alerts";
 const logger = new Logger("Scheduler", "StockAlerts");
@@ -38,9 +50,9 @@ const logger = new Logger("Scheduler", "StockAlerts");
  *
  * The fast path only fetches a stock's detail when its price changed, which is
  * sound — an unchanged price cannot set a new extreme — but a *stored* extreme
- * can age out of Torn's rolling 24-hour window. A periodic full sweep re-aligns
- * every baseline, so a stale-high figure can delay a genuine new 24h high by at
- * most this interval instead of indefinitely.
+ * can age out of Torn's rolling windows. A periodic full sweep re-aligns every
+ * baseline, so a stale-high figure can delay a genuine new high by at most this
+ * interval instead of indefinitely.
  */
 const FULL_REFRESH_INTERVAL_MS = 30 * 60_000;
 
@@ -70,13 +82,26 @@ const DETAIL_FETCH_CONCURRENCY = 4;
 /**
  * Rows per multi-row state upsert statement.
  *
- * A cycle writes one row per (faction x stock) pair — around eighty today — so
- * this only bounds the parameter count if the market or the faction list grows.
+ * A cycle writes one row per (guild x stock) pair — a few hundred today — so this
+ * only bounds the parameter count if the guild list or the market grows.
  */
 const STATE_UPSERT_CHUNK_SIZE = 500;
 
 /** Key-level Torn errors: the key is bad, not the request. */
 const KEY_ERROR_CODES = new Set([2, 10, 13, 18]);
+
+/** Maps each range onto the key Torn uses in `chart.performance`. */
+const TORN_PERFORMANCE_KEYS: Record<
+	StockAlertRange,
+	keyof NonNullable<TornSchema<"TornStockDetailed">["chart"]["performance"]>
+> = {
+	"1h": "last_hour",
+	"24h": "last_day",
+	"7d": "last_week",
+	"30d": "last_month",
+	"1y": "last_year",
+	all_time: "all_time",
+};
 
 let lastFullRefreshAtMs = 0;
 
@@ -134,39 +159,37 @@ async function requestWithKey<T>(
 }
 
 /**
- * Factions with stock alerts switched on and a channel to post them in.
+ * Guilds with stock alerts switched on and a channel to post them in.
  *
- * Both conditions are required to be considered active: an enabled faction with
- * no channel would otherwise drive a full Torn sweep every cycle for nothing.
+ * Both conditions are required to be considered active: an enabled guild with no
+ * channel would otherwise drive a full Torn sweep every cycle for nothing.
  */
 async function loadActiveConfigs(): Promise<
-	Map<number, SubversiveStockAlertConfig>
+	Map<string, GuildStockAlertConfig>
 > {
-	const active = new Map<number, SubversiveStockAlertConfig>();
+	const active = new Map<string, GuildStockAlertConfig>();
 
-	let rows: Array<typeof subversiveStockAlertConfigs.$inferSelect>;
+	let rows: Array<typeof guildStockAlertConfigs.$inferSelect>;
 	try {
-		rows = await db.select().from(subversiveStockAlertConfigs);
+		rows = await db.select().from(guildStockAlertConfigs);
 	} catch (error) {
 		logger.error("Failed to load stock alert configurations:", error);
 		return active;
 	}
 
 	for (const row of rows) {
-		if (!SUBVERSIVE_FAMILY_FACTION_IDS.includes(row.factionId)) continue;
 		if (!row.enabled) continue;
 		if (!row.channelId) {
 			logger.warn(
-				`Stock alerts are enabled for faction ${row.factionId} but no channel is selected; skipping it until a channel is set.`,
+				`Stock alerts are enabled for guild ${row.guildId} but no channel is selected; skipping it until a channel is set.`,
 			);
 			continue;
 		}
-		active.set(row.factionId, {
+		active.set(row.guildId, {
 			enabled: row.enabled,
 			channelId: row.channelId,
 			changeRules: row.changeRules ?? [],
-			highLowWindows: (row.highLowWindows ??
-				[]) as SubversiveStockAlertConfig["highLowWindows"],
+			highLowRanges: (row.highLowRanges ?? []).filter(isStockAlertRange),
 			cooldownMinutes: row.cooldownMinutes,
 			updatedAt: row.updatedAt.toISOString(),
 			updatedBy: row.updatedBy ?? undefined,
@@ -174,6 +197,53 @@ async function loadActiveConfigs(): Promise<
 	}
 
 	return active;
+}
+
+/**
+ * Every enabled personal subscription, grouped by the stock it watches.
+ *
+ * Grouped because the sweep is driven per stock: a stock's subscriptions are all
+ * evaluated from the same snapshot, and stocks nobody watches cost nothing.
+ */
+async function loadUserSubscriptions(): Promise<
+	Map<number, UserStockAlertSubscription[]>
+> {
+	const byStock = new Map<number, UserStockAlertSubscription[]>();
+
+	let rows: Array<typeof userStockAlerts.$inferSelect>;
+	try {
+		rows = await db.select().from(userStockAlerts);
+	} catch (error) {
+		logger.error("Failed to load personal stock alerts:", error);
+		return byStock;
+	}
+
+	for (const row of rows) {
+		if (!row.enabled) continue;
+		if (!isUserStockAlertCondition(row.condition)) continue;
+		if (row.rangeKey !== null && !isStockAlertRange(row.rangeKey)) continue;
+
+		const subscription: UserStockAlertSubscription = {
+			id: row.id,
+			guildId: row.guildId,
+			discordUserId: row.discordUserId,
+			stockId: row.stockId,
+			condition: row.condition,
+			range: row.rangeKey,
+			threshold: row.threshold ?? null,
+			conditionKey: row.conditionKey,
+			enabled: row.enabled,
+			state: normaliseUserStockAlertState(row.state),
+			createdAt: row.createdAt.toISOString(),
+			updatedAt: row.updatedAt.toISOString(),
+		};
+
+		const bucket = byStock.get(row.stockId);
+		if (bucket) bucket.push(subscription);
+		else byStock.set(row.stockId, [subscription]);
+	}
+
+	return byStock;
 }
 
 function toWindowPerformance(
@@ -192,9 +262,9 @@ function toWindowPerformance(
  * Normalises one stock's Torn responses into the shape the rules consume.
  *
  * The list response supplies the current price; the detailed response supplies
- * Torn's own rolling-window figures and the one-minute history series. Returns
- * null when the price is unusable, which is the only case where the stock is
- * skipped entirely rather than evaluated with less context.
+ * Torn's own rolling-range figures for all six ranges and the one-minute history
+ * series. Returns null when the price is unusable, which is the only case where
+ * the stock is skipped entirely rather than evaluated with less context.
  */
 export function buildStockSnapshot(
 	stock: TornSchema<"TornStock">,
@@ -206,10 +276,11 @@ export function buildStockSnapshot(
 	}
 
 	const performance: StockAlertSnapshot["performance"] = {};
-	const lastDay = toWindowPerformance(detailed?.chart?.performance?.last_day);
-	if (lastDay) performance["24h"] = lastDay;
-	const allTime = toWindowPerformance(detailed?.chart?.performance?.all_time);
-	if (allTime) performance.all_time = allTime;
+	for (const range of STOCK_ALERT_RANGES) {
+		const source = detailed?.chart?.performance?.[TORN_PERFORMANCE_KEYS[range]];
+		const mapped = toWindowPerformance(source);
+		if (mapped) performance[range] = mapped;
+	}
 
 	const history = Array.isArray(detailed?.chart?.history)
 		? detailed.chart.history
@@ -243,7 +314,7 @@ function hasStateChanged(
 	return !shallowNumberMapEqual(previous.lastAlertAt, next.lastAlertAt);
 }
 
-/** Field-wise comparison of the two-window (high, low) extremes record. */
+/** Field-wise comparison of the range (high, low) extremes record. */
 function extremesEqual(
 	a: StockAlertState["extremes"] | undefined,
 	b: StockAlertState["extremes"] | undefined,
@@ -251,9 +322,9 @@ function extremesEqual(
 	if (a === b) return true;
 	if (!a || !b) return false;
 
-	for (const window of STOCK_ALERT_WINDOWS) {
-		const left = a[window];
-		const right = b[window];
+	for (const range of STOCK_ALERT_RANGES) {
+		const left = a[range];
+		const right = b[range];
 		if (left === right) continue;
 		if (!left || !right) return false;
 		if (left.high !== right.high || left.low !== right.low) return false;
@@ -264,9 +335,8 @@ function extremesEqual(
 /**
  * Field-wise comparison of two small numeric records.
  *
- * These hold a handful of stock ids, so comparing them directly avoids the four
- * `JSON.stringify` calls per (faction x stock) pair the previous form paid —
- * roughly 800 serialisations per sweep to compare scalars.
+ * These hold a handful of alert keys, so comparing them directly avoids the four
+ * `JSON.stringify` calls per (guild x stock) pair the previous form paid.
  */
 function shallowNumberMapEqual(
 	a: Record<string, number> | undefined,
@@ -289,6 +359,7 @@ export interface StockAlertCycleResult {
 	detailsFetched: number;
 	alertsQueued: number;
 	channelsNotified: number;
+	userAlertsQueued: number;
 }
 
 /**
@@ -302,8 +373,9 @@ type DetailOutcome =
 	| { kind: "failed" };
 
 /**
- * One alerting cycle: poll the market, evaluate every active faction, persist
- * state, then hand the resulting alerts to the bot over IPC.
+ * One alerting cycle: poll the market, evaluate every active guild and every
+ * personal subscription, persist state, then hand the resulting alerts to the bot
+ * over IPC.
  */
 export async function runStockAlertCycle(
 	signal?: AbortSignal,
@@ -312,15 +384,21 @@ export async function runStockAlertCycle(
 	const nowMs = Date.now();
 
 	const configs = await loadActiveConfigs();
-	if (configs.size === 0) {
+	const subscriptionsByStock = await loadUserSubscriptions();
+
+	// Guild alerts and personal alerts are independent: a server may have no
+	// channel configured while its members still have personal subscriptions, and
+	// vice versa. Only when neither exists is the Torn market worth polling.
+	if (configs.size === 0 && subscriptionsByStock.size === 0) {
 		logger.debug(
-			"Stock alerts are disabled or unrouted for every family faction; skipping cycle without polling Torn.",
+			"No guild has stock alerts enabled and no personal subscriptions exist; skipping cycle without polling Torn.",
 		);
 		return {
 			stocksPolled: 0,
 			detailsFetched: 0,
 			alertsQueued: 0,
 			channelsNotified: 0,
+			userAlertsQueued: 0,
 		};
 	}
 
@@ -335,19 +413,23 @@ export async function runStockAlertCycle(
 			detailsFetched: 0,
 			alertsQueued: 0,
 			channelsNotified: 0,
+			userAlertsQueued: 0,
 		};
 	}
 
-	const factionIds = [...configs.keys()];
-	const stateRows = await db
-		.select()
-		.from(subversiveStockAlertStates)
-		.where(inArray(subversiveStockAlertStates.factionId, factionIds));
+	const guildIds = [...configs.keys()];
+	const stateRows =
+		guildIds.length > 0
+			? await db
+					.select()
+					.from(guildStockAlertStates)
+					.where(inArray(guildStockAlertStates.guildId, guildIds))
+			: [];
 
-	const stateByFactionStock = new Map<string, StockAlertState>();
+	const stateByGuildStock = new Map<string, StockAlertState>();
 	for (const row of stateRows) {
-		stateByFactionStock.set(
-			`${row.factionId}:${row.stockId}`,
+		stateByGuildStock.set(
+			`${row.guildId}:${row.stockId}`,
 			normaliseStockAlertState(row.state),
 		);
 	}
@@ -355,20 +437,26 @@ export async function runStockAlertCycle(
 	const forceFullRefresh =
 		nowMs - lastFullRefreshAtMs >= FULL_REFRESH_INTERVAL_MS;
 
-	// A stock needs its detailed response when any active faction has never seen
-	// it, when its price moved since the last sweep, or on a forced refresh. An
-	// unchanged price cannot set a new extreme or cross a change threshold, so
-	// skipping it is safe rather than merely cheap: a high or low that appears
-	// and reverts inside one cycle is still visible in Torn's rolling window on
-	// the next refresh, so it is delayed by at most that interval, never lost.
+	// A stock needs its detailed response when any active guild has never seen it,
+	// when its price moved since the last sweep, when a personal subscription
+	// watches it, or on a forced refresh. An unchanged price cannot set a new
+	// extreme or cross a change threshold, so skipping it is safe rather than
+	// merely cheap: a high or low that appears and reverts inside one cycle is
+	// still visible in Torn's rolling windows on the next refresh, so it is
+	// delayed by at most that interval, never lost.
 	const needsDetails = (stock: TornSchema<"TornStock">): boolean => {
+		// A personally-watched stock always gets its detail response: range
+		// conditions are judged entirely from figures only it carries, and a
+		// price-only subscription still needs a snapshot to be evaluated against at
+		// all. Subscriptions are bounded per user, so this cannot run away.
+		if ((subscriptionsByStock.get(stock.id)?.length ?? 0) > 0) return true;
 		if (forceFullRefresh) return true;
 		const price = stock.market?.price;
 		if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
 			return false;
 		}
-		for (const factionId of factionIds) {
-			const state = stateByFactionStock.get(`${factionId}:${stock.id}`);
+		for (const guildId of guildIds) {
+			const state = stateByGuildStock.get(`${guildId}:${stock.id}`);
 			if (!state?.seeded) return true;
 			if (state.lastPrice === null || state.lastPrice !== price) return true;
 		}
@@ -447,9 +535,9 @@ export async function runStockAlertCycle(
 			}
 		}
 
-		// A run of failures means the pool itself is failing (every key
-		// rejected or disabled), not one unlucky stock. Stop rather than
-		// repeat the same failure for the rest of the market.
+		// A run of failures means the pool itself is failing (every key rejected or
+		// disabled), not one unlucky stock. Stop rather than repeat the same failure
+		// for the rest of the market.
 		if (consecutiveFailures >= MAX_CONSECUTIVE_DETAIL_FAILURES) {
 			logger.warn(
 				`Aborting the sweep after ${consecutiveFailures} consecutive detail failures; the rest of the market is retried next cycle.`,
@@ -462,17 +550,23 @@ export async function runStockAlertCycle(
 
 	const alertsByChannel = new Map<string, Map<string, StockAlertEvent>>();
 	const stateUpserts: Array<{
-		factionId: number;
+		guildId: string;
 		stockId: number;
 		state: StockAlertState;
 	}> = [];
+	const userAlerts: UserStockAlertEvent[] = [];
+	const userStateUpserts: Array<{
+		id: string;
+		state: UserStockAlertSubscription["state"];
+	}> = [];
 
-	for (const [factionId, config] of configs) {
-		if (!config.channelId) continue;
+	for (const guildId of guildIds) {
+		const config = configs.get(guildId);
+		if (!config?.channelId) continue;
 
 		for (const snapshot of snapshots) {
-			const stateKey = `${factionId}:${snapshot.stockId}`;
-			const previous = stateByFactionStock.get(stateKey) ?? null;
+			const stateKey = `${guildId}:${snapshot.stockId}`;
+			const previous = stateByGuildStock.get(stateKey) ?? null;
 
 			const { events, nextState } = evaluateStockAlerts({
 				snapshot,
@@ -483,14 +577,14 @@ export async function runStockAlertCycle(
 
 			if (hasStateChanged(previous, nextState)) {
 				stateUpserts.push({
-					factionId,
+					guildId,
 					stockId: snapshot.stockId,
 					state: nextState,
 				});
 			}
 			if (events.length === 0) continue;
 
-			// Keyed by stock + alert kind so two factions sharing one channel get a
+			// Keyed by stock + alert kind so two guilds sharing one channel get a
 			// single embed for the same event instead of a duplicate pair.
 			let bucket = alertsByChannel.get(config.channelId);
 			if (!bucket) {
@@ -503,6 +597,40 @@ export async function runStockAlertCycle(
 		}
 	}
 
+	// ── Personal alerts ───────────────────────────────────────────────────────
+	// Evaluated from the same snapshots, but independently of any guild's channel
+	// configuration: a user's subscription is theirs, not the server's.
+	for (const snapshot of snapshots) {
+		const subscriptions = subscriptionsByStock.get(snapshot.stockId);
+		if (!subscriptions || subscriptions.length === 0) continue;
+
+		for (const subscription of subscriptions) {
+			const { event, nextState } = evaluateUserStockAlert({
+				snapshot,
+				subscription,
+				state: subscription.state ?? createEmptyUserStockAlertState(),
+				nowMs,
+			});
+
+			if (needsUserStateWrite(subscription.state, nextState)) {
+				userStateUpserts.push({ id: subscription.id, state: nextState });
+			}
+			if (event) userAlerts.push(event);
+		}
+	}
+
+	if (userStateUpserts.length > 0) {
+		const now = new Date();
+		await db.transaction(async (tx) => {
+			for (const row of userStateUpserts) {
+				await tx
+					.update(userStockAlerts)
+					.set({ state: row.state, updatedAt: now })
+					.where(eq(userStockAlerts.id, row.id));
+			}
+		});
+	}
+
 	if (stateUpserts.length > 0) {
 		const now = new Date();
 
@@ -511,15 +639,15 @@ export async function runStockAlertCycle(
 		// `excluded` — the row the insert proposed — which is exactly what the old
 		// row-at-a-time loop wrote.
 		//
-		// Duplicate (faction, stock) pairs are collapsed first, keeping the last
-		// one: Postgres rejects a statement that updates the same conflict target
-		// twice, and last-write-wins is what the sequential loop left behind.
+		// Duplicate (guild, stock) pairs are collapsed first, keeping the last one:
+		// Postgres rejects a statement that updates the same conflict target twice,
+		// and last-write-wins is what the sequential loop left behind.
 		const deduped = new Map<
 			string,
-			{ factionId: number; stockId: number; state: StockAlertState }
+			{ guildId: string; stockId: number; state: StockAlertState }
 		>();
 		for (const row of stateUpserts) {
-			deduped.set(`${row.factionId}:${row.stockId}`, row);
+			deduped.set(`${row.guildId}:${row.stockId}`, row);
 		}
 		const rowsToUpsert = [...deduped.values()];
 
@@ -534,10 +662,10 @@ export async function runStockAlertCycle(
 					offset + STATE_UPSERT_CHUNK_SIZE,
 				);
 				await tx
-					.insert(subversiveStockAlertStates)
+					.insert(guildStockAlertStates)
 					.values(
 						chunk.map((row) => ({
-							factionId: row.factionId,
+							guildId: row.guildId,
 							stockId: row.stockId,
 							state: row.state,
 							createdAt: now,
@@ -546,8 +674,8 @@ export async function runStockAlertCycle(
 					)
 					.onConflictDoUpdate({
 						target: [
-							subversiveStockAlertStates.factionId,
-							subversiveStockAlertStates.stockId,
+							guildStockAlertStates.guildId,
+							guildStockAlertStates.stockId,
 						],
 						set: {
 							state: sql`excluded.state`,
@@ -574,14 +702,21 @@ export async function runStockAlertCycle(
 		channelsNotified++;
 	}
 
-	if (alertsQueued > 0) {
+	if (userAlerts.length > 0 && ipcServer) {
+		ipcServer.broadcast({
+			action: "user_stock_alerts",
+			data: { alerts: userAlerts },
+		});
+	}
+
+	if (alertsQueued > 0 || userAlerts.length > 0) {
 		logger.info(
-			`Queued ${alertsQueued} stock alert(s) across ${alertsByChannel.size} channel(s)${ipcServer ? "" : " (no IPC listener connected, so nothing was delivered)"}.`,
+			`Queued ${alertsQueued} guild alert(s) across ${alertsByChannel.size} channel(s) and ${userAlerts.length} personal alert(s)${ipcServer ? "" : " (no IPC listener connected, so nothing was delivered)"}.`,
 		);
 	}
 
 	logger.info(
-		`Polled ${stocks.length} stock(s), fetched ${detailsFetched} detail response(s) for ${configs.size} faction(s)${forceFullRefresh ? " (full baseline refresh)" : ""}.`,
+		`Polled ${stocks.length} stock(s), fetched ${detailsFetched} detail response(s) for ${configs.size} guild(s) and ${subscriptionsByStock.size} personally-watched stock(s)${forceFullRefresh ? " (full baseline refresh)" : ""}.`,
 	);
 	finishLog();
 
@@ -590,7 +725,22 @@ export async function runStockAlertCycle(
 		detailsFetched,
 		alertsQueued,
 		channelsNotified,
+		userAlertsQueued: userAlerts.length,
 	};
+}
+
+/** Whether a subscription's stored state actually moved this cycle. */
+function needsUserStateWrite(
+	previous: UserStockAlertSubscription["state"] | undefined,
+	next: UserStockAlertSubscription["state"],
+): boolean {
+	if (!previous) return true;
+	return (
+		previous.seeded !== next.seeded ||
+		previous.wasTrue !== next.wasTrue ||
+		previous.lastExtreme !== next.lastExtreme ||
+		previous.lastAlertAt !== next.lastAlertAt
+	);
 }
 
 /**

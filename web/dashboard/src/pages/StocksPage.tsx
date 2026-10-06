@@ -1,11 +1,12 @@
 import {
 	formatStockAlertWindow,
+	type GuildStockAlertConfig,
 	MAX_STOCK_ALERT_CHANGE_RULES,
 	STOCK_ALERT_CHANGE_WINDOW_MINUTES,
-	STOCK_ALERT_WINDOWS,
+	STOCK_ALERT_RANGE_LABELS,
+	STOCK_ALERT_RANGES,
 	type StockAlertChangeRule,
-	type StockAlertWindow,
-	type SubversiveStockAlertConfig,
+	type StockAlertRange,
 } from "@sentinel/schemas";
 import {
 	Clock,
@@ -38,21 +39,20 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SUBVERSIVE_FAMILY_FACTIONS } from "@/lib/subversive-factions";
 
 /**
- * Wire shape of the configuration endpoint: the shared config plus the
- * bookkeeping fields, which arrive as nulls rather than being absent.
+ * Wire shape of the configuration endpoint: the shared config plus the bookkeeping
+ * fields, which arrive as nulls rather than being absent.
  */
 interface StockAlertConfig
-	extends Omit<SubversiveStockAlertConfig, "updatedAt" | "updatedBy"> {
+	extends Omit<GuildStockAlertConfig, "updatedAt" | "updatedBy"> {
 	updatedAt?: string | null;
 	updatedBy?: string | null;
 }
 
 /**
- * Every window the API accepts, labelled the same way the alert itself labels it.
+ * Every move window the API accepts, labelled the same way the alert itself
+ * labels it.
  *
  * Derived from the shared constant rather than repeated here, so the dashboard
  * cannot offer a window the worker refuses to evaluate.
@@ -65,13 +65,12 @@ const CHANGE_WINDOW_OPTIONS: ReadonlyArray<{ value: number; label: string }> =
 
 const MAX_CHANGE_RULES = MAX_STOCK_ALERT_CHANGE_RULES;
 
-const HIGH_LOW_LABELS: Record<StockAlertWindow, string> = {
-	"24h": "24-hour high / low",
-	all_time: "All-time high / low",
-};
-
-const HIGH_LOW_DESCRIPTIONS: Record<StockAlertWindow, string> = {
-	"24h": "Alerts when a stock sets a new high or low for the last day.",
+const RANGE_DESCRIPTIONS: Record<StockAlertRange, string> = {
+	"1h": "The last hour of trading.",
+	"24h": "The last day.",
+	"7d": "The last week.",
+	"30d": "The last month.",
+	"1y": "The last year.",
 	all_time: "Rare, notable events: a stock's best or worst price ever.",
 };
 
@@ -82,7 +81,7 @@ const DEFAULT_CONFIG: StockAlertConfig = {
 		{ windowMinutes: 30, thresholdPct: 0.5 },
 		{ windowMinutes: 60, thresholdPct: 1 },
 	],
-	highLowWindows: ["24h", "all_time"],
+	highLowRanges: ["24h", "all_time"],
 	cooldownMinutes: 30,
 };
 
@@ -92,15 +91,20 @@ function serialize(config: StockAlertConfig): string {
 		enabled: config.enabled,
 		channelId: config.channelId,
 		changeRules: config.changeRules,
-		highLowWindows: config.highLowWindows,
+		highLowRanges: config.highLowRanges,
 		cooldownMinutes: config.cooldownMinutes,
 	});
 }
 
-export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
-	const [factionId, setFactionId] = useState<number>(
-		SUBVERSIVE_FAMILY_FACTIONS[0].id,
-	);
+/**
+ * Torn stock-market alert settings for one Discord guild.
+ *
+ * Guild-wide by design: the alert channel, the sensitivity and the audience are
+ * properties of the server, and both family factions are members of it. The
+ * previous per-faction split made an admin configure the same channel twice and
+ * reason about two independent cooldowns.
+ */
+export function StocksPage({ guildId }: { guildId?: string } = {}) {
 	const [config, setConfig] = useState<StockAlertConfig>(DEFAULT_CONFIG);
 	const [initialConfig, setInitialConfig] =
 		useState<StockAlertConfig>(DEFAULT_CONFIG);
@@ -110,14 +114,12 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 	const [triggering, setTriggering] = useState(false);
 	const [loadError, setLoadError] = useState<string | null>(null);
 
-	const activeFaction =
-		SUBVERSIVE_FAMILY_FACTIONS.find((faction) => faction.id === factionId) ??
-		SUBVERSIVE_FAMILY_FACTIONS[0];
+	const basePath = guildId ? `/v2/guilds/${guildId}` : null;
 
-	// Channels are shared across factions, so they are fetched only once.
 	const fetchChannels = useCallback(async () => {
+		if (!basePath) return;
 		try {
-			const res = await fetch("/v2/subversive/guild-channels");
+			const res = await fetch(`${basePath}/channels`);
 			if (res.ok) {
 				const data = (await res.json()) as { channels?: DiscordChannel[] };
 				setChannels(data.channels ?? []);
@@ -125,15 +127,19 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 		} catch (err) {
 			console.error("Failed loading stock alert channels:", err);
 		}
-	}, []);
+	}, [basePath]);
 
-	const fetchConfig = useCallback(async (targetFactionId: number) => {
+	const fetchConfig = useCallback(async () => {
+		if (!basePath) {
+			setLoadError("No server selected.");
+			setLoading(false);
+			return;
+		}
+
 		setLoading(true);
 		setLoadError(null);
 		try {
-			const res = await fetch(
-				`/v2/subversive/stock-alert-config?factionId=${targetFactionId}`,
-			);
+			const res = await fetch(`${basePath}/stock-alert-config`);
 
 			if (res.ok) {
 				const data = (await res.json()) as { config?: StockAlertConfig };
@@ -156,15 +162,15 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [basePath]);
 
 	useEffect(() => {
 		void fetchChannels();
 	}, [fetchChannels]);
 
 	useEffect(() => {
-		void fetchConfig(factionId);
-	}, [factionId, fetchConfig]);
+		void fetchConfig();
+	}, [fetchConfig]);
 
 	const isDirty = serialize(config) !== serialize(initialConfig);
 
@@ -173,17 +179,17 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 	};
 
 	const handleSave = async () => {
+		if (!basePath) return;
 		setSaving(true);
 		try {
-			const res = await fetch("/v2/subversive/stock-alert-config", {
+			const res = await fetch(`${basePath}/stock-alert-config`, {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					factionId,
 					enabled: config.enabled,
 					channelId: config.channelId,
 					changeRules: config.changeRules,
-					highLowWindows: config.highLowWindows,
+					highLowRanges: config.highLowRanges,
 					cooldownMinutes: config.cooldownMinutes,
 				}),
 			});
@@ -199,9 +205,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 			const saved = { ...DEFAULT_CONFIG, ...data.config };
 			setConfig(saved);
 			setInitialConfig(saved);
-			toast.success(
-				`Stock alert settings updated for ${activeFaction.name} [${activeFaction.id}].`,
-			);
+			toast.success("Stock alert settings updated for this server.");
 		} catch (err) {
 			toast.error(
 				err instanceof Error ? err.message : "Failed to save settings.",
@@ -212,9 +216,10 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 	};
 
 	const handleRunNow = async () => {
+		if (!basePath) return;
 		setTriggering(true);
 		try {
-			const res = await fetch("/v2/subversive/stock-alerts/run-now", {
+			const res = await fetch(`${basePath}/stock-alerts/run-now`, {
 				method: "POST",
 			});
 			const data = (await res.json().catch(() => ({}))) as {
@@ -272,12 +277,16 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 		}));
 	};
 
-	const toggleWindow = (window: StockAlertWindow, checked: boolean): void => {
+	const toggleRange = (range: StockAlertRange, checked: boolean): void => {
 		setConfig((prev) => ({
 			...prev,
-			highLowWindows: checked
-				? [...new Set([...prev.highLowWindows, window])]
-				: prev.highLowWindows.filter((entry) => entry !== window),
+			highLowRanges: checked
+				? // Kept in the canonical order the API stores, so the dirty check does
+					// not report a difference purely from click order.
+					STOCK_ALERT_RANGES.filter(
+						(entry) => entry === range || prev.highLowRanges.includes(entry),
+					)
+				: prev.highLowRanges.filter((entry) => entry !== range),
 		}));
 	};
 
@@ -288,6 +297,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 		config.changeRules.length < MAX_CHANGE_RULES &&
 		usedWindows.size < CHANGE_WINDOW_OPTIONS.length;
 	const needsChannel = config.enabled && !config.channelId;
+	const selectedRangeCount = config.highLowRanges.length;
 
 	if (loading) {
 		return (
@@ -312,7 +322,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 							type="button"
 							variant="outline"
 							className="gap-2"
-							onClick={() => void fetchConfig(factionId)}
+							onClick={() => void fetchConfig()}
 						>
 							<RotateCcw className="size-3.5" />
 							Retry
@@ -328,7 +338,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 			<PageHeader
 				title="Stocks"
 				icon={TrendingUp}
-				description="Torn stock market alerts: notable price moves plus 24-hour and all-time highs and lows, posted to a Discord channel per family faction."
+				description="Torn stock market alerts: notable price moves plus highs and lows over the ranges you choose, posted to one Discord channel for the whole server."
 				actions={
 					<Button
 						type="button"
@@ -347,28 +357,9 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 				}
 			/>
 
-			{/* Faction switcher. Two long faction names cannot share a phone row
-			    comfortably, so the list stretches and each label truncates. */}
-			<Tabs
-				value={String(factionId)}
-				onValueChange={(val) => setFactionId(Number(val))}
-			>
-				<TabsList className="h-auto w-full max-w-lg p-1">
-					{SUBVERSIVE_FAMILY_FACTIONS.map((faction) => (
-						<TabsTrigger
-							key={faction.id}
-							value={String(faction.id)}
-							className="min-w-0 py-1.5"
-						>
-							<span className="truncate">{faction.name}</span>
-						</TabsTrigger>
-					))}
-				</TabsList>
-			</Tabs>
-
 			<SectionCard
-				title={`${activeFaction.name} [${activeFaction.id}]`}
-				description="Each family faction routes its own alerts to its own channel with its own sensitivity."
+				title="Server-wide settings"
+				description="Both family factions share these settings, and every member's personal alerts are configured separately with /stock-alerts."
 				action={
 					<StatusBadge tone={isDirty ? "warning" : "success"} size="sm">
 						{isDirty ? "Unsaved" : "Saved"}
@@ -382,8 +373,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 						<div className="min-w-0 space-y-0.5">
 							<div className="text-sm font-medium">Stock alerts</div>
 							<div className="text-xs text-muted-foreground">
-								Post alerts for {activeFaction.name} into the channel selected
-								below.
+								Post alerts for this server into the channel selected below.
 							</div>
 						</div>
 						<Switch
@@ -397,17 +387,15 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 					{/* ── Channel ────────────────────────────────────────────── */}
 					<div className="flex flex-col gap-3">
 						<div className="flex min-w-0 flex-col gap-1">
-							<Label htmlFor={`stock-alerts-channel-${factionId}`}>
-								Alert channel
-							</Label>
+							<Label htmlFor="stock-alerts-channel">Alert channel</Label>
 							<span className="text-xs text-muted-foreground">
-								Where stock alerts for this faction are posted.
+								Where stock alerts for this server are posted.
 							</span>
 						</div>
 
 						<div className="w-full min-w-0 sm:max-w-md">
 							<ChannelSelect
-								id={`stock-alerts-channel-${factionId}`}
+								id="stock-alerts-channel"
 								channels={channels}
 								value={config.channelId}
 								onValueChange={(val) =>
@@ -440,7 +428,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 							<span className="text-xs text-muted-foreground">
 								Alert when a price moves at least this much within the window.
 								Each window can be used once; mixes like 0.5% in 30 minutes and
-								1% in an hour are allowed.
+								10% in a week are allowed.
 							</span>
 						</div>
 
@@ -457,9 +445,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 									className="flex flex-col gap-2 rounded-xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-end sm:gap-3 sm:p-4"
 								>
 									<div className="flex min-w-0 flex-1 flex-col gap-2">
-										<Label htmlFor={`rule-window-${factionId}-${index}`}>
-											Window
-										</Label>
+										<Label htmlFor={`rule-window-${index}`}>Window</Label>
 										<Select
 											value={String(rule.windowMinutes)}
 											onValueChange={(val) =>
@@ -467,7 +453,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 											}
 										>
 											<SelectTrigger
-												id={`rule-window-${factionId}-${index}`}
+												id={`rule-window-${index}`}
 												className="w-full"
 											>
 												<SelectValue placeholder="Select a window" />
@@ -490,14 +476,14 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 									</div>
 
 									<div className="flex min-w-0 flex-1 flex-col gap-2">
-										<Label htmlFor={`rule-threshold-${factionId}-${index}`}>
+										<Label htmlFor={`rule-threshold-${index}`}>
 											Move threshold (%)
 										</Label>
 										<Input
-											id={`rule-threshold-${factionId}-${index}`}
+											id={`rule-threshold-${index}`}
 											type="number"
 											min={0.05}
-											max={25}
+											max={500}
 											step={0.05}
 											value={rule.thresholdPct}
 											onChange={(e) =>
@@ -512,7 +498,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 										type="button"
 										variant="outline"
 										size="icon"
-										aria-label={`Remove the ${rule.windowMinutes} minute rule`}
+										aria-label={`Remove the ${formatStockAlertWindow(rule.windowMinutes)} rule`}
 										title="Remove rule"
 										disabled={saving}
 										onClick={() => removeRule(index)}
@@ -543,43 +529,50 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 								Highs &amp; lows
 							</span>
 							<span className="text-xs text-muted-foreground">
-								Alerts are only raised on a <em>new</em> high or low, so a price
-								sitting at its peak does not repeat.
+								Pick any combination of ranges. Alerts are only raised on a{" "}
+								<em>new</em> high or low within a range, so a price sitting at
+								its peak does not repeat.
 							</span>
 						</div>
 
-						{STOCK_ALERT_WINDOWS.map((window) => (
-							<Label
-								key={window}
-								htmlFor={`stock-alert-window-${factionId}-${window}`}
-								className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 sm:p-4"
-							>
-								<Checkbox
-									id={`stock-alert-window-${factionId}-${window}`}
-									checked={config.highLowWindows.includes(window)}
-									onCheckedChange={(checked) =>
-										toggleWindow(window, checked === true)
-									}
-									className="mt-0.5"
-								/>
-								<span className="flex min-w-0 flex-col gap-0.5">
-									<span className="text-sm font-medium">
-										{HIGH_LOW_LABELS[window]}
+						<div className="grid gap-2 sm:grid-cols-2">
+							{STOCK_ALERT_RANGES.map((range) => (
+								<Label
+									key={range}
+									htmlFor={`stock-alert-range-${range}`}
+									className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/70 bg-muted/20 p-3"
+								>
+									<Checkbox
+										id={`stock-alert-range-${range}`}
+										checked={config.highLowRanges.includes(range)}
+										onCheckedChange={(checked) =>
+											toggleRange(range, checked === true)
+										}
+										className="mt-0.5"
+									/>
+									<span className="flex min-w-0 flex-col gap-0.5">
+										<span className="text-sm font-medium">
+											{STOCK_ALERT_RANGE_LABELS[range]} high / low
+										</span>
+										<span className="text-xs font-normal text-muted-foreground">
+											{RANGE_DESCRIPTIONS[range]}
+										</span>
 									</span>
-									<span className="text-xs font-normal text-muted-foreground">
-										{HIGH_LOW_DESCRIPTIONS[window]}
-									</span>
-								</span>
-							</Label>
-						))}
+								</Label>
+							))}
+						</div>
+
+						{selectedRangeCount === 0 ? (
+							<p className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+								No ranges selected — only the price-move rules above will alert.
+							</p>
+						) : null}
 					</div>
 
 					{/* ── Cooldown ───────────────────────────────────────────── */}
 					<div className="flex flex-col gap-3 border-t border-border/60 pt-4">
 						<div className="flex min-w-0 flex-col gap-1">
-							<Label htmlFor={`stock-alert-cooldown-${factionId}`}>
-								Cooldown (minutes)
-							</Label>
+							<Label htmlFor="stock-alert-cooldown">Cooldown (minutes)</Label>
 							<span className="text-xs text-muted-foreground">
 								Minimum gap between two alerts of the same kind for the same
 								stock. A suppressed alert still updates the stored baseline, so
@@ -588,7 +581,7 @@ export function StocksPage({ guildId: _guildId }: { guildId?: string } = {}) {
 						</div>
 						<div className="w-full sm:max-w-40">
 							<Input
-								id={`stock-alert-cooldown-${factionId}`}
+								id="stock-alert-cooldown"
 								type="number"
 								min={0}
 								max={1440}

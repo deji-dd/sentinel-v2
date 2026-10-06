@@ -7,6 +7,7 @@ export * from "./ffscouter";
 export * from "./giveaways";
 export * from "./ledger";
 export * from "./merc";
+export * from "./stock-alerts";
 export * from "./subversive";
 export * from "./system";
 export * from "./torn";

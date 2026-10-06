@@ -1,31 +1,28 @@
-import { db, eq, subversiveStockAlertConfigs } from "@sentinel/database";
+import { db, eq, guildStockAlertConfigs } from "@sentinel/database";
 import {
-	DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
+	DEFAULT_GUILD_STOCK_ALERT_CONFIG,
+	type GuildStockAlertConfig,
+	isStockAlertRange,
 	MAX_STOCK_ALERT_CHANGE_RULES,
 	MAX_STOCK_ALERT_COOLDOWN_MINUTES,
 	MAX_STOCK_ALERT_THRESHOLD_PCT,
 	MIN_STOCK_ALERT_THRESHOLD_PCT,
 	STOCK_ALERT_CHANGE_WINDOW_MINUTES,
-	STOCK_ALERT_WINDOWS,
+	STOCK_ALERT_RANGES,
 	type StockAlertChangeRule,
-	type StockAlertWindow,
-	type SubversiveStockAlertConfig,
+	type StockAlertRange,
 } from "@sentinel/schemas";
-import {
-	Logger,
-	resolveSubversiveFactionId,
-	SUBVERSIVE_FAMILY_FACTION_IDS,
-} from "@sentinel/utils";
+import { Logger } from "@sentinel/utils";
 
-const logger = new Logger("API", "SubversiveStockAlertManager");
+const logger = new Logger("API", "StockAlertConfigManager");
 
 /** Discord snowflake shape, used to reject hand-typed channel ids. */
 const SNOWFLAKE_PATTERN = /^\d{17,20}$/;
 
 /**
  * Raised when a patch would store a stock-alert configuration the worker cannot
- * honour — an unknown change window, a malformed channel id, a threshold outside
- * the supported range.
+ * honour — an unknown range, a malformed channel id, a threshold outside the
+ * supported range.
  *
  * A distinct type so the HTTP layer can answer 400 for these client mistakes
  * without also reporting genuine database failures as if they were the admin's
@@ -107,28 +104,30 @@ function normaliseChangeRules(value: unknown): StockAlertChangeRule[] {
 	return rules;
 }
 
-/** Validates and normalises the high/low window selection. */
-function normaliseHighLowWindows(value: unknown): StockAlertWindow[] {
+/**
+ * Validates and normalises the high/low range selection.
+ *
+ * Order is forced to `STOCK_ALERT_RANGES` rather than preserved from the request:
+ * the selection is a set, and a stable order keeps the stored row — and therefore
+ * the embed's field list — identical no matter how the dashboard happened to
+ * serialise the checkboxes.
+ */
+function normaliseHighLowRanges(value: unknown): StockAlertRange[] {
 	if (!Array.isArray(value)) {
-		throw new StockAlertConfigError("highLowWindows must be an array.");
+		throw new StockAlertConfigError("highLowRanges must be an array.");
 	}
 
-	const windows: StockAlertWindow[] = [];
+	const selected = new Set<StockAlertRange>();
 	for (const entry of value) {
-		if (
-			typeof entry !== "string" ||
-			!STOCK_ALERT_WINDOWS.includes(entry as StockAlertWindow)
-		) {
+		if (!isStockAlertRange(entry)) {
 			throw new StockAlertConfigError(
-				`Invalid high/low window ${String(entry)}: allowed values are ${STOCK_ALERT_WINDOWS.join(", ")}.`,
+				`Invalid high/low range ${String(entry)}: allowed values are ${STOCK_ALERT_RANGES.join(", ")}.`,
 			);
 		}
-		if (!windows.includes(entry as StockAlertWindow)) {
-			windows.push(entry as StockAlertWindow);
-		}
+		selected.add(entry);
 	}
 
-	return windows;
+	return STOCK_ALERT_RANGES.filter((range) => selected.has(range));
 }
 
 /** Validates and normalises the alert channel selection. */
@@ -157,79 +156,40 @@ function normaliseCooldownMinutes(value: unknown): number {
 }
 
 /**
- * Wire shape accepted by {@link SubversiveStockAlertConfigManager.updateConfig}.
+ * Wire shape accepted by {@link GuildStockAlertConfigManager.updateConfig}.
  *
- * Looser than {@link SubversiveStockAlertConfig} on purpose: the HTTP layer
- * forwards whatever the client sent, and every field is validated here before it
- * is merged or written — the types describe the wire format, not a guarantee.
+ * Looser than {@link GuildStockAlertConfig} on purpose: the HTTP layer forwards
+ * whatever the client sent, and every field is validated here before it is merged
+ * or written — the types describe the wire format, not a guarantee.
  */
 export interface StockAlertConfigPatch {
 	enabled?: boolean;
 	channelId?: string | null;
 	changeRules?: Array<{ windowMinutes: number; thresholdPct: number }>;
-	highLowWindows?: string[];
+	highLowRanges?: string[];
 	cooldownMinutes?: number;
 }
 
 /**
  * Reads and writes the stock-alert settings used by the `subversive:stock_alerts`
- * scheduler worker, one row per family faction in
- * `subversive_stock_alert_configs`.
+ * scheduler worker, one row per Discord guild in `guild_stock_alert_configs`.
+ *
+ * Deliberately **uncached**. The previous per-faction version memoised rows in a
+ * process-local map with no TTL, so a save made by one API replica left every
+ * other replica — and the scheduler's own view — stale until restart. Reads here
+ * happen only when an admin opens the page or saves it, so going back to the
+ * database every time costs nothing and removes the whole class of staleness.
  */
-class SubversiveStockAlertConfigManager {
-	/** Per-faction cache keyed by resolved faction id. */
-	private configs = new Map<number, SubversiveStockAlertConfig>();
-
-	/** Seeds every family faction with the defaults (or a shared override). */
-	setConfigForTesting(config?: Partial<SubversiveStockAlertConfig>): void {
-		this.configs.clear();
-		for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
-			this.configs.set(factionId, {
-				...DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
-				...config,
-			});
-		}
-	}
-
-	/** Overrides a single family faction's settings (useful for tests). */
-	setFactionConfigForTesting(
-		factionId: number,
-		config?: Partial<SubversiveStockAlertConfig>,
-	): void {
-		const resolved = resolveSubversiveFactionId(factionId);
-		this.configs.set(resolved, {
-			...DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
-			...config,
-		});
-	}
-
-	/** Test seam: drops every memoised configuration. */
-	clearCacheForTesting(): void {
-		this.configs.clear();
-	}
-
-	/**
-	 * Returns the cached configuration synchronously, so hot paths never block on
-	 * database IO. Always returns a value.
-	 */
-	getCachedConfig(factionId?: number | null): SubversiveStockAlertConfig {
-		const resolved = resolveSubversiveFactionId(factionId);
-		return (
-			this.configs.get(resolved) ?? {
-				...DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
-			}
-		);
-	}
-
+class GuildStockAlertConfigManager {
 	/** Maps one table row onto the config shape shared with the HTTP layer. */
 	private static toConfig(
-		row: typeof subversiveStockAlertConfigs.$inferSelect,
-	): SubversiveStockAlertConfig {
+		row: typeof guildStockAlertConfigs.$inferSelect,
+	): GuildStockAlertConfig {
 		return {
 			enabled: row.enabled,
 			channelId: row.channelId ?? null,
 			changeRules: row.changeRules ?? [],
-			highLowWindows: (row.highLowWindows ?? []) as StockAlertWindow[],
+			highLowRanges: (row.highLowRanges ?? []).filter(isStockAlertRange),
 			cooldownMinutes: row.cooldownMinutes,
 			updatedAt: row.updatedAt.toISOString(),
 			updatedBy: row.updatedBy ?? undefined,
@@ -237,61 +197,56 @@ class SubversiveStockAlertConfigManager {
 	}
 
 	/**
-	 * Retrieves the stock-alert settings for one family faction, reading them from
-	 * the database on first run and caching them thereafter.
+	 * Retrieves the stock-alert settings for one guild.
 	 *
 	 * A missing row is not an error: it means the dashboard has never saved
-	 * settings for that faction yet, so the factory defaults (disabled) apply.
+	 * settings for that guild yet, so the factory defaults (disabled) apply.
 	 */
-	async getConfig(
-		factionId?: number | null,
-	): Promise<SubversiveStockAlertConfig> {
-		const resolved = resolveSubversiveFactionId(factionId);
-		const cached = this.configs.get(resolved);
-		if (cached) return cached;
-
-		let config: SubversiveStockAlertConfig = {
-			...DEFAULT_SUBVERSIVE_STOCK_ALERT_CONFIG,
+	async getConfig(guildId: string): Promise<GuildStockAlertConfig> {
+		let config: GuildStockAlertConfig = {
+			...DEFAULT_GUILD_STOCK_ALERT_CONFIG,
 		};
+
 		try {
 			const [row] = await db
 				.select()
-				.from(subversiveStockAlertConfigs)
-				.where(eq(subversiveStockAlertConfigs.factionId, resolved));
+				.from(guildStockAlertConfigs)
+				.where(eq(guildStockAlertConfigs.guildId, guildId));
 
 			if (row) {
-				config = SubversiveStockAlertConfigManager.toConfig(row);
+				config = GuildStockAlertConfigManager.toConfig(row);
 			}
 		} catch (err) {
 			logger.warn(
-				`Failed to load stock alert config for faction ${resolved}:`,
+				`Failed to load stock alert config for guild ${guildId}:`,
 				err,
 			);
 		}
 
-		this.configs.set(resolved, config);
 		return config;
 	}
 
 	/**
-	 * Merges a patch into one family faction's stock-alert settings, persisting
-	 * the row and refreshing the in-memory cache.
+	 * Merges a patch into one guild's stock-alert settings and persists the row.
 	 *
 	 * The merged result is validated before any write, so a rejected patch leaves
 	 * both the stored row and the worker's view untouched.
+	 *
+	 * Upserts rather than requiring the row to pre-exist, because a guild that has
+	 * never been configured has no row to update — and unlike verification there
+	 * is no "guild config must exist first" precondition worth imposing here.
 	 *
 	 * @throws {StockAlertConfigError} when the merged configuration is not one the
 	 * worker can honour.
 	 */
 	async updateConfig(
 		patch: StockAlertConfigPatch,
-		updatedBy = "admin",
-		factionId?: number | null,
-	): Promise<SubversiveStockAlertConfig> {
-		const resolved = resolveSubversiveFactionId(factionId);
-		const current = await this.getConfig(resolved);
+		updatedBy: string,
+		guildId: string,
+	): Promise<GuildStockAlertConfig> {
+		const current = await this.getConfig(guildId);
 
-		const merged: SubversiveStockAlertConfig = {
+		const merged: GuildStockAlertConfig = {
 			enabled: patch.enabled !== undefined ? patch.enabled : current.enabled,
 			channelId:
 				patch.channelId !== undefined
@@ -301,10 +256,10 @@ class SubversiveStockAlertConfigManager {
 				patch.changeRules !== undefined
 					? normaliseChangeRules(patch.changeRules)
 					: current.changeRules,
-			highLowWindows:
-				patch.highLowWindows !== undefined
-					? normaliseHighLowWindows(patch.highLowWindows)
-					: current.highLowWindows,
+			highLowRanges:
+				patch.highLowRanges !== undefined
+					? normaliseHighLowRanges(patch.highLowRanges)
+					: current.highLowRanges,
 			cooldownMinutes:
 				patch.cooldownMinutes !== undefined
 					? normaliseCooldownMinutes(patch.cooldownMinutes)
@@ -312,23 +267,23 @@ class SubversiveStockAlertConfigManager {
 		};
 
 		const [row] = await db
-			.insert(subversiveStockAlertConfigs)
+			.insert(guildStockAlertConfigs)
 			.values({
-				factionId: resolved,
+				guildId,
 				enabled: merged.enabled,
 				channelId: merged.channelId,
 				changeRules: merged.changeRules,
-				highLowWindows: merged.highLowWindows,
+				highLowRanges: merged.highLowRanges,
 				cooldownMinutes: merged.cooldownMinutes,
 				updatedBy,
 			})
 			.onConflictDoUpdate({
-				target: subversiveStockAlertConfigs.factionId,
+				target: guildStockAlertConfigs.guildId,
 				set: {
 					enabled: merged.enabled,
 					channelId: merged.channelId,
 					changeRules: merged.changeRules,
-					highLowWindows: merged.highLowWindows,
+					highLowRanges: merged.highLowRanges,
 					cooldownMinutes: merged.cooldownMinutes,
 					updatedBy,
 					updatedAt: new Date(),
@@ -337,16 +292,14 @@ class SubversiveStockAlertConfigManager {
 			.returning();
 
 		const updated = row
-			? SubversiveStockAlertConfigManager.toConfig(row)
+			? GuildStockAlertConfigManager.toConfig(row)
 			: { ...current, ...merged, updatedBy };
 
-		this.configs.set(resolved, updated);
 		logger.info(
-			`Updated Subversive stock alert config for faction ${resolved} (enabled=${updated.enabled}, channel=${updated.channelId ?? "none"}).`,
+			`Updated stock alert config for guild ${guildId} (enabled=${updated.enabled}, channel=${updated.channelId ?? "none"}, ranges=${updated.highLowRanges.join("/") || "none"}).`,
 		);
 		return updated;
 	}
 }
 
-export const subversiveStockAlertManager =
-	new SubversiveStockAlertConfigManager();
+export const guildStockAlertManager = new GuildStockAlertConfigManager();

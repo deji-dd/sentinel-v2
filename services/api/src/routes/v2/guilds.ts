@@ -56,8 +56,14 @@ import {
 	syncReactionRolesViaIpc,
 } from "../../lib/bot-ipc";
 import { getBotGuilds } from "../../lib/discord-auth";
+import { notifySchedulerForceRun } from "../../lib/scheduler-ipc";
+import {
+	guildStockAlertManager,
+	StockAlertConfigError,
+} from "../../lib/stock-alert-config-manager";
 import {
 	getNextSubversiveUserKey,
+	hasActiveSubversiveKeys,
 	markSubversiveKeyDisabled,
 	recordSubversiveKeySuccess,
 } from "../../lib/subversive-key-pool";
@@ -928,6 +934,129 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			},
 		},
 	)
+
+	// ─── GET /api/v1/guilds/:guildId/stock-alert-config ───────────────────────
+	.get(
+		"/:guildId/stock-alert-config",
+		async ({ params, user, set }) => {
+			const canManage = await verifyGuildAdmin(user, params.guildId);
+			if (!canManage) {
+				set.status = 403;
+				return {
+					error: "Forbidden: Administrator access to this server is required.",
+				};
+			}
+
+			const config = await guildStockAlertManager.getConfig(params.guildId);
+			return { guildId: params.guildId, config };
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			detail: {
+				summary: "Get Guild Stock Alert Configuration",
+				description:
+					"Returns this server's Torn stock-market alert settings: alert channel, notable-move rules, high/low ranges and cooldown.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v1/guilds/:guildId/stock-alert-config ───────────────────────
+	.put(
+		"/:guildId/stock-alert-config",
+		async ({ params, body, user, set }) => {
+			const canManage = await verifyGuildAdmin(user, params.guildId);
+			if (!canManage) {
+				set.status = 403;
+				return {
+					error: "Forbidden: Administrator access to this server is required.",
+				};
+			}
+
+			try {
+				const updated = await guildStockAlertManager.updateConfig(
+					body,
+					user?.username ?? "admin",
+					params.guildId,
+				);
+				return { success: true, guildId: params.guildId, config: updated };
+			} catch (err) {
+				// Only an unhonourable configuration is a client mistake. Anything
+				// else is a genuine failure and must not be reported as a bad request.
+				if (err instanceof StockAlertConfigError) {
+					set.status = 400;
+					return { error: err.message };
+				}
+				throw err;
+			}
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			body: t.Object({
+				enabled: t.Optional(t.Boolean()),
+				channelId: t.Optional(t.Nullable(t.String())),
+				changeRules: t.Optional(
+					t.Array(
+						t.Object({
+							windowMinutes: t.Number(),
+							thresholdPct: t.Number(),
+						}),
+					),
+				),
+				highLowRanges: t.Optional(t.Array(t.String())),
+				cooldownMinutes: t.Optional(t.Number()),
+			}),
+			detail: {
+				summary: "Update Guild Stock Alert Configuration",
+				description:
+					"Routes stock-market alerts for this server and sets the notable-move rules, high/low ranges and cooldown they are throttled by. Guild-wide: both family factions share one setting.",
+			},
+		},
+	)
+
+	// ─── POST /api/v1/guilds/:guildId/stock-alerts/run-now ────────────────────
+	.post(
+		"/:guildId/stock-alerts/run-now",
+		async ({ params, user, set }) => {
+			const canManage = await verifyGuildAdmin(user, params.guildId);
+			if (!canManage) {
+				set.status = 403;
+				return {
+					error: "Forbidden: Administrator access to this server is required.",
+				};
+			}
+
+			// Checked here rather than left to the worker so the admin gets a reason
+			// instead of a trigger that silently does nothing.
+			const hasKeys = await hasActiveSubversiveKeys();
+			if (!hasKeys) {
+				set.status = 400;
+				return {
+					error:
+						"No active Torn API keys available in the Subversive script key pool. Please ensure at least one active user or system key is available.",
+				};
+			}
+
+			const delivered = await notifySchedulerForceRun(
+				"subversive:stock_alerts",
+			);
+
+			return {
+				success: true,
+				message: delivered
+					? "Stock alert check triggered immediately via scheduler IPC."
+					: "Scheduler IPC unreachable; the check will execute on the next 5-minute cycle.",
+			};
+		},
+		{
+			params: t.Object({ guildId: t.String() }),
+			detail: {
+				summary: "Trigger Immediate Stock Alert Check",
+				description:
+					"Instructs the scheduler background worker to poll the Torn stock market immediately and evaluate stock alerts.",
+			},
+		},
+	)
+
 	// GET /v2/guilds/:guildId/keys — list registered API keys for this guild
 	.get(
 		"/:guildId/keys",

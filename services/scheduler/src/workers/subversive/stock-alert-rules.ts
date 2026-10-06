@@ -1,10 +1,13 @@
 import {
 	formatStockAlertWindow,
+	type GuildStockAlertConfig,
+	STOCK_ALERT_CHANGE_WINDOW_RANGES,
+	STOCK_ALERT_RANGE_LABELS,
+	STOCK_ALERT_RANGES,
 	type StockAlertEvent,
 	type StockAlertMarketContext,
+	type StockAlertRange,
 	type StockAlertState,
-	type StockAlertWindow,
-	type SubversiveStockAlertConfig,
 } from "@sentinel/schemas";
 
 /**
@@ -31,15 +34,15 @@ const EXTREME_EPSILON = 1e-6;
  */
 const MIN_WINDOW_COVERAGE_RATIO = 0.5;
 
-/** One stock's Torn performance figures for a single window. */
+/** One stock's Torn performance figures for a single range. */
 export interface StockAlertWindowPerformance {
-	/** Percentage change across the window (`change_percentage`). */
+	/** Percentage change across the range (`change_percentage`). */
 	changePct: number;
-	/** Price at the start of the window. */
+	/** Price at the start of the range. */
 	start: number;
-	/** Highest price within the window. */
+	/** Highest price within the range. */
 	high: number;
-	/** Lowest price within the window. */
+	/** Lowest price within the range. */
 	low: number;
 }
 
@@ -58,11 +61,11 @@ export interface StockAlertSnapshot {
 	/** Current market price, from `/torn/stocks`. */
 	price: number;
 	/**
-	 * Torn's own rolling-window figures. `24h` is `chart.performance.last_day`
-	 * and `all_time` is `chart.performance.all_time`; either may be absent when
-	 * the detailed response was incomplete.
+	 * Torn's own rolling-range figures, one entry per range it published — `1h`
+	 * is `chart.performance.last_hour` through to `all_time`. An entry is absent
+	 * when the detailed response was incomplete.
 	 */
-	performance: Partial<Record<StockAlertWindow, StockAlertWindowPerformance>>;
+	performance: Partial<Record<StockAlertRange, StockAlertWindowPerformance>>;
 	/** `chart.history` raw points (order is not trusted). */
 	history: StockAlertHistoryPoint[];
 }
@@ -92,6 +95,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Rows are written by this worker, but a JSON column is still untrusted input:
  * a half-written or hand-edited row must not crash the cycle or, worse, be
  * mistaken for "seeded" and skip the baseline capture.
+ *
+ * Every range is read, including ones the guild has since switched off, so
+ * turning a range back on resumes from the baseline it had rather than
+ * re-announcing a high the guild already saw.
  */
 export function normaliseStockAlertState(raw: unknown): StockAlertState {
 	if (!isRecord(raw)) return createEmptyStockAlertState();
@@ -99,14 +106,14 @@ export function normaliseStockAlertState(raw: unknown): StockAlertState {
 	const extremes: StockAlertState["extremes"] = {};
 	const rawExtremes = raw.extremes;
 	if (isRecord(rawExtremes)) {
-		for (const window of ["24h", "all_time"] as const) {
-			const entry = rawExtremes[window];
+		for (const range of STOCK_ALERT_RANGES) {
+			const entry = rawExtremes[range];
 			if (
 				isRecord(entry) &&
 				typeof entry.high === "number" &&
 				typeof entry.low === "number"
 			) {
-				extremes[window] = { high: entry.high, low: entry.low };
+				extremes[range] = { high: entry.high, low: entry.low };
 			}
 		}
 	}
@@ -168,9 +175,9 @@ export function findReferenceSample(
 /**
  * Memo for `findReferenceSample`.
  *
- * The stock snapshot is shared by every faction evaluated in a sweep and `nowMs`
+ * The stock snapshot is shared by every guild evaluated in a sweep and `nowMs`
  * is fixed for that sweep, so the filter/map/sort over the price history was
- * recomputed to an identical answer once per (faction x stock x rule). Keying on
+ * recomputed to an identical answer once per (guild x stock x rule). Keying on
  * the history array identity means the memo dies with the snapshot, so it can
  * never serve a sample computed for a different point in time.
  */
@@ -213,6 +220,10 @@ function computeReferenceSample(
 /**
  * Resolves the signed percentage move a rule measures, or null when the window
  * cannot be measured honestly this cycle.
+ *
+ * Windows of a day or more are served by Torn's own rolling figures rather than
+ * by the hour-long history series, which is why they are restricted to the
+ * lengths Torn publishes.
  */
 export function resolveChange(
 	snapshot: StockAlertSnapshot,
@@ -223,21 +234,20 @@ export function resolveChange(
 	referencePrice: number;
 	referenceAt: number;
 } | null {
-	// Torn publishes a rolling 24-hour change directly, so the one-day rule does
-	// not depend on the hour-long history series at all.
-	if (windowMinutes >= 1440) {
-		const dayPerformance = snapshot.performance["24h"];
-		if (!dayPerformance) return null;
+	const range = STOCK_ALERT_CHANGE_WINDOW_RANGES[windowMinutes];
+	if (range) {
+		const performance = snapshot.performance[range];
+		if (!performance) return null;
 		if (
-			!Number.isFinite(dayPerformance.changePct) ||
-			!Number.isFinite(dayPerformance.start) ||
-			dayPerformance.start <= 0
+			!Number.isFinite(performance.changePct) ||
+			!Number.isFinite(performance.start) ||
+			performance.start <= 0
 		) {
 			return null;
 		}
 		return {
-			changePct: dayPerformance.changePct,
-			referencePrice: dayPerformance.start,
+			changePct: performance.changePct,
+			referencePrice: performance.start,
 			referenceAt: nowMs - windowMinutes * 60_000,
 		};
 	}
@@ -263,40 +273,52 @@ export function isCoolingDown(
 	return nowMs - lastAlertAtMs < cooldownMinutes * 60_000;
 }
 
-function buildContext(snapshot: StockAlertSnapshot): StockAlertMarketContext {
-	const day = snapshot.performance["24h"];
-	const allTime = snapshot.performance.all_time;
+/**
+ * Builds the range context carried by every alert.
+ *
+ * Only the ranges the guild tracks are included, so an embed never advertises a
+ * figure the server never asked about; a range with no Torn figure this cycle
+ * falls back to the current price rather than being dropped, which keeps the
+ * field list stable between alerts of the same batch.
+ */
+function buildContext(
+	snapshot: StockAlertSnapshot,
+	ranges: readonly StockAlertRange[],
+): StockAlertMarketContext {
 	return {
-		dayHigh: day?.high ?? snapshot.price,
-		dayLow: day?.low ?? snapshot.price,
-		allTimeHigh: allTime?.high ?? snapshot.price,
-		allTimeLow: allTime?.low ?? snapshot.price,
+		ranges: ranges.map((range) => {
+			const performance = snapshot.performance[range];
+			return {
+				range,
+				label: STOCK_ALERT_RANGE_LABELS[range],
+				high: performance?.high ?? snapshot.price,
+				low: performance?.low ?? snapshot.price,
+			};
+		}),
 	};
 }
 
-function windowLabel(window: StockAlertWindow): string {
-	return window === "all_time" ? "all time" : "24 hours";
-}
-
 /**
- * Evaluates one stock against one faction's configuration.
+ * Evaluates one stock against one guild's configuration.
  *
  * Ordering and suppression rules, all of which the tests pin down:
  *
- * - The first evaluation is a **seeding** cycle: it records Torn's own 24h and
- *   all-time extremes as baselines and emits nothing, so switching the feature
- *   on cannot produce an instant alert burst.
+ * - The first evaluation is a **seeding** cycle: it records Torn's own extremes
+ *   for every range as baselines and emits nothing, so switching the feature on
+ *   cannot produce an instant alert burst. Seeding every range rather than only
+ *   the enabled ones means enabling a range later is immediately accurate
+ *   instead of alerting on its first observed high.
  * - A change rule fires when the absolute move is at or above its threshold; the
  *   comparison uses the signed percentage so gains and drops share one rule.
  * - An extreme fires only on a **strictly new** high/low, so a price that merely
- *   sits at its window high does not re-alert every cycle.
+ *   sits at its range high does not re-alert every cycle.
  * - A suppressed alert still records its baseline and still starts a fresh
  *   cooldown: alerts are per episode, so a move that keeps holding is reported
  *   once rather than every cycle the threshold happens to remain crossed.
  */
 export function evaluateStockAlerts(params: {
 	snapshot: StockAlertSnapshot;
-	config: SubversiveStockAlertConfig;
+	config: GuildStockAlertConfig;
 	state: StockAlertState | null;
 	nowMs: number;
 }): StockAlertEvaluation {
@@ -315,17 +337,17 @@ export function evaluateStockAlerts(params: {
 	// accurate instead of treating "first price we happened to see" as a high.
 	if (!current.seeded) {
 		let haveBaseline = false;
-		for (const window of ["24h", "all_time"] as const) {
-			const performance = snapshot.performance[window];
+		for (const range of STOCK_ALERT_RANGES) {
+			const performance = snapshot.performance[range];
 			if (performance) {
-				nextState.extremes[window] = {
+				nextState.extremes[range] = {
 					high: performance.high,
 					low: performance.low,
 				};
 				haveBaseline = true;
 			}
 		}
-		// Stays unseeded when the detailed response carried no window figures, so
+		// Stays unseeded when the detailed response carried no range figures, so
 		// the next cycle with real data performs the baseline capture instead of
 		// comparing against nothing.
 		nextState.seeded = haveBaseline;
@@ -333,7 +355,7 @@ export function evaluateStockAlerts(params: {
 	}
 
 	const events: StockAlertEvent[] = [];
-	const context = buildContext(snapshot);
+	const context = buildContext(snapshot, config.highLowRanges);
 
 	// ── Notable moves ─────────────────────────────────────────────────────────
 	for (const rule of config.changeRules) {
@@ -361,6 +383,9 @@ export function evaluateStockAlerts(params: {
 			acronym: snapshot.acronym,
 			price: snapshot.price,
 			windowLabel: formatStockAlertWindow(rule.windowMinutes),
+			// Intraday windows are measured from the minute history, so they have no
+			// published range to open; link them at the hourly period instead.
+			range: STOCK_ALERT_CHANGE_WINDOW_RANGES[rule.windowMinutes] ?? undefined,
 			changePct: move.changePct,
 			referencePrice: move.referencePrice,
 			referenceAt: move.referenceAt,
@@ -369,14 +394,14 @@ export function evaluateStockAlerts(params: {
 		});
 	}
 
-	// ── Window highs and lows ─────────────────────────────────────────────────
-	for (const window of config.highLowWindows) {
-		const performance = snapshot.performance[window];
+	// ── Range highs and lows ──────────────────────────────────────────────────
+	for (const range of config.highLowRanges) {
+		const performance = snapshot.performance[range];
 		if (!performance) continue;
 
-		const recorded = nextState.extremes[window];
+		const recorded = nextState.extremes[range];
 		if (!recorded) {
-			nextState.extremes[window] = {
+			nextState.extremes[range] = {
 				high: performance.high,
 				low: performance.low,
 			};
@@ -384,14 +409,14 @@ export function evaluateStockAlerts(params: {
 		}
 
 		if (performance.high > recorded.high + EXTREME_EPSILON) {
-			const alertKey = `high:${window}`;
+			const alertKey = `high:${range}`;
 			const suppressed = isCoolingDown(
 				current.lastAlertAt[alertKey],
 				nowMs,
 				config.cooldownMinutes,
 			);
 			nextState.lastAlertAt[alertKey] = nowMs;
-			nextState.extremes[window] = {
+			nextState.extremes[range] = {
 				high: performance.high,
 				low: Math.min(recorded.low, performance.low),
 			};
@@ -403,21 +428,22 @@ export function evaluateStockAlerts(params: {
 					name: snapshot.name,
 					acronym: snapshot.acronym,
 					price: snapshot.price,
-					windowLabel: windowLabel(window),
+					windowLabel: STOCK_ALERT_RANGE_LABELS[range],
+					range,
 					extreme: performance.high,
 					previousExtreme: recorded.high,
 					context,
 				});
 			}
 		} else if (performance.low < recorded.low - EXTREME_EPSILON) {
-			const alertKey = `low:${window}`;
+			const alertKey = `low:${range}`;
 			const suppressed = isCoolingDown(
 				current.lastAlertAt[alertKey],
 				nowMs,
 				config.cooldownMinutes,
 			);
 			nextState.lastAlertAt[alertKey] = nowMs;
-			nextState.extremes[window] = {
+			nextState.extremes[range] = {
 				high: Math.max(recorded.high, performance.high),
 				low: performance.low,
 			};
@@ -429,7 +455,8 @@ export function evaluateStockAlerts(params: {
 					name: snapshot.name,
 					acronym: snapshot.acronym,
 					price: snapshot.price,
-					windowLabel: windowLabel(window),
+					windowLabel: STOCK_ALERT_RANGE_LABELS[range],
+					range,
 					extreme: performance.low,
 					previousExtreme: recorded.low,
 					context,

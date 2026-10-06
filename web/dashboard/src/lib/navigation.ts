@@ -104,8 +104,9 @@ export function getNavSections({
 							icon: Smile,
 							accent: "text-warning",
 						},
-				// Faction-only: stock alerts are routed per family faction, so
-				// non-faction servers have nothing to configure here.
+				// Faction-only: the market alerting feature belongs to the family
+				// factions' server, which is also the only guild where the
+				// member-facing `/stock-alerts` command is registered.
 				...(isFaction
 					? [
 							{

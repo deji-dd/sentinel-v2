@@ -49,7 +49,10 @@ import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
 import { updateRwPrimaryDisplays } from "../rw-primary-displays";
 import { updateRwTravelingDisplays } from "../rw-traveling-displays";
-import { handleSubversiveStockAlerts } from "../stock-alert-distributor";
+import {
+	handleSubversiveStockAlerts,
+	handleUserStockAlerts,
+} from "../stock-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
 
 type PendingRequest = {
@@ -374,6 +377,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleSubversiveRecruitmentAlert(client, message.data);
 		} else if (message.action === "subversive_stock_alerts" && message.data) {
 			void handleSubversiveStockAlerts(client, message.data);
+		} else if (message.action === "user_stock_alerts" && message.data) {
+			void handleUserStockAlerts(client, message.data);
 		} else if (
 			message.action === "subversive_rw_displays_update" &&
 			message.data

@@ -7,7 +7,7 @@ import type {
 	IpcSubversiveRwDisplaysUpdateMessage,
 	IpcSubversiveRwTravelingUpdateMessage,
 } from "./rw-displays";
-import type { StockAlertEvent } from "./stock-alerts";
+import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
 
 export type IpcWarAction =
@@ -549,6 +549,23 @@ export type IpcSubversiveStockAlertsMessage = {
 	data: IpcSubversiveStockAlertsPayload;
 };
 
+/**
+ * One batched delivery of *personal* stock alerts.
+ *
+ * Sent separately from the channel payload because the two have different
+ * audiences and different failure modes: a channel post failing is a server
+ * problem, whereas one user having DMs closed must not affect anybody else, so
+ * the bot delivers each entry independently.
+ */
+export type IpcUserStockAlertsPayload = {
+	alerts: UserStockAlertEvent[];
+};
+
+export type IpcUserStockAlertsMessage = {
+	action: "user_stock_alerts";
+	data: IpcUserStockAlertsPayload;
+};
+
 export type IpcFetchFactionMembersRequestMessage = {
 	action: "fetch_faction_members_request";
 	requestId: string;
@@ -621,6 +638,7 @@ export type IpcMessage =
 	| IpcWealthStateUpdatedMessage
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcSubversiveStockAlertsMessage
+	| IpcUserStockAlertsMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage
 	| IpcSubversiveRetalUpdatedMessage
