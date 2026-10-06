@@ -2355,14 +2355,35 @@ export function assessCapacityRegime(input: {
 	const dwellDays =
 		regime === "extraction_bound" ? trailingFilling : trailingDraining;
 
+	const transition: CapacityRegimeTransition =
+		previous === "extraction_bound" && regime === "extraction_bound"
+			? "held"
+			: previous === "extraction_bound" && regime === "balanced"
+				? "released"
+				: regime === "extraction_bound"
+					? "entered"
+					: "none";
+
 	let reason: string;
 	if (regime === "extraction_bound") {
-		const because = atCriticalFill
-			? `storage is at ${input.fillPct}% of capacity, where the stock delta is clamped and output above the sales rate cannot be stored`
-			: `${trailingFilling} consecutive measured day${trailingFilling === 1 ? "" : "s"} showed extraction matching or beating sales while storage was at ${input.fillPct}%, above the ${policy.enterMinFillPct}% pressure threshold`;
-		reason = held
-			? `Extraction-bound regime continues: ${because}. It is held until sales outpace extraction for ${policy.exitConsecutiveDrainDays} consecutive recorded days with storage at or below ${policy.exitMaxFillPct}% full, so a single draining day does not revoke it.`
-			: `Extraction-bound regime entered: ${because}.`;
+		if (transition === "held") {
+			// A held regime is usually held for a reason OTHER than the one that
+			// entered it: by the time it is held, sales are often already outpacing
+			// extraction and only the release thresholds are unmet. Composing a
+			// "because extraction matches sales" clause here produced the nonsense
+			// "continues: 0 consecutive measured days showed extraction matching or
+			// beating sales".
+			const flow =
+				trailingDraining > 0
+					? `sales have outpaced extraction for ${trailingDraining} recorded day${trailingDraining === 1 ? "" : "s"}`
+					: "extraction still matches or beats sales";
+			reason = `Extraction-bound regime held: ${flow}, and storage is at ${input.fillPct}%, above the ${policy.exitMaxFillPct}% release threshold. It releases after ${policy.exitConsecutiveDrainDays} consecutive draining days with storage at or below ${policy.exitMaxFillPct}%.`;
+		} else {
+			const because = atCriticalFill
+				? `storage is at ${input.fillPct}% of capacity, where the stock delta is clamped and output above the sales rate cannot be stored`
+				: `${trailingFilling} consecutive measured day${trailingFilling === 1 ? "" : "s"} showed extraction matching or beating sales while storage was at ${input.fillPct}%, above the ${policy.enterMinFillPct}% pressure threshold`;
+			reason = `Extraction-bound regime entered: ${because}.`;
+		}
 	} else {
 		const why =
 			held === false && previous === "extraction_bound"
@@ -2376,15 +2397,6 @@ export function assessCapacityRegime(input: {
 			? "Extraction and sell-through remain balanced."
 			: `Extraction-bound regime ${why}.`;
 	}
-
-	const transition: CapacityRegimeTransition =
-		previous === "extraction_bound" && regime === "extraction_bound"
-			? "held"
-			: previous === "extraction_bound" && regime === "balanced"
-				? "released"
-				: regime === "extraction_bound"
-					? "entered"
-					: "none";
 
 	const shortReason =
 		regime === "extraction_bound"
@@ -2428,10 +2440,17 @@ export interface CapacityRebalancePlan {
 	state: CapacityPlanState;
 	/** True when the plan compared the target against the actual roster. */
 	countsKnown: boolean;
-	/** Barrels per day being produced beyond sell-through. */
+	/** Barrels per day being LOSING right now; 0 while the rig is draining. */
 	discardedBarrelsPerDay: number;
 	/** Value of those barrels at the current price (upper bound). */
 	discardedValuePerDay: number;
+	/**
+	 * Median surplus measured on days storage still had room. Context for what the
+	 * cap costs when it binds, never a claim about the present.
+	 */
+	discardedHistoricPerDay: number;
+	/** True while the warehouse is at its cap and extraction outruns sales. */
+	currentlyDiscarding: boolean;
 	/** Quota moves that carry the rebalance into the target lineup. */
 	quotaShifts: QuotaShift[];
 	/** Seats still to move per role to reach the target, when counts are known. */
@@ -2504,10 +2523,21 @@ export function planCapacityRebalance(
 		? params.regime.regime === "extraction_bound"
 		: stock.isFillingUp || stock.warehouseCritical;
 
-	const discarded = Math.max(
+	// Barrels are only DISCARDED when the warehouse is at its cap and extraction
+	// outruns sales. While the rig is draining, production is being sold and the
+	// difference is coming out of storage - nothing is lost. The historical median
+	// describes days when storage was filling, so reporting it as a present-tense
+	// loss made the brief claim a ~94,517 bbl/day loss on a rig that was visibly
+	// draining 177,489 bbl/day.
+	const historicallyDiscarded = Math.max(
 		0,
-		Math.round(params.discardedBarrelsPerDay ?? stock.netFillPerDay ?? 0),
+		Math.round(params.discardedBarrelsPerDay ?? 0),
 	);
+	const atCapacity = stock.warehouseCritical;
+	const currentlyDiscarding = atCapacity && stock.isFillingUp;
+	// At the cap the stock delta is clamped, so the current rate cannot be measured
+	// and the historical median is the best available estimate of the true loss.
+	const discarded = currentlyDiscarding ? historicallyDiscarded : 0;
 	const discardedValuePerDay = discarded * params.barrelPrice;
 
 	const regime: CapacityRegime =
@@ -2531,6 +2561,8 @@ export function planCapacityRebalance(
 			countsKnown: params.currentCounts !== undefined,
 			discardedBarrelsPerDay: 0,
 			discardedValuePerDay: 0,
+			discardedHistoricPerDay: 0,
+			currentlyDiscarding: false,
 			quotaShifts: [],
 			seatDeltas: {},
 			hires: 0,
@@ -2576,9 +2608,11 @@ export function planCapacityRebalance(
 	const evidenceNote =
 		discarded > 0
 			? `About ${discarded.toLocaleString()} bbl/day (~$${discardedValuePerDay.toLocaleString()}/day at $${params.barrelPrice}/bbl) is produced beyond what the rig clears.`
-			: params.discardedEvidenceThin
-				? `The size of the loss is unknown: storage has been at or above the critical fill on every recorded day, and a full warehouse clamps the stock delta to zero, so the excess cannot be measured. Extraction matching or beating sales is measured; the quantity is not.`
-				: `Extraction matches or beats sales, so the warehouse cannot drain on its own; the discarded quantity is not measurable from the current records.`;
+			: stock.netDrainPerDay !== undefined
+				? `Sales are outpacing extraction by ${stock.netDrainPerDay.toLocaleString()} bbl/day, so storage is draining and nothing is being discarded right now.`
+				: params.discardedEvidenceThin
+					? `The size of the loss is unknown: storage has been at or above the critical fill on every recorded day, and a full warehouse clamps the stock delta to zero, so the excess cannot be measured. Extraction matching or beating sales is measured; the quantity is not.`
+					: `Extraction matches or beats sales, so the warehouse cannot drain on its own; the discarded quantity is not measurable from the current records.`;
 
 	const actions: CapacityRebalanceAction[] = [];
 	let state: CapacityPlanState = "action_required";
@@ -2639,6 +2673,8 @@ export function planCapacityRebalance(
 		countsKnown,
 		discardedBarrelsPerDay: discarded,
 		discardedValuePerDay,
+		discardedHistoricPerDay: historicallyDiscarded,
+		currentlyDiscarding,
 		quotaShifts: shifts,
 		seatDeltas,
 		hires,

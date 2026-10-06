@@ -23,6 +23,7 @@ import { OIL_RIG_POLICY } from "../src/oil-rig-policy";
 import {
 	adviceSignature,
 	buildAnalystPrompt,
+	clipNotes,
 	DISCORD_MESSAGE_LIMIT,
 	renderDeterministicBriefing,
 	splitDiscordMessages,
@@ -939,9 +940,15 @@ describe("Brief outcome attribution", () => {
 		const outcome = attributeBriefOutcome(previous, analysis());
 		expect(outcome.daysElapsed).toBe(5);
 		expect(outcome.fillPctBefore).toBe(90);
-		// Storage drained, which the summary must state rather than merely implying.
+		// The storage move must be stated outright, not merely implied by a number.
 		expect(outcome.fillPctChange).toBeLessThan(0);
-		expect(outcome.summary).toContain("Storage drained");
+		expect(outcome.summary).toContain("storage 90% → 53.3%");
+		// Age is in hours or days, never a bare "Over 0 days".
+		expect(outcome.summary).toContain("Since the last brief (5.0 days ago)");
+		// Only what changed: the ad budget and the storage-lever are unchanged here,
+		// and listing them as "x -> x" is noise the director has to filter out.
+		expect(outcome.summary).not.toContain("ads ");
+		expect(outcome.summary).not.toContain("461,431 → 461,431");
 		// The price was moved, so compliance is recorded as applied.
 		expect(outcome.compliance.priceApplied).toBe(true);
 		expect(outcome.compliance.adApplied).toBe(false);
@@ -1390,5 +1397,295 @@ describe("Analyst prompt explains the accounting", () => {
 		});
 		expect(result.rejected).toEqual([]);
 		expect(result.accepted.length).toBe(1);
+	});
+});
+
+/** A partial figure reads as a measurement, so a clip must never leave one. */
+describe("Analyst notes are clipped at a boundary", () => {
+	it("drops a trailing incomplete line instead of keeping a fragment", () => {
+		// This is the production truncation: "...increasing daily revenue by +1".
+		const notes = [
+			"• Price reduction to $173 raised volume by +24.8%.",
+			"• Daily revenue rose to $79,827,563, increasing daily revenue by +1",
+		].join("\n");
+		const clipped = clipNotes(notes, 60);
+		expect(clipped).toBe("• Price reduction to $173 raised volume by +24.8%.");
+		expect(clipped).not.toContain("+1");
+		expect(clipped.endsWith(".")).toBe(true);
+	});
+
+	it("leaves text inside the budget untouched", () => {
+		const notes = "• Short and complete.";
+		expect(clipNotes(notes, 900)).toBe(notes);
+	});
+
+	it("falls back to the last complete sentence for a single long line", () => {
+		const clipped = clipNotes(
+			"First sentence is complete. Second sentence is also complete. Third is cut off here",
+			62,
+		);
+		expect(clipped).toBe(
+			"First sentence is complete. Second sentence is also complete.",
+		);
+	});
+
+	it("returns nothing when no complete unit fits the budget", () => {
+		// Better to show no notes than a fragment of a figure.
+		expect(
+			clipNotes("• An extremely long unfinished clause that will not fit", 10),
+		).toBe("");
+	});
+});
+
+/**
+ * The regime is hysteretic, so it can be HELD while the constraint has already
+ * eased. The brief must describe the current flow, not the regime flag: it was
+ * claiming "Cannot drain" and "Losing ~94,517 bbl/day" on a rig that was draining
+ * 177,489 bbl/day.
+ */
+describe("Capacity section describes the current flow, not the held regime", () => {
+	const ROSTER: Array<[string, string]> = [
+		...Array(6)
+			.fill(null)
+			.map((_, i) => [`Driller${i}`, "Driller"] as [string, string]),
+		...Array(6)
+			.fill(null)
+			.map((_, i) => [`Sales${i}`, "Sales Executive"] as [string, string]),
+		...Array(4)
+			.fill(null)
+			.map((_, i) => [`Rough${i}`, "Roughneck"] as [string, string]),
+		...Array(2)
+			.fill(null)
+			.map((_, i) => [`Derrick${i}`, "Derrick Hand"] as [string, string]),
+		...Array(2)
+			.fill(null)
+			.map((_, i) => [`Motor${i}`, "Motor Hand"] as [string, string]),
+		["Secretary0", "Secretary"] as [string, string],
+	];
+
+	const snapshot = (fillPct: number, price: number): CompanySnapshot => ({
+		profile: {
+			id: 90288,
+			name: "Succession Oil",
+			rating: 4,
+			funds: 400_000_000,
+			efficiency: 89,
+			environment: 91,
+			popularity: 35,
+			income: { daily: 71_873_472, weekly: 503_000_000 },
+			customers: { daily: 6, weekly: 42 },
+			employees: { hired: ROSTER.length, capacity: 21 },
+			upgrades: { storage_capacity: 750_000 },
+			advertisement_budget: 5_000_000,
+		},
+		stock: [
+			{
+				name: "Crude Oil",
+				price,
+				in_stock: Math.round((fillPct / 100) * 750_000),
+				sold_amount: 461_431,
+				sold_worth: 461_431 * price,
+			},
+		],
+		employees: ROSTER.map(([name, role], i) => ({
+			id: i + 1,
+			name,
+			position: { id: 1, name: role },
+			days_in_company: 40 + i,
+			wage: 2_500_000,
+			stats: {
+				manual_labor: 150_000 + i * 8_000,
+				intelligence: 120_000 + i * 9_000,
+				endurance: 100_000 + i * 6_000,
+			},
+			effectiveness: {
+				working_stats: 100,
+				settled_in: 14,
+				director_education: 0,
+				addiction: 0,
+				inactivity: 0,
+				total: 114,
+			},
+		})),
+	});
+
+	/**
+	 * Storage filled first (so a historical discard median exists), and the LAST
+	 * recorded day is the one the rates come from: sales far above extraction,
+	 * which is the production shape this test is about.
+	 */
+	const fillingHistory = [
+		...[38, 45.8, 58.6, 73.9, 86.5].map((fillPct, i) =>
+			record({
+				timestamp: FIXED_NOW - (8 - i) * DAY,
+				producedMeasured: true,
+				// Uncapped days show the TRUE extraction, which is what the historical
+				// surplus median measures.
+				dailyProduced: 270_000 + i * 3_000 + 94_517,
+				stock: {
+					barrelPrice: 176,
+					inStock: Math.round((fillPct / 100) * 750_000),
+					soldAmount: 270_000 + i * 3_000,
+					fillPct,
+				},
+			}),
+		),
+		// Two days at the cap, where the clamped delta makes production look equal to
+		// sales - the source of the misleading figure.
+		record({
+			timestamp: FIXED_NOW - 2 * DAY,
+			producedMeasured: true,
+			dailyProduced: 269_102,
+			stock: {
+				barrelPrice: 176,
+				inStock: 750_000,
+				soldAmount: 269_102,
+				fillPct: 100,
+			},
+		}),
+		record({
+			timestamp: FIXED_NOW - 1 * DAY,
+			producedMeasured: true,
+			dailyProduced: 283_942,
+			stock: {
+				barrelPrice: 176,
+				inStock: 750_000,
+				soldAmount: 283_942,
+				fillPct: 100,
+			},
+		}),
+		// The day the rates are taken from: sell-through well above extraction.
+		record({
+			timestamp: FIXED_NOW,
+			producedMeasured: true,
+			dailyProduced: 302_266,
+			stock: {
+				barrelPrice: 176,
+				inStock: Math.round(0.788 * 750_000),
+				soldAmount: 461_431,
+				fillPct: 78.8,
+			},
+		}),
+	];
+
+	/** The regime held over from the last brief, as production had it. */
+	const heldRegime = {
+		regime: "extraction_bound" as const,
+		held: true,
+		transition: "held" as const,
+		dwellDays: 2,
+		fillingDays: 4,
+		drainingDays: 0,
+		since: FIXED_NOW - 3 * DAY,
+		reason: "restored from the previous brief",
+		shortReason: "restored from the previous brief",
+	};
+
+	it("says the rig is draining when sales outpace extraction, and claims no loss", () => {
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: fillingHistory,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+			previousCritical: true,
+		});
+
+		// The regime is genuinely held: storage has not drained to the release point.
+		expect(analysis.regime.regime).toBe("extraction_bound");
+		expect(analysis.regime.held).toBe(true);
+
+		const advice = renderDeterministicBriefing(analysis).advice;
+		expect(advice).toContain("**Draining**");
+		expect(advice).not.toContain("Cannot drain");
+		// 94,517 is a historical median from days storage was filling; nothing is
+		// being discarded while the rig drains, so it must not be reported as a loss.
+		expect(advice).not.toContain("Losing");
+		expect(advice).not.toContain("94,517");
+		expect(analysis.directives.capacityRebalance.discardedBarrelsPerDay).toBe(
+			0,
+		);
+		// The historical figure is still available as context for other surfaces.
+		expect(
+			analysis.directives.capacityRebalance.discardedHistoricPerDay,
+		).toBeGreaterThan(0);
+	});
+
+	it("states what the hold is actually waiting for", () => {
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: fillingHistory,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+			previousCritical: true,
+		});
+		const advice = renderDeterministicBriefing(analysis).advice;
+		// The binding condition is the storage level, not "sales outpacing
+		// extraction", which has already happened.
+		expect(advice).toContain("Releases when");
+		expect(advice).toContain("storage falls to 60%");
+		expect(advice).toContain("now 66.4%");
+	});
+
+	it("still reports a loss when the warehouse is genuinely at its cap", () => {
+		const atCap = Array.from({ length: 6 }, (_, i) => {
+			const sold = 270_000 + i * 3_000;
+			return record({
+				timestamp: FIXED_NOW - (6 - i) * DAY,
+				producedMeasured: i !== 0,
+				// Extraction above sales, and storage already full.
+				dailyProduced: sold + 94_517,
+				stock: {
+					barrelPrice: 176,
+					inStock: 750_000,
+					soldAmount: sold,
+					fillPct: 100,
+				},
+			});
+		});
+		const analysis = analyzeOilRig({
+			snapshot: {
+				...snapshot(100, 176),
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 176,
+						in_stock: 750_000,
+						sold_amount: 283_942,
+						sold_worth: 49_973_792,
+					},
+				],
+			},
+			history: atCap,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+
+		const advice = renderDeterministicBriefing(analysis).advice;
+		expect(advice).toContain("Cannot drain");
+		expect(advice).toContain("Losing");
+		expect(analysis.directives.capacityRebalance.currentlyDiscarding).toBe(
+			true,
+		);
+	});
+
+	it("does not claim a cause for the hold that did not happen", () => {
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: fillingHistory,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+			previousCritical: true,
+		});
+		// Production printed "continues: 0 consecutive measured days showed
+		// extraction matching or beating sales", which is a false claim.
+		expect(analysis.regime.reason).not.toContain("0 consecutive");
+		expect(analysis.regime.reason).toContain("held");
+		expect(analysis.regime.reason).toContain("66.4%");
 	});
 });

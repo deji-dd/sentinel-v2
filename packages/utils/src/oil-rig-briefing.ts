@@ -20,6 +20,7 @@ import {
 } from "./oil-rig-brief-store";
 import {
 	buildAnalystPrompt,
+	clipNotes,
 	renderCompanyDetails,
 	renderDeterministicBriefing,
 	renderProvenance,
@@ -563,12 +564,21 @@ export async function generateDirectorBriefing(
 			const cleaned = raw
 				.replace(/^#{1,6}.*$/gm, "")
 				.replace(/^\*\*(Analyst Notes|Analysis):?\*\*$/gim, "")
-				.trim()
-				// The prompt asks for 700 characters; the cap is headroom, not a
-				// target, because a long analysis is the wordiness being fixed.
-				.slice(0, 900);
+				.trim();
+			// The prompt asks for 700 characters; the cap is headroom, not a target.
+			// Clipping is boundary-aware so a cut can never leave a half-sentence or a
+			// partial figure reading like a measurement.
+			const withinBudget = clipNotes(cleaned, 900);
+			if (cleaned.length > 900) {
+				// Any clipping at all means the model ignored its length instruction, so
+				// record it: a note that ends mid-sentence is otherwise impossible to
+				// diagnose after the fact, because only the clipped text is ever stored.
+				logger.warn(
+					`Analyst notes exceeded the budget: ${cleaned.length} chars returned, clipped to ${withinBudget.length} at a line boundary.`,
+				);
+			}
 			const validated = validateAnalystNotes({
-				notes: cleaned,
+				notes: withinBudget,
 				allowedNumbers,
 				directives: analysis.directives,
 			});
@@ -580,7 +590,12 @@ export async function generateDirectorBriefing(
 						.join("; ")}`,
 				);
 			}
-			notesText = validated.accepted.join("\n");
+			notesText =
+				validated.accepted.length > 0
+					? validated.accepted.join("\n")
+					: withinBudget.length === 0
+						? "_Analyst notes omitted: the model's answer exceeded the length budget and nothing complete fitted._"
+						: "_Analyst notes withheld: every bullet contradicted the engines or cited an unsupported figure._";
 		} else {
 			logger.warn(
 				"No analyst notes returned; delivering the deterministic briefing only.",

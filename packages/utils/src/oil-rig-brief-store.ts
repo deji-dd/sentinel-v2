@@ -197,24 +197,48 @@ export function attributeBriefOutcome(
 	const salesBefore = num(before, "salesHeadcount") ?? salesAfter;
 
 	const fillPctChange = Number((fillAfter - fillBefore).toFixed(1));
-	const sellingFaster =
-		(num(after, "dailySold") ?? 0) - (num(before, "dailySold") ?? 0);
+	const soldAfter = after.dailySold;
+	const soldBeforeValue = num(before, "dailySold") ?? 0;
 
-	const moved = [
-		`storage ${fillBefore}% ➔ ${fillAfter}%`,
-		`sales ${(num(before, "dailySold") ?? 0).toLocaleString()} ➔ ${after.dailySold.toLocaleString()} bbl/day`,
-		`price $${priceBefore} ➔ $${after.currentPrice}`,
-		`ad $${adBefore.toLocaleString()} ➔ $${after.currentAdBudget.toLocaleString()}`,
-		`Sales Executive seats ${salesBefore} ➔ ${salesAfter}`,
-	].join("; ");
+	// Only what CHANGED, and in hours rather than a fraction of a day. The previous
+	// version listed every field including the unchanged ones and announced "Over
+	// 0 days", which read as noise: on a same-tick re-run it printed
+	// "sales 461,431 -> 461,431; Storage was unchanged" and left the director to
+	// work out why a price change had moved nothing.
+	const changes: string[] = [];
+	if (Math.round(fillBefore) !== Math.round(fillAfter)) {
+		changes.push(`storage ${fillBefore}% → ${fillAfter}%`);
+	}
+	if (soldBeforeValue !== soldAfter) {
+		changes.push(
+			`sales ${soldBeforeValue.toLocaleString()} → ${soldAfter.toLocaleString()} bbl/day`,
+		);
+	}
+	if (priceBefore !== after.currentPrice) {
+		changes.push(`price $${priceBefore} → $${after.currentPrice}`);
+	}
+	if (adBefore !== after.currentAdBudget) {
+		changes.push(
+			`ads $${adBefore.toLocaleString()} → $${after.currentAdBudget.toLocaleString()}`,
+		);
+	}
+	if (salesBefore !== salesAfter) {
+		changes.push(`Sales Executive seats ${salesBefore} → ${salesAfter}`);
+	}
 
-	const summary = `Over ${daysElapsed} day${daysElapsed === 1 ? "" : "s"}: ${moved}. ${
-		fillPctChange < 0
-			? `Storage drained ${Math.abs(fillPctChange)} points.`
-			: fillPctChange > 0
-				? `Storage filled a further ${fillPctChange} points, so the surplus is not clearing.`
-				: "Storage was unchanged."
-	}${sellingFaster > 0 ? ` Sell-through rose ${sellingFaster.toLocaleString()} bbl/day.` : sellingFaster < 0 ? ` Sell-through fell ${Math.abs(sellingFaster).toLocaleString()} bbl/day.` : ""}`;
+	const age =
+		daysElapsed < 1
+			? `${Math.max(1, Math.round(daysElapsed * 24))}h`
+			: `${daysElapsed.toFixed(1)} days`;
+
+	const summary =
+		changes.length > 0
+			? `Since the last brief (${age} ago): ${changes.join("; ")}.${
+					soldBeforeValue === soldAfter && priceBefore !== after.currentPrice
+						? " Sales and revenue are unchanged because they come from the same daily snapshot; a price change only shows up in them after the next one."
+						: ""
+				}`
+			: `Since the last brief (${age} ago): nothing changed.`;
 
 	return {
 		evaluatedAtIso: new Date(after.asOfSeconds * 1000).toISOString(),

@@ -152,8 +152,18 @@ export interface CompanyCapacityRebalance {
 	state: CompanyCapacityPlanState;
 	/** False when the plan could not compare against the actual roster. */
 	countsKnown: boolean;
-	/** Barrels per day produced beyond what the rig can sell. */
+	/**
+	 * Barrels per day being LOST right now. Zero while the rig is draining:
+	 * production above the sales rate is only discarded once storage is at its cap.
+	 */
 	discardedBarrelsPerDay: number;
+	/**
+	 * Median surplus measured on days storage still had room. Context for what the
+	 * cap costs when it binds, never a claim about the present.
+	 */
+	discardedHistoricPerDay: number;
+	/** True while the warehouse is at its cap and extraction outruns sales. */
+	currentlyDiscarding: boolean;
 	discardedPeakPerDay: number;
 	/** Days of pre-cap history the discarded figure is based on. */
 	discardedSamples: number;

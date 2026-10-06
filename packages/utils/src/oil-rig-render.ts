@@ -5,6 +5,7 @@ import {
 	type OilRigHistoryRecord,
 } from "./oil-rig";
 import type { OilRigAnalysis } from "./oil-rig-analysis";
+import { OIL_RIG_POLICY } from "./oil-rig-policy";
 
 /**
  * Rendering for the director briefing, kept separate from loading and delivery.
@@ -196,28 +197,39 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 	const lines: string[] = [];
 	const produced = analysis.stock.production.dailyProduced;
 	const sold = analysis.decision.dailySold;
+	const draining = analysis.stock.netDrainPerDay !== undefined;
 
 	if (plan.extractionBound) {
-		const flow =
-			produced !== undefined
-				? `extraction ${produced.toLocaleString()} vs sales ${sold.toLocaleString()} bbl/day`
-				: `sales ${sold.toLocaleString()} bbl/day, with extraction unmeasured`;
-		lines.push(
-			`• **Cannot drain** — storage is ${d.stock.fillPct}% full, and ${flow}.`,
-		);
+		if (draining) {
+			// The regime can be held while the constraint has already eased, so the
+			// state must be described from the CURRENT flow, not from the regime flag.
+			// Saying "cannot drain" beside sales outstripping extraction by 63% was
+			// simply false.
+			lines.push(
+				`• **Draining** — sales ${sold.toLocaleString()} vs extraction ${
+					produced !== undefined ? produced.toLocaleString() : "unmeasured"
+				} bbl/day, so storage is falling about ${analysis.stock.netDrainPerDay?.toLocaleString()} bbl/day (now ${d.stock.fillPct}% full).`,
+			);
+		} else {
+			const flow =
+				produced !== undefined
+					? `extraction ${produced.toLocaleString()} vs sales ${sold.toLocaleString()} bbl/day`
+					: `sales ${sold.toLocaleString()} bbl/day, with extraction unmeasured`;
+			lines.push(
+				`• **Cannot drain** — storage is ${d.stock.fillPct}% full, and ${flow}.`,
+			);
+		}
 
+		// A loss is only reported while one is actually happening.
 		if (plan.discardedBarrelsPerDay > 0) {
 			lines.push(
 				`• **Losing ~${plan.discardedBarrelsPerDay.toLocaleString()} bbl/day** (~${formatMoneyShort(plan.discardedValuePerDay)}/day) to the cap.`,
 			);
-		} else if (plan.discardedCappedLowerBound > 0) {
-			// Every recorded day was already at the cap, so the median surplus is
-			// zero while the clamped measurement still proves discard is happening.
-			// Reporting "cannot be sized" here would hide a figure we do have.
+		} else if (!draining && plan.discardedCappedLowerBound > 0) {
 			lines.push(
 				`• **Losing at least ~${plan.discardedCappedLowerBound.toLocaleString()} bbl/day** — a lower bound, because storage was at the cap on every recorded day and a full warehouse clamps the stock delta.`,
 			);
-		} else {
+		} else if (!draining) {
 			lines.push(
 				"• **Loss cannot be sized** while storage is pinned at the cap: a full warehouse clamps the stock delta to zero.",
 			);
@@ -239,8 +251,28 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 			lines.push(
 				`• **Nothing to move** — the roster already carries the sell-through weight this needs (${sales}/${target} seats).`,
 			);
-			lines.push(`• **Holds until** ${plan.holdCondition}.`);
 		}
+
+		// What the hold is actually waiting for, rather than the whole rule again.
+		const policy = OIL_RIG_POLICY.capacity;
+		const outstanding: string[] = [];
+		if (d.stock.fillPct > policy.exitMaxFillPct) {
+			outstanding.push(
+				`storage falls to ${policy.exitMaxFillPct}% (now ${d.stock.fillPct}%)`,
+			);
+		}
+		const drainDaysNeeded =
+			policy.exitConsecutiveDrainDays - analysis.regime.drainingDays;
+		if (drainDaysNeeded > 0) {
+			outstanding.push(
+				`${drainDaysNeeded} more draining day${drainDaysNeeded === 1 ? "" : "s"}`,
+			);
+		}
+		lines.push(
+			outstanding.length > 0
+				? `• **Releases when** ${outstanding.join(" and ")}. The roster is left alone until then, so the correction is not undone and reapplied.`
+				: `• **Releases when** ${plan.holdCondition}.`,
+		);
 
 		if (d.stock.structuralAdvice) {
 			lines.push(`• ${d.stock.structuralAdvice}`);
@@ -377,6 +409,34 @@ export function renderCompanyDetails(
 }
 
 /**
+ * Clips model prose to a budget without leaving a half-sentence.
+ *
+ * The budget used to be a bare `slice(0, 900)`, which cut mid-word: production
+ * briefs ended "increasing daily revenue by +1" and "reducing". A partial figure
+ * is worse than a missing one, because it reads as a measurement. The trailing
+ * incomplete line is dropped instead, and an empty result means nothing complete
+ * fitted, so the caller shows no notes at all.
+ */
+export function clipNotes(text: string, budget: number): string {
+	if (text.length <= budget) return text;
+	const clipped = text.slice(0, budget);
+
+	// Notes are bullet lists, so a complete line is a complete thought.
+	const lastNewline = clipped.lastIndexOf("\n");
+	if (lastNewline > 0) return clipped.slice(0, lastNewline).trim();
+
+	// A single long line: fall back to the last complete sentence.
+	const lastStop = Math.max(
+		clipped.lastIndexOf(". "),
+		clipped.lastIndexOf("! "),
+		clipped.lastIndexOf("? "),
+	);
+	if (lastStop > 0) return clipped.slice(0, lastStop + 1).trim();
+
+	return "";
+}
+
+/**
  * The basis and caveats block, so "why does this say something different?" is
  * answerable without reading the code.
  *
@@ -386,15 +446,17 @@ export function renderCompanyDetails(
  */
 export function renderProvenance(analysis: OilRigAnalysis): string {
 	const lines: string[] = [];
+	// Says what the reader needs to know to interpret a number that did not move
+	// when they changed something: the rate figures are not live.
 	const tick = analysis.provenance.tickIsoDate
-		? `recorded tick ${analysis.provenance.tickIsoDate}${
+		? `come from the ${analysis.provenance.tickIsoDate} daily snapshot${
 				analysis.provenance.tickAgeMinutes !== undefined
-					? ` (${Math.round(analysis.provenance.tickAgeMinutes / 60)}h old)`
+					? ` (${Math.round(analysis.provenance.tickAgeMinutes / 60)}h ago)`
 					: ""
 			}`
-		: "no tick recorded yet";
+		: "have no snapshot yet, so they fall back to the current live values";
 	lines.push(
-		`• **Basis:** settings (stock, price, ads, roster) ← live snapshot · rates (sales, revenue, wages) ← ${tick}`,
+		`• **Data:** price, ads, roster and stock are read live. Sales, revenue and wages ${tick}, so they hold their value until the next one.`,
 	);
 	if (analysis.warnings.length > 0) {
 		lines.push(

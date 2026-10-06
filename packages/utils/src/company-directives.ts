@@ -69,6 +69,8 @@ export function buildCompanyDirectives(
 		state: plan.state,
 		countsKnown: plan.countsKnown,
 		discardedBarrelsPerDay: plan.discardedBarrelsPerDay,
+		discardedHistoricPerDay: plan.discardedHistoricPerDay,
+		currentlyDiscarding: plan.currentlyDiscarding,
 		discardedPeakPerDay: inputs.discarded.peakSurplus,
 		discardedSamples: inputs.discarded.samples,
 		discardedValuePerDay: plan.discardedValuePerDay,

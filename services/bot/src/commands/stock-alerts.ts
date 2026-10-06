@@ -153,8 +153,15 @@ export function buildStockPicker(
  * trigger chosen in the same form; validation afterwards produces a specific
  * message for the combinations that need them, which is more useful than refusing
  * to submit.
+ *
+ * Note that the inner components carry no label of their own. A `Label` *is* the
+ * label for its child, so Discord rejects the payload outright when the child also
+ * sets one (`Cannot set label on a TextInput in a Label component`); the official
+ * type documents the field as "Cannot be used in a label component". The hint a
+ * text input would otherwise put in its own label therefore belongs in the Label's
+ * description.
  */
-function buildAlertModal(stock: StockOption): ModalBuilder {
+export function buildAlertModal(stock: StockOption): ModalBuilder {
 	const conditionSelect = new StringSelectMenuBuilder()
 		.setCustomId(MODAL_CONDITION_FIELD)
 		.setPlaceholder("What should trigger the alert?")
@@ -180,7 +187,6 @@ function buildAlertModal(stock: StockOption): ModalBuilder {
 
 	const amountInput = new TextInputBuilder()
 		.setCustomId(MODAL_AMOUNT_FIELD)
-		.setLabel("Amount — dollars, or % for a percentage alert")
 		.setStyle(TextInputStyle.Short)
 		.setRequired(false)
 		.setMaxLength(16)
@@ -205,7 +211,7 @@ function buildAlertModal(stock: StockOption): ModalBuilder {
 			(label) =>
 				label
 					.setLabel("Amount")
-					.setDescription("Ignored by the new high/new low triggers.")
+					.setDescription("Dollars, or % for a percentage alert.")
 					.setTextInputComponent(amountInput),
 		);
 }

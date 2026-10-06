@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { MessageFlags } from "discord.js";
 import {
+	buildAlertModal,
 	buildStockPicker,
 	stockAlertsCommand,
 } from "../src/commands/stock-alerts";
@@ -120,6 +121,117 @@ describe("Stock picker option budget", () => {
 		expect(single && "placeholder" in single ? single.placeholder : null).toBe(
 			"Pick a stock",
 		);
+	});
+});
+
+describe("Stock alert modal payload", () => {
+	/** The JSON Discord would receive for the alert form. */
+	function modalJson(stockId = 1) {
+		return buildAlertModal({
+			id: stockId,
+			name: "Torn & Shanghai Banking",
+			acronym: "TSB",
+		}).toJSON();
+	}
+
+	/** Top-level components of the modal, which must all be Labels. */
+	function labels(json: ReturnType<typeof modalJson>) {
+		return json.components;
+	}
+
+	it("never puts a label on a component that already sits inside a Label", () => {
+		// The production failure: Discord rejects the whole interaction with
+		// `TEXT_INPUT_COMPONENT_LABEL_IN_LABEL_COMPONENT` when a child carries its
+		// own label, because the Label is the child's label. Checked generically over
+		// every inner component so a future field cannot reintroduce it.
+		for (const label of labels(modalJson())) {
+			expect("component" in label).toBe(true);
+			if ("component" in label) {
+				expect(label.component).not.toHaveProperty("label");
+			}
+		}
+	});
+
+	it("uses a Label for every field, within Discord's length limits", () => {
+		const components = labels(modalJson());
+
+		// Discord allows at most five components in a modal.
+		expect(components.length).toBeLessThanOrEqual(5);
+		expect(components.length).toBe(3);
+
+		for (const label of components) {
+			expect(label.type).toBe(18);
+			if (!("label" in label)) throw new Error("Expected a label");
+			expect(label.label.length).toBeGreaterThan(0);
+			expect(label.label.length).toBeLessThanOrEqual(45);
+			if ("description" in label && label.description !== undefined) {
+				expect(label.description.length).toBeLessThanOrEqual(100);
+			}
+		}
+	});
+
+	it("carries the chosen stock in the custom id, matching the handler's parse", () => {
+		// The submit handler reads the stock id back out of the custom id, so this
+		// is the contract between the picker and the form.
+		const json = modalJson(42);
+		expect(json.custom_id).toBe("stock_alert_config_modal:42");
+		expect(json.custom_id?.split(":")[1]).toBe("42");
+	});
+
+	it("keeps the title inside Discord's 45-character limit", () => {
+		const json = buildAlertModal({
+			id: 1,
+			// A deliberately long name, to prove the acronym is what gets used.
+			name: "A Very Long Stock Name That Would Overflow The Title Limit",
+			acronym: "TSB",
+		}).toJSON();
+
+		expect(json.title.length).toBeLessThanOrEqual(45);
+		expect(json.title).toBe("Alert: TSB");
+	});
+
+	it("offers every condition as a required trigger select", () => {
+		const component = labels(modalJson())[0];
+		if (!component || !("component" in component)) {
+			throw new Error("Expected a trigger field");
+		}
+
+		const select = component.component;
+		expect(select.type).toBe(3);
+		expect(select.custom_id).toBe("condition");
+		expect("options" in select ? select.options : []).toHaveLength(6);
+		// The handler reads this field with no fallback, so it must be answered.
+		expect("required" in select ? select.required : undefined).not.toBe(false);
+	});
+
+	it("makes the range select genuinely optional", () => {
+		const component = labels(modalJson())[1];
+		if (!component || !("component" in component)) {
+			throw new Error("Expected a range field");
+		}
+
+		const select = component.component;
+		expect(select.custom_id).toBe("range");
+		expect("options" in select ? select.options : []).toHaveLength(6);
+		// `required: false` on a modal select is documented, and `min_values: 0` is
+		// what lets the handler receive an empty array for a price-only alert.
+		expect("required" in select ? select.required : undefined).toBe(false);
+		expect("min_values" in select ? select.min_values : undefined).toBe(0);
+	});
+
+	it("makes the amount input optional, without a label of its own", () => {
+		const component = labels(modalJson())[2];
+		if (!component || !("component" in component)) {
+			throw new Error("Expected an amount field");
+		}
+
+		const input = component.component;
+		expect(input.type).toBe(4);
+		expect(input.custom_id).toBe("amount");
+		expect("required" in input ? input.required : undefined).toBe(false);
+		expect(input).not.toHaveProperty("label");
+		// The hint lives on the Label instead, where Discord accepts it.
+		expect(component).toHaveProperty("description");
 	});
 });
 
