@@ -55,8 +55,8 @@ import type { BotCommand } from ".";
  * setup, and no in-memory pending map has to be reaped.
  */
 
-/** Discord caps a string select at 25 options; the market is larger than that. */
-const STOCK_OPTIONS_PER_PAGE = 25;
+/** Discord's hard cap on the options a single string select may carry. */
+const SELECT_OPTION_LIMIT = 25;
 
 /** Custom-id prefixes. Kept together so the router in `interaction-create.ts` and
  * the handlers here cannot drift. */
@@ -73,13 +73,35 @@ const MODAL_AMOUNT_FIELD = "amount";
 /** Sentinel option value used to page through the stock list. */
 const NEXT_PAGE_VALUE = "page:next";
 
+/**
+ * How many stocks one page of the picker may hold.
+ *
+ * One slot is reserved for the "show more" entry whenever the market does not fit
+ * on a single page. That entry is itself an option, so a full page of 25 stocks
+ * plus the paging entry is 26 options — a count Discord rejects outright, which
+ * takes the whole command down rather than merely truncating the list. The market
+ * is larger than 25 stocks, so this is the normal path, not an edge case.
+ */
+function optionCapacity(total: number): number {
+	return total <= SELECT_OPTION_LIMIT
+		? SELECT_OPTION_LIMIT
+		: SELECT_OPTION_LIMIT - 1;
+}
+
+/**
+ * Number of pages the market needs.
+ *
+ * Derived from `optionCapacity` rather than from the raw limit, so the page count
+ * and the page contents can never disagree about how many stocks a page holds.
+ */
 function pageCount(total: number): number {
-	return Math.max(1, Math.ceil(total / STOCK_OPTIONS_PER_PAGE));
+	return Math.max(1, Math.ceil(total / optionCapacity(total)));
 }
 
 function pageSlice(stocks: StockOption[], page: number): StockOption[] {
-	const start = page * STOCK_OPTIONS_PER_PAGE;
-	return stocks.slice(start, start + STOCK_OPTIONS_PER_PAGE);
+	const capacity = optionCapacity(stocks.length);
+	const start = page * capacity;
+	return stocks.slice(start, start + capacity);
 }
 
 /**
@@ -89,7 +111,7 @@ function pageSlice(stocks: StockOption[], page: number): StockOption[] {
  * selecting a stock always yields a plain numeric id no matter which page it came
  * from — the handler then has only one shape to parse.
  */
-function buildStockPicker(
+export function buildStockPicker(
 	stocks: StockOption[],
 	page: number,
 ): ActionRowBuilder<StringSelectMenuBuilder> {
@@ -369,7 +391,7 @@ async function handleRemove(
 		.setCustomId(STOCK_ALERT_REMOVE_SELECT_ID)
 		.setPlaceholder("Pick an alert to delete")
 		.addOptions(
-			views.slice(0, STOCK_OPTIONS_PER_PAGE).map((view) => ({
+			views.slice(0, SELECT_OPTION_LIMIT).map((view) => ({
 				label: `${names.get(view.stockId) ?? view.stockId}`.slice(0, 100),
 				description: describeUserStockAlert(view).slice(0, 100),
 				value: view.id,
