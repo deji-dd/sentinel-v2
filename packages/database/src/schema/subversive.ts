@@ -380,6 +380,16 @@ export const subversiveRwChannelConfigs = pgTable(
 		 * primary channel.
 		 */
 		secondaryDisplaysChannelId: text("secondary_displays_channel_id"),
+		/**
+		 * Channel hosting the faction's friendly display, which lists the
+		 * faction's *own* members who allow revives.
+		 *
+		 * Must differ from both other selections, for the same reason the
+		 * primary and secondary must differ: each display ChannelId runs its
+		 * own author-gated stale-message sweep, so a shared channel would have
+		 * one display delete the other's embeds as strays.
+		 */
+		friendlyDisplaysChannelId: text("friendly_displays_channel_id"),
 		updatedBy: text("updated_by"),
 		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 			.defaultNow()
@@ -406,11 +416,12 @@ export type NewSubversiveRwChannelConfigRow =
  * "fetch every live display for this faction" a single indexed query.
  *
  * One row per category per faction. The primary displays use the four buckets
- * declared by `RW_DISPLAY_CATEGORIES`, and the secondary travel display uses
- * `RW_TRAVELING_CATEGORY` ("traveling"). Because `category` is the second half
- * of the primary key, the two channels coexist in one table without a second
- * table — but any bulk delete scoped only by faction would hit both, so every
- * such delete must filter on the categories it owns.
+ * declared by `RW_DISPLAY_CATEGORIES`, the secondary travel display uses
+ * `RW_TRAVELING_CATEGORY` ("traveling"), and the friendly revive board uses
+ * `RW_FRIENDLY_CATEGORY` ("friendlyRevivable"). Because `category` is the second
+ * half of the primary key, the three channels coexist in one table without a
+ * second table — but any bulk delete scoped only by faction would hit all of
+ * them, so every such delete must filter on the categories it owns.
  *
  * Rows are deleted when the war ends or the channel is deselected, so a stale
  * id is never silently reused.
@@ -428,10 +439,11 @@ export const subversiveRwDisplayMessages = pgTable(
 		 * Which embed this row tracks.
 		 *
 		 * One of `hospital` | `offlineOkay` | `onlineOkay` | `revivable`, as
-		 * declared by `RW_DISPLAY_CATEGORIES` in `@sentinel/schemas`, or
-		 * `traveling` as declared by `RW_TRAVELING_CATEGORY`. Stored as text
-		 * rather than a PG enum to match every other discriminator column in
-		 * this schema.
+		 * declared by `RW_DISPLAY_CATEGORIES` in `@sentinel/schemas`; or
+		 * `traveling` as declared by `RW_TRAVELING_CATEGORY`; or
+		 * `friendlyRevivable` as declared by `RW_FRIENDLY_CATEGORY`. Stored as
+		 * text rather than a PG enum to match every other discriminator column
+		 * in this schema.
 		 */
 		category: text("category").notNull(),
 		/** Discord snowflake of the message rendering the embed. */

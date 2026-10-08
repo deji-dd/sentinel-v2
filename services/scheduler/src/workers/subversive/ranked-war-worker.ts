@@ -1,9 +1,11 @@
 import { db, inArray, subversiveTargetFinderTargets } from "@sentinel/database";
 import {
 	emptyRwDisplayBuckets,
+	emptyRwFriendlyMembers,
 	emptyRwTravelingBuckets,
 	type IpcMessage,
 	type RwDisplaysUpdate,
+	type RwFriendlyUpdate,
 	type RwTravelingUpdate,
 } from "@sentinel/schemas";
 import {
@@ -17,9 +19,19 @@ import type { IpcServer } from "@sentinel/utils/ipc";
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import {
+	resolveFriendlyDisplayChannels,
 	resolvePrimaryDisplayChannels,
 	resolveSecondaryDisplayChannels,
 } from "../../lib/rw-channel-config";
+import {
+	classifyFriendlyRevivables,
+	type FriendlyRosterMember,
+} from "../../lib/rw-friendly-buckets";
+import {
+	clearRwFriendlyBroadcastState,
+	hasRwFriendlyBroadcastState,
+	shouldBroadcastRwFriendly,
+} from "../../lib/rw-friendly-displays";
 import { classifyOpponentsIntoRwBuckets } from "../../lib/rw-opponent-buckets";
 import {
 	buildOpponentFingerprint,
@@ -44,7 +56,10 @@ import {
 
 const logger = new Logger("Scheduler", "SubversiveRankedWarWorker");
 
-import { SUBVERSIVE_FAMILY_FACTION_IDS } from "@sentinel/utils";
+import {
+	getSubversiveFactionName,
+	SUBVERSIVE_FAMILY_FACTION_IDS,
+} from "@sentinel/utils";
 
 export type WarState = "no_war" | "scheduled" | "active";
 
@@ -627,6 +642,84 @@ async function refreshFactionOpponents(
 }
 
 /**
+ * How long a fetched own-faction roster is reused before re-reading it.
+ *
+ * The opponent roster is polled every cycle because it drives live attack
+ * decisions, and that already consumes one `/faction/{id}/members` request per
+ * second per engaged faction. The friendly board is a *second* read of the same
+ * endpoint for the other faction in the war, so polling it at the same rate
+ * would double this worker's Torn footprint for a board whose own repaint floor
+ * is five seconds and whose broadcast heartbeat is thirty. Ten seconds keeps
+ * "teammate just went down" feeling live — hospital timers run for minutes —
+ * while cutting the extra requests by an order of magnitude.
+ */
+const FRIENDLY_ROSTER_TTL_MS = 10_000;
+
+/** Last good own roster per family faction, so a failed poll is not a blank board. */
+const friendlyRosterByFaction = new Map<
+	number,
+	{ members: FriendlyRosterMember[]; fetchedAtMs: number }
+>();
+
+/**
+ * Polls a family faction's **own** member roster for the friendly revive board.
+ *
+ * Read with a key from the shared pool, which may belong to either family
+ * faction. Torn only populates `revive_setting` for the key's own faction, so a
+ * key from the sibling faction leaves that field "Unknown" — the classifier
+ * falls back to `is_revivable`, which is populated for every roster.
+ *
+ * A failed poll serves the last good roster rather than an empty one: a
+ * transient API error must not blank a board revivers are working from, and a
+ * ten-second-old list beats no list at all.
+ */
+async function refreshFriendlyRoster(
+	client: TornApiClient,
+	factionId: number,
+): Promise<FriendlyRosterMember[]> {
+	const cached = friendlyRosterByFaction.get(factionId);
+	if (cached && Date.now() - cached.fetchedAtMs < FRIENDLY_ROSTER_TTL_MS) {
+		return cached.members;
+	}
+
+	const ownKey = await getNextSubversiveUserKey();
+	if (!ownKey) return cached?.members ?? [];
+
+	try {
+		const membersRes = (await client.get("/faction/{id}/members", {
+			apiKey: ownKey.apiKey,
+			rateLimitKey: ownKey.userId,
+			pathParams: { id: factionId },
+		})) as TornFactionMembersResponse;
+
+		recordSubversiveKeySuccess(ownKey.apiKey);
+
+		const members: FriendlyRosterMember[] = (membersRes.members ?? []).map(
+			(m) => ({
+				id: m.id,
+				name: m.name,
+				isRevivable: m.is_revivable ?? false,
+				reviveSetting: m.revive_setting ?? "Unknown",
+				lastAction: { timestamp: m.last_action?.timestamp ?? 0 },
+				status: {
+					state: m.status?.state ?? "Okay",
+					until: m.status?.until ?? null,
+				},
+			}),
+		);
+
+		friendlyRosterByFaction.set(factionId, {
+			members,
+			fetchedAtMs: Date.now(),
+		});
+		return members;
+	} catch (err) {
+		handleKeyError(err, ownKey.apiKey);
+		return cached?.members ?? [];
+	}
+}
+
+/**
  * Checks ranked war status + opponent rosters for every faction in the Subversive
  * family (2013 Subversive Alliance, 27312 SA Succession). Each faction runs its own
  * ranked war, so state, opponents and cadence are tracked per faction.
@@ -656,6 +749,18 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 	> = {};
 	let nextCadenceMs = 30_000;
 
+	// Resolved for every family faction up front, and therefore from a single
+	// query that covers all of them. Resolving per faction inside the loop would
+	// memoise a partial map, and the primary/secondary resolutions below — which
+	// ask for the engaged subset — would then read the missing factions back as
+	// "no channel selected".
+	const friendlyChannelIdByFaction = await resolveFriendlyDisplayChannels([
+		...SUBVERSIVE_FAMILY_FACTION_IDS,
+	]);
+
+	/** Own rosters for engaged factions with a friendly channel configured. */
+	const friendlyMembersByFaction = new Map<number, FriendlyRosterMember[]>();
+
 	for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
 		const entry = getFactionCache(factionId);
 
@@ -675,6 +780,19 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 		// 2. Refresh opponent roster when engaged (live, every cycle)
 		const opponents = await refreshFactionOpponents(client, warInfo);
 		entry.opponents = opponents;
+
+		// 2b. Refresh the faction's own roster for the friendly revive board.
+		// Only read when the board is actually routed: an unconfigured faction
+		// must not pay for a second roster request every cycle.
+		const engaged = warInfo.state === "active" || warInfo.state === "scheduled";
+		if (engaged && friendlyChannelIdByFaction.get(factionId)) {
+			friendlyMembersByFaction.set(
+				factionId,
+				await refreshFriendlyRoster(client, factionId),
+			);
+		} else {
+			friendlyMembersByFaction.delete(factionId);
+		}
 
 		wars[String(factionId)] = { war: warInfo, opponents };
 
@@ -713,6 +831,12 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 
 		await broadcastRwPrimaryDisplays(ipcServer, wars, nowSec);
 		await broadcastRwTravelingDisplays(ipcServer, wars);
+		await broadcastRwFriendlyDisplays(
+			ipcServer,
+			wars,
+			friendlyMembersByFaction,
+			nowSec,
+		);
 	}
 
 	schedulerEvents.emit("ranked_war_updated");
@@ -912,6 +1036,105 @@ async function broadcastRwTravelingDisplays(
 		});
 	}
 }
+
+/**
+ * Classifies each engaged faction's own revivable members and pushes the
+ * friendly revive board to the Discord bot.
+ *
+ * Independent of the opponent payloads on purpose. The board renders our own
+ * roster, so the three things it deliberately does *not* share with them are:
+ *
+ * - suppression state (`rw-friendly-displays.ts`), because a teammate falling
+ *   into hospital moves no opponent bucket;
+ * - the `opponent` guard, because an engaged war whose opposing faction could
+ *   not be resolved this cycle still has a perfectly valid own roster; and
+ * - the roster source, which is a second `/faction/{id}/members` read for the
+ *   family faction itself rather than the opponent.
+ *
+ * Mirrors their lifecycle otherwise, including the `no_war` teardown that only
+ * goes to a faction that previously rendered.
+ */
+async function broadcastRwFriendlyDisplays(
+	ipcServer: IpcServer<IpcMessage>,
+	wars: Record<string, { war: CurrentWarInfo; opponents: RankedWarOpponent[] }>,
+	friendlyMembersByFaction: Map<number, FriendlyRosterMember[]>,
+	nowSec: number,
+): Promise<void> {
+	const engagedFactionIds: number[] = [];
+	const idleFactionIds: number[] = [];
+
+	for (const [factionId, snapshot] of Object.entries(wars)) {
+		const state = snapshot.war.state;
+		if (state === "active" || state === "scheduled") {
+			engagedFactionIds.push(Number(factionId));
+		} else {
+			idleFactionIds.push(Number(factionId));
+		}
+	}
+
+	const nowMs = Date.now();
+
+	for (const factionId of idleFactionIds) {
+		if (!hasRwFriendlyBroadcastState(factionId)) continue;
+
+		ipcServer.broadcast({
+			action: "subversive_rw_friendly_update",
+			data: {
+				factionId,
+				factionName: "",
+				warState: "no_war",
+				channelId: lastFriendlyChannelByFaction.get(factionId) ?? null,
+				members: emptyRwFriendlyMembers(),
+				updatedAt: nowMs,
+			},
+		});
+
+		clearRwFriendlyBroadcastState(factionId);
+		lastFriendlyChannelByFaction.delete(factionId);
+	}
+
+	if (engagedFactionIds.length === 0) return;
+
+	const channelIdByFaction =
+		await resolveFriendlyDisplayChannels(engagedFactionIds);
+
+	for (const factionId of engagedFactionIds) {
+		const snapshot = wars[String(factionId)];
+		if (!snapshot) continue;
+
+		const members = classifyFriendlyRevivables(
+			friendlyMembersByFaction.get(factionId) ?? [],
+			nowSec,
+		);
+
+		if (!shouldBroadcastRwFriendly(factionId, members, nowMs)) continue;
+
+		const channelId = channelIdByFaction.get(factionId) ?? null;
+		lastFriendlyChannelByFaction.set(factionId, channelId);
+
+		const payload: RwFriendlyUpdate = {
+			factionId,
+			factionName:
+				snapshot.war.subversive?.name ?? getSubversiveFactionName(factionId),
+			warState: snapshot.war.state === "active" ? "active" : "scheduled",
+			channelId,
+			members,
+			updatedAt: nowMs,
+		};
+
+		ipcServer.broadcast({
+			action: "subversive_rw_friendly_update",
+			data: payload,
+		});
+	}
+}
+
+/**
+ * The friendly channel each faction's revive board was last rendered into.
+ * Kept separately from the other two so a channel change on one display cannot
+ * misdirect another's teardown.
+ */
+const lastFriendlyChannelByFaction = new Map<number, string | null>();
 
 /**
  * The channel each faction was last rendered into, kept so a war-ended

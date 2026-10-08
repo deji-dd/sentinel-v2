@@ -15,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 interface RwChannelConfig {
 	primaryDisplaysChannelId: string | null;
 	secondaryDisplaysChannelId: string | null;
+	friendlyDisplaysChannelId: string | null;
 	updatedAt?: string | null;
 	updatedBy?: string | null;
 }
@@ -31,6 +32,7 @@ const RW_FACTIONS = [
 const DEFAULT_CONFIG: RwChannelConfig = {
 	primaryDisplaysChannelId: null,
 	secondaryDisplaysChannelId: null,
+	friendlyDisplaysChannelId: null,
 };
 
 /**
@@ -40,18 +42,28 @@ const DEFAULT_CONFIG: RwChannelConfig = {
 const CHANNEL_FIELDS: ReadonlyArray<{
 	field: keyof RwChannelConfig;
 	label: string;
+	/** What the bot posts into this channel, so the choice is not a guess. */
+	hint: string;
 	/** Design-token accent so the highlight survives the light theme. */
 	accent: string;
 }> = [
 	{
 		field: "primaryDisplaysChannelId",
 		label: "Primary Displays",
+		hint: "The opposing roster: leaving hospital, offline and okay, online and okay, and revivable opponents.",
 		accent: "text-warning",
 	},
 	{
 		field: "secondaryDisplaysChannelId",
 		label: "Secondary Displays",
+		hint: "Where the opposing roster is currently flying, with a per-destination breakdown.",
 		accent: "text-info",
+	},
+	{
+		field: "friendlyDisplaysChannelId",
+		label: "Friendly Displays",
+		hint: "Our own members who allow revives, downed first with their hospital timers. Posted while a ranked war is engaged.",
+		accent: "text-success",
 	},
 ];
 
@@ -139,6 +151,7 @@ export function RwChannelsPage({
 					factionId,
 					primaryDisplaysChannelId: config.primaryDisplaysChannelId,
 					secondaryDisplaysChannelId: config.secondaryDisplaysChannelId,
+					friendlyDisplaysChannelId: config.friendlyDisplaysChannelId,
 				}),
 			});
 
@@ -209,35 +222,39 @@ export function RwChannelsPage({
 				flush
 			>
 				<div className="flex flex-col gap-4 px-4 py-4 sm:px-6">
-					{CHANNEL_FIELDS.map(({ field, label, accent }) => {
+					{CHANNEL_FIELDS.map(({ field, label, hint, accent }) => {
 						const inputId = `select-${String(field)}-${factionId}`;
 						const selected = config[field] ?? null;
 
-						// The two displays must not share a channel: the primary
-						// channel's stale-message sweep deletes any bot-authored
-						// message it does not recognise, so a shared channel would
-						// have it destroy the travel embed as strays. Hiding the
-						// other field's selection makes the conflict unreachable
+						// No two displays may share a channel: each one sweeps
+						// bot-authored messages it does not recognise as its own,
+						// so a shared channel would have one display destroy the
+						// others' embeds as strays. Hiding every channel already
+						// claimed by another field makes the conflict unreachable
 						// rather than relying on the save being rejected.
-						const otherField = CHANNEL_FIELDS.find(
-							(f) => f.field !== field,
-						)?.field;
-						const reservedByOther = otherField ? config[otherField] : null;
-						const availableChannels = reservedByOther
-							? channels.filter((c) => c.id !== reservedByOther)
-							: channels;
+						const reservedByOthers = new Set(
+							CHANNEL_FIELDS.filter((f) => f.field !== field)
+								.map((f) => config[f.field])
+								.filter((id): id is string => Boolean(id)),
+						);
+						const availableChannels = channels.filter(
+							(c) => !reservedByOthers.has(c.id),
+						);
 
 						return (
 							<div
 								key={field}
 								className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 sm:p-4"
 							>
-								<Label
-									htmlFor={inputId}
-									className="cursor-pointer text-sm font-semibold"
-								>
-									{label}
-								</Label>
+								<div className="flex flex-col gap-1">
+									<Label
+										htmlFor={inputId}
+										className="cursor-pointer text-sm font-semibold"
+									>
+										{label}
+									</Label>
+									<p className="text-xs text-muted-foreground">{hint}</p>
+								</div>
 
 								<div className="w-full min-w-0 sm:max-w-md">
 									<ChannelSelect

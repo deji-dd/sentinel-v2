@@ -12,8 +12,8 @@ import {
 const logger = new Logger("API", "SubversiveRwChannelManager");
 
 /**
- * Raised when a patch would point the primary and secondary displays at the
- * same Discord channel.
+ * Raised when a patch would point two ranked-war displays at the same Discord
+ * channel.
  *
  * A distinct type so the HTTP layer can answer 400 for this client mistake
  * without also swallowing genuine database failures as if they were the admin's
@@ -21,9 +21,7 @@ const logger = new Logger("API", "SubversiveRwChannelManager");
  */
 export class RwChannelConflictError extends Error {
 	constructor() {
-		super(
-			"Primary and secondary ranked-war displays must use different channels.",
-		);
+		super("Ranked-war displays must each use a different channel.");
 		this.name = "RwChannelConflictError";
 	}
 }
@@ -77,6 +75,7 @@ class SubversiveRwChannelManager {
 		return {
 			primaryDisplaysChannelId: row.primaryDisplaysChannelId,
 			secondaryDisplaysChannelId: row.secondaryDisplaysChannelId,
+			friendlyDisplaysChannelId: row.friendlyDisplaysChannelId,
 			updatedAt: row.updatedAt.toISOString(),
 			updatedBy: row.updatedBy ?? undefined,
 		};
@@ -123,10 +122,10 @@ class SubversiveRwChannelManager {
 	 * Merges a patch into one family faction's ranked-war channels, persisting
 	 * the row and refreshing the in-memory cache.
 	 *
-	 * @throws {RwChannelConflictError} when the patch would point both displays
-	 * at the same channel. The primary channel's stale-message sweep deletes
-	 * any bot-authored message it does not recognise, so a shared channel would
-	 * have that sweep destroy the travel embed as strays on the next war cycle.
+	 * @throws {RwChannelConflictError} when the patch would point two displays
+	 * at the same channel. Each display channel is swept by its own renderer,
+	 * which deletes any bot-authored message it does not recognise, so a shared
+	 * channel would have one display destroy the other's embeds as strays.
 	 */
 	async updateConfig(
 		patch: Partial<SubversiveRwChannelConfig>,
@@ -148,12 +147,23 @@ class SubversiveRwChannelManager {
 				patch.secondaryDisplaysChannelId !== undefined
 					? patch.secondaryDisplaysChannelId
 					: current.secondaryDisplaysChannelId,
+			friendlyDisplaysChannelId:
+				patch.friendlyDisplaysChannelId !== undefined
+					? patch.friendlyDisplaysChannelId
+					: current.friendlyDisplaysChannelId,
 		};
 
-		if (
-			merged.primaryDisplaysChannelId &&
-			merged.primaryDisplaysChannelId === merged.secondaryDisplaysChannelId
-		) {
+		// Every display channel is swept by its own renderer, which deletes any
+		// bot-authored message it does not recognise as one of its own. Two
+		// selections sharing a channel would therefore have one display destroy
+		// the other's embeds, so duplicates are rejected rather than merged.
+		const selected = [
+			merged.primaryDisplaysChannelId,
+			merged.secondaryDisplaysChannelId,
+			merged.friendlyDisplaysChannelId,
+		].filter((channelId): channelId is string => Boolean(channelId));
+
+		if (new Set(selected).size !== selected.length) {
 			throw new RwChannelConflictError();
 		}
 

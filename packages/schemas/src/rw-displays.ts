@@ -201,3 +201,75 @@ export type IpcSubversiveRwTravelingUpdateMessage = {
 	action: "subversive_rw_traveling_update";
 	data: RwTravelingUpdate;
 };
+
+/* ────────────────────────── friendly (own revive) display ────────────────────────── */
+
+/**
+ * The category key the friendly display's message id is stored under.
+ *
+ * Like `RW_TRAVELING_CATEGORY`, it deliberately lives *outside*
+ * `RW_DISPLAY_CATEGORIES` so the primary renderer neither reads nor deletes it,
+ * even though all of them share `subversive_rw_display_messages`.
+ */
+export const RW_FRIENDLY_CATEGORY = "friendlyRevivable";
+
+/**
+ * A trimmed projection of one of the family faction's **own** members.
+ *
+ * Distinct from `RwOpponentLine`: battle stats are deliberately absent (they
+ * are not resolved for our own roster — that would cost an FFScouter lookup per
+ * member for a number no reviver acts on), and the fields that *are* here are
+ * the ones a reviver needs: who they are, when they were last around, and
+ * whether they are down right now.
+ */
+export interface RwFriendlyLine {
+	/** Torn player id. */
+	id: number;
+	name: string;
+	/**
+	 * Unix **seconds** of the member's last recorded action, or 0 when Torn
+	 * reported no timestamp.
+	 */
+	lastSeenAt: number;
+	/**
+	 * Unix **seconds** the member leaves hospital, or null when they are not in
+	 * hospital. Downed members lead the list — they are the actionable revives.
+	 */
+	hospitalUntil: number | null;
+}
+
+/**
+ * Payload for the friendly revive display.
+ *
+ * `warState` and `channelId` behave exactly as in `RwDisplaysUpdate`, including
+ * `no_war` as the teardown signal: this is ranked-war tooling, so the board
+ * lives for the duration of the faction's war and is removed when it ends.
+ *
+ * It is a separate payload from the other two because the roster it renders is
+ * a different faction entirely — the collection runs against the family
+ * faction's own members, not the opponent — so sharing a signature would let a
+ * friendly-only change be suppressed as "unchanged", and vice versa.
+ */
+export interface RwFriendlyUpdate {
+	/** Family faction (2013 / 27312) whose own members these are. */
+	factionId: number;
+	/** The family faction's own name; empty when `no_war`. */
+	factionName: string;
+	warState: "no_war" | "scheduled" | "active";
+	/** Discord snowflake of the friendly displays channel, or null when unset. */
+	channelId: string | null;
+	/** Own members who allow revives, downed first. */
+	members: RwFriendlyLine[];
+	/** Epoch ms the scheduler produced this payload. */
+	updatedAt: number;
+}
+
+export type IpcSubversiveRwFriendlyUpdateMessage = {
+	action: "subversive_rw_friendly_update";
+	data: RwFriendlyUpdate;
+};
+
+/** An empty friendly roster, used when a war is not engaged. */
+export function emptyRwFriendlyMembers(): RwFriendlyLine[] {
+	return [];
+}

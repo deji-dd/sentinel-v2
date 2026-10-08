@@ -5,11 +5,12 @@ import {
 } from "../src/lib/rw-channel-manager";
 
 /**
- * The primary and secondary ranked-war displays must never share a channel.
+ * No two ranked-war displays may share a channel.
  *
- * The primary channel runs an author-gated stale-message sweep that deletes any
- * bot message it does not recognise as one of its own four embeds, so a shared
- * channel would have that sweep destroy the travel embed on the next war cycle.
+ * Each display channel is swept by its own renderer, which deletes any bot
+ * message it does not recognise as one of its own — the primary's four embeds,
+ * the travel board, the friendly revive board. A shared channel therefore has
+ * one display destroy another's embeds on the next war cycle.
  *
  * Every case here throws *before* the database write, so none of them touch the
  * real faction config rows.
@@ -17,11 +18,12 @@ import {
 
 const FACTION_ID = 27312;
 
-describe("SubversiveRwChannelManager - primary/secondary channel conflict", () => {
+describe("SubversiveRwChannelManager - display channel conflicts", () => {
 	beforeEach(() => {
 		subversiveRwChannelManager.setConfigForTesting({
 			primaryDisplaysChannelId: null,
 			secondaryDisplaysChannelId: null,
+			friendlyDisplaysChannelId: null,
 		});
 	});
 
@@ -68,6 +70,51 @@ describe("SubversiveRwChannelManager - primary/secondary channel conflict", () =
 		).rejects.toBeInstanceOf(RwChannelConflictError);
 	});
 
+	it("rejects a friendly selection that repeats the primary channel", async () => {
+		subversiveRwChannelManager.setFactionConfigForTesting(FACTION_ID, {
+			primaryDisplaysChannelId: "777777777777777777",
+			friendlyDisplaysChannelId: null,
+		});
+
+		expect(
+			subversiveRwChannelManager.updateConfig(
+				{ friendlyDisplaysChannelId: "777777777777777777" },
+				"tester",
+				FACTION_ID,
+			),
+		).rejects.toBeInstanceOf(RwChannelConflictError);
+	});
+
+	it("rejects a friendly selection that repeats the secondary channel", async () => {
+		subversiveRwChannelManager.setFactionConfigForTesting(FACTION_ID, {
+			secondaryDisplaysChannelId: "888888888888888888",
+			friendlyDisplaysChannelId: null,
+		});
+
+		expect(
+			subversiveRwChannelManager.updateConfig(
+				{ friendlyDisplaysChannelId: "888888888888888888" },
+				"tester",
+				FACTION_ID,
+			),
+		).rejects.toBeInstanceOf(RwChannelConflictError);
+	});
+
+	it("rejects a primary selection that repeats the friendly channel", async () => {
+		subversiveRwChannelManager.setFactionConfigForTesting(FACTION_ID, {
+			primaryDisplaysChannelId: null,
+			friendlyDisplaysChannelId: "999999999999999999",
+		});
+
+		expect(
+			subversiveRwChannelManager.updateConfig(
+				{ primaryDisplaysChannelId: "999999999999999999" },
+				"tester",
+				FACTION_ID,
+			),
+		).rejects.toBeInstanceOf(RwChannelConflictError);
+	});
+
 	it("carries a message the dashboard can surface", async () => {
 		subversiveRwChannelManager.setFactionConfigForTesting(FACTION_ID, {
 			primaryDisplaysChannelId: "444444444444444444",
@@ -83,7 +130,7 @@ describe("SubversiveRwChannelManager - primary/secondary channel conflict", () =
 			.catch((e: unknown) => e);
 
 		expect(error).toBeInstanceOf(RwChannelConflictError);
-		expect((error as Error).message).toContain("different channels");
+		expect((error as Error).message).toContain("different channel");
 	});
 
 	/**
@@ -96,26 +143,24 @@ describe("SubversiveRwChannelManager - primary/secondary channel conflict", () =
 		expect(new RwChannelConflictError().name).toBe("RwChannelConflictError");
 	});
 
-	it("treats an unset channel as no conflict", () => {
-		// A null primary can never collide with anything.
-		expect(
-			subversiveRwChannelManager.getCachedConfig(FACTION_ID)
-				.primaryDisplaysChannelId,
-		).toBeNull();
-		expect(
-			subversiveRwChannelManager.getCachedConfig(FACTION_ID)
-				.secondaryDisplaysChannelId,
-		).toBeNull();
+	it("treats unset channels as no conflict", () => {
+		// A null selection can never collide with anything.
+		const cached = subversiveRwChannelManager.getCachedConfig(FACTION_ID);
+		expect(cached.primaryDisplaysChannelId).toBeNull();
+		expect(cached.secondaryDisplaysChannelId).toBeNull();
+		expect(cached.friendlyDisplaysChannelId).toBeNull();
 	});
 
-	it("exposes the secondary channel through the cached config", () => {
+	it("exposes every channel through the cached config", () => {
 		subversiveRwChannelManager.setFactionConfigForTesting(FACTION_ID, {
 			primaryDisplaysChannelId: "555555555555555555",
 			secondaryDisplaysChannelId: "666666666666666666",
+			friendlyDisplaysChannelId: "777777777777777777",
 		});
 
 		const cached = subversiveRwChannelManager.getCachedConfig(FACTION_ID);
 		expect(cached.primaryDisplaysChannelId).toBe("555555555555555555");
 		expect(cached.secondaryDisplaysChannelId).toBe("666666666666666666");
+		expect(cached.friendlyDisplaysChannelId).toBe("777777777777777777");
 	});
 });

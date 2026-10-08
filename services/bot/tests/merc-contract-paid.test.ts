@@ -36,6 +36,7 @@ const completedContract = (
 	terms: {
 		statuses: { online: true, idle: true, offline: false },
 		idleDurationMinutes: 15,
+		offlineDurationMinutes: null,
 		strickenHits: false,
 		levelRange: [1, 100],
 	},

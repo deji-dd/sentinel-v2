@@ -5,6 +5,7 @@
 
 import type {
 	IpcSubversiveRwDisplaysUpdateMessage,
+	IpcSubversiveRwFriendlyUpdateMessage,
 	IpcSubversiveRwTravelingUpdateMessage,
 } from "./rw-displays";
 import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
@@ -645,6 +646,7 @@ export type IpcMessage =
 	| IpcSubversiveHitCountsUpdatedMessage
 	| IpcSubversiveRwDisplaysUpdateMessage
 	| IpcSubversiveRwTravelingUpdateMessage
+	| IpcSubversiveRwFriendlyUpdateMessage
 	| IpcPersonalBountiesUpdatedMessage
 	| IpcPostDibsAlertMessage
 	| IpcEditDibsAlertMessage

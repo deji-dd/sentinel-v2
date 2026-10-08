@@ -73,6 +73,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		const terms: MercContractHitTerms = {
 			statuses: { online: true, idle: true, offline: true },
 			idleDurationMinutes: 15,
+			offlineDurationMinutes: null,
 			strickenHits: true,
 			levelRange: [1, 100],
 		};
@@ -80,6 +81,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		const warStartTerms: MercContractHitTerms = {
 			statuses: { online: true, idle: false, offline: false },
 			idleDurationMinutes: null,
+			offlineDurationMinutes: null,
 			strickenHits: false,
 			levelRange: [10, 80],
 		};
@@ -293,6 +295,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		const terms: MercContractHitTerms = {
 			statuses: { online: true, idle: false, offline: false },
 			idleDurationMinutes: null,
+			offlineDurationMinutes: null,
 			strickenHits: false,
 			levelRange: [10, 80],
 		};
@@ -326,6 +329,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 		const terms: MercContractHitTerms = {
 			statuses: { online: true, idle: false, offline: false },
 			idleDurationMinutes: null,
+			offlineDurationMinutes: null,
 			strickenHits: false,
 			levelRange: [10, 80],
 		};

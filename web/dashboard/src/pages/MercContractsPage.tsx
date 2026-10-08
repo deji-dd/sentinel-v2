@@ -55,6 +55,8 @@ export interface MercContractHitTerms {
 		offline: boolean;
 	};
 	idleDurationMinutes: number | null;
+	/** Optional floor on minutes offline. `null` means no minimum was set. */
+	offlineDurationMinutes: number | null;
 	strickenHits: boolean;
 	levelRange: [number, number];
 }
@@ -360,6 +362,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [idleStatus, setIdleStatus] = useState(true);
 	const [offlineStatus, setOfflineStatus] = useState(false);
 	const [idleDuration, setIdleDuration] = useState<number>(15);
+	// Minimum minutes offline is opt-in: unchecked (the default) stores null,
+	// which means any offline target qualifies.
+	const [offlineMinEnabled, setOfflineMinEnabled] = useState(false);
+	const [offlineMinDuration, setOfflineMinDuration] = useState<number>(15);
 	const [strickenHits, setStrickenHits] = useState(false);
 	const [levelRange, setLevelRange] = useState<[number, number]>([1, 100]);
 
@@ -369,6 +375,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [warStartIdle, setWarStartIdle] = useState(false);
 	const [warStartOffline, setWarStartOffline] = useState(false);
 	const [warStartIdleDuration, setWarStartIdleDuration] = useState<number>(15);
+	const [warStartOfflineMinEnabled, setWarStartOfflineMinEnabled] =
+		useState(false);
+	const [warStartOfflineMinDuration, setWarStartOfflineMinDuration] =
+		useState<number>(15);
 	const [warStartStricken, setWarStartStricken] = useState(false);
 	const [warStartLevelRange, setWarStartLevelRange] = useState<
 		[number, number]
@@ -420,6 +430,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [editIdleStatus, setEditIdleStatus] = useState(true);
 	const [editOfflineStatus, setEditOfflineStatus] = useState(false);
 	const [editIdleDuration, setEditIdleDuration] = useState<number>(15);
+	const [editOfflineMinEnabled, setEditOfflineMinEnabled] = useState(false);
+	const [editOfflineMinDuration, setEditOfflineMinDuration] =
+		useState<number>(15);
 	const [editStrickenHits, setEditStrickenHits] = useState(false);
 	const [editLevelRange, setEditLevelRange] = useState<[number, number]>([
 		1, 100,
@@ -434,6 +447,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [editWarStartIdle, setEditWarStartIdle] = useState(false);
 	const [editWarStartOffline, setEditWarStartOffline] = useState(false);
 	const [editWarStartIdleDuration, setEditWarStartIdleDuration] =
+		useState<number>(15);
+	const [editWarStartOfflineMinEnabled, setEditWarStartOfflineMinEnabled] =
+		useState(false);
+	const [editWarStartOfflineMinDuration, setEditWarStartOfflineMinDuration] =
 		useState<number>(15);
 	const [editWarStartStricken, setEditWarStartStricken] = useState(false);
 	const [editWarStartLevelRange, setEditWarStartLevelRange] = useState<
@@ -698,6 +715,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						offline: offlineStatus,
 					},
 					idleDurationMinutes: idleStatus ? idleDuration : null,
+					offlineDurationMinutes:
+						offlineStatus && offlineMinEnabled ? offlineMinDuration : null,
 					strickenHits,
 					levelRange,
 				},
@@ -723,6 +742,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 									offline: warStartOffline,
 								},
 								idleDurationMinutes: warStartIdle ? warStartIdleDuration : null,
+								offlineDurationMinutes:
+									warStartOffline && warStartOfflineMinEnabled
+										? warStartOfflineMinDuration
+										: null,
 								strickenHits: warStartStricken,
 								levelRange: warStartLevelRange,
 							}
@@ -961,6 +984,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setEditIdleStatus(Boolean(contract.terms.statuses.idle));
 		setEditOfflineStatus(Boolean(contract.terms.statuses.offline));
 		setEditIdleDuration(contract.terms.idleDurationMinutes ?? 15);
+		setEditOfflineMinEnabled(contract.terms.offlineDurationMinutes != null);
+		setEditOfflineMinDuration(contract.terms.offlineDurationMinutes ?? 15);
 		setEditStrickenHits(Boolean(contract.terms.strickenHits));
 		setEditLevelRange(contract.terms.levelRange ?? [1, 100]);
 
@@ -984,6 +1009,12 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		);
 		setEditWarStartIdleDuration(
 			contract.warStartTerms?.idleDurationMinutes ?? 15,
+		);
+		setEditWarStartOfflineMinEnabled(
+			contract.warStartTerms?.offlineDurationMinutes != null,
+		);
+		setEditWarStartOfflineMinDuration(
+			contract.warStartTerms?.offlineDurationMinutes ?? 15,
 		);
 		setEditWarStartStricken(
 			Boolean(contract.warStartTerms?.strickenHits ?? false),
@@ -1117,6 +1148,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						offline: editOfflineStatus,
 					},
 					idleDurationMinutes: editIdleStatus ? editIdleDuration : null,
+					offlineDurationMinutes:
+						editOfflineStatus && editOfflineMinEnabled
+							? editOfflineMinDuration
+							: null,
 					strickenHits: editStrickenHits,
 					levelRange: editLevelRange,
 				},
@@ -1147,6 +1182,10 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 								idleDurationMinutes: editWarStartIdle
 									? editWarStartIdleDuration
 									: null,
+								offlineDurationMinutes:
+									editWarStartOffline && editWarStartOfflineMinEnabled
+										? editWarStartOfflineMinDuration
+										: null,
 								strickenHits: editWarStartStricken,
 								levelRange: editWarStartLevelRange,
 							}
@@ -1620,6 +1659,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															className="text-[11px] font-mono px-2 py-0.5 bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
 														>
 															Offline
+															{contract.terms.offlineDurationMinutes
+																? ` ≥ ${contract.terms.offlineDurationMinutes}m`
+																: ""}
 														</Badge>
 													)}
 													{contract.terms.strickenHits && (
@@ -1671,6 +1713,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																	className="text-[11px] font-mono px-2 py-0.5 bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
 																>
 																	Offline
+																	{contract.warStartTerms.offlineDurationMinutes
+																		? ` ≥ ${contract.warStartTerms.offlineDurationMinutes}m`
+																		: ""}
 																</Badge>
 															)}
 															{contract.warStartTerms.strickenHits && (
@@ -2331,6 +2376,46 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 													/>
 												</div>
 											)}
+
+											{/* Min Offline Duration (opt-in; unset by default) */}
+											{offlineStatus && (
+												<div className="pt-2 max-w-xs space-y-2">
+													<div className="flex items-center gap-2">
+														<Checkbox
+															id="term-offline-min-enabled"
+															checked={offlineMinEnabled}
+															onCheckedChange={(c) =>
+																setOfflineMinEnabled(Boolean(c))
+															}
+														/>
+														<label
+															htmlFor="term-offline-min-enabled"
+															className="text-xs text-muted-foreground cursor-pointer"
+														>
+															Require minimum minutes offline
+														</label>
+													</div>
+													{offlineMinEnabled ? (
+														<Input
+															id="term-offline-minutes"
+															type="number"
+															min={1}
+															max={1440}
+															value={offlineMinDuration}
+															onChange={(e) => {
+																const next = Number(e.target.value) || 15;
+																setOfflineMinDuration(next);
+															}}
+															className="h-9 text-xs rounded-xl font-mono"
+															placeholder="15"
+														/>
+													) : (
+														<p className="text-[10px] text-muted-foreground">
+															No minimum — any offline target qualifies.
+														</p>
+													)}
+												</div>
+											)}
 										</div>
 
 										{/* Stricken Hits Checkbox */}
@@ -2550,6 +2635,46 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 																	className="h-9 text-xs rounded-xl font-mono"
 																	placeholder="15"
 																/>
+															</div>
+														)}
+
+														{/* Min Offline Duration (opt-in; unset by default) */}
+														{warStartOffline && (
+															<div className="pt-1 max-w-xs space-y-2">
+																<div className="flex items-center gap-2">
+																	<Checkbox
+																		id="war-term-offline-min-enabled"
+																		checked={warStartOfflineMinEnabled}
+																		onCheckedChange={(c) =>
+																			setWarStartOfflineMinEnabled(Boolean(c))
+																		}
+																	/>
+																	<label
+																		htmlFor="war-term-offline-min-enabled"
+																		className="text-xs text-muted-foreground cursor-pointer"
+																	>
+																		Require minimum minutes offline
+																	</label>
+																</div>
+																{warStartOfflineMinEnabled ? (
+																	<Input
+																		id="war-term-offline-minutes"
+																		type="number"
+																		min={1}
+																		max={1440}
+																		value={warStartOfflineMinDuration}
+																		onChange={(e) => {
+																			const next = Number(e.target.value) || 15;
+																			setWarStartOfflineMinDuration(next);
+																		}}
+																		className="h-9 text-xs rounded-xl font-mono"
+																		placeholder="15"
+																	/>
+																) : (
+																	<p className="text-[10px] text-muted-foreground">
+																		No minimum — any offline target qualifies.
+																	</p>
+																)}
 															</div>
 														)}
 
@@ -2999,6 +3124,46 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 											/>
 										</div>
 									)}
+
+									{/* Min Offline Duration (opt-in; unset by default) */}
+									{editOfflineStatus && (
+										<div className="pt-2 max-w-xs space-y-2">
+											<div className="flex items-center gap-2">
+												<Checkbox
+													id="edit-term-offline-min-enabled"
+													checked={editOfflineMinEnabled}
+													onCheckedChange={(c) =>
+														setEditOfflineMinEnabled(Boolean(c))
+													}
+												/>
+												<label
+													htmlFor="edit-term-offline-min-enabled"
+													className="text-xs text-muted-foreground cursor-pointer"
+												>
+													Require minimum minutes offline
+												</label>
+											</div>
+											{editOfflineMinEnabled ? (
+												<Input
+													id="edit-term-offline-minutes"
+													type="number"
+													min={1}
+													max={1440}
+													value={editOfflineMinDuration}
+													onChange={(e) => {
+														const next = Number(e.target.value) || 15;
+														setEditOfflineMinDuration(next);
+													}}
+													className="h-9 text-xs rounded-xl font-mono"
+													placeholder="15"
+												/>
+											) : (
+												<p className="text-[10px] text-muted-foreground">
+													No minimum — any offline target qualifies.
+												</p>
+											)}
+										</div>
+									)}
 								</div>
 
 								{/* Stricken Hits Checkbox */}
@@ -3230,6 +3395,46 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															className="h-9 text-xs rounded-xl font-mono"
 															placeholder="15"
 														/>
+													</div>
+												)}
+
+												{/* Min Offline Duration (opt-in; unset by default) */}
+												{editWarStartOffline && (
+													<div className="pt-1 max-w-xs space-y-2">
+														<div className="flex items-center gap-2">
+															<Checkbox
+																id="edit-war-term-offline-min-enabled"
+																checked={editWarStartOfflineMinEnabled}
+																onCheckedChange={(c) =>
+																	setEditWarStartOfflineMinEnabled(Boolean(c))
+																}
+															/>
+															<label
+																htmlFor="edit-war-term-offline-min-enabled"
+																className="text-xs text-muted-foreground cursor-pointer"
+															>
+																Require minimum minutes offline
+															</label>
+														</div>
+														{editWarStartOfflineMinEnabled ? (
+															<Input
+																id="edit-war-term-offline-minutes"
+																type="number"
+																min={1}
+																max={1440}
+																value={editWarStartOfflineMinDuration}
+																onChange={(e) => {
+																	const next = Number(e.target.value) || 15;
+																	setEditWarStartOfflineMinDuration(next);
+																}}
+																className="h-9 text-xs rounded-xl font-mono"
+																placeholder="15"
+															/>
+														) : (
+															<p className="text-[10px] text-muted-foreground">
+																No minimum — any offline target qualifies.
+															</p>
+														)}
 													</div>
 												)}
 

@@ -227,7 +227,13 @@ export async function postMercContractAnnouncement(
 					contract.terms.statuses.idle
 						? `Idle (${contract.terms.idleDurationMinutes ?? 15}m min)`
 						: null,
-					contract.terms.statuses.offline ? "Offline" : null,
+					// A null offlineDurationMinutes means the client set no minimum, so the
+					// status is shown bare rather than implying a duration.
+					contract.terms.statuses.offline
+						? contract.terms.offlineDurationMinutes
+							? `Offline (${contract.terms.offlineDurationMinutes}m min)`
+							: "Offline"
+						: null,
 				]
 					.filter(Boolean)
 					.join(", "),

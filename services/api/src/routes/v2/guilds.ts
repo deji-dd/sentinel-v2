@@ -2006,6 +2006,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					endOnWarEnd: body.endOnWarEnd ?? false,
 					terms: {
 						...body.terms,
+						// Absent means "no minimum offline duration".
+						offlineDurationMinutes: body.terms.offlineDurationMinutes ?? null,
 					},
 					hitPrice: body.hitPrice ?? 3_000_000,
 					strickenHitPrice:
@@ -2015,6 +2017,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					warStartTerms: body.warStartTerms
 						? {
 								...body.warStartTerms,
+								offlineDurationMinutes:
+									body.warStartTerms.offlineDurationMinutes ?? null,
 							}
 						: null,
 					warStartHitPrice: body.warStartHitPrice ?? null,
@@ -2089,6 +2093,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						offline: t.Boolean(),
 					}),
 					idleDurationMinutes: t.Nullable(t.Number()),
+					// Optional floor on minutes offline; omitted/null means "no minimum".
+					offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 					strickenHits: t.Boolean(),
 					levelRange: t.Tuple([t.Number(), t.Number()]),
 				}),
@@ -2104,6 +2110,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 								offline: t.Boolean(),
 							}),
 							idleDurationMinutes: t.Nullable(t.Number()),
+							// Optional floor on minutes offline; null means "no minimum".
+							offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 							strickenHits: t.Boolean(),
 							levelRange: t.Tuple([t.Number(), t.Number()]),
 						}),
@@ -2205,11 +2213,41 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			const isPausing = body.status === "paused";
 			const isResuming =
 				current.status === "paused" && body.status === "active";
+
+			// Terms are normalized out of the spread so an omitted minimum-offline
+			// field is always persisted as an explicit null ("no minimum") rather
+			// than being typed as possibly-undefined.
+			const {
+				terms: bodyTerms,
+				warStartTerms: bodyWarStartTerms,
+				...restBody
+			} = body;
+
 			const updated = await updateMercContract(
 				params.guildId,
 				params.contractId,
 				{
-					...body,
+					...restBody,
+					...(bodyTerms !== undefined
+						? {
+								terms: {
+									...bodyTerms,
+									offlineDurationMinutes:
+										bodyTerms.offlineDurationMinutes ?? null,
+								},
+							}
+						: {}),
+					...(bodyWarStartTerms !== undefined
+						? {
+								warStartTerms: bodyWarStartTerms
+									? {
+											...bodyWarStartTerms,
+											offlineDurationMinutes:
+												bodyWarStartTerms.offlineDurationMinutes ?? null,
+										}
+									: null,
+							}
+						: {}),
 					...(isEnding ? { endTime: new Date().toISOString() } : {}),
 				},
 			);
@@ -2321,6 +2359,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 							offline: t.Boolean(),
 						}),
 						idleDurationMinutes: t.Nullable(t.Number()),
+						// Optional floor on minutes offline; null means "no minimum".
+						offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 						strickenHits: t.Boolean(),
 						levelRange: t.Tuple([t.Number(), t.Number()]),
 					}),
@@ -2337,6 +2377,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 								offline: t.Boolean(),
 							}),
 							idleDurationMinutes: t.Nullable(t.Number()),
+							// Optional floor on minutes offline; null means "no minimum".
+							offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 							strickenHits: t.Boolean(),
 							levelRange: t.Tuple([t.Number(), t.Number()]),
 						}),

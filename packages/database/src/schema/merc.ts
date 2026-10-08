@@ -42,6 +42,11 @@ export const mercContracts = pgTable(
 		allowIdle: boolean("allow_idle").default(true).notNull(),
 		allowOffline: boolean("allow_offline").default(false).notNull(),
 		maxIdleMinutes: integer("max_idle_minutes").default(15),
+		// Optional floor on how long a target must have been offline before it
+		// qualifies. Deliberately nullable with no default: NULL means "no
+		// minimum", so every pre-existing contract keeps alerting on any offline
+		// target until an operator opts into a duration.
+		minOfflineMinutes: integer("min_offline_minutes"),
 		allowStrickenHits: boolean("allow_stricken_hits").default(false).notNull(),
 		minLevel: integer("min_level").default(1).notNull(),
 		maxLevel: integer("max_level").default(100).notNull(),
@@ -71,6 +76,7 @@ export const mercContracts = pgTable(
 		warStartAllowIdle: boolean("war_start_allow_idle"),
 		warStartAllowOffline: boolean("war_start_allow_offline"),
 		warStartMaxIdleMinutes: integer("war_start_max_idle_minutes"),
+		warStartMinOfflineMinutes: integer("war_start_min_offline_minutes"),
 		warStartAllowStrickenHits: boolean("war_start_allow_stricken_hits"),
 		warStartMinLevel: integer("war_start_min_level"),
 		warStartMaxLevel: integer("war_start_max_level"),

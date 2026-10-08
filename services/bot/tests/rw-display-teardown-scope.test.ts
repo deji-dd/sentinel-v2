@@ -7,6 +7,7 @@ import {
 } from "@sentinel/database";
 import {
 	RW_DISPLAY_CATEGORIES,
+	RW_FRIENDLY_CATEGORY,
 	RW_TRAVELING_CATEGORY,
 } from "@sentinel/schemas";
 import type { Client } from "discord.js";
@@ -15,11 +16,12 @@ import { teardownRwPrimaryDisplays } from "../src/lib/rw-primary-displays";
 /**
  * Regression cover for the shared display-message table.
  *
- * `subversive_rw_display_messages` stores the four primary embeds *and* the
- * secondary travel embed for the same faction, keyed by (factionId, category).
- * A teardown that deleted by faction alone would therefore destroy the travel
- * embed every time a war ended — invisible in the primary channel, and only
- * apparent as a travel display that vanishes on the next war.
+ * `subversive_rw_display_messages` stores the four primary embeds, the secondary
+ * travel embed *and* the friendly revive board for the same faction, keyed by
+ * (factionId, category). A teardown that deleted by faction alone would
+ * therefore destroy the other channels' embeds every time a war ended —
+ * invisible in the primary channel, and only apparent as a travel or revive
+ * display that vanishes on the next war.
  */
 
 const FACTION_ID = 999_001;
@@ -48,6 +50,12 @@ async function seed(): Promise<void> {
 		factionId: FACTION_ID,
 		category: RW_TRAVELING_CATEGORY,
 		messageId: "travel-embed",
+	});
+
+	await db.insert(subversiveRwDisplayMessages).values({
+		factionId: FACTION_ID,
+		category: RW_FRIENDLY_CATEGORY,
+		messageId: "friendly-embed",
 	});
 }
 
@@ -82,11 +90,13 @@ describe("primary display teardown scoping", () => {
 		}
 	});
 
-	it("leaves the secondary travel row untouched", async () => {
+	it("leaves the secondary travel and friendly rows untouched", async () => {
 		await seed();
 		await teardownRwPrimaryDisplays(fakeClient, FACTION_ID, null);
 
-		expect(await survivingCategories()).toEqual([RW_TRAVELING_CATEGORY]);
+		expect(await survivingCategories()).toEqual(
+			[RW_FRIENDLY_CATEGORY, RW_TRAVELING_CATEGORY].sort(),
+		);
 	});
 
 	it("does not disturb another faction's rows", async () => {

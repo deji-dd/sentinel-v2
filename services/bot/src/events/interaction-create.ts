@@ -80,6 +80,7 @@ import {
 	handleArchiveChannelButtonClick,
 	handleContractCreationButtonClick,
 } from "../lib/merc-contract-creation";
+import { handleRwFriendlyButton } from "../lib/rw-friendly-displays";
 import { handleRwDisplaysButton } from "../lib/rw-primary-displays";
 import { handleRwTravelingSelect } from "../lib/rw-traveling-displays";
 
@@ -128,6 +129,8 @@ export const interactionCreateEvent = {
 					await handleFactionMonitoringButton(interaction);
 				} else if (interaction.customId.startsWith("rw_displays_page:")) {
 					await handleRwDisplaysButton(interaction);
+				} else if (interaction.customId.startsWith("rw_friendly_page:")) {
+					await handleRwFriendlyButton(interaction);
 				} else if (interaction.customId === "giveaway_create_init") {
 					await handleGiveawayCreateInitButton(interaction);
 				} else if (interaction.customId.startsWith("giveaway_item_page:")) {

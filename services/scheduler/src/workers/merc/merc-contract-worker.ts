@@ -540,39 +540,56 @@ export class MercTargetManager {
 			}
 		} else if (statusState === "Offline") {
 			if (termsStatuses.offline) {
-				// Jitter buffer for offline status:
-				// Players' status can momentarily flicker to Offline for 1-3 seconds due to socket reconnects or page refreshes.
-				// Enforce a 10-second stability window before considering them genuinely offline.
-				if (existingAlert) {
-					// Once legitimate offline alert is already posted, keep it active
-					isActivityAllowed = true;
-				} else {
-					const lastActionSec = m.last_action?.timestamp;
-					const secondsSinceLastAction =
-						lastActionSec && lastActionSec > 0
-							? nowSec - lastActionSec
-							: undefined;
+				// How long the target has been offline. Torn's last_action timestamp is
+				// the primary signal; when it is missing or zero we fall back to how
+				// long we have continuously observed this member offline ourselves.
+				const lastActionSec = m.last_action?.timestamp;
+				const secondsSinceLastAction =
+					lastActionSec && lastActionSec > 0
+						? nowSec - lastActionSec
+						: undefined;
 
-					// If last_action was within the last 10 seconds, they were just active (flicker)
-					const isRecentActionFlicker =
-						secondsSinceLastAction !== undefined &&
-						secondsSinceLastAction < OFFLINE_JITTER_SECONDS;
+				const firstSeenOffline = this.offlineTracker.get(key);
+				if (firstSeenOffline === undefined) {
+					this.offlineTracker.set(key, nowSec);
+				}
 
-					const firstSeenOffline = this.offlineTracker.get(key);
-					if (firstSeenOffline === undefined) {
-						this.offlineTracker.set(key, nowSec);
-					}
+				const trackedOfflineSec = nowSec - (firstSeenOffline ?? nowSec);
 
-					const trackedOfflineSec =
-						nowSec - (this.offlineTracker.get(key) ?? nowSec);
+				const offlineMinutes = Math.floor(
+					Math.max(0, secondsSinceLastAction ?? trackedOfflineSec) / 60,
+				);
 
-					const isEstablishedOffline =
-						(secondsSinceLastAction !== undefined &&
-							secondsSinceLastAction >= OFFLINE_JITTER_SECONDS) ||
-						trackedOfflineSec >= OFFLINE_JITTER_SECONDS;
+				// Optional contract term: minimum minutes offline. Unset (null) keeps
+				// the historical behaviour of qualifying any offline target, so only
+				// contracts that opt in are affected.
+				const minOfflineMinutes =
+					effectiveTerms?.offlineDurationMinutes ?? null;
+				const meetsMinOffline =
+					minOfflineMinutes === null || offlineMinutes >= minOfflineMinutes;
 
-					if (!isRecentActionFlicker && isEstablishedOffline) {
+				if (meetsMinOffline) {
+					if (existingAlert) {
+						// Once legitimate offline alert is already posted, keep it active
 						isActivityAllowed = true;
+					} else {
+						// Jitter buffer for offline status:
+						// Players' status can momentarily flicker to Offline for 1-3 seconds due to socket reconnects or page refreshes.
+						// Enforce a 10-second stability window before considering them genuinely offline.
+
+						// If last_action was within the last 10 seconds, they were just active (flicker)
+						const isRecentActionFlicker =
+							secondsSinceLastAction !== undefined &&
+							secondsSinceLastAction < OFFLINE_JITTER_SECONDS;
+
+						const isEstablishedOffline =
+							(secondsSinceLastAction !== undefined &&
+								secondsSinceLastAction >= OFFLINE_JITTER_SECONDS) ||
+							trackedOfflineSec >= OFFLINE_JITTER_SECONDS;
+
+						if (!isRecentActionFlicker && isEstablishedOffline) {
+							isActivityAllowed = true;
+						}
 					}
 				}
 			}

@@ -787,6 +787,12 @@ export interface MercContractHitTerms {
 		offline: boolean;
 	};
 	idleDurationMinutes: number | null;
+	/**
+	 * Optional floor on how long a target must have been continuously offline
+	 * before it qualifies. `null` means no minimum (any offline target counts),
+	 * which is the default for new and pre-existing contracts.
+	 */
+	offlineDurationMinutes: number | null;
 	strickenHits: boolean;
 	levelRange: [number, number];
 }
@@ -939,6 +945,9 @@ export function mapRowToMercContract(
 				offline: row.allowOffline,
 			},
 			idleDurationMinutes: row.allowIdle ? (row.maxIdleMinutes ?? 15) : null,
+			offlineDurationMinutes: row.allowOffline
+				? (row.minOfflineMinutes ?? null)
+				: null,
 			strickenHits: row.allowStrickenHits,
 			levelRange: [row.minLevel, row.maxLevel],
 		},
@@ -955,6 +964,9 @@ export function mapRowToMercContract(
 					},
 					idleDurationMinutes: row.warStartAllowIdle
 						? (row.warStartMaxIdleMinutes ?? 15)
+						: null,
+					offlineDurationMinutes: row.warStartAllowOffline
+						? (row.warStartMinOfflineMinutes ?? null)
 						: null,
 					strickenHits: row.warStartAllowStrickenHits ?? false,
 					levelRange: [row.warStartMinLevel ?? 1, row.warStartMaxLevel ?? 100],
@@ -1030,6 +1042,7 @@ export async function createMercContract(
 			allowIdle: contractData.terms.statuses.idle,
 			allowOffline: contractData.terms.statuses.offline,
 			maxIdleMinutes: contractData.terms.idleDurationMinutes ?? 15,
+			minOfflineMinutes: contractData.terms.offlineDurationMinutes ?? null,
 			allowStrickenHits: contractData.terms.strickenHits,
 			minLevel: contractData.terms.levelRange[0],
 			maxLevel: contractData.terms.levelRange[1],
@@ -1049,6 +1062,8 @@ export async function createMercContract(
 				contractData.warStartTerms?.statuses.offline ?? null,
 			warStartMaxIdleMinutes:
 				contractData.warStartTerms?.idleDurationMinutes ?? null,
+			warStartMinOfflineMinutes:
+				contractData.warStartTerms?.offlineDurationMinutes ?? null,
 			warStartAllowStrickenHits:
 				contractData.warStartTerms?.strickenHits ?? null,
 			warStartMinLevel: contractData.warStartTerms?.levelRange[0] ?? null,
@@ -1101,6 +1116,9 @@ export async function createMercContract(
 				offline: created.allowOffline,
 			},
 			idleDurationMinutes: created.allowIdle ? created.maxIdleMinutes : null,
+			offlineDurationMinutes: created.allowOffline
+				? (created.minOfflineMinutes ?? null)
+				: null,
 			strickenHits: created.allowStrickenHits,
 			levelRange: [created.minLevel, created.maxLevel],
 		},
@@ -1116,6 +1134,9 @@ export async function createMercContract(
 					},
 					idleDurationMinutes: created.warStartAllowIdle
 						? (created.warStartMaxIdleMinutes ?? 15)
+						: null,
+					offlineDurationMinutes: created.warStartAllowOffline
+						? (created.warStartMinOfflineMinutes ?? null)
 						: null,
 					strickenHits: created.warStartAllowStrickenHits ?? false,
 					levelRange: [
@@ -1237,6 +1258,7 @@ export async function updateMercContract(
 						allowIdle: updates.terms.statuses.idle,
 						allowOffline: updates.terms.statuses.offline,
 						maxIdleMinutes: updates.terms.idleDurationMinutes ?? 15,
+						minOfflineMinutes: updates.terms.offlineDurationMinutes ?? null,
 						allowStrickenHits: updates.terms.strickenHits,
 						minLevel: updates.terms.levelRange[0],
 						maxLevel: updates.terms.levelRange[1],
@@ -1266,6 +1288,8 @@ export async function updateMercContract(
 							updates.warStartTerms?.statuses.offline ?? null,
 						warStartMaxIdleMinutes:
 							updates.warStartTerms?.idleDurationMinutes ?? null,
+						warStartMinOfflineMinutes:
+							updates.warStartTerms?.offlineDurationMinutes ?? null,
 						warStartAllowStrickenHits:
 							updates.warStartTerms?.strickenHits ?? null,
 						warStartMinLevel: updates.warStartTerms?.levelRange[0] ?? null,

@@ -561,6 +561,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					terms: {
 						...body.terms,
 						idleDurationMinutes: body.terms.idleDurationMinutes ?? null,
+						offlineDurationMinutes: body.terms.offlineDurationMinutes ?? null,
 					},
 					hitPrice: effectiveHitPrice,
 					strickenHitPrice: effectiveStrickenPrice,
@@ -570,6 +571,8 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 								...body.warStartTerms,
 								idleDurationMinutes:
 									body.warStartTerms.idleDurationMinutes ?? null,
+								offlineDurationMinutes:
+									body.warStartTerms.offlineDurationMinutes ?? null,
 							}
 						: null,
 					warStartHitPrice: body.warStartHitPrice ?? null,
@@ -652,6 +655,8 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 						offline: t.Boolean(),
 					}),
 					idleDurationMinutes: t.Optional(t.Nullable(t.Number())),
+					// Optional floor on minutes offline; omitted/null means "no minimum".
+					offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 					strickenHits: t.Boolean(),
 					levelRange: t.Tuple([t.Number(), t.Number()]),
 				}),
@@ -667,6 +672,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 								offline: t.Boolean(),
 							}),
 							idleDurationMinutes: t.Optional(t.Nullable(t.Number())),
+							offlineDurationMinutes: t.Optional(t.Nullable(t.Number())),
 							strickenHits: t.Boolean(),
 							levelRange: t.Tuple([t.Number(), t.Number()]),
 						}),

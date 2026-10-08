@@ -47,6 +47,7 @@ import {
 import { updateMercRevivablesList } from "../merc-revivables";
 import { syncReactionRoleMessages } from "../reaction-roles";
 import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distributor";
+import { updateRwFriendlyDisplays } from "../rw-friendly-displays";
 import { updateRwPrimaryDisplays } from "../rw-primary-displays";
 import { updateRwTravelingDisplays } from "../rw-traveling-displays";
 import {
@@ -389,6 +390,11 @@ export function setupBotIpcListeners(client: Client): void {
 			message.data
 		) {
 			void updateRwTravelingDisplays(client, message.data);
+		} else if (
+			message.action === "subversive_rw_friendly_update" &&
+			message.data
+		) {
+			void updateRwFriendlyDisplays(client, message.data);
 		} else if (message.action === "post_dibs_alert" && message.data) {
 			const channelId = message.data.channelId as string;
 			const dibs = message.data

@@ -14,15 +14,16 @@ const logger = new Logger("Scheduler", "RwChannelConfig");
 const CHANNEL_CONFIG_TTL_MS = 30_000;
 
 /**
- * Both ranked-war channel selections for one faction.
+ * Every ranked-war channel selection for one faction.
  *
- * Read together in a single query so adding the secondary channel cost no extra
- * database round-trip: the primary and travel displays are always consulted on
- * the same cycle.
+ * Read together in a single query so adding the secondary and friendly channels
+ * cost no extra database round-trip: all the displays are consulted on the same
+ * cycle.
  */
 export interface RwChannelSelection {
 	primaryDisplaysChannelId: string | null;
 	secondaryDisplaysChannelId: string | null;
+	friendlyDisplaysChannelId: string | null;
 }
 
 type FactionSelections = Map<number, RwChannelSelection>;
@@ -45,10 +46,11 @@ function normalise(value: string | null | undefined): string | null {
 const EMPTY: RwChannelSelection = {
 	primaryDisplaysChannelId: null,
 	secondaryDisplaysChannelId: null,
+	friendlyDisplaysChannelId: null,
 };
 
 /**
- * Reads both channel selections for every given faction.
+ * Reads every channel selection for each given faction.
  *
  * A faction with no row resolves to nulls (nothing selected), which is a normal
  * state rather than an error: the dashboard simply has not been configured for
@@ -82,6 +84,8 @@ export async function resolveRwChannelSelections(
 					subversiveRwChannelConfigs.primaryDisplaysChannelId,
 				secondaryDisplaysChannelId:
 					subversiveRwChannelConfigs.secondaryDisplaysChannelId,
+				friendlyDisplaysChannelId:
+					subversiveRwChannelConfigs.friendlyDisplaysChannelId,
 			})
 			.from(subversiveRwChannelConfigs)
 			.where(inArray(subversiveRwChannelConfigs.factionId, factionIds));
@@ -90,6 +94,7 @@ export async function resolveRwChannelSelections(
 			selections.set(row.factionId, {
 				primaryDisplaysChannelId: normalise(row.primaryDisplaysChannelId),
 				secondaryDisplaysChannelId: normalise(row.secondaryDisplaysChannelId),
+				friendlyDisplaysChannelId: normalise(row.friendlyDisplaysChannelId),
 			});
 		}
 
@@ -125,6 +130,19 @@ export async function resolveSecondaryDisplayChannels(
 		factionIds.map((id) => [
 			id,
 			selections.get(id)?.secondaryDisplaysChannelId ?? null,
+		]),
+	);
+}
+
+/** Reads only the friendly (own revives) displays channel per faction. */
+export async function resolveFriendlyDisplayChannels(
+	factionIds: number[],
+): Promise<Map<number, string | null>> {
+	const selections = await resolveRwChannelSelections(factionIds);
+	return new Map(
+		factionIds.map((id) => [
+			id,
+			selections.get(id)?.friendlyDisplaysChannelId ?? null,
 		]),
 	);
 }

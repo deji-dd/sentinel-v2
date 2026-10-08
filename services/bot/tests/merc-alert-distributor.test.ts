@@ -150,6 +150,7 @@ describe("Merc Alert Distributor Timestamps & Formatting", () => {
 				terms: {
 					statuses: { online: true, idle: true, offline: false },
 					idleDurationMinutes: 15,
+					offlineDurationMinutes: null,
 					strickenHits: false,
 					levelRange: [1, 100],
 				},
@@ -181,6 +182,103 @@ describe("Merc Alert Distributor Timestamps & Formatting", () => {
 
 			expect(startField?.value).toContain("TCT");
 			expect(endField?.value).toContain("TCT");
+		});
+
+		it("shows a minimum offline duration only when the contract sets one", async () => {
+			const sentPayloads: Array<{ embeds?: unknown[] }> = [];
+			const mockChannel = {
+				id: "chan-upcoming",
+				name: "upcoming-contracts",
+				isTextBased: () => true,
+				send: mock(async (payload: { embeds?: unknown[] }) => {
+					sentPayloads.push(payload);
+					return { id: `msg-${sentPayloads.length}` };
+				}),
+			};
+
+			const mockGuild = {
+				id: "guild-offline-term",
+				name: "Test Guild",
+				channels: {
+					cache: new Map([["upcoming-contracts", mockChannel]]),
+					fetch: mock(
+						async () => new Map([["upcoming-contracts", mockChannel]]),
+					),
+				},
+			};
+
+			const mockClient = {
+				guilds: {
+					cache: new Map([[mockGuild.id, mockGuild]]),
+					fetch: mock(async () => mockGuild),
+				},
+			} as unknown as Client;
+
+			spyOn(database, "getMercChannelConfig").mockResolvedValue({
+				contractCreation: null,
+				pastContracts: null,
+				upcomingContracts: "upcoming-contracts",
+				targets: null,
+				mercLog: null,
+				clientCategory: null,
+				archiveCategory: null,
+			});
+
+			const baseContract: database.MercContract = {
+				id: "contract-offline-term-test",
+				guildId: mockGuild.id,
+				factionId: 5555,
+				factionName: "TargetFaction",
+				warStatusAtCreation: "upcoming",
+				startTime: "2026-10-05T18:00:00.000Z",
+				endTime: "2026-10-07T18:00:00.000Z",
+				endOnWarEnd: false,
+				terms: {
+					statuses: { online: true, idle: true, offline: true },
+					idleDurationMinutes: 15,
+					offlineDurationMinutes: null,
+					strickenHits: false,
+					levelRange: [1, 100],
+				},
+				hitPrice: 3000000,
+				status: "upcoming",
+				createdAt: new Date().toISOString(),
+			};
+
+			await postMercContractAnnouncement(
+				mockClient,
+				mockGuild.id,
+				"upcoming-contracts",
+				baseContract,
+			);
+			await postMercContractAnnouncement(
+				mockClient,
+				mockGuild.id,
+				"upcoming-contracts",
+				{
+					...baseContract,
+					terms: {
+						...baseContract.terms,
+						offlineDurationMinutes: 45,
+					},
+				},
+			);
+
+			const statusValues = sentPayloads.map((payload) => {
+				const embed = (
+					payload.embeds as Array<{
+						data: {
+							fields: Array<{ name: string; value: string }>;
+						};
+					}>
+				)[0];
+				return embed?.data.fields.find((f) => f.name === "Target Statuses")
+					?.value;
+			});
+
+			// Unset minimum: the status is listed without inventing a duration.
+			expect(statusValues[0]).toBe("Online, Idle (15m min), Offline");
+			expect(statusValues[1]).toBe("Online, Idle (15m min), Offline (45m min)");
 		});
 	});
 });

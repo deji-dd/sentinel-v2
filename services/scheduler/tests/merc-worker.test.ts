@@ -29,6 +29,7 @@ const mockContract: MercContract = {
 			offline: false,
 		},
 		idleDurationMinutes: 15,
+		offlineDurationMinutes: null,
 		strickenHits: true,
 	},
 	createdAt: new Date().toISOString(),
@@ -909,6 +910,223 @@ describe("MercTargetManager - Claims, 20s Expiration & Reposting", () => {
 			nowMs,
 		);
 		expect(manager.getAlert(offlineContract.id, 3002)).toBeDefined();
+	});
+
+	it("enforces a minimum offline duration when one is set and ignores it when unset", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = 1_700_000_000;
+		const nowMs = nowSec * 1000;
+
+		const minOfflineContract: MercContract = {
+			...mockContract,
+			id: "contract-offline-min-30",
+			terms: {
+				...mockContract.terms,
+				statuses: {
+					online: false,
+					idle: false,
+					offline: true,
+				},
+				offlineDurationMinutes: 30,
+			},
+		};
+
+		const recentlyOffline = createMockMember({
+			id: 3101,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 10 * 60,
+				relative: "10 minutes ago",
+			},
+		});
+
+		const longOffline = createMockMember({
+			id: 3102,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 45 * 60,
+				relative: "45 minutes ago",
+			},
+		});
+
+		// 10 minutes offline < 30 minute floor -> disqualified
+		await manager.processMember(
+			minOfflineContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			recentlyOffline,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(minOfflineContract.id, 3101)).toBeUndefined();
+
+		// 45 minutes offline >= 30 minute floor -> qualifies
+		await manager.processMember(
+			minOfflineContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			longOffline,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(minOfflineContract.id, 3102)).toBeDefined();
+
+		// Unset (the default) keeps the 10-minute-offline target eligible.
+		const noMinimumContract: MercContract = {
+			...minOfflineContract,
+			id: "contract-offline-no-min",
+			terms: {
+				...minOfflineContract.terms,
+				offlineDurationMinutes: null,
+			},
+		};
+		const freshManager = new MercTargetManager();
+		await freshManager.processMember(
+			noMinimumContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			recentlyOffline,
+			nowSec,
+			nowMs,
+		);
+		expect(freshManager.getAlert(noMinimumContract.id, 3101)).toBeDefined();
+	});
+
+	it("tears down a posted offline alert once the minimum is raised past the target's offline time", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = 1_700_000_500;
+		const nowMs = nowSec * 1000;
+
+		const noMinimumContract: MercContract = {
+			...mockContract,
+			id: "contract-offline-raise-min",
+			terms: {
+				...mockContract.terms,
+				statuses: {
+					online: false,
+					idle: false,
+					offline: true,
+				},
+				offlineDurationMinutes: null,
+			},
+		};
+
+		const member = createMockMember({
+			id: 3201,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 5 * 60,
+				relative: "5 minutes ago",
+			},
+		});
+
+		await manager.processMember(
+			noMinimumContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			member,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(noMinimumContract.id, 3201)).toBeDefined();
+
+		// Operator edits the live contract terms: a 30 minute floor now applies.
+		const editedContract: MercContract = {
+			...noMinimumContract,
+			terms: {
+				...noMinimumContract.terms,
+				offlineDurationMinutes: 30,
+			},
+		};
+
+		await manager.processMember(
+			editedContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			member,
+			nowSec + 1,
+			(nowSec + 1) * 1000,
+		);
+		expect(manager.getAlert(editedContract.id, 3201)).toBeUndefined();
+	});
+
+	it("uses the war-start minimum offline duration once the war has begun", async () => {
+		const manager = new MercTargetManager();
+		const warStartSec = 1_700_000_000;
+		const nowSec = warStartSec + 300; // war started 5 minutes ago
+		const nowMs = nowSec * 1000;
+
+		const contract: MercContract = {
+			...mockContract,
+			id: "contract-offline-war-start",
+			warStatusAtCreation: "upcoming",
+			warStart: warStartSec,
+			warEnd: warStartSec + 3600,
+			changeTermsOnWarStart: true,
+			terms: {
+				...mockContract.terms,
+				statuses: {
+					online: false,
+					idle: false,
+					offline: true,
+				},
+				offlineDurationMinutes: null,
+			},
+			warStartTerms: {
+				...mockContract.terms,
+				statuses: {
+					online: false,
+					idle: false,
+					offline: true,
+				},
+				offlineDurationMinutes: 60,
+			},
+		};
+
+		// 20 minutes offline < 60 minute war-start floor -> disqualified
+		const member = createMockMember({
+			id: 3301,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 20 * 60,
+				relative: "20 minutes ago",
+			},
+		});
+		await manager.processMember(
+			contract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			member,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(contract.id, 3301)).toBeUndefined();
+
+		// 90 minutes offline >= 60 minute war-start floor -> qualifies
+		const longerOffline = createMockMember({
+			id: 3302,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 90 * 60,
+				relative: "90 minutes ago",
+			},
+		});
+		await manager.processMember(
+			contract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			longerOffline,
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert(contract.id, 3302)).toBeDefined();
 	});
 
 	it("applies 60s RW cooldown when contract was created as upcoming but war is now active", async () => {

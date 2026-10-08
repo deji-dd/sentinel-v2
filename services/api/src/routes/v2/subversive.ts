@@ -1340,11 +1340,12 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				factionId: t.Optional(t.Numeric()),
 				primaryDisplaysChannelId: t.Optional(t.Nullable(t.String())),
 				secondaryDisplaysChannelId: t.Optional(t.Nullable(t.String())),
+				friendlyDisplaysChannelId: t.Optional(t.Nullable(t.String())),
 			}),
 			detail: {
 				summary: "Update Subversive Ranked-War Channel Selections",
 				description:
-					"Routes ranked-war tooling channels for one family faction. The primary and secondary selections must differ.",
+					"Routes ranked-war tooling channels for one family faction. The primary, secondary and friendly selections must all differ.",
 			},
 		},
 	)
