@@ -263,6 +263,100 @@ describe("Wealth ledger routes", () => {
 		}
 	});
 
+	test("the movements view hides events that changed nothing", async () => {
+		await seed();
+		// A neutral row: real history, but not a transaction.
+		await db.insert(ledgerEvents).values(
+			eventRow(`${PREFIX}neutral_ev`, {
+				logId: `${PREFIX}log`,
+				logType: 8160,
+				wealthCategory: "attacks",
+				transactionName: "Hospitalised a target",
+				walletDelta: 0,
+				assetDelta: 0,
+			}),
+		);
+
+		// The default list is movements, which is what a reader scanning day by day
+		// wants: a table of zero-value rows buries the ones that matter.
+		const movements = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?limit=50",
+			),
+		);
+		const movementBody = (await movements.json()) as WealthTransactionsResponse;
+		expect(
+			movementBody.transactions.some((row) => row.id === `${PREFIX}neutral_ev`),
+		).toBe(false);
+
+		// Asking for everything brings it back.
+		const all = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?limit=50&movements=0",
+			),
+		);
+		const allBody = (await all.json()) as WealthTransactionsResponse;
+		expect(allBody.total).toBeGreaterThan(movementBody.total);
+
+		await db
+			.delete(ledgerEvents)
+			.where(eq(ledgerEvents.id, `${PREFIX}neutral_ev`));
+	});
+
+	test("an unpriced row says why it is unpriced", async () => {
+		await seed();
+		// `movements=0` matters here: an event the ledger could not value usually
+		// has a recorded movement of zero, which is exactly why it needs looking
+		// at. Filtering by movement would return an empty table for the very
+		// question this view exists to answer.
+		const response = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?priced=0&payloads=1&movements=0&limit=50",
+			),
+		);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as WealthTransactionsResponse;
+		expect(body.transactions.length).toBeGreaterThan(0);
+		for (const row of body.transactions) {
+			expect(row.priced).toBe(false);
+			// "Unpriced" alone is not actionable, so every row carries a reason.
+			expect(typeof row.pricingNote).toBe("string");
+			expect(row.pricingNote?.length ?? 0).toBeGreaterThan(0);
+		}
+	});
+
+	test("the priced filter is exact in both directions", async () => {
+		await seed();
+		const priced = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?priced=1&movements=0&limit=50",
+			),
+		);
+		const pricedBody = (await priced.json()) as WealthTransactionsResponse;
+		for (const row of pricedBody.transactions) expect(row.priced).toBe(true);
+
+		const unpriced = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?priced=0&movements=0&limit=50",
+			),
+		);
+		const unpricedBody = (await unpriced.json()) as WealthTransactionsResponse;
+		for (const row of unpricedBody.transactions) expect(row.priced).toBe(false);
+	});
+
+	test("paging reports the total so the client can size the table", async () => {
+		await seed();
+		const response = await app.handle(
+			new Request(
+				"http://localhost/v2/system/wealth-ledger/transactions?limit=1&offset=0&movements=0",
+			),
+		);
+		const body = (await response.json()) as WealthTransactionsResponse;
+		expect(body.transactions.length).toBeLessThanOrEqual(1);
+		expect(body.total).toBeGreaterThanOrEqual(body.transactions.length);
+	});
+
 	test("an unrecognised log type surfaces in coverage instead of vanishing", async () => {
 		await seed();
 		await db.insert(ledgerEvents).values(

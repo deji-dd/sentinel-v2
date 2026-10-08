@@ -15,6 +15,7 @@ import type {
 	WealthStateResponse,
 	WealthTimelinePoint,
 	WealthTransaction,
+	WealthTransactionsResponse,
 } from "../types";
 import { renderLineChart } from "../ui/chart-core";
 import {
@@ -159,6 +160,19 @@ export class WealthTab {
 	private analytics: WealthAnalyticsResponse | null = null;
 	private timeframe: "7d" | "30d" | "90d" | "all" = "30d";
 	private chartMode: "cash" | "networth" = "cash";
+	/**
+	 * `movements` is the day-to-day list: rows that changed something, newest
+	 * first, paged. `all` adds the neutral history back. `unpriced` is the
+	 * debugging view, where each row says why it could not be valued and shows the
+	 * payload it came from.
+	 */
+	private ledgerView: "movements" | "all" | "unpriced" = "movements";
+	private ledgerPage = 0;
+	private ledgerPageSize = 50;
+	private ledgerCategory = "";
+	private ledger: WealthTransactionsResponse | null = null;
+	private ledgerLoading = false;
+	private expandedPayloads = new Set<string>();
 	private sort: SortState<WealthSortKey> = {
 		key: "netWorthDelta",
 		direction: "desc",
@@ -225,6 +239,7 @@ export class WealthTab {
 			this.balances = stateRes.balances;
 			this.analytics = analyticsRes;
 			this.render();
+			await this.loadLedgerPage(seq);
 		} catch (err) {
 			if (seq !== this.requestSeq) return;
 			console.error("[Blasted's Script] Error refreshing wealth data:", err);
@@ -276,11 +291,12 @@ export class WealthTab {
 			${this.renderChartCard()}
 			${this.renderAccounts(balances)}
 			${analytics ? this.renderCategoryTable(analytics.categories) : ""}
-			${analytics ? this.renderTopEvents(analytics.topEvents) : ""}
+			${this.renderLedgerTable()}
 			${this.renderCoverage(state)}
 		`;
 
 		this.attachEventListeners();
+		this.bindLedgerControls();
 		this.renderChartOnly();
 	}
 
@@ -544,37 +560,115 @@ export class WealthTab {
 		`;
 	}
 
-	private renderTopEvents(events: WealthTransaction[]): string {
-		if (events.length === 0) return "";
-		const rows = events
-			.map(
-				(event) => `
-					<tr>
-						<td class="text-left" style="white-space: nowrap;">${escapeHtml(
-							formatTimestamp(
-								Math.floor(new Date(event.timestamp).getTime() / 1000),
-							),
-						)}</td>
-						<td class="text-left">${escapeHtml(event.label)}</td>
-						<td class="text-left">${escapeHtml(CATEGORY_LABELS[event.category] ?? event.category)}</td>
-						<td class="text-right">${
-							event.walletDelta === 0 ? "—" : signedMoney(event.walletDelta)
-						}</td>
-						<td class="text-right">${signedMoney(event.netWorthDelta)}${
-							event.priced
-								? ""
-								: ` <span style="color: #fbbf24;" title="This event could not be fully priced">⚠</span>`
-						}</td>
-					</tr>
-				`,
-			)
-			.join("");
+	/**
+	 * Fetches one page of the ledger for the current view.
+	 *
+	 * Kept separate from `refresh` because paging and filtering must not re-fetch
+	 * the analytics, the balances or the chart — only the table changes.
+	 */
+	private async loadLedgerPage(seq: number): Promise<void> {
+		this.ledgerLoading = true;
+		this.renderLedgerOnly();
+		try {
+			const page = await apiClient.getWealthTransactions({
+				limit: this.ledgerPageSize,
+				offset: this.ledgerPage * this.ledgerPageSize,
+				category: this.ledgerCategory || undefined,
+				priced: this.ledgerView === "unpriced" ? "0" : undefined,
+				// Only the day-to-day view filters by movement. The unpriced view
+				// must NOT: an event the ledger could not value usually has a
+				// recorded movement of zero, which is precisely why it needs
+				// looking at, and filtering it out would show an empty table for
+				// the one question being asked.
+				movements: this.ledgerView === "movements" ? "1" : "0",
+				// The debugging view is the only one that needs the raw payload.
+				payloads: this.ledgerView === "unpriced" ? "1" : undefined,
+			});
+			if (seq !== this.requestSeq) return;
+			this.ledger = page;
+			// A filter change can leave the reader past the last page.
+			const lastPage = Math.max(
+				0,
+				Math.ceil(page.total / this.ledgerPageSize) - 1,
+			);
+			if (this.ledgerPage > lastPage) {
+				this.ledgerPage = lastPage;
+				this.ledgerLoading = false;
+				await this.loadLedgerPage(seq);
+				return;
+			}
+		} catch (err) {
+			if (seq !== this.requestSeq) return;
+			console.error("[Blasted's Script] Error loading wealth movements:", err);
+			this.ledger = null;
+		}
+		this.ledgerLoading = false;
+		this.renderLedgerOnly();
+	}
+
+	/** Repaints only the ledger card, leaving the chart and KPIs alone. */
+	private renderLedgerOnly(): void {
+		const host = this.container.querySelector<HTMLElement>("#wealth-ledger");
+		if (!host) return;
+		host.outerHTML = this.renderLedgerTable();
+		this.bindLedgerControls();
+	}
+
+	private renderLedgerTable(): string {
+		const ledger = this.ledger;
+		const total = ledger?.total ?? 0;
+		const lastPage = Math.max(0, Math.ceil(total / this.ledgerPageSize) - 1);
+		const page = Math.min(this.ledgerPage, lastPage);
+
+		const categories = (this.analytics?.categories ?? []).map(
+			(row) => row.category,
+		);
+		const categoryOptions = [
+			`<option value="">All categories</option>`,
+			...categories.map(
+				(category) =>
+					`<option value="${escapeHtml(category)}" ${this.ledgerCategory === category ? "selected" : ""}>${escapeHtml(CATEGORY_LABELS[category] ?? category)}</option>`,
+			),
+		].join("");
+
+		const viewPill = (
+			view: "movements" | "all" | "unpriced",
+			label: string,
+		): string =>
+			`<button class="btn-pill ${this.ledgerView === view ? "active" : ""}" data-ledger-view="${view}">${label}</button>`;
+
+		const body = this.renderLedgerRows(ledger?.transactions ?? []);
 
 		return `
-			<div class="table-card">
+			<div class="table-card" id="wealth-ledger">
 				<div class="table-header-title">
-					<span>Largest Movements</span>
+					<span>${this.ledgerView === "unpriced" ? "Unpriced Events" : "Movements"}</span>
+					<span class="table-header-meta">${
+						this.ledgerLoading
+							? "Loading…"
+							: `${formatNumber(total)} row${total === 1 ? "" : "s"}`
+					}</span>
 				</div>
+				<div class="table-filter-row" style="flex-wrap: wrap; gap: 8px;">
+					<div class="btn-pill-group">
+						${viewPill("movements", "Movements")}
+						${viewPill("all", "Everything")}
+						${viewPill("unpriced", "Unpriced")}
+					</div>
+					<label class="table-filter">
+						<span class="sr-only">Filter by category</span>
+						<select id="wealth-ledger-category" class="input-text">${categoryOptions}</select>
+					</label>
+				</div>
+				${
+					this.ledgerView === "unpriced"
+						? `<div style="font-size: 11px; color: #fbbf24; padding: 0 14px 8px;">
+								These events are recorded and counted but carry no trustworthy amount, so
+								they are excluded from the totals rather than counted as zero. Each row
+								says why. Expand a row to see the Torn payload it was built from.
+							</div>`
+						: ""
+				}
 				<div class="table-wrap">
 					<table>
 						<thead>
@@ -584,17 +678,145 @@ export class WealthTab {
 								<th class="text-left">Category</th>
 								<th class="text-right">Wallet</th>
 								<th class="text-right">Net Worth</th>
+								<th class="text-left">Type</th>
 							</tr>
 						</thead>
-						<tbody>${rows}</tbody>
+						<tbody>${body}</tbody>
 					</table>
 				</div>
-				<div style="font-size: 11px; color: #94a3b8; padding: 8px 14px 12px;">
-					⚠ marks an event whose amount could not be fully established, so its
-					figure is a floor rather than a measurement.
+				<div class="table-filter-row" style="justify-content: space-between; align-items: center;">
+					<button id="wealth-ledger-prev" class="btn-primary" ${
+						this.ledgerLoading || page <= 0 ? "disabled" : ""
+					} style="width: fit-content;">← Newer</button>
+					<span class="table-header-meta">Page ${total === 0 ? 0 : page + 1} of ${total === 0 ? 0 : lastPage + 1}</span>
+					<button id="wealth-ledger-next" class="btn-primary" ${
+						this.ledgerLoading || page >= lastPage ? "disabled" : ""
+					} style="width: fit-content;">Older →</button>
 				</div>
 			</div>
 		`;
+	}
+
+	private renderLedgerRows(transactions: WealthTransaction[]): string {
+		if (transactions.length === 0) {
+			return `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">${
+				this.ledgerView === "unpriced"
+					? "Nothing in the ledger is unpriced. Every event carries a figure."
+					: "No movements recorded in this window."
+			}</td></tr>`;
+		}
+
+		return transactions
+			.map((event) => {
+				const when = formatTimestamp(
+					Math.floor(new Date(event.timestamp).getTime() / 1000),
+				);
+				const warning = event.priced
+					? ""
+					: ` <span style="color: #fbbf24;" title="${escapeHtml(event.pricingNote ?? "Not fully priced")}">⚠</span>`;
+				const note = event.pricingNote
+					? `<div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">${escapeHtml(event.pricingNote)}</div>`
+					: "";
+				const payloadRow =
+					event.rawPayload === undefined
+						? ""
+						: `<tr id="payload-${escapeHtml(event.id)}" style="display: none;">
+								<td colspan="6" style="background: #0f172a;">
+									<div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px;">Torn payload for log ${event.logType}:</div>
+									<pre style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; color: #cbd5e1;">${escapeHtml(JSON.stringify(event.rawPayload, null, 2))}</pre>
+								</td>
+							</tr>`;
+				const expandable =
+					event.rawPayload === undefined
+						? ""
+						: ` data-expand="${escapeHtml(event.id)}" style="cursor: pointer;" title="Show the Torn payload"`;
+
+				return `
+					<tr${expandable}>
+						<td class="text-left" style="white-space: nowrap;">${escapeHtml(when)}</td>
+						<td class="text-left">${escapeHtml(event.label)}${warning}${note}</td>
+						<td class="text-left">${escapeHtml(CATEGORY_LABELS[event.category] ?? event.category)}</td>
+						<td class="text-right">${
+							event.walletDelta === 0 ? "—" : signedMoney(event.walletDelta)
+						}</td>
+						<td class="text-right">${
+							event.netWorthDelta === 0 ? "—" : signedMoney(event.netWorthDelta)
+						}</td>
+						<td class="text-left" style="white-space: nowrap;">${
+							event.account
+								? `→ ${escapeHtml(ACCOUNT_LABELS[event.account] ?? event.account)}`
+								: event.itemsIn.length > 0
+									? `+${formatNumber(event.itemsIn.reduce((sum, item) => sum + item.quantity, 0))} items`
+									: event.itemsOut.length > 0
+										? `−${formatNumber(event.itemsOut.reduce((sum, item) => sum + item.quantity, 0))} items`
+										: "—"
+						}</td>
+					</tr>
+					${payloadRow}
+				`;
+			})
+			.join("");
+	}
+
+	private bindLedgerControls(): void {
+		this.container
+			.querySelectorAll<HTMLButtonElement>("[data-ledger-view]")
+			.forEach((btn) => {
+				btn.addEventListener("click", () => {
+					const view = btn.getAttribute("data-ledger-view");
+					if (view !== "movements" && view !== "all" && view !== "unpriced") {
+						return;
+					}
+					this.ledgerView = view;
+					// A different view is a different result set, so paging restarts.
+					this.ledgerPage = 0;
+					this.expandedPayloads.clear();
+					this.render();
+					void this.loadLedgerPage(this.requestSeq);
+				});
+			});
+
+		const categorySelect = this.container.querySelector<HTMLSelectElement>(
+			"#wealth-ledger-category",
+		);
+		categorySelect?.addEventListener("change", () => {
+			this.ledgerCategory = categorySelect.value;
+			this.ledgerPage = 0;
+			this.render();
+			void this.loadLedgerPage(this.requestSeq);
+		});
+
+		this.container
+			.querySelector<HTMLButtonElement>("#wealth-ledger-prev")
+			?.addEventListener("click", () => {
+				this.ledgerPage = Math.max(0, this.ledgerPage - 1);
+				void this.loadLedgerPage(this.requestSeq);
+			});
+
+		this.container
+			.querySelector<HTMLButtonElement>("#wealth-ledger-next")
+			?.addEventListener("click", () => {
+				this.ledgerPage += 1;
+				void this.loadLedgerPage(this.requestSeq);
+			});
+
+		// Clicking a row reveals the payload it was classified from.
+		this.container
+			.querySelectorAll<HTMLElement>("[data-expand]")
+			.forEach((row) => {
+				row.addEventListener("click", () => {
+					const id = row.getAttribute("data-expand");
+					if (!id) return;
+					const payload = this.container.querySelector<HTMLElement>(
+						`#payload-${CSS.escape(id)}`,
+					);
+					if (!payload) return;
+					const open = payload.style.display !== "none";
+					payload.style.display = open ? "none" : "table-row";
+					if (open) this.expandedPayloads.delete(id);
+					else this.expandedPayloads.add(id);
+				});
+			});
 	}
 
 	/**
@@ -663,6 +885,7 @@ export class WealthTab {
 								${formatNumber(coverage.unpricedEvents)} events could not be fully priced,
 								carrying ${formatMoney(coverage.unpricedAmount)} of movement. Those
 								amounts are excluded from the totals rather than counted as zero.
+								<button id="wealth-show-unpriced" class="btn-pill" style="margin-left: 6px;">Review them ↓</button>
 							</div>`
 						: ""
 				}
@@ -696,6 +919,19 @@ export class WealthTab {
 						this.render();
 					}
 				});
+			});
+
+		// The coverage line is a claim about specific rows, so it links to them.
+		this.container
+			.querySelector<HTMLButtonElement>("#wealth-show-unpriced")
+			?.addEventListener("click", () => {
+				this.ledgerView = "unpriced";
+				this.ledgerPage = 0;
+				this.render();
+				void this.loadLedgerPage(this.requestSeq);
+				this.container
+					.querySelector("#wealth-ledger")
+					?.scrollIntoView({ behavior: "smooth", block: "start" });
 			});
 
 		bindSortableHeaders(this.container, WEALTH_SORT_KEYS, (key) => {

@@ -185,6 +185,29 @@ export async function requestCrimeLedgerReinitialize(): Promise<boolean> {
 }
 
 /**
+ * Dispatches an IPC request to the Scheduler to re-anchor the wealth ledger.
+ *
+ * Anchoring is destructive by design: it wipes `ledger_events` and rebuilds it
+ * from the personal log, with day-zero balances measured as of 00:00 UTC on the
+ * day it runs. That is what the engine needs in order to be correct, so this is
+ * the escape hatch for the case where the ledger is in a state worth discarding.
+ */
+export async function requestWealthReinitialize(): Promise<boolean> {
+	try {
+		const delivered = await notifySchedulerAction("reinitialize_wealth");
+		if (!delivered) {
+			logger.warn(
+				"Could not reach scheduler via IPC; the wealth ledger will re-anchor on scheduler startup.",
+			);
+		}
+		return delivered;
+	} catch (err) {
+		logger.error("Failed to send wealth re-anchor IPC:", err);
+		return false;
+	}
+}
+
+/**
  * Dispatches an IPC request to the Scheduler to re-initialize the battlestats ledger:
  * wipes battlestats_ledgers and regenerates all records from personal_logs.
  */

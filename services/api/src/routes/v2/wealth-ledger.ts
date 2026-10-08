@@ -4,7 +4,10 @@ import {
 	desc,
 	eq,
 	gte,
+	inArray,
 	ledgerEvents,
+	lte,
+	personalLogs,
 	sql,
 	systemStates,
 	wealthAccountSnapshots,
@@ -21,9 +24,12 @@ import type {
 	WealthTransaction,
 	WealthTransactionsResponse,
 } from "@sentinel/schemas";
-import { extractItemMarketPrice, Logger } from "@sentinel/utils";
+import { extractItemMarketPrice, getWealthRule, Logger } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
-import { notifySchedulerForceRun } from "../../lib/scheduler-ipc";
+import {
+	notifySchedulerForceRun,
+	requestWealthReinitialize,
+} from "../../lib/scheduler-ipc";
 import { authenticateCrimeLedgerRequest } from "./crime-ledger";
 
 /**
@@ -106,10 +112,46 @@ function readAssetsAffected(raw: unknown): AssetEffect[] {
 	return out;
 }
 
+/**
+ * Why this event has no trustworthy figure.
+ *
+ * "Unpriced" alone tells a reader nothing they can act on, so this names the
+ * specific cause. The three are genuinely different problems: a log type with no
+ * pricing rule needs a rule, an item with no market price needs a price, and a
+ * payload missing the field its rule names means the rule is wrong.
+ */
+function explainPricing(
+	row: LedgerEventRow,
+	items: readonly WealthEventItem[],
+): string {
+	const rule = getWealthRule(row.logType ?? 0);
+	if (rule && rule.priced === false) {
+		return rule.evidence
+			? `Recorded but deliberately not valued — ${rule.evidence}`
+			: `Log type ${row.logType} is recorded but has no pricing rule.`;
+	}
+	if (!rule) {
+		return `Log type ${row.logType} has no rule and no band, so its movements are counted but never valued.`;
+	}
+
+	const unpriced = items.filter((item) => item.marketPrice <= 0);
+	if (unpriced.length > 0) {
+		return `No market price for item ${[
+			...new Set(unpriced.map((item) => item.itemId)),
+		].join(", ")}, so this movement is a floor rather than a total.`;
+	}
+
+	const fields = rule.wallet?.[0]?.fields.join(" or ");
+	return fields
+		? `The payload carried no \`${fields}\`, so no amount could be read.`
+		: "The payload carried nothing this log type is known to value.";
+}
+
 function toTransactions(
 	rows: LedgerEventRow[],
 	prices: ReadonlyMap<string, number>,
 	names: ReadonlyMap<string, string>,
+	payloads?: ReadonlyMap<string, unknown>,
 ): WealthTransaction[] {
 	return rows.map((row) => {
 		const effects = readAssetsAffected(row.assetsAffected);
@@ -132,7 +174,10 @@ function toTransactions(
 					};
 				});
 
-		return {
+		const itemsIn = build(1);
+		const itemsOut = build(-1);
+
+		const transaction: WealthTransaction = {
 			id: row.id,
 			logId: row.logId ?? "",
 			logType: row.logType ?? 0,
@@ -145,11 +190,19 @@ function toTransactions(
 			walletDelta: row.walletDelta,
 			account: (row.account ?? null) as WealthTransaction["account"],
 			accountDelta: row.accountDelta,
-			itemsIn: build(1),
-			itemsOut: build(-1),
+			itemsIn,
+			itemsOut,
 			netWorthDelta: row.assetDelta,
 			priced: row.priced,
 		};
+
+		if (!row.priced) {
+			transaction.pricingNote = explainPricing(row, [...itemsIn, ...itemsOut]);
+			const payload = payloads?.get(row.logId ?? "");
+			if (payload !== undefined) transaction.rawPayload = payload;
+		}
+
+		return transaction;
 	});
 }
 
@@ -205,9 +258,19 @@ async function loadState(): Promise<{
 		.orderBy(desc(sql`count(*)`))
 		.limit(50);
 
+	// The anchor row is the authority on whether the ledger is usable, not the
+	// saved flag: init writes that flag before doing its work, so a run that
+	// failed half way leaves a state claiming to be anchored with nothing behind
+	// it. Reporting from the flag is what showed "anchored" over zero balances.
+	const [anchorRow] = await db
+		.select({ id: wealthAccountSnapshots.id })
+		.from(wealthAccountSnapshots)
+		.where(eq(wealthAccountSnapshots.source, "anchor"))
+		.limit(1);
+
 	const state: WealthLedgerState = {
 		status: stored.status ?? "idle",
-		initialised: stored.initialised ?? false,
+		initialised: anchorRow !== undefined,
 		anchorTimestamp: stored.anchorTimestamp ?? null,
 		anchorDate: stored.anchorDate ?? null,
 		totalIndexedEvents: stored.totalIndexedEvents ?? 0,
@@ -515,22 +578,56 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 			},
 		},
 	)
-	// GET /v2/system/wealth-ledger/transactions — the raw ledger, paged
+	// GET /v2/system/wealth-ledger/transactions — the ledger, paged and filtered
 	.get(
 		"/transactions",
 		async ({ query }): Promise<WealthTransactionsResponse> => {
 			const limit = Math.min(Math.max(Number(query.limit ?? 50) || 50, 1), 200);
 			const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
 
+			// `priced` selects between the whole ledger, only what can be trusted,
+			// and only what cannot — which is the debugging view.
+			const pricedFilter = query.priced;
+			// A "movement" is an event that changed something. This is ON by
+			// default: a forum post is real history but it is not a transaction, and
+			// a list full of them buries the rows the reader came for. `movements=0`
+			// asks for the whole ledger, which is what the audit wants.
+			const movementsOnly = query.movements !== "0";
+
 			const filters = [];
+			if (pricedFilter === "1") filters.push(eq(ledgerEvents.priced, true));
+			if (pricedFilter === "0") filters.push(eq(ledgerEvents.priced, false));
 			if (query.category) {
 				filters.push(eq(ledgerEvents.wealthCategory, query.category));
+			}
+			if (query.logType) {
+				const logType = Number(query.logType);
+				if (Number.isInteger(logType)) {
+					filters.push(eq(ledgerEvents.logType, logType));
+				}
+			}
+			if (query.from) {
+				const from = new Date(query.from);
+				if (!Number.isNaN(from.getTime())) {
+					filters.push(gte(ledgerEvents.timestamp, from));
+				}
+			}
+			if (query.to) {
+				const to = new Date(query.to);
+				if (!Number.isNaN(to.getTime())) {
+					filters.push(lte(ledgerEvents.timestamp, to));
+				}
 			}
 			if (query.minAmount) {
 				const amount = Number(query.minAmount);
 				if (Number.isFinite(amount)) {
 					filters.push(gte(sql`abs(${ledgerEvents.assetDelta})`, amount));
 				}
+			}
+			if (movementsOnly) {
+				filters.push(
+					sql`(${ledgerEvents.walletDelta} <> 0 or ${ledgerEvents.accountDelta} <> 0 or ${ledgerEvents.assetDelta} <> 0 or ${ledgerEvents.assetsAffected} <> '[]'::jsonb)`,
+				);
 			}
 			const where = filters.length > 0 ? and(...filters) : undefined;
 
@@ -543,7 +640,7 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 				.select()
 				.from(ledgerEvents)
 				.where(where)
-				.orderBy(desc(ledgerEvents.timestamp))
+				.orderBy(desc(ledgerEvents.timestamp), desc(ledgerEvents.id))
 				.limit(limit)
 				.offset(offset);
 
@@ -552,12 +649,35 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 				loadItemNames(),
 			]);
 
+			// The raw payload is fetched only when it is going to be shown. It is
+			// what makes an unpriced row fixable without opening the database.
+			let payloads: Map<string, unknown> | undefined;
+			if (query.payloads === "1" && rows.length > 0) {
+				const logIds = rows
+					.map((row) => row.logId)
+					.filter(
+						(id): id is string => typeof id === "string" && id.length > 0,
+					);
+				if (logIds.length > 0) {
+					const logRows = await db
+						.select({ id: personalLogs.id, data: personalLogs.data })
+						.from(personalLogs)
+						.where(inArray(personalLogs.id, logIds));
+					payloads = new Map(
+						logRows.map((row) => [
+							row.id,
+							(row.data as Record<string, unknown> | null)?.data ?? row.data,
+						]),
+					);
+				}
+			}
+
 			return {
 				success: true,
 				total: Number(countRow?.total ?? 0),
 				offset,
 				limit,
-				transactions: toTransactions(rows, prices, names),
+				transactions: toTransactions(rows, prices, names, payloads),
 			};
 		},
 		{
@@ -565,15 +685,47 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 				limit: t.Optional(t.String()),
 				offset: t.Optional(t.String()),
 				category: t.Optional(t.String()),
+				logType: t.Optional(t.String()),
 				minAmount: t.Optional(t.String()),
+				/** `1` priced only, `0` unpriced only, omitted for everything. */
+				priced: t.Optional(t.String()),
+				/** `0` to include events that changed nothing. On by default. */
+				movements: t.Optional(t.String()),
+				/** `1` to include the raw Torn payload on unpriced rows. */
+				payloads: t.Optional(t.String()),
+				from: t.Optional(t.String()),
+				to: t.Optional(t.String()),
 			}),
 			detail: {
 				summary: "Wealth transactions",
 				description:
-					"The ledger itself, newest first, filterable by category and minimum magnitude.",
+					"The ledger itself, newest first. Filter by category, log type, date range, minimum magnitude, and by whether the amount could be trusted. Rows that are not fully priced come back with a plain-language reason and, on request, the raw payload they were built from. Note that the movement filter is ON by default and `priced=0` does not turn it off: an unpriced event usually has a zero movement, so a caller asking for unpriced rows almost always wants `movements=0` too.",
 			},
 		},
 	)
+
+	// POST /v2/system/wealth-ledger/reinitialize — re-anchor from scratch
+	.post(
+		"/reinitialize",
+		async () => {
+			const schedulerNotified = await requestWealthReinitialize();
+			return {
+				success: true,
+				message: schedulerNotified
+					? "Wealth ledger re-anchoring dispatched to the scheduler. Balances are measured as of 00:00 UTC today, and today's events are replayed against them."
+					: "The scheduler is unreachable; the ledger will re-anchor on its next cycle.",
+				schedulerNotified,
+			};
+		},
+		{
+			detail: {
+				summary: "Re-anchor the wealth ledger",
+				description:
+					"Wipes ledger_events and rebuilds them from the personal log, measuring day-zero balances as of 00:00 UTC today. Destructive by design: anchoring is what makes the ledger correct, so this is the escape hatch for a ledger in a state worth discarding.",
+			},
+		},
+	)
+
 	// POST /v2/system/wealth-ledger/refresh — reconcile now, then report
 	.post(
 		"/refresh",

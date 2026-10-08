@@ -109,8 +109,26 @@ export interface WealthTransaction {
 	accountDelta: number;
 	itemsIn: WealthEventItem[];
 	itemsOut: WealthEventItem[];
+	/** Net change in net worth: wallet + account + items in − items out. */
 	netWorthDelta: number;
 	priced: boolean;
+	/**
+	 * Why this event carries no trustworthy figure, in words.
+	 *
+	 * Only set when `priced` is false. It names the specific reason — the log type
+	 * has no pricing rule, an item moved that has no market price, or the payload
+	 * was missing the field the rule names — because "unpriced" on its own is not
+	 * something a reader can act on.
+	 */
+	pricingNote?: string;
+	/**
+	 * The raw Torn payload, included only when the caller asked for it.
+	 *
+	 * This is what makes an unpriced event debuggable rather than merely visible:
+	 * the rule table can be corrected from the payload alone, without going back
+	 * to the database.
+	 */
+	rawPayload?: unknown;
 }
 
 /** The day-zero anchor and the balances derived from it since. */

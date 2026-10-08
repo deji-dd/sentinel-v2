@@ -419,12 +419,39 @@ export class BlastedApiClient {
 		return data;
 	}
 
-	public async getWealthTransactions(
-		limit = 50,
-		offset = 0,
-	): Promise<WealthTransactionsResponse> {
+	/**
+	 * A page of the ledger.
+	 *
+	 * `movements` defaults to on at the API, so the day-to-day list is rows that
+	 * actually changed something; `unpriced` switches to the debugging view, where
+	 * each row carries the reason it could not be valued and the raw payload it
+	 * was built from.
+	 */
+	public async getWealthTransactions(options?: {
+		limit?: number;
+		offset?: number;
+		category?: string;
+		logType?: number;
+		priced?: "1" | "0";
+		movements?: "1" | "0";
+		payloads?: "1";
+		from?: string;
+		to?: string;
+	}): Promise<WealthTransactionsResponse> {
+		const params = new URLSearchParams();
+		params.set("limit", String(options?.limit ?? 50));
+		params.set("offset", String(options?.offset ?? 0));
+		if (options?.category) params.set("category", options.category);
+		if (options?.logType !== undefined) {
+			params.set("logType", String(options.logType));
+		}
+		if (options?.priced) params.set("priced", options.priced);
+		if (options?.movements) params.set("movements", options.movements);
+		if (options?.payloads) params.set("payloads", options.payloads);
+		if (options?.from) params.set("from", options.from);
+		if (options?.to) params.set("to", options.to);
 		return this.request<WealthTransactionsResponse>(
-			`/v2/system/wealth-ledger/transactions?limit=${limit}&offset=${offset}`,
+			`/v2/system/wealth-ledger/transactions?${params.toString()}`,
 		);
 	}
 

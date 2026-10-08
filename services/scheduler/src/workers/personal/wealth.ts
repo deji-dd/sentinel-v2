@@ -20,6 +20,7 @@ import type {
 	WealthCoverage,
 	WealthLedgerState,
 } from "@sentinel/schemas";
+import type { ManagedApiKey } from "@sentinel/torn-api";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import {
 	classifyWealthLog,
@@ -213,20 +214,38 @@ export async function loadItemPrices(): Promise<Map<string, number>> {
 	return prices;
 }
 
-/** The 23 item categories Torn's inventory endpoint accepts. */
-export async function loadItemCategories(): Promise<
-	Array<{ type: string; itemId: string }>
-> {
-	const rows = await db
-		.select({ id: tornItems.id, data: tornItems.data })
-		.from(tornItems);
-	const out: Array<{ type: string; itemId: string }> = [];
-	for (const row of rows) {
-		const data = row.data as Record<string, unknown> | null;
-		const type = data?.type;
-		if (typeof type === "string" && type.length > 0) {
-			out.push({ type, itemId: row.id });
+/**
+ * Accepts either shape Torn has returned for the log type list.
+ *
+ * v2 gives `[{ id, title }]`; v1 gave `{ "101": "Successful login" }`. Both are
+ * turned into the same list, because a shape mismatch here used to be a hard
+ * crash rather than a missed sync.
+ */
+export function normalizeLogTypes(
+	raw:
+		| Array<{ id?: number; title?: string }>
+		| Record<string, string>
+		| undefined,
+): Array<{ id: number; title: string | null }> {
+	if (!raw) return [];
+	if (Array.isArray(raw)) {
+		const out: Array<{ id: number; title: string | null }> = [];
+		for (const entry of raw) {
+			const id = readNumber(entry?.id);
+			if (id === null || id <= 0) continue;
+			out.push({ id: Math.trunc(id), title: entry.title ?? null });
 		}
+		return out;
+	}
+	if (typeof raw !== "object") return [];
+	const out: Array<{ id: number; title: string | null }> = [];
+	for (const [key, title] of Object.entries(raw)) {
+		const id = readNumber(key);
+		if (id === null || id <= 0) continue;
+		out.push({
+			id: Math.trunc(id),
+			title: typeof title === "string" ? title : null,
+		});
 	}
 	return out;
 }
@@ -238,7 +257,10 @@ export async function loadItemCategories(): Promise<
  * turns "we classified everything we have seen" into a claim about coverage
  * rather than a claim about experience.
  */
-export async function syncTornLogTypes(force = false): Promise<number> {
+export async function syncTornLogTypes(
+	force = false,
+	key?: ManagedApiKey,
+): Promise<number> {
 	const state = getWealthState();
 	if (
 		!force &&
@@ -249,26 +271,35 @@ export async function syncTornLogTypes(force = false): Promise<number> {
 		return 0;
 	}
 
-	const response = (await tornApi.getPersonalRaw("/torn", {
-		queryParams: { selections: "logtypes" },
-	})) as { logtypes?: Array<{ id?: number; title?: string }> };
+	// `/torn/logtypes` on the v2 base. The v1 endpoint of the same name returns an
+	// id-to-title MAP rather than a list, and iterating it throws
+	// "{} is not iterable" — which is exactly how this crashed on first deploy.
+	// Both shapes are accepted so a base change can never take the worker down
+	// again, but the list is what v2 returns.
+	const resolved = key ?? (await getPersonalKey());
+	if (!resolved) return 0;
 
-	const logTypes = response.logtypes ?? [];
+	const response = (await tornApi.get("/torn/logtypes", {
+		apiKey: resolved.apiKey,
+		userId: resolved.userId,
+	})) as unknown as {
+		logtypes?: Array<{ id?: number; title?: string }> | Record<string, string>;
+	};
+
+	const logTypes = normalizeLogTypes(response.logtypes);
 	if (logTypes.length === 0) return 0;
 
 	const now = new Date();
 	let written = 0;
 	for (const entry of logTypes) {
-		const id = readNumber(entry.id);
-		if (id === null || id <= 0) continue;
-		const logType = Math.trunc(id);
+		const logType = entry.id;
 		const rule = getWealthRule(logType);
 		const band = rule ? null : getWealthBand(logType);
 		await db
 			.insert(tornLogTypes)
 			.values({
 				id: logType,
-				title: entry.title ?? null,
+				title: entry.title,
 				wealthCategory: rule?.category ?? band?.category ?? null,
 				observed: false,
 				updatedAt: now,
@@ -276,7 +307,7 @@ export async function syncTornLogTypes(force = false): Promise<number> {
 			.onConflictDoUpdate({
 				target: tornLogTypes.id,
 				set: {
-					title: entry.title ?? null,
+					title: entry.title,
 					wealthCategory: rule?.category ?? band?.category ?? null,
 					updatedAt: now,
 				},
@@ -320,26 +351,86 @@ export type BaselineSnapshot = {
 };
 
 /**
+ * The item categories Torn's inventory endpoint accepts.
+ *
+ * These are NOT the item types in `torn_items`: `Weapon`, `Armor` and `Unused`
+ * are rejected with error 21, and weapons are split into `Melee`, `Primary`,
+ * `Secondary` and `Defensive` instead. Reading the categories out of the item
+ * table asked for three that always failed and never asked for the five that
+ * hold weapons, so weapons were silently absent from every baseline.
+ *
+ * The list mirrors the API's own `TornInventoryItemType`, and typing it as that
+ * union is what keeps it honest.
+ */
+const INVENTORY_CATEGORIES: readonly TornSchema<"TornInventoryItemType">[] = [
+	"Alcohol",
+	"Artifact",
+	"Book",
+	"Booster",
+	"Candy",
+	"Car",
+	"Clothing",
+	"Collectible",
+	"Defensive",
+	"Drug",
+	"Energy Drink",
+	"Enhancer",
+	"Flower",
+	"Jewelry",
+	"Material",
+	"Medical",
+	"Melee",
+	"Other",
+	"Plushie",
+	"Primary",
+	"Secondary",
+	"Special",
+	"Supply Pack",
+	"Temporary",
+	"Tool",
+];
+
+/**
  * Reads everything the ledger is anchored to.
  *
- * Torn removed the `/user` inventory selection, so the only way to enumerate a
- * holding is `/user/inventory?cat=<type>` one category at a time. `cat=All` is
- * rejected outright (error 21), and each category must be walked to the end:
- * the previous implementation took only the first page and swallowed every
- * error, so a category that failed looked identical to a category that was empty.
+ * All three calls go to the **v2** base through `getPersonal`. `getPersonalRaw`
+ * uses the v1 base, and v1 answers these three differently in ways that all look
+ * like success: the money selection comes back flat rather than nested, so every
+ * balance read as zero; `/user/inventory` is not a v1 path at all, so it answers
+ * with the player's profile and the inventory comes back empty; and `/torn`
+ * returns the log types as an id-to-title map rather than a list.
+ *
+ * The lesson is in the guards below: a snapshot that cannot find what it asked
+ * for now throws instead of returning zeros. A ledger anchored on zeros reports
+ * a net worth of nothing and reconciles against it forever.
+ *
+ * The key is a PARAMETER rather than resolved here, and the calls go through
+ * `tornApi.get` with it explicitly. `getPersonal` falls back to the shared
+ * system-key pool when no personal key is configured, and those keys belong to
+ * other players — reading one would anchor this ledger on somebody else's wallet
+ * and look entirely successful doing it.
  */
-export async function snapshotBalances(): Promise<BaselineSnapshot> {
+export async function snapshotBalances(
+	key: ManagedApiKey,
+): Promise<BaselineSnapshot> {
 	const failures: string[] = [];
 
-	const moneyResponse = (await tornApi.getPersonalRaw("/user", {
-		queryParams: { selections: "money,display,bazaar" },
-	})) as {
+	const moneyResponse = (await tornApi.get("/user/money", {
+		apiKey: key.apiKey,
+		userId: key.userId,
+	})) as unknown as {
 		money?: MoneySelection;
-		display?: Array<Record<string, unknown>>;
-		bazaar?: Array<Record<string, unknown>>;
 	};
 
-	const money = moneyResponse.money ?? {};
+	// A missing `money` object means the call did not do what we think it did.
+	// Zeros here would anchor the entire ledger on nothing.
+	if (!moneyResponse?.money || typeof moneyResponse.money !== "object") {
+		throw new Error(
+			"Torn returned no `money` selection for /user/money, so the baseline cannot be read.",
+		);
+	}
+	const money = moneyResponse.money;
+
 	const wallet = readNumber(money.wallet) ?? 0;
 	const points = readNumber(money.points) ?? 0;
 	const vault = readNumber(money.vault) ?? 0;
@@ -347,6 +438,15 @@ export async function snapshotBalances(): Promise<BaselineSnapshot> {
 	const cityBank = readNumber(money.city_bank?.amount) ?? 0;
 	const caymanBank = readNumber(money.cayman_bank) ?? 0;
 	const tornNetWorth = readNumber(money.daily_networth);
+
+	const holdingsResponse = (await tornApi.get("/user", {
+		apiKey: key.apiKey,
+		userId: key.userId,
+		queryParams: { selections: ["display", "bazaar"] as never },
+	})) as unknown as {
+		display?: Array<Record<string, unknown>>;
+		bazaar?: Array<Record<string, unknown>>;
+	};
 
 	const prices = await loadItemPrices();
 
@@ -371,30 +471,29 @@ export async function snapshotBalances(): Promise<BaselineSnapshot> {
 	};
 
 	const items: ObservedItem[] = [];
-	for (const raw of moneyResponse.display ?? []) {
+	for (const raw of holdingsResponse.display ?? []) {
 		const entry = toObserved(raw, "display");
 		if (entry) items.push(entry);
 	}
-	for (const raw of moneyResponse.bazaar ?? []) {
+	for (const raw of holdingsResponse.bazaar ?? []) {
 		const entry = toObserved(raw, "bazaar");
 		if (entry) items.push(entry);
 	}
 
 	// Inventory, one category at a time, paged to the end.
-	const categories = new Set(
-		(await loadItemCategories()).map((entry) => entry.type),
-	);
-	for (const category of categories) {
+	for (const category of INVENTORY_CATEGORIES) {
 		try {
 			let offset = 0;
 			for (let page = 0; page < INVENTORY_MAX_PAGES; page += 1) {
-				const response = (await tornApi.getPersonalRaw("/user/inventory", {
+				const response = (await tornApi.get("/user/inventory", {
+					apiKey: key.apiKey,
+					userId: key.userId,
 					queryParams: {
 						cat: category,
 						offset,
 						limit: INVENTORY_PAGE_SIZE,
 					},
-				})) as {
+				})) as unknown as {
 					inventory?: { items?: Array<Record<string, unknown>> };
 				};
 				const pageItems = response.inventory?.items ?? [];
@@ -432,8 +531,8 @@ export async function snapshotBalances(): Promise<BaselineSnapshot> {
 		failures,
 		raw: {
 			money: money as Record<string, unknown>,
-			displayCount: (moneyResponse.display ?? []).length,
-			bazaarCount: (moneyResponse.bazaar ?? []).length,
+			displayCount: (holdingsResponse.display ?? []).length,
+			bazaarCount: (holdingsResponse.bazaar ?? []).length,
 			inventoryCount: items.filter((i) => i.location === "inventory").length,
 		},
 	};
@@ -714,6 +813,30 @@ async function writeOpeningAssets(
 
 type AnchorRow = typeof wealthAccountSnapshots.$inferSelect;
 
+/**
+ * Whether the ledger actually has the row everything else is derived from.
+ *
+ * `initialised` is written from inside init, and init sets it before doing the
+ * work — so a run that fails half way leaves a state that claims to be set up
+ * with no anchor behind it. The module then takes the reconcile branch forever
+ * and reports zero balances, which is exactly what happened on first deploy.
+ *
+ * Asking the table is the only answer that cannot be stale.
+ */
+export async function hasAnchorSnapshot(): Promise<boolean> {
+	try {
+		const [row] = await db
+			.select({ id: wealthAccountSnapshots.id })
+			.from(wealthAccountSnapshots)
+			.where(eq(wealthAccountSnapshots.source, "anchor"))
+			.limit(1);
+		return row !== undefined;
+	} catch (error) {
+		logger.error("Could not check for a wealth anchor:", error);
+		return false;
+	}
+}
+
 async function loadAnchor(): Promise<AnchorRow | null> {
 	const [row] = await db
 		.select()
@@ -929,10 +1052,13 @@ export async function initWealthTracking(
 		};
 	}
 
+	// `initialised` stays false until the anchor row is actually written. Setting
+	// it optimistically here is what left the deployed ledger permanently in a
+	// state that claimed to be anchored while having no balances at all.
 	const state: WealthState = {
 		...DEFAULT_STATE,
 		status: "running",
-		initialised: true,
+		initialised: false,
 		anchorTimestamp,
 		anchorDate: anchorDate.toISOString(),
 		logTypesSyncedAt: inMemoryState.logTypesSyncedAt,
@@ -972,8 +1098,8 @@ export async function initWealthTracking(
 			`Anchoring the wealth ledger at ${anchorDate.toISOString()} (00:00 UTC of the anchor day)...`,
 		);
 
-		await syncTornLogTypes(true);
-		const baseline = await snapshotBalances();
+		await syncTornLogTypes(true, keyEntry);
+		const baseline = await snapshotBalances(keyEntry);
 		const prices = await loadItemPrices();
 
 		// Everything since the anchor, which is what the opening balances must
@@ -1031,6 +1157,8 @@ export async function initWealthTracking(
 
 		state.totalIndexedEvents = written + companyEvents;
 		state.status = "completed";
+		// The anchor row exists, so the ledger is genuinely usable now.
+		state.initialised = true;
 		state.lastReconciledAt = new Date().toISOString();
 		state.lastError =
 			baseline.failures.length > 0
@@ -1122,7 +1250,22 @@ export async function handleIncomingWealthLogs(
  */
 export async function reconcileWealthTracker(): Promise<number> {
 	const state = await loadWealthState();
-	if (!state.initialised || state.anchorTimestamp === null) return 0;
+
+	// Reconciling means filling in logs the ledger missed. There is nothing to
+	// fill in until the ledger has an anchor, so this anchors instead — which also
+	// makes the hourly cadence a retry loop: a ledger that could not be built at
+	// boot because no API key was registered gets built as soon as one is.
+	if (
+		!state.initialised ||
+		state.anchorTimestamp === null ||
+		!(await hasAnchorSnapshot())
+	) {
+		logger.info(
+			"The wealth ledger has no anchor yet. Anchoring it at 00:00 UTC of today...",
+		);
+		const result = await initWealthTracking();
+		return result.eventsWritten;
+	}
 
 	state.status = "running";
 	await persistWealthState(state);
@@ -1186,8 +1329,15 @@ export async function reconcileWealthTracker(): Promise<number> {
  */
 export async function recordSnapshot(): Promise<WealthBalances> {
 	const balances = await computeBalances();
+	const key = await getPersonalKey();
+	if (!key) {
+		logger.warn(
+			"No personal API key is registered, so no balance snapshot was recorded.",
+		);
+		return balances;
+	}
 	try {
-		const observed = await snapshotBalances();
+		const observed = await snapshotBalances(key);
 		const tracked = balances.trackedNetWorth;
 		const drift =
 			observed.tornNetWorth === null ? null : tracked - observed.tornNetWorth;
@@ -1244,13 +1394,11 @@ export async function recordSnapshot(): Promise<WealthBalances> {
  *   3. Reconciles hourly, which also refreshes coverage and drift.
  */
 export function startWealthModule(options?: WorkerStartOptions): void {
+	// Both paths below ask the data rather than the flag: a ledger whose anchor row
+	// is missing is rebuilt, however confident its saved state is.
 	loadWealthState()
-		.then(async (state) => {
-			if (!state.initialised || state.anchorTimestamp === null) {
-				await initWealthTracking();
-			} else {
-				await reconcileWealthTracker();
-			}
+		.then(async () => {
+			await reconcileWealthTracker();
 		})
 		.catch((error) => {
 			logger.error("Failed to start the wealth module:", error);
