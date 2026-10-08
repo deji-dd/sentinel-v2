@@ -1129,6 +1129,20 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 				finalEndTime = parseTctInputToIso(editCustomEndTime);
 			}
 
+			// Whether the war-start terms override is in play for this save.
+			// While the contract is still upcoming, the pre-war lead time is what
+			// decides whether a pre-war window exists at all, so the slider gates it.
+			// Once the contract is live that slider is gone, so the stored contract
+			// and the operator's checkbox are authoritative instead — otherwise a
+			// live contract could never have its override cleared.
+			const warStartTermsEnabled =
+				editingContract.warStatusAtCreation === "upcoming" &&
+				(isLiveEdit
+					? editChangeTermsOnWarStart
+					: calculatedMinutesBeforeWar !== null &&
+						calculatedMinutesBeforeWar > 0 &&
+						editChangeTermsOnWarStart);
+
 			const payload = {
 				startTime: finalStartTime,
 				startImmediately: isLiveEdit
@@ -1163,46 +1177,30 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					: editStrickenHits
 						? Math.max(0, Number(editStrickenHitPrice) || 0)
 						: null,
-				changeTermsOnWarStart:
-					editingContract.warStatusAtCreation === "upcoming" &&
-					calculatedMinutesBeforeWar !== null &&
-					calculatedMinutesBeforeWar > 0 &&
-					editChangeTermsOnWarStart,
-				warStartTerms:
-					editingContract.warStatusAtCreation === "upcoming" &&
-					calculatedMinutesBeforeWar !== null &&
-					calculatedMinutesBeforeWar > 0 &&
-					editChangeTermsOnWarStart
-						? {
-								statuses: {
-									online: editWarStartOnline,
-									idle: editWarStartIdle,
-									offline: editWarStartOffline,
-								},
-								idleDurationMinutes: editWarStartIdle
-									? editWarStartIdleDuration
+				changeTermsOnWarStart: warStartTermsEnabled,
+				warStartTerms: warStartTermsEnabled
+					? {
+							statuses: {
+								online: editWarStartOnline,
+								idle: editWarStartIdle,
+								offline: editWarStartOffline,
+							},
+							idleDurationMinutes: editWarStartIdle
+								? editWarStartIdleDuration
+								: null,
+							offlineDurationMinutes:
+								editWarStartOffline && editWarStartOfflineMinEnabled
+									? editWarStartOfflineMinDuration
 									: null,
-								offlineDurationMinutes:
-									editWarStartOffline && editWarStartOfflineMinEnabled
-										? editWarStartOfflineMinDuration
-										: null,
-								strickenHits: editWarStartStricken,
-								levelRange: editWarStartLevelRange,
-							}
-						: null,
-				warStartHitPrice:
-					editingContract.warStatusAtCreation === "upcoming" &&
-					calculatedMinutesBeforeWar !== null &&
-					calculatedMinutesBeforeWar > 0 &&
-					editChangeTermsOnWarStart
-						? Math.max(0, Number(editWarStartHitPrice) || 0)
-						: null,
+							strickenHits: editWarStartStricken,
+							levelRange: editWarStartLevelRange,
+						}
+					: null,
+				warStartHitPrice: warStartTermsEnabled
+					? Math.max(0, Number(editWarStartHitPrice) || 0)
+					: null,
 				warStartStrickenHitPrice:
-					editingContract.warStatusAtCreation === "upcoming" &&
-					calculatedMinutesBeforeWar !== null &&
-					calculatedMinutesBeforeWar > 0 &&
-					editChangeTermsOnWarStart &&
-					editWarStartStricken
+					warStartTermsEnabled && editWarStartStricken
 						? Math.max(0, Number(editWarStartStrickenHitPrice) || 0)
 						: null,
 				autoStopPrice: editAutoStopPrice
@@ -1213,11 +1211,18 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 
 			// Once a contract is live the API locks start time and hit payout rates,
 			// while terms, exclusions, end time, and auto-stop budget remain editable.
+			// The war-start terms override is part of the editable set: dropping it
+			// here meant the "Change terms on war start" checkbox looked interactive
+			// on a live contract but every save silently discarded it, leaving the
+			// pre-war term set quietly in force. War-start payout rates stay out of
+			// this payload because the API rejects rate edits on a started contract.
 			const isContractLive = isContractStarted;
 
 			const finalPayload = isContractLive
 				? {
 						terms: payload.terms,
+						changeTermsOnWarStart: payload.changeTermsOnWarStart,
+						warStartTerms: payload.warStartTerms,
 						excludedMembers: payload.excludedMembers,
 						endTime: payload.endTime,
 						endOnWarEnd: payload.endOnWarEnd,
