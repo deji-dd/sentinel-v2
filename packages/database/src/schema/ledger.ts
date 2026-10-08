@@ -1,4 +1,5 @@
 import {
+	boolean,
 	doublePrecision,
 	index,
 	integer,
@@ -88,47 +89,176 @@ export const crimeActionMappings = pgTable("crime_action_mappings", {
 		.notNull(),
 });
 
-export const assets = pgTable("assets", {
-	id: text("id").primaryKey(),
-	type: text("type").notNull(),
-	assetId: text("asset_id").notNull(),
-	quantity: doublePrecision("quantity").default(0).notNull(),
-	movingAverageCost: doublePrecision("moving_average_cost")
-		.default(0)
-		.notNull(),
-	totalCostBasis: doublePrecision("total_cost_basis").default(0).notNull(),
-	location: text("location").notNull(),
-	owner: text("owner").default("personal").notNull(),
-	origin: text("origin"),
-	realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
-	lastUpdated: timestamp("last_updated", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
+export const assets = pgTable(
+	"assets",
+	{
+		id: text("id").primaryKey(),
+		type: text("type").notNull(),
+		assetId: text("asset_id").notNull(),
+		quantity: doublePrecision("quantity").default(0).notNull(),
+		movingAverageCost: doublePrecision("moving_average_cost")
+			.default(0)
+			.notNull(),
+		totalCostBasis: doublePrecision("total_cost_basis").default(0).notNull(),
+		/** Current item-market value per unit, refreshed by the wealth worker. */
+		marketValue: doublePrecision("market_value").default(0).notNull(),
+		/** Torn's item category (Alcohol, Weapon, …), for grouping holdings. */
+		itemType: text("item_type"),
+		location: text("location").notNull(),
+		owner: text("owner").default("personal").notNull(),
+		origin: text("origin"),
+		realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
+		lastUpdated: timestamp("last_updated", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_assets_asset_location").on(table.assetId, table.location),
+	],
+);
 
-export const ledgerEvents = pgTable("ledger_events", {
-	id: text("id").primaryKey(),
-	logId: text("log_id"),
-	timestamp: timestamp("timestamp", {
-		withTimezone: true,
-		mode: "date",
-	}).notNull(),
-	type: text("type").notNull(),
-	categoryId: integer("category_id").notNull(),
-	transactionName: text("transaction_name").notNull(),
-	assetsAffected: jsonb("assets_affected").notNull(),
-	cashFlow: doublePrecision("cash_flow").default(0).notNull(),
-	realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
-	rawLog: jsonb("raw_log"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
+export const ledgerEvents = pgTable(
+	"ledger_events",
+	{
+		id: text("id").primaryKey(),
+		logId: text("log_id"),
+		timestamp: timestamp("timestamp", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		type: text("type").notNull(),
+		categoryId: integer("category_id").notNull(),
+		transactionName: text("transaction_name").notNull(),
+		assetsAffected: jsonb("assets_affected").notNull(),
+		cashFlow: doublePrecision("cash_flow").default(0).notNull(),
+		realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
+		rawLog: jsonb("raw_log"),
+		/**
+		 * The Torn log type this event was built from.
+		 *
+		 * Kept as a column rather than read back out of `raw_log` because the
+		 * audit sweeps group by it, and a jsonb extraction over the whole table
+		 * does not use an index.
+		 */
+		logType: integer("log_type"),
+		/** Which of the thirty wealth categories the engine filed this under. */
+		wealthCategory: text("wealth_category"),
+		/**
+		 * Cash in or out of the pocket.
+		 *
+		 * Distinct from `realizedPnl` because a vault deposit moves the first and
+		 * not the second: the money left the wallet but the player still owns it.
+		 */
+		walletDelta: doublePrecision("wallet_delta").default(0).notNull(),
+		/** Which non-wallet balance moved, when one did. */
+		account: text("account"),
+		accountDelta: doublePrecision("account_delta").default(0).notNull(),
+		/**
+		 * Net change in NET WORTH: wallet + account + items in − items out.
+		 *
+		 * This is the column the wealth totals sum, and the one the observed
+		 * balances are reconciled against.
+		 */
+		assetDelta: doublePrecision("asset_delta").default(0).notNull(),
+		/**
+		 * False when any part of the effect could not be established.
+		 *
+		 * Unpriced events still get a row: the coverage report needs to count
+		 * them, and a dropped row would read as "nothing happened" rather than
+		 * "we could not tell".
+		 */
+		priced: boolean("priced").default(true).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// The tab's timeline and top-transaction queries scan by time, and the
+		// audit groups by log type. Without these the ledger is seq-scanned on
+		// every panel refresh, with cost growing as history accumulates.
+		index("idx_ledger_events_timestamp").on(table.timestamp),
+		index("idx_ledger_events_log_type").on(table.logType),
+	],
+);
+
+/**
+ * A periodic reading of the balances the ledger is anchored to.
+ *
+ * Two jobs, and the second is the important one:
+ *
+ *  1. The day-zero row is the anchor. Its values are OPENING balances — what
+ *     Torn reports now, minus the net effect of every event since 00:00 UTC —
+ *     because init runs mid-day and the account has already been active.
+ *
+ *  2. `daily_networth` is Torn's own net worth figure. Comparing it against what
+ *     the ledger thinks the account is worth is the only mechanical check that
+ *     no rule is quietly wrong, so every sync writes a row and the API surfaces
+ *     the difference as drift.
+ */
+export const wealthAccountSnapshots = pgTable(
+	"wealth_account_snapshots",
+	{
+		id: text("id").primaryKey(),
+		timestamp: timestamp("timestamp", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		/** `anchor` for the day-zero row, `api` for a periodic reading. */
+		source: text("source").notNull(),
+		wallet: doublePrecision("wallet").default(0).notNull(),
+		points: doublePrecision("points").default(0).notNull(),
+		vault: doublePrecision("vault").default(0).notNull(),
+		company: doublePrecision("company").default(0).notNull(),
+		cityBank: doublePrecision("city_bank").default(0).notNull(),
+		caymanBank: doublePrecision("cayman_bank").default(0).notNull(),
+		piggyBank: doublePrecision("piggy_bank").default(0).notNull(),
+		/** Derived purely from the log: bets out, winnings in, withdrawals back. */
+		bookie: doublePrecision("bookie").default(0).notNull(),
+		/** Item market value of the inventory, bazaar and display case. */
+		itemsValue: doublePrecision("items_value").default(0).notNull(),
+		/** The tracked net worth this snapshot implies. */
+		trackedNetWorth: doublePrecision("tracked_net_worth").default(0).notNull(),
+		/** Torn's own figure, when it could be read. */
+		tornNetWorth: doublePrecision("torn_net_worth"),
+		/** `trackedNetWorth − tornNetWorth`, for the drift panel. */
+		netWorthDrift: doublePrecision("net_worth_drift"),
+		raw: jsonb("raw"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_wealth_account_snapshots_timestamp").on(table.timestamp),
+	],
+);
+
+/**
+ * Every log type Torn publishes, whether or not this account has ever generated
+ * one.
+ *
+ * Torn has 1170 of them and this account has seen 785. The difference matters for
+ * coverage: a rule set that only knows the types someone has already triggered
+ * looks complete until it meets a new one. `wealthCategory` records what the
+ * engine decided, so the audit can list what was recognised without a rule.
+ */
+export const tornLogTypes = pgTable("torn_log_types", {
+	id: integer("id").primaryKey(),
+	title: text("title"),
+	/** Torn's own display category, as seen in `personal_logs.details.category`. */
+	category: text("category"),
+	/** The wealth engine's category for this type. */
+	wealthCategory: text("wealth_category"),
+	/** True once the account has actually generated one of these. */
+	observed: boolean("observed").default(false).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),

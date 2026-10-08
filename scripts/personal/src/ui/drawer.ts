@@ -9,16 +9,36 @@ import { BattlestatsTab } from "../modules/battlestats-tab";
 import { CompanyTab } from "../modules/company-tab";
 import { CrimesTab } from "../modules/crimes-tab";
 import { StocksTab } from "../modules/stocks-tab";
+import { WealthTab } from "../modules/wealth-tab";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
 declare function GM_setValue<T>(key: string, value: T): void;
 
-/** Tabs that render a body. `wealth` remains a stub in the markup only. */
+/**
+ * A usable drawer width for the current window.
+ *
+ * Returns 0 when the width should be left to the stylesheet: a stored value that
+ * is not a number, or a viewport too narrow to drag in at all. Otherwise the width
+ * is held between a readable minimum and whichever is smaller of the hard maximum
+ * and the space the window can actually give up.
+ */
+function clampDrawerWidth(width: number, viewportWidth: number): number {
+	if (!Number.isFinite(width) || width <= 0) return 0;
+	if (viewportWidth < RESIZE_MIN_VIEWPORT_PX) return 0;
+	const max = Math.max(
+		MIN_DRAWER_WIDTH,
+		Math.min(MAX_DRAWER_WIDTH, viewportWidth - DRAG_GUTTER_PX),
+	);
+	return Math.round(Math.min(Math.max(width, MIN_DRAWER_WIDTH), max));
+}
+
+/** Tabs that render a body. */
 export type DrawerTabName =
 	| "crimes"
 	| "battlestats"
 	| "company"
 	| "stocks"
+	| "wealth"
 	| "settings";
 
 /** The lifecycle every tab body implements, so the drawer has one code path. */
@@ -33,6 +53,7 @@ const TAB_LABELS: Record<DrawerTabName, string> = {
 	battlestats: "Battlestats",
 	company: "Company",
 	stocks: "Stocks",
+	wealth: "Wealth",
 	settings: "Settings",
 };
 
@@ -41,8 +62,18 @@ const TAB_ORDER: DrawerTabName[] = [
 	"battlestats",
 	"company",
 	"stocks",
+	"wealth",
 	"settings",
 ];
+
+/** Narrower than this and the tables inside stop being readable. */
+const MIN_DRAWER_WIDTH = 380;
+/** Widest the drawer may be dragged, however wide the window is. */
+const MAX_DRAWER_WIDTH = 1_600;
+/** Window width kept visible beside the drawer while dragging. */
+const DRAG_GUTTER_PX = 48;
+/** Below this the drawer is full-width and the handle is hidden. */
+const RESIZE_MIN_VIEWPORT_PX = 700;
 
 /**
  * The drawer shell.
@@ -61,6 +92,9 @@ export class DrawerPanel {
 	private onRatioChange?: () => void;
 	private onSettingsSaved?: () => void;
 	private onOpenChange?: (isOpen: boolean) => void;
+	/** User-dragged width in pixels; 0 means "use the stylesheet default". */
+	private width = 0;
+	private dragging = false;
 
 	constructor(
 		onSettingsSaved?: () => void,
@@ -83,6 +117,13 @@ export class DrawerPanel {
 
 		this.overlay.addEventListener("click", () => this.close());
 		this.buildSkeleton();
+		this.width = clampDrawerWidth(
+			GM_getValue<number>(STORAGE_KEYS.drawerWidth, 0),
+			window.innerWidth,
+		);
+		this.applyWidth();
+		this.bindResizeHandle();
+		window.addEventListener("resize", () => this.applyWidth());
 	}
 
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -97,6 +138,73 @@ export class DrawerPanel {
 
 	public isOpen(): boolean {
 		return this.drawer.classList.contains("open");
+	}
+
+	/** Applies the stored width, or clears it when the user has never dragged. */
+	private applyWidth(): void {
+		const resolved = clampDrawerWidth(this.width, window.innerWidth);
+		if (resolved > 0) {
+			this.drawer.style.width = `${resolved}px`;
+		} else {
+			this.drawer.style.removeProperty("width");
+		}
+	}
+
+	/**
+	 * Drags the drawer's left edge to resize it.
+	 *
+	 * The drawer is a fixed-width panel, and the stock and ledger tables inside it
+	 * have more columns than fit at 580px. Pointer events cover mouse, pen and
+	 * touch alike, and the class is only set while a drag is live so the width
+	 * transition stays out of the way.
+	 */
+	private bindResizeHandle(): void {
+		const handle = this.drawer.querySelector<HTMLElement>("#drawer-resize");
+		if (!handle) return;
+
+		const move = (event: PointerEvent): void => {
+			if (!this.dragging) return;
+			this.width = clampDrawerWidth(
+				window.innerWidth - event.clientX,
+				window.innerWidth,
+			);
+			this.applyWidth();
+		};
+
+		const end = (): void => {
+			if (!this.dragging) return;
+			this.dragging = false;
+			this.drawer.classList.remove("resizing");
+			document.body.style.removeProperty("cursor");
+			document.body.style.removeProperty("user-select");
+			GM_setValue(STORAGE_KEYS.drawerWidth, this.width);
+			handle.removeEventListener("pointermove", move);
+			handle.removeEventListener("pointerup", end);
+			handle.removeEventListener("pointercancel", end);
+		};
+
+		handle.addEventListener("pointerdown", (event) => {
+			if (window.innerWidth < RESIZE_MIN_VIEWPORT_PX) return;
+			event.preventDefault();
+			this.dragging = true;
+			this.drawer.classList.add("resizing");
+			// Text selection fights the drag, and the cursor has to stay a resize
+			// cursor even when the pointer outruns the 6px handle.
+			document.body.style.cursor = "col-resize";
+			document.body.style.userSelect = "none";
+			handle.setPointerCapture(event.pointerId);
+			handle.addEventListener("pointermove", move);
+			handle.addEventListener("pointerup", end);
+			handle.addEventListener("pointercancel", end);
+		});
+
+		// Double-click resets to the stylesheet width without touching storage keys
+		// the user cannot see.
+		handle.addEventListener("dblclick", () => {
+			this.width = 0;
+			GM_setValue(STORAGE_KEYS.drawerWidth, 0);
+			this.applyWidth();
+		});
 	}
 
 	public open(tab?: DrawerTabName): void {
@@ -203,6 +311,8 @@ export class DrawerPanel {
 			);
 		} else if (name === "company") {
 			tab = new CompanyTab(body, () => this.openSettings());
+		} else if (name === "wealth") {
+			tab = new WealthTab(body, () => this.openSettings());
 		} else {
 			tab = new StocksTab(body, () => this.openSettings());
 		}
@@ -230,13 +340,20 @@ export class DrawerPanel {
 		).join("");
 
 		this.drawer.innerHTML = `
+			<!-- Drag handle: widens the panel on desktop, hidden on phones -->
+			<div
+				id="drawer-resize"
+				class="drawer-resize"
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="Drag to resize the panel, double-click to reset"
+				title="Drag to resize · double-click to reset"
+			></div>
+
 			<!-- Header with Tabs and Actions -->
 			<div class="drawer-header">
 				<div class="drawer-tabs">
 					${tabButtons}
-					<button class="drawer-tab disabled" data-tab="wealth" disabled title="Not built yet">
-						Wealth <span class="tab-badge">Soon</span>
-					</button>
 				</div>
 				<div class="drawer-actions">
 					<button id="btn-refresh" class="btn-icon" title="Refresh Data">

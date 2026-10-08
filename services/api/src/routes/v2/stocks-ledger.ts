@@ -26,7 +26,7 @@ import {
 	type StockEvent,
 	type StockReferenceRow,
 } from "@sentinel/utils";
-import { Elysia, t } from "elysia";
+import { Elysia } from "elysia";
 import { authenticateCrimeLedgerRequest } from "./crime-ledger";
 
 /**
@@ -49,29 +49,10 @@ import { authenticateCrimeLedgerRequest } from "./crime-ledger";
 const logger = new Logger("API", "StocksLedger");
 
 const STOCKS_LEDGER_STATE_ID = "personal:stocks_ledger";
+/** Average points-market price, synced by the Torn reference worker. */
+const POINTS_PRICE_STATE_ID = "points_market_price";
 /** Prices older than this are refreshed on read, so the tab cannot go stale. */
 const PRICE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-function parseRate(value: string | undefined): number {
-	if (value === undefined) return 0;
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
-/** Resource rates, in dollars per unit. Zero means "unpriced", never "worthless". */
-function rateQuery(query: {
-	energy?: string;
-	nerve?: string;
-	happy?: string;
-	points?: string;
-}) {
-	return {
-		energy: parseRate(query.energy),
-		nerve: parseRate(query.nerve),
-		happy: parseRate(query.happy),
-		points: parseRate(query.points),
-	};
-}
 
 function asList(value: unknown): unknown[] {
 	if (Array.isArray(value)) return value;
@@ -234,6 +215,28 @@ async function loadRecordedDividendValues(): Promise<Map<string, number>> {
 	return new Map(rows.map((row) => [row.id, Number(row.value) || 0]));
 }
 
+/**
+ * The points-market price per point, as the reference sync last measured it.
+ *
+ * Points are the one "resource" a dividend can pay in that has a real market
+ * price, so a stock paying points can be valued honestly while energy, nerve and
+ * happiness cannot be valued at all. Zero means points payouts stay unpriced
+ * rather than being counted as nothing.
+ */
+async function loadPointsPrice(): Promise<number> {
+	const record = await db.query.systemStates.findFirst({
+		where: eq(systemStates.id, POINTS_PRICE_STATE_ID),
+	});
+	const data =
+		record?.data && typeof record.data === "object"
+			? (record.data as Record<string, unknown>)
+			: {};
+	const price = data.price;
+	return typeof price === "number" && Number.isFinite(price) && price > 0
+		? price
+		: 0;
+}
+
 /** Pulls the stock list and current prices from Torn and stores them. */
 export async function refreshStockReferences(): Promise<number> {
 	const payload = (await tornApi.getPersonal("/torn", {
@@ -325,7 +328,6 @@ export async function syncUserStocksFromTorn(): Promise<number> {
 }
 
 interface PortfolioOptions {
-	rates: ReturnType<typeof rateQuery>;
 	/** Skip the stale-price refresh (used right after an explicit sync). */
 	skipPriceRefresh?: boolean;
 }
@@ -356,11 +358,13 @@ async function buildPortfolio(
 		}
 	}
 
-	const [positions, events, recordedDividendValues] = await Promise.all([
-		loadPositions(),
-		loadStockEvents(),
-		loadRecordedDividendValues(),
-	]);
+	const [positions, events, recordedDividendValues, pointsPrice] =
+		await Promise.all([
+			loadPositions(),
+			loadStockEvents(),
+			loadRecordedDividendValues(),
+			loadPointsPrice(),
+		]);
 	const itemPrices = await loadItemPrices(events);
 
 	const positionAsOfIso =
@@ -376,7 +380,7 @@ async function buildPortfolio(
 		events,
 		recordedDividendValues,
 		stocks: references.stocks,
-		rates: options.rates,
+		pointsPrice,
 		itemPricesById: itemPrices.byId,
 		itemPricesByName: itemPrices.byName,
 		itemNamesById: itemPrices.namesById,
@@ -410,27 +414,17 @@ export const stocksLedgerRoutes = new Elysia({ prefix: "/stocks-ledger" })
 		},
 	})
 	// GET /v2/system/stocks-ledger/portfolio — current-term holdings, profit and ROI
-	.get(
-		"/portfolio",
-		async ({ query }) => buildPortfolio({ rates: rateQuery(query) }),
-		{
-			query: t.Object({
-				energy: t.Optional(t.String()),
-				nerve: t.Optional(t.String()),
-				happy: t.Optional(t.String()),
-				points: t.Optional(t.String()),
-			}),
-			detail: {
-				summary: "Personal stock portfolio",
-				description:
-					"Computes the current holding term for every owned stock — cost basis, dividends collected, mark-to-market value, realised and unrealised profit, term ROI and forward yield — plus the full stock list as candidates.",
-			},
+	.get("/portfolio", async () => buildPortfolio({}), {
+		detail: {
+			summary: "Personal stock portfolio",
+			description:
+				"Computes the current holding term for every owned stock — cost basis, dividends collected, mark-to-market value, realised and unrealised profit, term ROI and the APR of the next block — plus every increment of every stock as a buy candidate.",
 		},
-	)
+	})
 	// POST /v2/system/stocks-ledger/sync — pull the live position and prices from Torn
 	.post(
 		"/sync",
-		async ({ query, set }) => {
+		async ({ set }) => {
 			try {
 				const [positionCount] = await Promise.all([
 					syncUserStocksFromTorn(),
@@ -439,10 +433,7 @@ export const stocksLedgerRoutes = new Elysia({ prefix: "/stocks-ledger" })
 				logger.info(
 					`Manual stock sync: ${positionCount} positions held, prices refreshed.`,
 				);
-				return await buildPortfolio({
-					rates: rateQuery(query),
-					skipPriceRefresh: true,
-				});
+				return await buildPortfolio({ skipPriceRefresh: true });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				logger.error(`Manual stock sync failed: ${message}`);
@@ -454,12 +445,6 @@ export const stocksLedgerRoutes = new Elysia({ prefix: "/stocks-ledger" })
 			}
 		},
 		{
-			query: t.Object({
-				energy: t.Optional(t.String()),
-				nerve: t.Optional(t.String()),
-				happy: t.Optional(t.String()),
-				points: t.Optional(t.String()),
-			}),
 			detail: {
 				summary: "Sync stock position from Torn",
 				description:

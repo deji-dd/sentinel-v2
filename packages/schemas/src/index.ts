@@ -6,3 +6,4 @@ export * from "./rw-displays";
 export * from "./stock-alerts";
 export * from "./stocks";
 export * from "./torn/index";
+export * from "./wealth";

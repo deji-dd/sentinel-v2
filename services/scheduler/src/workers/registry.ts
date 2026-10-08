@@ -11,6 +11,7 @@ import { startMercContractWorker } from "./merc/merc-contract-worker";
 import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
+import { startWealthModule } from "./personal/wealth";
 import { startSubversiveBountyFinder } from "./subversive/bounty-finder";
 import { startSubversiveFFScouterCrawlerWorker } from "./subversive/ffscouter-target-crawler";
 import { startHitCounter } from "./subversive/hit-counter";
@@ -108,6 +109,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		id: "personal:reference_sync",
 		description: "Daily personal perks and gym unlock calculation",
 		start: startPersonalReferenceSync,
+	},
+	{
+		id: "personal:wealth",
+		description:
+			"Hourly personal wealth ledger: anchors balances at 00:00 UTC, classifies every log type into cash, account and item movements, and reconciles against Torn's own net worth",
+		start: startWealthModule,
 	},
 	{
 		id: "elims:team_tracker",

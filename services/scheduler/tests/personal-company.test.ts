@@ -142,16 +142,15 @@ describe("Personal Company Sync Worker", () => {
 		expect(snapshot?.outflow).toBe(950000);
 		expect(snapshot?.profit).toBe(9050000);
 
-		// Verify database insertion in ledgerEvents
+		// `company_daily_profits` is this worker's table; `ledger_events` belongs to
+		// the wealth engine, which reads the row above back and re-emits it as a
+		// company-account gain. Asserting the write here would re-introduce the
+		// second writer that made a company profit countable twice.
 		const events = await db
 			.select()
 			.from(ledgerEvents)
 			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
-		expect(events.length).toBe(1);
-		const ev = events[0];
-		expect(ev?.realizedPnl).toBe(9050000);
-		expect(ev?.type).toBe("injection");
-		expect(ev?.categoryId).toBe(9);
+		expect(events.length).toBe(0);
 	});
 
 	test("handles loss scenario correctly (outflow > inflow)", async () => {
@@ -184,13 +183,19 @@ describe("Personal Company Sync Worker", () => {
 		expect(result.outflow).toBe(450000);
 		expect(result.profit).toBe(-250000);
 
+		// The loss is carried by the snapshot; the ledger row comes from the wealth
+		// engine reading it back, not from this worker writing it.
+		const snapshotLosses = await db
+			.select()
+			.from(companyDailyProfits)
+			.where(eq(companyDailyProfits.profit, -250000));
+		expect(snapshotLosses.length).toBeGreaterThanOrEqual(1);
+
 		const events = await db
 			.select()
 			.from(ledgerEvents)
 			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
-		expect(events.length).toBe(1);
-		expect(events[0]?.type).toBe("loss");
-		expect(events[0]?.realizedPnl).toBe(-250000);
+		expect(events.length).toBe(0);
 	});
 
 	test("handles missing personal key gracefully without throwing", async () => {

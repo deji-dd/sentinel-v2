@@ -190,6 +190,56 @@ export const SHADOW_STYLES = `
 	transform: translateX(0);
 }
 
+/* While the edge is dragged the width must follow the pointer exactly: no width
+   transition, and the panel's own drag affordance stays lit. */
+.blasted-drawer.resizing {
+	transition: none;
+}
+
+.drawer-resize {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 7px;
+	z-index: 5;
+	cursor: col-resize;
+	touch-action: none;
+	background: transparent;
+	transition: background 0.15s ease;
+}
+
+.drawer-resize::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 2px;
+	width: 3px;
+	height: 46px;
+	transform: translateY(-50%);
+	border-radius: 3px;
+	background: #475569;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.blasted-drawer:hover .drawer-resize::after,
+.drawer-resize:hover::after {
+	opacity: 1;
+}
+
+.drawer-resize:hover,
+.blasted-drawer.resizing .drawer-resize {
+	background: rgba(56, 189, 248, 0.22);
+}
+
+/* On a phone the drawer is the full width, so there is nothing to drag. */
+@media (max-width: 699px) {
+	.drawer-resize {
+		display: none;
+	}
+}
+
 /* ─── Drawer Header ─── */
 .drawer-header {
 	display: flex;
@@ -1158,7 +1208,8 @@ tr:hover td {
 	min-width: 620px;
 }
 
-.stock-table th[data-sort] {
+.stock-table th[data-sort],
+.stock-table th[data-block-sort] {
 	cursor: pointer;
 	user-select: none;
 }
@@ -1368,40 +1419,6 @@ tr:hover td {
 	margin-bottom: 3px;
 }
 
-.stock-rates-body {
-	margin-top: 8px;
-}
-
-.stock-rates-help {
-	font-size: 11px;
-	color: #94a3b8;
-	line-height: 1.55;
-	margin-bottom: 8px;
-}
-
-.stock-rates-grid {
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 8px;
-	margin-bottom: 10px;
-}
-
-.stock-rate-field {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	font-size: 10px;
-	text-transform: uppercase;
-	letter-spacing: 0.4px;
-	color: #94a3b8;
-}
-
-.stock-rates-summary {
-	font-size: 11px;
-	color: #cbd5e1;
-	margin-top: 6px;
-}
-
 .stock-catalog-note {
 	font-size: 11px;
 	color: #94a3b8;
@@ -1422,6 +1439,102 @@ tr:hover td {
 	color: #94a3b8;
 	margin-top: 3px;
 	line-height: 1.4;
+}
+
+/* ─── Stock block table ─── */
+
+.stock-cell-sub {
+	display: block;
+	font-size: 10px;
+	color: #94a3b8;
+	margin-top: 2px;
+	line-height: 1.35;
+}
+
+.stock-dash {
+	color: #64748b;
+	cursor: help;
+}
+
+.stock-dash-muted {
+	color: #475569;
+}
+
+.stock-held-mark {
+	font-size: 10.5px;
+	color: #34d399;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+}
+
+.stock-chip.own-partial {
+	background: rgba(56, 189, 248, 0.14);
+	color: #7dd3fc;
+	border-color: rgba(56, 189, 248, 0.4);
+}
+
+.stock-chip.next-buy {
+	background: rgba(52, 211, 153, 0.16);
+	color: #6ee7b7;
+	border-color: rgba(52, 211, 153, 0.45);
+}
+
+.stock-block-filters {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding: 8px 12px;
+	border-bottom: 1px solid #334155;
+	background: rgba(15, 23, 42, 0.35);
+}
+
+.stock-apr-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 10.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: #94a3b8;
+}
+
+.stock-apr-filter input {
+	width: 60px;
+	padding: 3px 6px;
+	font-size: 11px;
+}
+
+.stock-apr-filter select {
+	width: auto;
+	padding: 3px 6px;
+	font-size: 11px;
+}
+
+.stock-block-paginator {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 9px 12px;
+	border-top: 1px solid #334155;
+	background: rgba(15, 23, 42, 0.5);
+}
+
+.stock-page-size {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 10.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: #94a3b8;
+}
+
+.stock-page-size select {
+	width: auto;
+	padding: 3px 6px;
+	font-size: 11px;
 }
 
 .tos-table {

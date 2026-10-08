@@ -16,15 +16,24 @@
  *     (since the position was last opened) unless the name says otherwise.
  *
  *  2. Only some benefits are cash. Money dividends, items (valued at item-market
- *     price), energy, nerve, happiness and points are all comparable only if the
- *     reader supplies a value for the resources; ammo packs, random properties and
- *     passive benefits have no price at all. So each benefit carries an explicit
- *     `priced` flag instead of silently contributing a zero, and holdings whose
- *     benefit cannot be priced report `roiPct: null` rather than a wrong number.
+ *     price) and points (valued at the points-market price) are tradeable, so they
+ *     have an honest dollar figure. Energy, nerve, happiness, ammo packs, random
+ *     properties and passive benefits have no market price at all. So each benefit
+ *     carries an explicit `priced` flag instead of silently contributing a zero.
  *
- *  3. Realised and unrealised profit are different things. Sells are recorded in
- *     the personal log with Torn's own realised profit, and the shares that are
- *     still held are marked to the current market price, so both are reported.
+ *  3. Income, market movement and ROI are three different numbers and are reported
+ *     separately. Dividends collected are flat income — cash the account actually
+ *     received. Share-price movement is unrealised. ROI is the total return on the
+ *     capital still committed, and it is only claimed for a position that can
+ *     actually earn: at least one COMPLETE benefit block (a passive block, or an
+ *     active holding below its block size, earns nothing, so no stock return
+ *     exists for it) whose payout has a dollar figure and whose cost basis is known.
+ *
+ *  4. Increments are cumulative, not additive. The second block of a stock costs
+ *     twice the first ON TOP of the first, so holding `n` blocks costs
+ *     `(2^n − 1) × blockShares` shares, and the block being worked toward starts at
+ *     `(2^n − 1) × blockShares` shares held. Everything about "should I buy more?"
+ *     is decided on the block being worked toward, not on the blended position.
  *
  * This module is intentionally dependency-free and must stay that way: the
  * userscript imports it type-only and bundles for the browser.
@@ -45,16 +54,8 @@ export type StockBenefitKind =
 	/** A passive benefit with no dividend at all. */
 	| "passive";
 
-/** A resource a dividend can pay in, which the reader may value per unit. */
+/** A resource a dividend can pay in. Only points are tradeable, so only points price. */
 export type StockResourceUnit = "energy" | "nerve" | "happy" | "points";
-
-/** Optional reader-supplied value of one unit of each resource, in dollars. */
-export interface StockValuationRates {
-	energy: number;
-	nerve: number;
-	happy: number;
-	points: number;
-}
 
 /** How much one dividend cycle of a benefit is worth, and whether that is knowable. */
 export interface StockBenefitValuation {
@@ -205,7 +206,17 @@ export interface StockHolding {
 	shares: number;
 	/** Shares in one block, so "how many increments" is readable. */
 	blockShares: number;
+	/**
+	 * Complete benefit blocks held. Increments are cumulative: holding `n` blocks
+	 * costs `(2^n − 1) × blockShares` shares, so this is not `shares ÷ blockShares`.
+	 */
 	increments: number;
+	/** Shares the block being worked toward adds once complete. */
+	nextBlockShares: number;
+	/** Shares still needed before that block is complete and starts paying. */
+	sharesToNextBlock: number;
+	/** Share of the block being worked toward that is already owned, 0–100. */
+	nextBlockProgressPct: number;
 	/** Current market price per share. */
 	price: number;
 	marketValue: number;
@@ -216,75 +227,127 @@ export interface StockHolding {
 	previousTerm: StockClosedTerm | null;
 	/** marketValue − costBasis. */
 	unrealized: number;
+	/**
+	 * Flat income collected this term: the dollar value of dividends already paid
+	 * out. Deliberately excludes market movement and sale proceeds.
+	 */
+	income: number;
 	/** realised + dividends + unrealized across the open term. */
 	profit: number;
-	/** profit ÷ invested. Null when the benefit cannot be priced or nothing was invested. */
+	/**
+	 * profit ÷ invested. Null whenever no stock return exists to measure: a passive
+	 * block, a holding below one complete block, an unpriceable payout, or no basis.
+	 */
 	roiPct: number | null;
+	/** Why `roiPct` is null, when it is. */
+	roiNote?: string;
 	/** Term ROI annualised. Null over short terms, where it says nothing. */
 	annualizedRoiPct: number | null;
 	/** Why `annualizedRoiPct` is null, when it is. */
 	annualizedNote?: string;
-	/** Forward annualised yield of one more block at today's price. */
-	forwardYieldPct: number | null;
+	/** Annualised return of buying one more block at today's price, as a percentage. */
+	nextBlockAprPct: number | null;
+	/** Why `nextBlockAprPct` is null, when it is. */
+	nextBlockNote?: string;
 	benefit: StockBenefit;
 	progress: StockBenefitProgress | null;
 	reconciliation: StockReconciliation;
 	warnings: string[];
 }
 
-/** One row of the full stock list, owned or not, so candidates can be compared. */
-export interface StockCatalogEntry {
+/**
+ * One increment of one stock, priced so it can be compared against every other
+ * increment of every other stock.
+ *
+ * This is the decision surface: the row for the block being worked toward answers
+ * "what does the next purchase cost, and what does it return?", and the rows for
+ * later blocks show what buying further would eventually yield.
+ */
+export interface StockBlock {
 	stockId: number;
 	name: string;
 	acronym: string;
-	price: number;
-	benefit: StockBenefit;
-	/** Shares held right now; 0 when not owned. */
+	/** 1 for the first block, 2 for the second increment, and so on. */
+	increment: number;
+	/** Shares this single increment adds (the block size, doubled per block held). */
 	shares: number;
-	owned: boolean;
-	/** Shares that the next increment would cost (doubling each time). */
-	nextIncrementShares: number;
-	/** Cash the next increment would cost at today's price. Null when capped out. */
-	nextIncrementCost: number | null;
+	/** Shares in the first block, so "block 3 of 4" is readable. */
+	blockShares: number;
+	price: number;
+	/** Cash this increment costs at today's price. Null when no price is on record. */
+	cost: number | null;
+	frequencyDays: number | null;
+	/** Dollar value of one payout of this block, or null when it has no price. */
+	payoutValue: number | null;
+	/** What one payout is: "$4,000,000", "1× Drug Pack", "100 points". */
+	payoutLabel: string;
+	/** Why this payout carries no dollar figure, when it does not. */
+	payoutNote?: string;
+	/** Annual income once complete: payoutValue × 365 ÷ frequencyDays. */
+	annualIncome: number | null;
+	/** annualIncome ÷ cost, as a percentage. The APR on the whole block. */
+	annualizedAprPct: number | null;
+	/** Shares already held toward this block. */
+	sharesHeld: number;
+	/** Share of this block already owned, 0–100. */
+	progressPct: number;
+	/** Shares still needed to complete it. */
+	sharesRemaining: number;
+	/** Cash still needed to complete it. Null when no price is on record. */
+	costRemaining: number | null;
 	/**
-	 * Annualised yield of buying the NEXT increment at today's price. This is the
-	 * number that answers "should I buy more?", which is not the same as the yield
-	 * on what is already held. Null when the benefit cannot be priced.
+	 * annualIncome ÷ costRemaining: the return on the cash the NEXT purchase costs.
+	 *
+	 * Set only for the one block a purchase can actually advance — a block already
+	 * held cannot be bought, and a later block cannot be reached yet — which is what
+	 * makes it the "next to buy" ranking.
 	 */
-	nextIncrementYieldPct: number | null;
-	/** Annualised yield of the FIRST increment at today's price. */
-	firstIncrementYieldPct: number | null;
-	/** Performance of the open term, repeated here so the list sorts in one place. */
-	termRoiPct: number | null;
-	termProfit: number;
+	nextToBuyAprPct: number | null;
+	/** Every share of this block is held, so it is paying. */
+	held: boolean;
+	/** A cap blocks any further increment of this stock. */
+	capped: boolean;
+	/** A passive block pays no dividend, so no increment of it has an APR. */
+	passive: boolean;
+	benefit: StockBenefit;
 }
 
-/** Portfolio-wide roll-up. Holdings whose benefit cannot be priced are excluded. */
+/**
+ * Portfolio-wide roll-up.
+ *
+ * `profit` and `roiPct` deliberately cover different sets. Profit is every
+ * position's realised sales plus collected dividends plus market movement; ROI
+ * covers only the positions that can earn (one complete, priceable block with a
+ * known basis), because averaging a passive block or a half-built one into an
+ * "ROI" would describe a return that cannot exist.
+ */
 export interface StockPortfolioTotals {
 	holdingsCount: number;
-	/** Holdings whose benefit has no dollar figure, excluded from the money totals. */
+	/** Holdings whose benefit has no dollar figure. */
 	unpricedHoldingsCount: number;
+	/** Holdings below one complete block, so no dividend is accruing. */
+	incompleteHoldingsCount: number;
+	/** Holdings an ROI can be measured on: complete, priceable block, known basis. */
+	measuredHoldingsCount: number;
+	/** Every dollar put into the open terms, measured or not. */
 	invested: number;
 	costBasis: number;
 	marketValue: number;
 	unrealized: number;
 	realized: number;
-	dividendsValue: number;
+	/** Flat income collected this term across every holding. */
+	income: number;
 	dividendsCount: number;
 	dividendsUnpriced: number;
+	/** realised + income + unrealized, across every holding. */
 	profit: number;
-	/**
-	 * profit ÷ invested across every holding with a basis. This is a lower bound,
-	 * not a measurement, whenever `unpricedHoldingsCount` is non-zero.
-	 */
+	/** Capital sitting in positions whose return can be measured. */
+	measuredInvested: number;
+	/** Total return of those same positions. */
+	measuredProfit: number;
+	/** measuredProfit ÷ measuredInvested. Null when nothing measurable is held. */
 	roiPct: number | null;
-	/** Capital in holdings whose benefit has a dollar value and whose basis is known. */
-	pricedInvested: number;
-	/** Profit of those same holdings. */
-	pricedProfit: number;
-	/** The like-for-like ROI: pricedProfit ÷ pricedInvested. */
-	pricedRoiPct: number | null;
-	/** Annualised income of every priced holding's current blocks, at today's rates. */
+	/** Annualised income of the complete, priceable blocks actually held. */
 	forwardAnnualIncome: number;
 	/** forwardAnnualIncome ÷ costBasis. */
 	forwardYieldOnCostPct: number | null;
@@ -299,11 +362,12 @@ export interface StockPortfolioResponse {
 	positionAsOfIso: string | null;
 	/** When the share prices were last refreshed. */
 	pricesAsOfIso: string | null;
-	/** The resource rates used for every figure above. */
-	rates: StockValuationRates;
+	/** Points-market price per point, used to value any points payout. */
+	pointsPrice: number;
 	totals: StockPortfolioTotals;
 	holdings: StockHolding[];
-	catalog: StockCatalogEntry[];
+	/** Every increment of every stock, owned or not, for the buy-decision table. */
+	blocks: StockBlock[];
 	/** Why some figures are missing, in the reader's words. */
 	warnings: string[];
 }

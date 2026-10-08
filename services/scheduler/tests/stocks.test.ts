@@ -178,7 +178,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 			);
 	});
 
-	test("parseStockGainLog parses money and item dividends into stock_ledgers & ledger_events", async () => {
+	test("parseStockGainLog parses money and item dividends into stock_ledgers", async () => {
 		// Seed active user stocks
 		await db.insert(userStocks).values([
 			{
@@ -223,12 +223,13 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 		expect(stockEntry1?.value).toBe(5000000);
 		expect(stockEntry1?.logType).toBe(5530);
 
+		// `ledger_events` has exactly one writer — the wealth engine — which
+		// classifies the same dividend logs alongside every other money-moving
+		// type. This worker writing it too is how a dividend was booked twice.
 		const ledgerEv1 = await db.query.ledgerEvents.findFirst({
 			where: eq(ledgerEvents.id, `ledger_ev_${LOG_ID_1}`),
 		});
-		expect(ledgerEv1).toBeDefined();
-		expect(ledgerEv1?.type).toBe("stock_dividend");
-		expect(ledgerEv1?.cashFlow).toBe(5000000);
+		expect(ledgerEv1).toBeUndefined();
 
 		// 2. Item Dividend Log
 		const itemLog: UserLog = {

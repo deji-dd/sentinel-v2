@@ -12,7 +12,9 @@ import type {
 	StatType,
 	StockPortfolioResponse,
 	StocksLedgerState,
-	StockValuationRates,
+	WealthAnalyticsResponse,
+	WealthStateResponse,
+	WealthTransactionsResponse,
 } from "./types";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
@@ -203,33 +205,24 @@ export class BlastedApiClient {
 		return (await res.json()) as T;
 	}
 
-	/** Query string for the reader's resource valuations, omitted when unset. */
-	private rateQuery(rates: StockValuationRates): string {
-		const parts = (["energy", "nerve", "happy", "points"] as const).flatMap(
-			(unit) => {
-				const value = rates[unit];
-				return value > 0 ? [`${unit}=${value}`] : [];
-			},
-		);
-		return parts.length > 0 ? `?${parts.join("&")}` : "";
-	}
-
-	public async getStockPortfolio(
-		rates: StockValuationRates,
-	): Promise<StockPortfolioResponse> {
+	/**
+	 * The portfolio as the API computes it.
+	 *
+	 * No resource rates are sent: points are priced server-side from the points
+	 * market, and energy, nerve and happiness have no market price to send.
+	 */
+	public async getStockPortfolio(): Promise<StockPortfolioResponse> {
 		const data = await this.request<StockPortfolioResponse>(
-			`/v2/system/stocks-ledger/portfolio${this.rateQuery(rates)}`,
+			"/v2/system/stocks-ledger/portfolio",
 		);
 		GM_setValue(STORAGE_KEYS.cachedStockPortfolio, JSON.stringify(data));
 		return data;
 	}
 
 	/** Reads the live position and prices from Torn, then re-computes. */
-	public async syncStockPortfolio(
-		rates: StockValuationRates,
-	): Promise<StockPortfolioResponse> {
+	public async syncStockPortfolio(): Promise<StockPortfolioResponse> {
 		const data = await this.request<StockPortfolioResponse>(
-			`/v2/system/stocks-ledger/sync${this.rateQuery(rates)}`,
+			"/v2/system/stocks-ledger/sync",
 			{ method: "POST" },
 		);
 		if (data.success) {
@@ -401,6 +394,67 @@ export class BlastedApiClient {
 		if (!raw) return null;
 		try {
 			return JSON.parse(raw) as CompanyStateResponse;
+		} catch {
+			return null;
+		}
+	}
+	// ─── Wealth ledger ─────────────────────────────────────────────────────────
+
+	public async getWealthState(): Promise<WealthStateResponse> {
+		const data = await this.request<WealthStateResponse>(
+			"/v2/system/wealth-ledger/state",
+		);
+		GM_setValue(STORAGE_KEYS.cachedWealthState, JSON.stringify(data));
+		return data;
+	}
+
+	public async getWealthAnalytics(
+		timeframe = "30d",
+	): Promise<WealthAnalyticsResponse> {
+		const daysParam = timeframe === "all" ? "all" : timeframe.replace("d", "");
+		const data = await this.request<WealthAnalyticsResponse>(
+			`/v2/system/wealth-ledger/analytics?days=${daysParam}`,
+		);
+		GM_setValue(STORAGE_KEYS.cachedWealthAnalytics, JSON.stringify(data));
+		return data;
+	}
+
+	public async getWealthTransactions(
+		limit = 50,
+		offset = 0,
+	): Promise<WealthTransactionsResponse> {
+		return this.request<WealthTransactionsResponse>(
+			`/v2/system/wealth-ledger/transactions?limit=${limit}&offset=${offset}`,
+		);
+	}
+
+	/** Asks the scheduler to reconcile, then returns the refreshed state. */
+	public async refreshWealth(): Promise<WealthStateResponse> {
+		const data = await this.request<WealthStateResponse>(
+			"/v2/system/wealth-ledger/refresh",
+			{ method: "POST" },
+		);
+		if (data.success) {
+			GM_setValue(STORAGE_KEYS.cachedWealthState, JSON.stringify(data));
+		}
+		return data;
+	}
+
+	public getCachedWealthState(): WealthStateResponse | null {
+		const raw = GM_getValue<string>(STORAGE_KEYS.cachedWealthState, "");
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as WealthStateResponse;
+		} catch {
+			return null;
+		}
+	}
+
+	public getCachedWealthAnalytics(): WealthAnalyticsResponse | null {
+		const raw = GM_getValue<string>(STORAGE_KEYS.cachedWealthAnalytics, "");
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as WealthAnalyticsResponse;
 		} catch {
 			return null;
 		}

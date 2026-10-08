@@ -23,12 +23,21 @@ export const STORAGE_KEYS = {
 	companyChartMode: "blasted_company_chart_mode",
 	companyWeeklyOffset: "blasted_company_weekly_offset",
 	cachedStockPortfolio: "blasted_cached_stock_portfolio",
-	stockRates: "blasted_stock_rates",
 	stockSort: "blasted_stock_sort",
 	stockFilter: "blasted_stock_filter",
+	stockPageSize: "blasted_stock_page_size",
+	stockBlockSort: "blasted_stock_block_sort",
+	stockMinApr: "blasted_stock_min_apr",
+	stockAprBasis: "blasted_stock_apr_basis",
+	drawerWidth: "blasted_drawer_width",
 	crimesTimeframe: "blasted_crimes_timeframe",
 	crimesSort: "blasted_crimes_sort",
 	companySort: "blasted_company_sort",
+	wealthTimeframe: "blasted_wealth_timeframe",
+	cachedWealthState: "blasted_cached_wealth_state",
+	cachedWealthAnalytics: "blasted_cached_wealth_analytics",
+	wealthSort: "blasted_wealth_sort",
+	wealthChartMode: "blasted_wealth_chart_mode",
 };
 
 export const POLLING_CONFIG = {

@@ -7,7 +7,6 @@ import {
 	eq,
 	inArray,
 	isNull,
-	ledgerEvents,
 	personalLogs,
 	sql,
 	systemStates,
@@ -289,6 +288,12 @@ export async function processCrimeLogsBatch(
 	}
 
 	// 3. Batch upsert rows inside an atomic transaction (without modifying non-conflicting data)
+	//
+	// This worker owns `crime_logs` and nothing else. `ledger_events` has a single
+	// writer — the wealth engine — which classifies the same crime logs alongside
+	// every other money-moving type. Two writers on one ledger was how a crime
+	// reward ended up counted twice with no way to tell afterwards which row came
+	// from where.
 	await db.transaction(
 		async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
 			for (const row of rowsToUpsert) {
@@ -306,39 +311,6 @@ export async function processCrimeLogsBatch(
 							updatedAt: row.updatedAt,
 						},
 					});
-
-				if (row.value > 0) {
-					const eventId = `ledger_ev_crime_${row.id}`;
-					await tx
-						.insert(ledgerEvents)
-						.values({
-							id: eventId,
-							logId: row.id,
-							timestamp: row.timestamp,
-							type: "crime_reward",
-							categoryId: 7,
-							transactionName: row.action || "Crime Reward",
-							assetsAffected: [],
-							cashFlow: row.value,
-							realizedPnl: row.value,
-							rawLog: null,
-							createdAt: now,
-							updatedAt: now,
-						})
-						.onConflictDoUpdate({
-							target: ledgerEvents.id,
-							set: {
-								logId: row.id,
-								timestamp: row.timestamp,
-								type: "crime_reward",
-								categoryId: 7,
-								transactionName: row.action || "Crime Reward",
-								cashFlow: row.value,
-								realizedPnl: row.value,
-								updatedAt: now,
-							},
-						});
-				}
 			}
 		},
 	);
@@ -370,9 +342,6 @@ export async function reconcileHistoricalCrimeLogs(options?: {
 
 		if (options?.wipeAndRebuild) {
 			await db.delete(crimeLogs);
-			await db
-				.delete(ledgerEvents)
-				.where(eq(ledgerEvents.type, "crime_reward"));
 			state.lastProcessedTimestamp = null;
 			state.totalIndexedCrimes = 0;
 		}

@@ -10,6 +10,7 @@
 		"db:generate": "bun --filter @sentinel/database db:generate",
 		"db:migrate": "bun --filter @sentinel/database db:migrate",
 		"merc:backfill": "bun run scripts/merc-backfill-hits.ts",
+		"wealth:audit": "bun run scripts/wealth-audit.ts",
 		"scheduler:start": "NODE_ENV=production bun run services/scheduler/index.ts",
 		"scheduler:dev": "NODE_ENV=development bun --watch run services/scheduler/index.ts",
 		"scheduler:prod-profile": "NODE_ENV=production DISABLED_WORKERS=\"elims:team_tracker,elims:member_stats_worker\" bun run services/scheduler/index.ts",

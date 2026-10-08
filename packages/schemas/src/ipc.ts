@@ -10,6 +10,7 @@ import type {
 } from "./rw-displays";
 import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
+import type { WealthBalances, WealthLedgerState } from "./wealth";
 
 export type IpcWarAction =
 	| "assault_start"
@@ -460,25 +461,7 @@ export type IpcReinitializeWealthMessage = {
 
 export type IpcWealthStateUpdatedMessage = {
 	action: "wealth_state_updated";
-	data: {
-		init: boolean;
-		initTimestamp: number | null;
-		status: "idle" | "running" | "completed" | "error";
-		lastSyncTimestamp: number | null;
-		lastError: string | null;
-		updatedAt: string;
-		totals: {
-			totalInflow: number;
-			totalOutflow: number;
-			netProfit: number;
-			crimesInflow: number;
-			stocksInflow: number;
-			companyInflow: number;
-			companyOutflow: number;
-			otherInflow: number;
-		};
-		totalEventsIndexed: number;
-	};
+	data: WealthLedgerState & { balances: WealthBalances };
 };
 
 export type IpcElimsStopWorkersRequestMessage = {

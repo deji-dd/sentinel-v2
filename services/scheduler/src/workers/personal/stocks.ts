@@ -5,7 +5,6 @@ import {
 	eq,
 	inArray,
 	isNull,
-	ledgerEvents,
 	personalLogs,
 	sql,
 	stockLedgers,
@@ -354,49 +353,10 @@ export async function parseStockGainLog(log: UserLog): Promise<boolean> {
 			},
 		});
 
-	// 2. Record in ledger_events
-	const assetsAffected = itemId
-		? [
-				{
-					assetId: String(itemId),
-					quantityChange: 1,
-					costBasisImpact: valueReceived,
-				},
-			]
-		: [];
-
-	const eventId = `ledger_ev_${logIdStr}`;
-	await db
-		.insert(ledgerEvents)
-		.values({
-			id: eventId,
-			logId: logIdStr,
-			timestamp: logTimestamp,
-			type: "stock_dividend",
-			categoryId: 8,
-			transactionName: "Stock Benefit Block Dividend",
-			assetsAffected,
-			cashFlow: inner.money || logData.money ? valueReceived : 0,
-			realizedPnl: valueReceived,
-			rawLog: log as unknown as Record<string, unknown>,
-			createdAt: now,
-			updatedAt: now,
-		})
-		.onConflictDoUpdate({
-			target: ledgerEvents.id,
-			set: {
-				logId: logIdStr,
-				timestamp: logTimestamp,
-				type: "stock_dividend",
-				categoryId: 8,
-				transactionName: "Stock Benefit Block Dividend",
-				assetsAffected,
-				cashFlow: inner.money || logData.money ? valueReceived : 0,
-				realizedPnl: valueReceived,
-				rawLog: log as unknown as Record<string, unknown>,
-				updatedAt: now,
-			},
-		});
+	// This worker owns `stock_ledgers`. `ledger_events` is owned solely by the
+	// wealth engine, which classifies the same dividend logs alongside every other
+	// money-moving type — one writer per ledger, so a dividend cannot be booked
+	// twice under two different event ids.
 
 	return true;
 }
@@ -475,9 +435,6 @@ export async function reconcileHistoricalStockLogs(options?: {
 
 		if (options?.wipeAndRebuild) {
 			await db.delete(stockLedgers);
-			await db
-				.delete(ledgerEvents)
-				.where(eq(ledgerEvents.type, "stock_dividend"));
 			state.lastProcessedTimestamp = null;
 			state.totalIndexedLogs = 0;
 		}

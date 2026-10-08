@@ -92,17 +92,27 @@ describe("Stock portfolio route", () => {
 
 		expect(portfolio.success).toBe(true);
 		// The catalogue is the fallback for a database with no `torn_stocks` rows, so
-		// it has to stand on its own rather than reflecting whatever is stored.
-		expect(portfolio.catalog.length).toBeGreaterThanOrEqual(35);
-		expect(
-			portfolio.catalog.find((entry) => entry.acronym === "MCS")?.owned,
-		).toBe(false);
-		expect(portfolio.rates).toEqual({
-			energy: 0,
-			nerve: 0,
-			happy: 0,
-			points: 0,
-		});
+		// it has to stand on its own rather than reflecting whatever is stored. Each
+		// stock contributes at least two increments, so the row count is larger.
+		expect(portfolio.blocks.length).toBeGreaterThanOrEqual(70);
+		const mcsFirst = portfolio.blocks.find(
+			(block) => block.acronym === "MCS" && block.increment === 1,
+		);
+		expect(mcsFirst?.held).toBe(false);
+		expect(mcsFirst?.progressPct).toBe(0);
+		// Points trade, so a points payout is priced from the points market; energy
+		// cannot be sold for cash, so MCS's payout still carries no dollar figure.
+		expect(portfolio.pointsPrice).toBeGreaterThan(0);
+		const pts = portfolio.blocks.find(
+			(block) => block.acronym === "PTS" && block.increment === 1,
+		);
+		expect(pts?.payoutValue).toBe(portfolio.pointsPrice * 100);
+		expect(pts?.payoutNote).toBeUndefined();
+		const mcsEnergy = portfolio.blocks.find(
+			(block) => block.acronym === "MCS" && block.increment === 1,
+		);
+		expect(mcsEnergy?.payoutValue).toBeNull();
+		expect(mcsEnergy?.annualizedAprPct).toBeNull();
 	});
 
 	test("reports a seeded position with its cost basis and progress", async () => {
@@ -120,39 +130,25 @@ describe("Stock portfolio route", () => {
 		expect(holding?.term.invested).toBe(SHARES * BUY_PRICE);
 		expect(holding?.marketValue).toBe(SHARES * MARKET_PRICE);
 		expect(holding?.unrealized).toBe(SHARES * (MARKET_PRICE - BUY_PRICE));
-		expect(holding?.roiPct).toBeCloseTo(
-			((MARKET_PRICE - BUY_PRICE) / BUY_PRICE) * 100,
-			6,
-		);
-		// Torn reports 2 of 7 days of progress.
-		expect(holding?.progress?.daysUntil).toBe(5);
-		// A stock the catalogue has never heard of cannot be priced, and says so
-		// instead of reporting a stock that pays nothing.
+		// A stock the catalogue has never heard of cannot be priced, so its payout
+		// has no dollar figure and no ROI is claimed for the movement alone.
 		expect(holding?.benefit.valuation.priced).toBe(false);
 		expect(holding?.benefit.valuation.pricingNote).toContain("catalogue");
+		expect(holding?.roiPct).toBeNull();
+		expect(holding?.roiNote).toContain("catalogue");
+		expect(holding?.income).toBe(0);
+		// Torn reports 2 of 7 days of progress.
+		expect(holding?.progress?.daysUntil).toBe(5);
 	});
 
-	test("accepts reader-supplied resource rates and echoes what it used", async () => {
+	test("ignores the removed resource-rate parameters instead of failing", async () => {
 		await seed();
 
+		// The reader no longer supplies rates: points are priced from the points
+		// market and energy, nerve and happiness are not priced at all. A stale
+		// client sending the old query string must still get a portfolio back.
 		const portfolio = await getPortfolio("?energy=5000&nerve=80000");
-		expect(portfolio.rates).toEqual({
-			energy: 5_000,
-			nerve: 80_000,
-			happy: 0,
-			points: 0,
-		});
-	});
-
-	test("ignores nonsense rate parameters instead of poisoning the payload", async () => {
-		const portfolio = await getPortfolio(
-			"?energy=abc&nerve=-5&happy=0&points=",
-		);
-		expect(portfolio.rates).toEqual({
-			energy: 0,
-			nerve: 0,
-			happy: 0,
-			points: 0,
-		});
+		expect(portfolio.success).toBe(true);
+		expect(portfolio.pointsPrice).toBeGreaterThan(0);
 	});
 });

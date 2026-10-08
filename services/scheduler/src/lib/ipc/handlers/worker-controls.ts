@@ -70,7 +70,9 @@ export const handleReinitializeWealth: IpcActionHandler = (
 			: undefined;
 	const initTs = data?.timestamp;
 	logger.info(
-		`Received reinitialize_wealth IPC command with timestamp: ${initTs ?? "now"}. Running full baseline snapshot in scheduler...`,
+		`Received reinitialize_wealth IPC command. Anchoring the ledger at ${
+			initTs !== undefined ? `timestamp ${initTs}` : "00:00 UTC today"
+		} and re-snapshotting opening balances...`,
 	);
 	initWealthTracking(initTs).catch((err) => {
 		logger.error("Error executing wealth initialization:", err);

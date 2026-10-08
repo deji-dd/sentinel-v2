@@ -1,142 +1,175 @@
 import {
+	and,
+	assets,
 	companyDailyProfits,
-	count,
 	db,
 	eq,
 	gte,
+	isNull,
 	ledgerEvents,
 	personalLogs,
 	sql,
 	systemStates,
 	tornItems,
+	tornLogTypes,
+	wealthAccountSnapshots,
 } from "@sentinel/database";
-import type { TornSchema } from "@sentinel/schemas";
-import { extractItemMarketPrice, Logger } from "@sentinel/utils";
+import type {
+	TornSchema,
+	WealthBalances,
+	WealthCoverage,
+	WealthLedgerState,
+} from "@sentinel/schemas";
+import { getPersonalKey, tornApi } from "@sentinel/torn-api";
+import {
+	classifyWealthLog,
+	computeTrackedNetWorth,
+	deriveOpeningBalances,
+	extractItemMarketPrice,
+	getWealthBand,
+	getWealthRule,
+	Logger,
+	readNumber,
+	startOfUtcDay,
+	WEALTH_LOG_RULES,
+	type WealthAccount,
+	type WealthEvent,
+	type WealthItemRef,
+	type WealthLogRow,
+} from "@sentinel/utils";
 import { schedulerEvents } from "../../lib/events";
+import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
+/**
+ * The wealth ledger.
+ *
+ * WHAT THIS OWNS
+ *
+ * `ledger_events` has exactly one writer, and this is it. The crimes, stocks and
+ * company workers each keep their own domain table (`crime_logs`, `stock_ledgers`,
+ * `company_daily_profits`) which their own tabs read, and none of them writes the
+ * unified ledger any more. That was the source of the double-counting in the
+ * previous attempt: a stock dividend booked once by the stocks worker and again by
+ * the wealth engine, with no way to tell afterwards which was which.
+ *
+ * Company profit is the one contribution a log cannot express — it is money
+ * appearing in a company balance between two API snapshots — so it is read out of
+ * `company_daily_profits`, which the company worker still owns, and re-emitted
+ * here under the same event id.
+ *
+ * THE ANCHOR IS 00:00 UTC, NOT "NOW"
+ *
+ * Init runs part-way through a day on an account that has already been active
+ * since midnight. If day zero were the observed balances, everything that
+ * happened today would be counted twice: once already inside the balances, and
+ * once by the replayed events. So the anchor row stores OPENING balances —
+ * observed minus the net effect of every event since midnight — and the ledger
+ * starts at midnight. The upshot is that the panel is useful on the first open
+ * instead of showing an empty day.
+ *
+ * WHAT IT REFUSES TO DO
+ *
+ * Guess. Events whose amounts cannot be established are written with
+ * `priced: false` and counted in the coverage block rather than dropped or
+ * zeroed. Torn's own `daily_networth` is compared against the tracked figure on
+ * every sync, and the difference is surfaced as drift: it is the only mechanical
+ * signal that a rule is quietly wrong.
+ */
+
 const WORKER_NAME = "personal:wealth";
 const STATE_ID = "personal:wealth";
-const CADENCE_SEC = 3600; // Hourly reconciliation sync
+/**
+ * Hourly, which is also Torn's own inventory cache window.
+ *
+ * The drift check needs a live reading of the wallet, the accounts and the
+ * holdings, and the holdings can only be enumerated one category at a time. Torn
+ * caches each category for an hour, so running at exactly that cadence gets a
+ * fresh figure without ever asking for a cached one twice.
+ */
+const CADENCE_SEC = 3600;
+/** The log types are static reference data; daily is plenty. */
+const LOG_TYPE_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const /** Torn caps inventory pages at 250. */ INVENTORY_PAGE_SIZE = 250;
+/** Stops a runaway pager if Torn ever returns a full page forever. */
+const INVENTORY_MAX_PAGES = 40;
 
 const logger = new Logger("Scheduler", "Wealth");
-export type UserLog = TornSchema<"UserLog">;
 
-export type WealthBreakdown = {
-	totalInflow: number;
-	totalOutflow: number;
-	netProfit: number;
-	crimesInflow: number;
-	stocksInflow: number;
-	companyInflow: number;
-	companyOutflow: number;
-	otherInflow: number;
-};
-
-export type WealthState = {
-	init: boolean;
-	initTimestamp: number | null; // Cutoff timestamp in seconds; logs prior to this are ignored
-	status: "idle" | "running" | "completed" | "error";
-	lastSyncTimestamp: number | null;
-	lastError: string | null;
+/** The persisted half of the ledger state; coverage and balances are derived. */
+export type WealthState = Omit<WealthLedgerState, "coverage" | "updatedAt"> & {
 	updatedAt: string;
-	totals: WealthBreakdown;
-	totalEventsIndexed: number;
+	/** When the Torn log-type reference was last refreshed. */
+	logTypesSyncedAt: string | null;
 };
 
-const DEFAULT_BREAKDOWN: WealthBreakdown = {
-	totalInflow: 0,
-	totalOutflow: 0,
-	netProfit: 0,
-	crimesInflow: 0,
-	stocksInflow: 0,
-	companyInflow: 0,
-	companyOutflow: 0,
-	otherInflow: 0,
-};
-
-const DEFAULT_WEALTH_STATE: WealthState = {
-	init: false,
-	initTimestamp: null,
+const DEFAULT_STATE: WealthState = {
 	status: "idle",
-	lastSyncTimestamp: null,
+	initialised: false,
+	anchorTimestamp: null,
+	anchorDate: null,
+	totalIndexedEvents: 0,
+	lastReconciledAt: null,
 	lastError: null,
 	updatedAt: new Date().toISOString(),
-	totals: { ...DEFAULT_BREAKDOWN },
-	totalEventsIndexed: 0,
+	logTypesSyncedAt: null,
 };
 
-let inMemoryState: WealthState = { ...DEFAULT_WEALTH_STATE };
+let inMemoryState: WealthState = { ...DEFAULT_STATE };
 
-/**
- * Loads the wealth tracking state from SQLite system_states.
- */
+// ─── State ───────────────────────────────────────────────────────────────────
+
 export async function loadWealthState(): Promise<WealthState> {
 	try {
 		const record = await db.query.systemStates.findFirst({
 			where: eq(systemStates.id, STATE_ID),
 		});
-
 		if (record?.data && typeof record.data === "object") {
-			const saved = record.data as Partial<WealthState>;
 			inMemoryState = {
-				...DEFAULT_WEALTH_STATE,
-				...saved,
-				init: Boolean(record.init ?? saved.init),
-				totals: {
-					...DEFAULT_BREAKDOWN,
-					...(saved.totals ?? {}),
-				},
+				...DEFAULT_STATE,
+				...(record.data as Partial<WealthState>),
 				updatedAt: new Date().toISOString(),
 			};
-		} else {
-			inMemoryState = { ...DEFAULT_WEALTH_STATE };
+			return { ...inMemoryState };
 		}
 	} catch (error) {
-		logger.error("Failed to load Wealth state:", error);
-		inMemoryState = { ...DEFAULT_WEALTH_STATE };
+		logger.error("Failed to load wealth state:", error);
 	}
+	inMemoryState = { ...DEFAULT_STATE };
 	return { ...inMemoryState };
 }
 
-import { getActiveIpcServer } from "../../lib/ipc/server";
-
-/**
- * Persists the wealth state to SQLite system_states.
- */
 export async function persistWealthState(state: WealthState): Promise<void> {
 	state.updatedAt = new Date().toISOString();
 	inMemoryState = { ...state };
-
 	try {
 		const now = new Date();
 		await db
 			.insert(systemStates)
 			.values({
 				id: STATE_ID,
-				init: state.init,
+				init: state.initialised,
 				data: state,
 				updatedAt: now,
 			})
 			.onConflictDoUpdate({
 				target: systemStates.id,
-				set: {
-					init: state.init,
-					data: state,
-					updatedAt: now,
-				},
+				set: { init: state.initialised, data: state, updatedAt: now },
 			});
 
 		const ipc = getActiveIpcServer();
 		if (ipc) {
+			// The state broadcast carries the balances too, so a listener does not
+			// have to make a second round trip to render the header.
+			const balances = await computeBalances();
 			ipc.broadcast({
 				action: "wealth_state_updated",
-				data: state,
+				data: { ...(await buildLedgerState(state)), balances },
 			});
 		}
 	} catch (error) {
-		logger.error("Failed to persist Wealth state:", error);
+		logger.error("Failed to persist wealth state:", error);
 	}
 }
 
@@ -144,218 +177,519 @@ export function getWealthState(): WealthState {
 	return { ...inMemoryState };
 }
 
-import { assets } from "@sentinel/database";
-import { getPersonalKey, tornApi } from "@sentinel/torn-api";
+// ─── Reference data ──────────────────────────────────────────────────────────
 
-/**
- * Fetches all unique item categories dynamically from `torn_items` in SQLite.
- */
-export async function getUniqueItemCategories(): Promise<string[]> {
-	const allItems = await db.select({ data: tornItems.data }).from(tornItems);
+let cachedItemPrices: Map<string, number> | null = null;
+let cachedItemPricesAt = 0;
+const ITEM_PRICE_TTL_MS = 15 * 60_000;
 
-	const categoriesSet = new Set<string>();
-	for (const item of allItems) {
-		if (item.data && typeof item.data === "object") {
-			const itemObj = item.data as Record<string, unknown>;
-			const cat = (itemObj.type ?? itemObj.category) as string | undefined;
-			if (cat && typeof cat === "string" && cat.trim().length > 0) {
-				categoriesSet.add(cat.trim());
-			}
-		}
-	}
-
-	return Array.from(categoriesSet).sort();
+/** Test seam: drops the memoised item prices. */
+export function clearWealthCaches(): void {
+	cachedItemPrices = null;
+	cachedItemPricesAt = 0;
 }
 
 /**
- * Initializes or resets Wealth tracking with a full baseline snapshot of inventory,
- * bazaar, display items, points, and wallet from Torn API into the `assets` table.
+ * Item market prices, memoised.
+ *
+ * The live ingest path runs on every page of a backfill burst; re-reading 1502
+ * item rows each time was costing more than the classification itself.
  */
-export async function initWealthTracking(
-	startTimestampSec?: number,
-): Promise<WealthState> {
-	const currentSec = Math.floor(Date.now() / 1000);
-	const initTimestamp = startTimestampSec ?? currentSec;
-	const startTime = performance.now();
+export async function loadItemPrices(): Promise<Map<string, number>> {
+	const now = Date.now();
+	if (cachedItemPrices && now - cachedItemPricesAt < ITEM_PRICE_TTL_MS) {
+		return cachedItemPrices;
+	}
+	const rows = await db
+		.select({ id: tornItems.id, data: tornItems.data })
+		.from(tornItems);
+	const prices = new Map<string, number>();
+	for (const row of rows) {
+		const price = extractItemMarketPrice(row.data);
+		if (price > 0) prices.set(row.id, price);
+	}
+	cachedItemPrices = prices;
+	cachedItemPricesAt = now;
+	return prices;
+}
 
-	const state: WealthState = {
-		init: true,
-		initTimestamp,
-		status: "running",
-		lastSyncTimestamp: currentSec,
-		lastError: null,
-		updatedAt: new Date().toISOString(),
-		totals: { ...DEFAULT_BREAKDOWN },
-		totalEventsIndexed: 0,
-	};
+/** The 23 item categories Torn's inventory endpoint accepts. */
+export async function loadItemCategories(): Promise<
+	Array<{ type: string; itemId: string }>
+> {
+	const rows = await db
+		.select({ id: tornItems.id, data: tornItems.data })
+		.from(tornItems);
+	const out: Array<{ type: string; itemId: string }> = [];
+	for (const row of rows) {
+		const data = row.data as Record<string, unknown> | null;
+		const type = data?.type;
+		if (typeof type === "string" && type.length > 0) {
+			out.push({ type, itemId: row.id });
+		}
+	}
+	return out;
+}
+
+/**
+ * Refreshes the full list of log types Torn publishes.
+ *
+ * The account has generated 785 of the 1170. Knowing the other 385 exist is what
+ * turns "we classified everything we have seen" into a claim about coverage
+ * rather than a claim about experience.
+ */
+export async function syncTornLogTypes(force = false): Promise<number> {
+	const state = getWealthState();
+	if (
+		!force &&
+		state.logTypesSyncedAt &&
+		Date.now() - new Date(state.logTypesSyncedAt).getTime() <
+			LOG_TYPE_SYNC_INTERVAL_MS
+	) {
+		return 0;
+	}
+
+	const response = (await tornApi.getPersonalRaw("/torn", {
+		queryParams: { selections: "logtypes" },
+	})) as { logtypes?: Array<{ id?: number; title?: string }> };
+
+	const logTypes = response.logtypes ?? [];
+	if (logTypes.length === 0) return 0;
+
+	const now = new Date();
+	let written = 0;
+	for (const entry of logTypes) {
+		const id = readNumber(entry.id);
+		if (id === null || id <= 0) continue;
+		const logType = Math.trunc(id);
+		const rule = getWealthRule(logType);
+		const band = rule ? null : getWealthBand(logType);
+		await db
+			.insert(tornLogTypes)
+			.values({
+				id: logType,
+				title: entry.title ?? null,
+				wealthCategory: rule?.category ?? band?.category ?? null,
+				observed: false,
+				updatedAt: now,
+			})
+			.onConflictDoUpdate({
+				target: tornLogTypes.id,
+				set: {
+					title: entry.title ?? null,
+					wealthCategory: rule?.category ?? band?.category ?? null,
+					updatedAt: now,
+				},
+			});
+		written += 1;
+	}
+
+	state.logTypesSyncedAt = now.toISOString();
 	await persistWealthState(state);
+	logger.info(`Cached ${written} Torn log types for coverage reporting.`);
+	return written;
+}
 
-	try {
-		const keyEntry = await getPersonalKey();
-		if (!keyEntry) {
-			logger.warn(
-				"No personal API key found. Initializing with empty baseline.",
-			);
-			state.status = "completed";
-			await persistWealthState(state);
-			return state;
-		}
+// ─── Baseline snapshot ───────────────────────────────────────────────────────
 
-		logger.info("Snapshotting baseline assets from Torn API...");
+type MoneySelection = {
+	points?: number;
+	wallet?: number;
+	vault?: number;
+	company?: number;
+	cayman_bank?: number;
+	city_bank?: { amount?: number; profit?: number; until?: number } | null;
+	daily_networth?: number;
+};
 
-		// 1. Wipe previous baseline assets and ledger events
-		await db.delete(assets);
-		await db.delete(ledgerEvents);
+type ObservedItem = WealthItemRef & { location: string; name: string | null };
 
-		// 2. Fetch baseline data from /user (money, bazaar, display)
-		const userRes = (await tornApi.get("/user", {
-			apiKey: keyEntry.apiKey,
-			userId: keyEntry.userId,
-			queryParams: { selections: ["money", "bazaar", "display"] },
-		})) as Record<string, unknown>;
+export type BaselineSnapshot = {
+	wallet: number;
+	points: number;
+	vault: number;
+	company: number;
+	cityBank: number;
+	caymanBank: number;
+	tornNetWorth: number | null;
+	items: ObservedItem[];
+	itemsValue: number;
+	/** Categories whose inventory page could not be read, by name. */
+	failures: string[];
+	raw: Record<string, unknown>;
+};
 
-		const bazaar = (userRes.bazaar as Array<Record<string, unknown>>) ?? [];
-		const display = (userRes.display as Array<Record<string, unknown>>) ?? [];
-		const moneyData = (userRes.money as Record<string, unknown>) ?? {};
-		const pointsCount = Number(moneyData.points ?? 0);
-		const walletCash = Number(moneyData.wallet ?? 0);
+/**
+ * Reads everything the ledger is anchored to.
+ *
+ * Torn removed the `/user` inventory selection, so the only way to enumerate a
+ * holding is `/user/inventory?cat=<type>` one category at a time. `cat=All` is
+ * rejected outright (error 21), and each category must be walked to the end:
+ * the previous implementation took only the first page and swallowed every
+ * error, so a category that failed looked identical to a category that was empty.
+ */
+export async function snapshotBalances(): Promise<BaselineSnapshot> {
+	const failures: string[] = [];
 
-		// 3. Pre-fetch Item Market Prices for baseline valuation
-		const itemPriceMap = await fetchItemPricesMap();
+	const moneyResponse = (await tornApi.getPersonalRaw("/user", {
+		queryParams: { selections: "money,display,bazaar" },
+	})) as {
+		money?: MoneySelection;
+		display?: Array<Record<string, unknown>>;
+		bazaar?: Array<Record<string, unknown>>;
+	};
 
-		// 4. Fetch Inventory across all dynamic categories from DB
-		const categories = await getUniqueItemCategories();
-		let inventoryItems: Array<Record<string, unknown>> = [];
-		for (const cat of categories) {
-			try {
-				const invRes = (await tornApi.get("/user/inventory", {
-					apiKey: keyEntry.apiKey,
-					userId: keyEntry.userId,
-					queryParams: { cat: cat as never, limit: 250 },
-				})) as Record<string, unknown>;
+	const money = moneyResponse.money ?? {};
+	const wallet = readNumber(money.wallet) ?? 0;
+	const points = readNumber(money.points) ?? 0;
+	const vault = readNumber(money.vault) ?? 0;
+	const company = readNumber(money.company) ?? 0;
+	const cityBank = readNumber(money.city_bank?.amount) ?? 0;
+	const caymanBank = readNumber(money.cayman_bank) ?? 0;
+	const tornNetWorth = readNumber(money.daily_networth);
 
-				const invPayload = invRes.inventory as {
-					items?: Array<Record<string, unknown>>;
-				};
-				if (invPayload?.items && Array.isArray(invPayload.items)) {
-					inventoryItems = inventoryItems.concat(invPayload.items);
-				}
-			} catch {
-				// Category empty or skipped
-			}
-		}
+	const prices = await loadItemPrices();
 
-		let totalBaselineAssetsValue = 0;
-		const now = new Date();
-
-		// Helper to insert items into assets table
-		const insertBaselineItems = async (
-			rawList: Array<Record<string, unknown>>,
-			location: "inventory" | "bazaar" | "display",
-		) => {
-			for (const raw of rawList) {
-				const itemId = Number(raw.id ?? raw.ID ?? 0);
-				const itemUid = raw.uid ? Number(raw.uid) : null;
-				const qty = Number(raw.amount ?? raw.quantity ?? 1);
-				if (!itemId) continue;
-
-				const marketPrice = itemPriceMap.get(String(itemId)) ?? 0;
-				const totalCostBasis = marketPrice * qty;
-				totalBaselineAssetsValue += totalCostBasis;
-
-				if (itemUid) {
-					const assetKey = `uid_${itemUid}`;
-					await db
-						.insert(assets)
-						.values({
-							id: assetKey,
-							type: "item",
-							assetId: String(itemId),
-							quantity: 1,
-							movingAverageCost: marketPrice,
-							totalCostBasis: marketPrice,
-							location,
-							owner: "personal",
-							origin: "baseline_init",
-							realizedPnl: 0,
-							lastUpdated: now,
-							createdAt: now,
-							updatedAt: now,
-						})
-						.onConflictDoUpdate({
-							target: assets.id,
-							set: {
-								quantity: 1,
-								movingAverageCost: marketPrice,
-								totalCostBasis: marketPrice,
-								location,
-								updatedAt: now,
-							},
-						});
-				} else {
-					const assetKey = `item_${itemId}_${location}`;
-					const [existing] = await db
-						.select()
-						.from(assets)
-						.where(eq(assets.id, assetKey));
-
-					if (existing) {
-						const newQty = existing.quantity + qty;
-						const newCost = newQty * marketPrice;
-						await db
-							.update(assets)
-							.set({
-								quantity: newQty,
-								totalCostBasis: newCost,
-								movingAverageCost: marketPrice,
-								updatedAt: now,
-							})
-							.where(eq(assets.id, assetKey));
-					} else {
-						await db.insert(assets).values({
-							id: assetKey,
-							type: "item",
-							assetId: String(itemId),
-							quantity: qty,
-							movingAverageCost: marketPrice,
-							totalCostBasis,
-							location,
-							owner: "personal",
-							origin: "baseline_init",
-							realizedPnl: 0,
-							lastUpdated: now,
-							createdAt: now,
-							updatedAt: now,
-						});
-					}
-				}
-			}
+	/** Turns one API item entry into a valued holding. */
+	const toObserved = (
+		raw: Record<string, unknown>,
+		location: string,
+	): ObservedItem | null => {
+		const itemId = readNumber(raw.id ?? raw.ID);
+		if (itemId === null || itemId <= 0) return null;
+		const quantity = readNumber(raw.amount ?? raw.quantity ?? raw.qty) ?? 1;
+		if (quantity <= 0) return null;
+		const uid = readNumber(raw.uid ?? raw.UID);
+		const name = typeof raw.name === "string" ? raw.name : null;
+		return {
+			itemId: String(Math.trunc(itemId)),
+			quantity,
+			uid: uid !== null && uid > 0 ? uid : null,
+			location,
+			name,
 		};
+	};
 
-		// 5. Ingest all inventory, bazaar, and display items
-		await insertBaselineItems(inventoryItems, "inventory");
-		await insertBaselineItems(bazaar, "bazaar");
-		await insertBaselineItems(display, "display");
+	const items: ObservedItem[] = [];
+	for (const raw of moneyResponse.display ?? []) {
+		const entry = toObserved(raw, "display");
+		if (entry) items.push(entry);
+	}
+	for (const raw of moneyResponse.bazaar ?? []) {
+		const entry = toObserved(raw, "bazaar");
+		if (entry) items.push(entry);
+	}
 
-		// 6. Ingest Points
-		if (pointsCount > 0) {
-			const pointRate = itemPriceMap.get("points") ?? 30000;
-			const pointsValue = pointsCount * pointRate;
-			totalBaselineAssetsValue += pointsValue;
+	// Inventory, one category at a time, paged to the end.
+	const categories = new Set(
+		(await loadItemCategories()).map((entry) => entry.type),
+	);
+	for (const category of categories) {
+		try {
+			let offset = 0;
+			for (let page = 0; page < INVENTORY_MAX_PAGES; page += 1) {
+				const response = (await tornApi.getPersonalRaw("/user/inventory", {
+					queryParams: {
+						cat: category,
+						offset,
+						limit: INVENTORY_PAGE_SIZE,
+					},
+				})) as {
+					inventory?: { items?: Array<Record<string, unknown>> };
+				};
+				const pageItems = response.inventory?.items ?? [];
+				for (const raw of pageItems) {
+					const entry = toObserved(raw, "inventory");
+					if (entry) items.push(entry);
+				}
+				if (pageItems.length < INVENTORY_PAGE_SIZE) break;
+				offset += INVENTORY_PAGE_SIZE;
+			}
+		} catch (error) {
+			// Recorded, not swallowed: an unread category means the baseline is
+			// incomplete and the panel has to say so.
+			failures.push(
+				`${category}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 
-			const pointsKey = "item_points_inventory";
-			await db
+	let itemsValue = 0;
+	for (const item of items) {
+		itemsValue += (prices.get(item.itemId) ?? 0) * item.quantity;
+	}
+
+	return {
+		wallet,
+		points,
+		vault,
+		company,
+		cityBank,
+		caymanBank,
+		tornNetWorth,
+		items,
+		itemsValue,
+		failures,
+		raw: {
+			money: money as Record<string, unknown>,
+			displayCount: (moneyResponse.display ?? []).length,
+			bazaarCount: (moneyResponse.bazaar ?? []).length,
+			inventoryCount: items.filter((i) => i.location === "inventory").length,
+		},
+	};
+}
+
+// ─── Log classification ──────────────────────────────────────────────────────
+
+type PersonalLogRow = {
+	id: string;
+	log: number;
+	title: string | null;
+	timestamp: Date;
+	data: unknown;
+};
+
+function toWealthRow(row: PersonalLogRow): WealthLogRow {
+	return {
+		id: row.id,
+		log: row.log,
+		title: row.title,
+		timestamp: row.timestamp,
+		data: row.data,
+	};
+}
+
+async function classifyRows(rows: PersonalLogRow[]): Promise<WealthEvent[]> {
+	const prices = await loadItemPrices();
+	const ctx = { itemPrices: prices };
+	const events: WealthEvent[] = [];
+	for (const row of rows) {
+		const event = classifyWealthLog(toWealthRow(row), ctx);
+		if (event) events.push(event);
+	}
+	return events;
+}
+
+/** Reads every personal log at or after `anchorDate`. */
+async function readLogsSince(anchorDate: Date): Promise<PersonalLogRow[]> {
+	return db
+		.select({
+			id: personalLogs.id,
+			log: personalLogs.log,
+			title: personalLogs.title,
+			timestamp: personalLogs.timestamp,
+			data: personalLogs.data,
+		})
+		.from(personalLogs)
+		.where(gte(personalLogs.timestamp, anchorDate))
+		.orderBy(personalLogs.timestamp);
+}
+
+// ─── Ledger writes ───────────────────────────────────────────────────────────
+
+/**
+ * One `ledger_events` row.
+ *
+ * `cashFlow` and `realizedPnl` are kept populated for the columns that predate
+ * this module, while the new columns carry the split the wealth totals sum.
+ * `assetDelta` is the net-worth change, which is what the observed balances are
+ * reconciled against.
+ */
+function toLedgerRow(event: WealthEvent) {
+	const now = new Date();
+	return {
+		id: event.id,
+		logId: event.logId,
+		timestamp: event.timestamp,
+		type: event.account
+			? `account_${event.account}`
+			: event.walletDelta === 0
+				? "neutral"
+				: event.walletDelta > 0
+					? "inflow"
+					: "outflow",
+		categoryId: 0,
+		transactionName: event.label,
+		assetsAffected: [
+			...event.itemsIn.map((item) => ({
+				assetId: item.itemId,
+				quantityChange: item.quantity,
+				uid: item.uid,
+			})),
+			...event.itemsOut.map((item) => ({
+				assetId: item.itemId,
+				quantityChange: -item.quantity,
+				uid: item.uid,
+			})),
+		],
+		cashFlow: event.walletDelta,
+		realizedPnl: event.netWorthDelta,
+		rawLog: null,
+		logType: event.logType,
+		wealthCategory: event.category,
+		walletDelta: event.walletDelta,
+		account: event.account,
+		accountDelta: event.accountDelta,
+		assetDelta: event.netWorthDelta,
+		priced: event.priced,
+		createdAt: now,
+		updatedAt: now,
+	};
+}
+
+/**
+ * Writes events in one transaction.
+ *
+ * The previous implementation awaited an insert per log inside the ingest loop,
+ * which is a round trip per row; during a backfill burst that is thousands of
+ * sequential statements for a page of logs.
+ */
+async function writeEvents(events: WealthEvent[]): Promise<number> {
+	const rows = events.filter((event) => !event.mirrored).map(toLedgerRow);
+	if (rows.length === 0) return 0;
+
+	await db.transaction(async (tx) => {
+		for (const row of rows) {
+			await tx
+				.insert(ledgerEvents)
+				.values(row)
+				.onConflictDoUpdate({
+					target: ledgerEvents.id,
+					set: {
+						timestamp: row.timestamp,
+						type: row.type,
+						transactionName: row.transactionName,
+						assetsAffected: row.assetsAffected,
+						cashFlow: row.cashFlow,
+						realizedPnl: row.realizedPnl,
+						logType: row.logType,
+						wealthCategory: row.wealthCategory,
+						walletDelta: row.walletDelta,
+						account: row.account,
+						accountDelta: row.accountDelta,
+						assetDelta: row.assetDelta,
+						priced: row.priced,
+						updatedAt: row.updatedAt,
+					},
+				});
+		}
+	});
+	return rows.length;
+}
+
+/**
+ * Company profit, re-emitted from the company worker's own table.
+ *
+ * A company balance earns between two API snapshots and no log records it, so
+ * this is the one contribution that cannot be derived from `personal_logs`. The
+ * company's funds are money the player owns, so it is an account gain, not cash.
+ */
+async function writeCompanyProfitEvents(anchorDate: Date): Promise<number> {
+	const rows = await db
+		.select({
+			id: companyDailyProfits.id,
+			timestamp: companyDailyProfits.timestamp,
+			profit: companyDailyProfits.profit,
+		})
+		.from(companyDailyProfits)
+		.where(gte(companyDailyProfits.timestamp, anchorDate));
+
+	if (rows.length === 0) return 0;
+	const now = new Date();
+	await db.transaction(async (tx) => {
+		for (const row of rows) {
+			await tx
+				.insert(ledgerEvents)
+				.values({
+					id: row.id.startsWith("ledger_ev_")
+						? row.id
+						: `ledger_ev_company_profit_${Math.floor(row.timestamp.getTime() / 1000)}`,
+					logId: "company",
+					timestamp: row.timestamp,
+					type: "account_company",
+					categoryId: 0,
+					transactionName: "Company daily profit",
+					assetsAffected: [],
+					cashFlow: 0,
+					realizedPnl: row.profit,
+					rawLog: null,
+					logType: null,
+					wealthCategory: "company",
+					walletDelta: 0,
+					account: "company",
+					accountDelta: row.profit,
+					assetDelta: row.profit,
+					priced: true,
+					createdAt: now,
+					updatedAt: now,
+				})
+				.onConflictDoUpdate({
+					target: ledgerEvents.id,
+					set: {
+						timestamp: row.timestamp,
+						accountDelta: row.profit,
+						assetDelta: row.profit,
+						updatedAt: now,
+					},
+				});
+		}
+	});
+	return rows.length;
+}
+
+/** Writes the opening item holdings the anchor implies. */
+async function writeOpeningAssets(
+	snapshot: BaselineSnapshot,
+	todayEvents: readonly WealthEvent[],
+	prices: ReadonlyMap<string, number>,
+): Promise<void> {
+	// Opening = observed minus everything that moved today, so the day's item
+	// events are not counted twice.
+	const netByItem = new Map<string, number>();
+	for (const event of todayEvents) {
+		if (event.mirrored) continue;
+		for (const item of event.itemsIn) {
+			netByItem.set(
+				item.itemId,
+				(netByItem.get(item.itemId) ?? 0) + item.quantity,
+			);
+		}
+		for (const item of event.itemsOut) {
+			netByItem.set(
+				item.itemId,
+				(netByItem.get(item.itemId) ?? 0) - item.quantity,
+			);
+		}
+	}
+
+	const now = new Date();
+	const seen = new Set<string>();
+	await db.transaction(async (tx) => {
+		for (const item of snapshot.items) {
+			const key = `item_${item.itemId}_${item.location}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const observedQuantity = snapshot.items
+				.filter((i) => i.itemId === item.itemId && i.location === item.location)
+				.reduce((sum, i) => sum + i.quantity, 0);
+			const openingQuantity =
+				observedQuantity - (netByItem.get(item.itemId) ?? 0);
+			if (openingQuantity <= 0) continue;
+
+			const price = prices.get(item.itemId) ?? 0;
+			await tx
 				.insert(assets)
 				.values({
-					id: pointsKey,
-					type: "point",
-					assetId: "points",
-					quantity: pointsCount,
-					movingAverageCost: pointRate,
-					totalCostBasis: pointsValue,
-					location: "inventory",
+					id: key,
+					type: "item",
+					assetId: item.itemId,
+					quantity: openingQuantity,
+					movingAverageCost: price,
+					totalCostBasis: price * openingQuantity,
+					marketValue: price,
+					location: item.location,
 					owner: "personal",
-					origin: "baseline_init",
+					origin: "wealth_anchor",
 					realizedPnl: 0,
 					lastUpdated: now,
 					createdAt: now,
@@ -364,593 +698,586 @@ export async function initWealthTracking(
 				.onConflictDoUpdate({
 					target: assets.id,
 					set: {
-						quantity: pointsCount,
-						movingAverageCost: pointRate,
-						totalCostBasis: pointsValue,
+						quantity: openingQuantity,
+						movingAverageCost: price,
+						totalCostBasis: price * openingQuantity,
+						marketValue: price,
+						lastUpdated: now,
 						updatedAt: now,
 					},
 				});
 		}
+	});
+}
 
-		// 7. Write Day Zero Initial Ledger Event
-		const logDate = new Date(initTimestamp * 1000);
-		await db
-			.insert(ledgerEvents)
-			.values({
-				id: `ledger_ev_init_${initTimestamp}`,
-				logId: "init",
-				timestamp: logDate,
-				type: "init",
-				categoryId: 1,
-				transactionName: "Wealth Engine Baseline Snapshot",
-				assetsAffected: [],
-				cashFlow: walletCash,
-				realizedPnl: totalBaselineAssetsValue,
-				rawLog: {
-					wallet: walletCash,
-					points: pointsCount,
-					totalAssetValuation: totalBaselineAssetsValue,
-					inventoryCount: inventoryItems.length,
-					bazaarCount: bazaar.length,
-					displayCount: display.length,
-				},
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoUpdate({
-				target: ledgerEvents.id,
-				set: {
-					cashFlow: walletCash,
-					realizedPnl: totalBaselineAssetsValue,
-					updatedAt: now,
-				},
-			});
+// ─── Balances ────────────────────────────────────────────────────────────────
 
-		state.status = "completed";
-		await persistWealthState(state);
+type AnchorRow = typeof wealthAccountSnapshots.$inferSelect;
 
-		const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
-		logger.info(
-			`Successfully snapshotted baseline wealth. Value imported: $${totalBaselineAssetsValue.toLocaleString()} in ${elapsedSec}s`,
-		);
-	} catch (error) {
-		logger.error("Failed to snapshot baseline wealth:", error);
-		state.status = "error";
-		state.lastError = error instanceof Error ? error.message : String(error);
-		await persistWealthState(state);
-	}
-
-	return state;
+async function loadAnchor(): Promise<AnchorRow | null> {
+	const [row] = await db
+		.select()
+		.from(wealthAccountSnapshots)
+		.where(eq(wealthAccountSnapshots.source, "anchor"))
+		.orderBy(sql`${wealthAccountSnapshots.timestamp} desc`)
+		.limit(1);
+	return row ?? null;
 }
 
 /**
- * Universal Item Extractor from Torn Log Data Payloads.
- * Handles arrays, single objects, dictionary maps, numeric ID, and points.
+ * Current balances, from the anchor plus every event since.
+ *
+ * Item value is recovered from `assetDelta` by subtracting the cash and account
+ * legs, rather than stored again: `assetDelta = wallet + account + items`, so the
+ * item leg is whatever is left.
  */
-export function extractItemsFromLogData(data: Record<string, unknown>): Array<{
-	id: string | number;
-	qty: number;
-	uid?: number | null;
-}> {
-	const items: Array<{
-		id: string | number;
-		qty: number;
-		uid?: number | null;
-	}> = [];
-	if (!data) return items;
-
-	// Case 1: items: [{ id/item, qty/amount, uid }]
-	if (Array.isArray(data.items)) {
-		for (const it of data.items as Record<string, unknown>[]) {
-			if (it && (it.id || it.item)) {
-				items.push({
-					id: (it.id ?? it.item) as string | number,
-					qty: Number(it.quantity ?? it.qty ?? it.amount ?? 1),
-					uid: it.uid ? Number(it.uid) : null,
-				});
-			}
-		}
-	} else if (Array.isArray(data.item)) {
-		for (const it of data.item as Record<string, unknown>[]) {
-			if (it && (it.id || it.item)) {
-				items.push({
-					id: (it.id ?? it.item) as string | number,
-					qty: Number(it.quantity ?? it.qty ?? it.amount ?? 1),
-					uid: it.uid ? Number(it.uid) : null,
-				});
-			}
-		}
-	} else if (data.items_gained && typeof data.items_gained === "object") {
-		for (const [itemId, qty] of Object.entries(
-			data.items_gained as Record<string, unknown>,
-		)) {
-			items.push({ id: itemId, qty: Number(qty ?? 1) });
-		}
-	} else if (
-		data.item &&
-		typeof data.item === "object" &&
-		!Array.isArray(data.item)
-	) {
-		for (const [itemId, qty] of Object.entries(
-			data.item as Record<string, unknown>,
-		)) {
-			items.push({ id: itemId, qty: Number(qty ?? 1) });
-		}
-	} else if (typeof data.item === "number" || typeof data.item === "string") {
-		items.push({
-			id: data.item as string | number,
-			qty: Number(data.quantity ?? data.amount ?? 1),
-		});
+export async function computeBalances(): Promise<WealthBalances> {
+	const anchor = await loadAnchor();
+	if (!anchor) {
+		return {
+			wallet: 0,
+			accounts: {},
+			itemsValue: 0,
+			trackedNetWorth: 0,
+			tornNetWorth: null,
+			netWorthDrift: null,
+			observedAt: new Date().toISOString(),
+		};
 	}
 
-	if (data.points && typeof data.points === "number") {
-		items.push({ id: "points", qty: data.points });
-	}
-
-	return items;
-}
-
-/**
- * Universal Money Flow Extractor from Torn Log Data Payloads.
- * Returns direct cash gain (+) or cash loss (-).
- */
-export function extractMoneyFlow(data: Record<string, unknown>): number {
-	if (!data) return 0;
-
-	// Money gained / received
-	const moneyGained = Number(
-		data.money_gained ?? data.money_won ?? data.profit ?? 0,
-	);
-	if (moneyGained > 0) return moneyGained;
-
-	// Generic money property
-	if (data.money !== undefined) {
-		return Number(data.money);
-	}
-
-	// Money lost / spent
-	const moneyLost = Number(data.money_lost ?? data.cost ?? data.loss ?? 0);
-	if (moneyLost > 0) return -moneyLost;
-
-	return 0;
-}
-
-/**
- * Pre-fetches item market prices into an in-memory map for fast lookups.
- */
-export async function fetchItemPricesMap(): Promise<Map<string, number>> {
-	const allItems = await db
-		.select({ id: tornItems.id, data: tornItems.data })
-		.from(tornItems);
-
-	const map = new Map<string, number>();
-	for (const item of allItems) {
-		if (item.data) {
-			const price = extractItemMarketPrice(item.data);
-			map.set(String(item.id), price);
-		}
-	}
-	map.set("points", 30000); // Standard Torn points valuation fallback
-	return map;
-}
-
-// Log ID Classification Maps
-const CRIME_LOG_IDS = new Set([
-	9010, 9015, 9020, 9025, 9027, 9030, 9050, 9051, 9052, 9053, 9055, 9056, 9060,
-	9065, 9070, 9071, 9072, 9073, 9150, 9154, 9155, 9158, 9160, 9163, 9165, 9190,
-	9191,
-]);
-
-const STOCK_LOG_IDS = new Set([1000, 1001, 1002, 1003, 1004, 1005]);
-const BAZAAR_ITEM_SALE_IDS = new Set([1220, 1221, 1222, 1223, 1225]);
-const TRADE_LOG_IDS = new Set([4430, 4440, 4441, 4445, 4446]);
-
-/**
- * Parses an individual user log and writes financial transaction to `ledger_events`
- * if it occurred at or after the `initTimestamp`.
- */
-export async function processWealthLog(
-	log: UserLog,
-	initTimestampSec: number,
-	itemPrices: Map<string, number>,
-): Promise<{ processed: boolean; value: number }> {
-	const logTimestampSec = Number(log.timestamp);
-	if (logTimestampSec < initTimestampSec) {
-		return { processed: false, value: 0 };
-	}
-
-	const rawLogCode = (log as unknown as { log?: number }).log;
-	const logDetails = log.details ?? {};
-	const logTypeCode = Number(
-		(logDetails as { id?: number }).id ?? rawLogCode ?? 0,
-	);
-	const rawPayload = (log.data ?? log) as Record<string, unknown>;
-
-	const cashFlow = extractMoneyFlow(rawPayload);
-	const extractedItems = extractItemsFromLogData(rawPayload);
-
-	let itemsValue = 0;
-	let costBasisConsumed = 0;
-	const assetsAffected = [];
-
-	const isItemSale = BAZAAR_ITEM_SALE_IDS.has(logTypeCode);
-	const isCrimeReward = CRIME_LOG_IDS.has(logTypeCode);
-	const isTrade = TRADE_LOG_IDS.has(logTypeCode);
-
-	for (const item of extractedItems) {
-		const isUid = !!(item.uid && typeof item.uid !== "boolean");
-		const assetKey = isUid ? `uid_${item.uid}` : `item_${item.id}_inventory`;
-
-		const [existing] = await db
-			.select()
-			.from(assets)
-			.where(eq(assets.id, assetKey));
-
-		const systemPrice = itemPrices.get(String(item.id)) ?? 0;
-
-		if (isItemSale) {
-			// Item was sold: consume existing cost basis
-			const mac = existing?.movingAverageCost ?? systemPrice;
-			const consumed = mac * item.qty;
-			costBasisConsumed += consumed;
-
-			if (existing) {
-				const newQty = Math.max(0, existing.quantity - item.qty);
-				const newCost = newQty * mac;
-				await db
-					.update(assets)
-					.set({
-						quantity: newQty,
-						totalCostBasis: newCost,
-						updatedAt: new Date(),
-					})
-					.where(eq(assets.id, assetKey));
-			}
-
-			assetsAffected.push({
-				assetId: String(item.id),
-				quantityChange: -item.qty,
-				costBasisImpact: -consumed,
-			});
-		} else {
-			// Item was acquired: Crime drop has $0 cost basis; otherwise systemPrice or purchase cost
-			const costPerUnit = isCrimeReward ? 0 : systemPrice;
-			const addedCostBasis = costPerUnit * item.qty;
-			itemsValue += addedCostBasis;
-
-			if (existing) {
-				const newQty = existing.quantity + item.qty;
-				const newCost = existing.totalCostBasis + addedCostBasis;
-				const newMac = newQty > 0 ? newCost / newQty : 0;
-				await db
-					.update(assets)
-					.set({
-						quantity: newQty,
-						totalCostBasis: newCost,
-						movingAverageCost: newMac,
-						updatedAt: new Date(),
-					})
-					.where(eq(assets.id, assetKey));
-			} else {
-				await db.insert(assets).values({
-					id: assetKey,
-					type: String(item.id) === "points" ? "point" : "item",
-					assetId: String(item.id),
-					quantity: item.qty,
-					movingAverageCost: costPerUnit,
-					totalCostBasis: addedCostBasis,
-					location: "inventory",
-					owner: "personal",
-					origin: isCrimeReward ? "crime_reward" : "log_ingest",
-					realizedPnl: 0,
-					lastUpdated: new Date(),
-					createdAt: new Date(),
-					updatedAt: new Date(),
-				});
-			}
-
-			assetsAffected.push({
-				assetId: String(item.id),
-				quantityChange: item.qty,
-				costBasisImpact: addedCostBasis,
-			});
-		}
-	}
-
-	// Realized P&L:
-	// If selling item: Cash received minus Cost Basis consumed (e.g. $100k cash - $0 MAC = +$100k profit)
-	// If crime reward: Cash received + 0 cost basis item
-	// Otherwise: Cash Flow + Item Valuation
-	const realizedPnl = isItemSale
-		? cashFlow - costBasisConsumed
-		: isCrimeReward
-			? cashFlow
-			: cashFlow + itemsValue;
-
-	// If no financial money or item impact, skip
-	if (realizedPnl === 0 && cashFlow === 0 && assetsAffected.length === 0) {
-		return { processed: false, value: 0 };
-	}
-
-	// Classify transaction category
-	let eventType = "other_income";
-	let categoryId = 1;
-	const title =
-		logDetails.title ?? (log as unknown as { title?: string }).title;
-	let transactionName = title ?? "Financial Transaction";
-
-	if (isCrimeReward) {
-		eventType = "crime_reward";
-		categoryId = 7;
-		transactionName = (rawPayload.crime_action as string) ?? "Crime Reward";
-	} else if (STOCK_LOG_IDS.has(logTypeCode)) {
-		eventType = "stock_dividend";
-		categoryId = 8;
-		transactionName = "Stock Dividend";
-	} else if (isItemSale) {
-		eventType = "bazaar_sale";
-		categoryId = 2;
-		transactionName = "Bazaar / Item Sale";
-	} else if (isTrade) {
-		eventType = "trade";
-		categoryId = 6;
-		transactionName = "Trade / Barter Exchange";
-	} else if (realizedPnl > 0) {
-		eventType = "inflow";
-		categoryId = 1;
-	} else {
-		eventType = "loss";
-		categoryId = 1;
-	}
-
-	const logIdStr = String(log.id);
-	const eventId = `ledger_ev_${logIdStr}`;
-	const logDate = new Date(logTimestampSec * 1000);
-	const now = new Date();
-
-	await db
-		.insert(ledgerEvents)
-		.values({
-			id: eventId,
-			logId: logIdStr,
-			timestamp: logDate,
-			type: eventType,
-			categoryId,
-			transactionName,
-			assetsAffected,
-			cashFlow,
-			realizedPnl,
-			rawLog: log as unknown as Record<string, unknown>,
-			createdAt: now,
-			updatedAt: now,
-		})
-		.onConflictDoUpdate({
-			target: ledgerEvents.id,
-			set: {
-				logId: logIdStr,
-				timestamp: logDate,
-				type: eventType,
-				categoryId,
-				transactionName,
-				assetsAffected,
-				cashFlow,
-				realizedPnl,
-				updatedAt: now,
-			},
-		});
-
-	return { processed: true, value: realizedPnl };
-}
-
-/**
- * Re-aggregates wealth totals from `ledger_events` and `company_daily_profits`
- * starting strictly from the `initTimestamp`.
- */
-export async function recalculateWealthTotals(
-	initTimestampSec: number,
-): Promise<WealthBreakdown> {
-	const initDate = new Date(initTimestampSec * 1000);
-
-	const eventTotals = await db
+	const [totals] = await db
 		.select({
-			type: ledgerEvents.type,
-			totalPnl: sql<number>`COALESCE(sum(${ledgerEvents.realizedPnl}), 0)`,
-			count: count(ledgerEvents.id),
+			wallet: sql<number>`COALESCE(sum(${ledgerEvents.walletDelta}), 0)`,
+			account: sql<number>`COALESCE(sum(${ledgerEvents.accountDelta}), 0)`,
+			asset: sql<number>`COALESCE(sum(${ledgerEvents.assetDelta}), 0)`,
 		})
 		.from(ledgerEvents)
-		.where(gte(ledgerEvents.timestamp, initDate))
-		.groupBy(ledgerEvents.type);
+		.where(gte(ledgerEvents.timestamp, anchor.timestamp));
 
-	let crimesInflow = 0;
-	let stocksInflow = 0;
-	let otherInflow = 0;
-	let totalInflow = 0;
-	let totalOutflow = 0;
+	const walletNet = Number(totals?.wallet ?? 0);
+	const accountNet = Number(totals?.account ?? 0);
+	const assetNet = Number(totals?.asset ?? 0);
 
-	for (const row of eventTotals) {
-		const pnl = Number(row.totalPnl);
-		if (row.type === "crime_reward") {
-			crimesInflow += pnl;
-		} else if (row.type === "stock_dividend") {
-			stocksInflow += pnl;
-		} else if (pnl > 0) {
-			otherInflow += pnl;
-		} else if (pnl < 0) {
-			totalOutflow += Math.abs(pnl);
-		}
+	const perAccount = await db
+		.select({
+			account: ledgerEvents.account,
+			total: sql<number>`COALESCE(sum(${ledgerEvents.accountDelta}), 0)`,
+		})
+		.from(ledgerEvents)
+		.where(gte(ledgerEvents.timestamp, anchor.timestamp))
+		.groupBy(ledgerEvents.account);
+
+	const accounts: Partial<Record<WealthAccount, number>> = {
+		vault: anchor.vault,
+		company: anchor.company,
+		bank: anchor.cityBank,
+		cayman: anchor.caymanBank,
+		piggy: anchor.piggyBank,
+		bookie: anchor.bookie,
+	};
+	for (const row of perAccount) {
+		if (!row.account) continue;
+		const key = row.account as WealthAccount;
+		accounts[key] = (accounts[key] ?? 0) + Number(row.total);
 	}
 
-	// Company daily profits since initDate
-	const [companyRows] = await db
-		.select({
-			inflow: sql<number>`COALESCE(sum(${companyDailyProfits.inflow}), 0)`,
-			outflow: sql<number>`COALESCE(sum(${companyDailyProfits.outflow}), 0)`,
-		})
-		.from(companyDailyProfits)
-		.where(gte(companyDailyProfits.timestamp, initDate));
-
-	const companyInflow = Number(companyRows?.inflow ?? 0);
-	const companyOutflow = Number(companyRows?.outflow ?? 0);
-
-	totalInflow = crimesInflow + stocksInflow + otherInflow + companyInflow;
-	totalOutflow += companyOutflow;
-	const netProfit = totalInflow - totalOutflow;
+	const itemsValue = anchor.itemsValue + (assetNet - walletNet - accountNet);
+	const wallet = anchor.wallet + walletNet;
+	const trackedNetWorth = computeTrackedNetWorth({
+		wallet,
+		accounts,
+		itemsValue,
+	});
 
 	return {
-		totalInflow,
-		totalOutflow,
-		netProfit,
-		crimesInflow,
-		stocksInflow,
-		companyInflow,
-		companyOutflow,
-		otherInflow,
+		wallet,
+		accounts,
+		itemsValue,
+		trackedNetWorth,
+		tornNetWorth: anchor.tornNetWorth,
+		netWorthDrift:
+			anchor.tornNetWorth === null
+				? null
+				: trackedNetWorth - anchor.tornNetWorth,
+		cityBank: null,
+		observedAt: anchor.timestamp.toISOString(),
 	};
 }
 
+/** Coverage, from the events themselves plus the log-type reference. */
+export async function computeCoverage(): Promise<WealthCoverage> {
+	const [counts] = await db
+		.select({
+			priced: sql<number>`count(*) filter (where ${ledgerEvents.priced})`,
+			unpriced: sql<number>`count(*) filter (where not ${ledgerEvents.priced})`,
+			unpricedAmount: sql<number>`COALESCE(sum(abs(${ledgerEvents.assetDelta})) filter (where not ${ledgerEvents.priced}), 0)`,
+		})
+		.from(ledgerEvents);
+
+	const unclassifiedRows = await db
+		.select({
+			logType: ledgerEvents.logType,
+			events: sql<number>`count(*)`,
+			title: sql<string | null>`max(${ledgerEvents.transactionName})`,
+		})
+		.from(ledgerEvents)
+		.where(eq(ledgerEvents.wealthCategory, "other"))
+		.groupBy(ledgerEvents.logType);
+
+	const classifiedRows = await db
+		.select({ logType: ledgerEvents.logType })
+		.from(ledgerEvents)
+		.groupBy(ledgerEvents.logType);
+
+	const [referenceCount] = await db
+		.select({ total: sql<number>`count(*)` })
+		.from(tornLogTypes);
+
+	return {
+		pricedEvents: Number(counts?.priced ?? 0),
+		unpricedEvents: Number(counts?.unpriced ?? 0),
+		unpricedAmount: Number(counts?.unpricedAmount ?? 0),
+		unclassified: unclassifiedRows
+			.filter((row) => row.logType !== null)
+			.map((row) => ({
+				logType: Number(row.logType),
+				title: row.title,
+				events: Number(row.events),
+				sample: "",
+			})),
+		classifiedLogTypes: classifiedRows.filter((row) => row.logType !== null)
+			.length,
+		totalLogTypes:
+			Number(referenceCount?.total ?? 0) > 0
+				? Number(referenceCount?.total)
+				: null,
+	};
+}
+
+async function buildLedgerState(
+	state: WealthState,
+): Promise<WealthLedgerState> {
+	return {
+		status: state.status,
+		initialised: state.initialised,
+		anchorTimestamp: state.anchorTimestamp,
+		anchorDate: state.anchorDate,
+		totalIndexedEvents: state.totalIndexedEvents,
+		lastReconciledAt: state.lastReconciledAt,
+		lastError: state.lastError,
+		updatedAt: state.updatedAt,
+		coverage: await computeCoverage(),
+	};
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
+export type InitResult = {
+	state: WealthState;
+	eventsWritten: number;
+	baseline: BaselineSnapshot;
+};
+
 /**
- * Handles incoming real-time logs stream from `log-manager`.
+ * Anchors the ledger and writes day zero.
+ *
+ * `startTimestampSec` defaults to 00:00 UTC today. Whatever the anchor, the
+ * balances recorded are OPENING balances: observed minus the events that already
+ * happened since the anchor, so the same activity is never counted in the
+ * balances and in the ledger.
  */
-export async function handleIncomingWealthLogs(logs: UserLog[]): Promise<void> {
-	const state = getWealthState();
-	if (!state.init || state.initTimestamp === null) {
-		return;
+export async function initWealthTracking(
+	startTimestampSec?: number,
+): Promise<InitResult> {
+	const now = new Date();
+	const requested = readNumber(startTimestampSec);
+	const anchorTimestamp =
+		requested !== null && requested > 0
+			? Math.trunc(requested)
+			: startOfUtcDay(now);
+	const anchorDate = new Date(anchorTimestamp * 1000);
+
+	// Anchoring REBUILDS the ledger, so it must never happen as a side effect of
+	// booting workers in a test process. The registry test starts every registered
+	// worker to check the wiring; without this guard that would delete whatever
+	// ledger another test file had just seeded, and reach for the Torn API to do
+	// it. Everything past this point is destructive by design.
+	if (process.env.NODE_ENV === "test") {
+		logger.warn(
+			"Refusing to anchor the wealth ledger in a test process: anchoring rebuilds `ledger_events`.",
+		);
+		return {
+			state: {
+				...DEFAULT_STATE,
+				status: "idle",
+				lastError: "Anchoring is disabled in test environments.",
+			},
+			eventsWritten: 0,
+			baseline: {
+				wallet: 0,
+				points: 0,
+				vault: 0,
+				company: 0,
+				cityBank: 0,
+				caymanBank: 0,
+				tornNetWorth: null,
+				items: [],
+				itemsValue: 0,
+				failures: [],
+				raw: {},
+			},
+		};
 	}
 
-	const initTimestamp = state.initTimestamp;
-	const validLogs = logs.filter((l) => Number(l.timestamp) >= initTimestamp);
-	if (validLogs.length === 0) return;
+	const state: WealthState = {
+		...DEFAULT_STATE,
+		status: "running",
+		initialised: true,
+		anchorTimestamp,
+		anchorDate: anchorDate.toISOString(),
+		logTypesSyncedAt: inMemoryState.logTypesSyncedAt,
+	};
+	await persistWealthState(state);
 
-	state.status = "running";
 	try {
-		const itemPrices = await fetchItemPricesMap();
-		let processedCount = 0;
-
-		for (const log of validLogs) {
-			const res = await processWealthLog(log, initTimestamp, itemPrices);
-			if (res.processed) processedCount++;
+		const keyEntry = await getPersonalKey();
+		if (!keyEntry) {
+			logger.warn(
+				"No personal API key registered. The wealth ledger cannot be anchored.",
+			);
+			state.status = "completed";
+			state.lastError =
+				"No personal API key registered, so no balances could be read.";
+			await persistWealthState(state);
+			return {
+				state,
+				eventsWritten: 0,
+				baseline: {
+					wallet: 0,
+					points: 0,
+					vault: 0,
+					company: 0,
+					cityBank: 0,
+					caymanBank: 0,
+					tornNetWorth: null,
+					items: [],
+					itemsValue: 0,
+					failures: ["no API key"],
+					raw: {},
+				},
+			};
 		}
 
-		state.totals = await recalculateWealthTotals(initTimestamp);
-		state.totalEventsIndexed += processedCount;
+		logger.info(
+			`Anchoring the wealth ledger at ${anchorDate.toISOString()} (00:00 UTC of the anchor day)...`,
+		);
+
+		await syncTornLogTypes(true);
+		const baseline = await snapshotBalances();
+		const prices = await loadItemPrices();
+
+		// Everything since the anchor, which is what the opening balances must
+		// unwind.
+		const logs = await readLogsSince(anchorDate);
+		const events = await classifyRows(logs);
+		const opening = deriveOpeningBalances({
+			observedWallet: baseline.wallet,
+			observedItemsValue: baseline.itemsValue,
+			observedAccounts: {
+				vault: baseline.vault,
+				company: baseline.company,
+				bank: baseline.cityBank,
+				cayman: baseline.caymanBank,
+				// The bookie balance is not in the API response; it is reconstructed
+				// from the log, so its opening value is whatever the day's bets imply.
+				bookie: 0,
+			},
+			todayEvents: events,
+		});
+
+		// Rebuild from scratch: the ledger owns this table, and stale rows from a
+		// previous anchor would be double-counted.
+		await db.delete(ledgerEvents);
+		await db.delete(assets);
+		await db.delete(wealthAccountSnapshots);
+
+		const anchorId = `wealth_anchor_${anchorTimestamp}`;
+		await db.insert(wealthAccountSnapshots).values({
+			id: anchorId,
+			timestamp: anchorDate,
+			source: "anchor",
+			wallet: opening.wallet,
+			points: baseline.points,
+			vault: opening.accounts.vault ?? 0,
+			company: opening.accounts.company ?? 0,
+			cityBank: opening.accounts.bank ?? 0,
+			caymanBank: opening.accounts.cayman ?? 0,
+			piggyBank: opening.accounts.piggy ?? 0,
+			bookie: opening.accounts.bookie ?? 0,
+			itemsValue: opening.itemsValue,
+			trackedNetWorth: computeTrackedNetWorth({
+				wallet: opening.wallet,
+				accounts: opening.accounts,
+				itemsValue: opening.itemsValue,
+			}),
+			tornNetWorth: baseline.tornNetWorth,
+			netWorthDrift: null,
+			raw: baseline.raw,
+		});
+
+		const written = await writeEvents(events);
+		const companyEvents = await writeCompanyProfitEvents(anchorDate);
+		await writeOpeningAssets(baseline, events, prices);
+
+		state.totalIndexedEvents = written + companyEvents;
 		state.status = "completed";
-		state.lastSyncTimestamp = Math.floor(Date.now() / 1000);
-		state.lastError = null;
+		state.lastReconciledAt = new Date().toISOString();
+		state.lastError =
+			baseline.failures.length > 0
+				? `Baseline incomplete for: ${baseline.failures.join("; ")}`
+				: null;
 		await persistWealthState(state);
-	} catch (err) {
-		logger.error("Error processing incoming wealth logs:", err);
+
+		logger.info(
+			`Wealth ledger anchored. ${written + companyEvents} events indexed, ` +
+				`opening wallet $${opening.wallet.toLocaleString()}, ` +
+				`items $${opening.itemsValue.toLocaleString()}.`,
+		);
+
+		return { state, eventsWritten: written + companyEvents, baseline };
+	} catch (error) {
+		logger.error("Failed to anchor the wealth ledger:", error);
 		state.status = "error";
-		state.lastError = err instanceof Error ? err.message : String(err);
+		state.lastError = error instanceof Error ? error.message : String(error);
 		await persistWealthState(state);
+		return {
+			state,
+			eventsWritten: 0,
+			baseline: {
+				wallet: 0,
+				points: 0,
+				vault: 0,
+				company: 0,
+				cityBank: 0,
+				caymanBank: 0,
+				tornNetWorth: null,
+				items: [],
+				itemsValue: 0,
+				failures: ["init failed"],
+				raw: {},
+			},
+		};
 	}
 }
 
-/**
- * Reconciles wealth transactions from `personal_logs` where `timestamp >= initTimestamp`.
- */
-export async function reconcileWealthTracker(): Promise<void> {
-	const state = await loadWealthState();
-	if (!state.init || state.initTimestamp === null) {
-		return;
+// ─── Live ingest and reconcile ───────────────────────────────────────────────
+
+/** Classifies and writes a freshly polled page of logs from the live stream. */
+export async function handleIncomingWealthLogs(
+	logs: TornSchema<"UserLog">[],
+): Promise<number> {
+	const state = getWealthState();
+	if (!state.initialised || state.anchorTimestamp === null) return 0;
+
+	const anchorDate = new Date(state.anchorTimestamp * 1000);
+	const fresh = logs.filter(
+		(log) => new Date(Number(log.timestamp) * 1000) >= anchorDate,
+	);
+	if (fresh.length === 0) return 0;
+
+	const prices = await loadItemPrices();
+	const events: WealthEvent[] = [];
+	for (const log of fresh) {
+		const details = log.details as { id?: number; title?: string } | undefined;
+		const event = classifyWealthLog(
+			{
+				id: String(log.id),
+				log: Number(details?.id ?? 0),
+				title: (details?.title as string | undefined) ?? null,
+				timestamp: new Date(Number(log.timestamp) * 1000),
+				// The live stream hands over the parsed log object, which is the same
+				// shape `personal_logs.data` holds, so one classifier serves both.
+				data: log as unknown as Record<string, unknown>,
+			},
+			{ itemPrices: prices },
+		);
+		if (event) events.push(event);
 	}
 
-	logger.info(
-		`Reconciling wealth tracking starting from anchor: ${state.initTimestamp} (${new Date(state.initTimestamp * 1000).toISOString()})...`,
-	);
+	const written = await writeEvents(events);
+	if (written > 0) {
+		state.totalIndexedEvents += written;
+		state.lastError = null;
+		await persistWealthState(state);
+	}
+	return written;
+}
+
+/**
+ * Fills in any log the live path missed.
+ *
+ * An anti-join rather than a timestamp window: a dropped page, a restart or an
+ * out-of-order insert all leave a hole that a "since last seen" scan silently
+ * steps over, and the ledger would then be quietly short.
+ */
+export async function reconcileWealthTracker(): Promise<number> {
+	const state = await loadWealthState();
+	if (!state.initialised || state.anchorTimestamp === null) return 0;
 
 	state.status = "running";
 	await persistWealthState(state);
 
 	try {
-		const initDate = new Date(state.initTimestamp * 1000);
-		const logsToProcess = await db
+		const anchorDate = new Date(state.anchorTimestamp * 1000);
+		const missing = await db
 			.select({
 				id: personalLogs.id,
-				data: personalLogs.data,
 				log: personalLogs.log,
-				timestamp: personalLogs.timestamp,
 				title: personalLogs.title,
+				timestamp: personalLogs.timestamp,
+				data: personalLogs.data,
 			})
 			.from(personalLogs)
-			.where(gte(personalLogs.timestamp, initDate))
+			.leftJoin(ledgerEvents, eq(personalLogs.id, ledgerEvents.logId))
+			.where(
+				and(gte(personalLogs.timestamp, anchorDate), isNull(ledgerEvents.id)),
+			)
 			.orderBy(personalLogs.timestamp);
 
-		if (logsToProcess.length > 0) {
-			const itemPrices = await fetchItemPricesMap();
-			for (const raw of logsToProcess) {
-				const userLog: UserLog = {
-					id: raw.id as unknown as string,
-					log: raw.log,
-					timestamp: Math.floor(new Date(raw.timestamp).getTime() / 1000),
-					data: raw.data as Record<string, unknown>,
-					title: raw.title ?? undefined,
-				} as unknown as UserLog;
-
-				await processWealthLog(userLog, state.initTimestamp, itemPrices);
-			}
+		let written = 0;
+		if (missing.length > 0) {
+			const events = await classifyRows(missing);
+			written = await writeEvents(events);
+			await writeCompanyProfitEvents(anchorDate);
 		}
 
-		state.totals = await recalculateWealthTotals(state.initTimestamp);
+		// Refresh the log-type reference and record a snapshot, so drift is
+		// measured against a fresh Torn figure rather than a stale one.
+		await syncTornLogTypes();
+		await recordSnapshot();
+
 		state.status = "completed";
-		state.lastSyncTimestamp = Math.floor(Date.now() / 1000);
+		state.totalIndexedEvents += written;
+		state.lastReconciledAt = new Date().toISOString();
 		state.lastError = null;
 		await persistWealthState(state);
-		logger.info("Wealth reconciliation completed successfully.");
-	} catch (err) {
-		logger.error("Failed to reconcile wealth tracker:", err);
+
+		if (written > 0) {
+			logger.info(`Wealth reconciliation indexed ${written} missing events.`);
+		}
+		return written;
+	} catch (error) {
+		logger.error("Wealth reconciliation failed:", error);
 		state.status = "error";
-		state.lastError = err instanceof Error ? err.message : String(err);
+		state.lastError = error instanceof Error ? error.message : String(error);
 		await persistWealthState(state);
+		return 0;
 	}
 }
 
+// ─── Snapshots ───────────────────────────────────────────────────────────────
+
 /**
- * Starts the Wealth Worker:
- * 1. Loads persisted state from DB.
- * 2. Listens to `logs_inserted` stream events for live tracking.
- * 3. Registers hourly reconciliation maintenance runner.
+ * Reads the live balances and records what the ledger thinks the account is worth.
+ *
+ * The `daily_networth` comparison is the point of this: a tracked figure that
+ * drifts away from Torn's own means a rule is wrong, and this is the only place
+ * that can be noticed without a human reading every category.
+ */
+export async function recordSnapshot(): Promise<WealthBalances> {
+	const balances = await computeBalances();
+	try {
+		const observed = await snapshotBalances();
+		const tracked = balances.trackedNetWorth;
+		const drift =
+			observed.tornNetWorth === null ? null : tracked - observed.tornNetWorth;
+
+		await db
+			.insert(wealthAccountSnapshots)
+			.values({
+				id: `wealth_snapshot_${Math.floor(Date.now() / 1000)}`,
+				timestamp: new Date(),
+				source: "api",
+				wallet: observed.wallet,
+				points: observed.points,
+				vault: observed.vault,
+				company: observed.company,
+				cityBank: observed.cityBank,
+				caymanBank: observed.caymanBank,
+				piggyBank: 0,
+				bookie: balances.accounts.bookie ?? 0,
+				itemsValue: observed.itemsValue,
+				trackedNetWorth: tracked,
+				tornNetWorth: observed.tornNetWorth,
+				netWorthDrift: drift,
+				raw: observed.raw,
+			})
+			.onConflictDoNothing({ target: wealthAccountSnapshots.id });
+
+		return {
+			...balances,
+			tornNetWorth: observed.tornNetWorth,
+			netWorthDrift: drift,
+			cityBank:
+				observed.cityBank > 0
+					? {
+							amount: observed.cityBank,
+							profit: 0,
+							until: null,
+						}
+					: null,
+		};
+	} catch (error) {
+		logger.warn(
+			`Could not record a wealth snapshot: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return balances;
+	}
+}
+
+// ─── Worker ──────────────────────────────────────────────────────────────────
+
+/**
+ * Starts the wealth module:
+ *   1. Loads persisted state, anchoring the ledger if it has never run.
+ *   2. Follows the `logs_inserted` stream for live tracking.
+ *   3. Reconciles hourly, which also refreshes coverage and drift.
  */
 export function startWealthModule(options?: WorkerStartOptions): void {
 	loadWealthState()
 		.then(async (state) => {
-			// If not yet initialized, auto-initialize on boot if an API key is available
-			if (!state.init || state.initTimestamp === null) {
-				const key = await getPersonalKey();
-				if (key) {
-					logger.info(
-						"Wealth tracking not yet initialized. Auto-snapshotting baseline assets on boot...",
-					);
-					await initWealthTracking();
-				}
+			if (!state.initialised || state.anchorTimestamp === null) {
+				await initWealthTracking();
+			} else {
+				await reconcileWealthTracker();
 			}
 		})
-		.catch((err) => {
-			logger.error("Failed to load initial wealth state:", err);
+		.catch((error) => {
+			logger.error("Failed to start the wealth module:", error);
 		});
 
-	// Also auto-initialize when log backfill finishes if still uninitialized
-	schedulerEvents.on("log_backfill_completed", async () => {
-		const state = getWealthState();
-		if (!state.init || state.initTimestamp === null) {
-			logger.info(
-				"Log backfill completed. Auto-snapshotting wealth baseline...",
-			);
-			await initWealthTracking();
-		}
-	});
-
-	// 1. Live stream processing from log-manager
-	schedulerEvents.on("logs_inserted", (logs: UserLog[]) => {
-		handleIncomingWealthLogs(logs).catch((err) => {
-			logger.error("Error processing live wealth logs stream:", err);
+	// A completed log backfill is the moment the ledger can be made whole.
+	schedulerEvents.on("log_backfill_completed", () => {
+		reconcileWealthTracker().catch((error) => {
+			logger.error("Wealth reconcile after backfill failed:", error);
 		});
 	});
 
-	// 2. Periodic reconciliation runner
+	schedulerEvents.on("logs_inserted", (logs) => {
+		handleIncomingWealthLogs(logs).catch((error) => {
+			logger.error("Live wealth ingest failed:", error);
+		});
+	});
+
 	startEventDrivenRunner({
 		worker: WORKER_NAME,
 		defaultCadenceSeconds: CADENCE_SEC,
 		initialDelayMs: options?.initialDelayMs,
 		handler: reconcileWealthTracker,
 	});
+}
+
+/** Exposed for the audit script: how many rules the table carries. */
+export function wealthRuleCount(): number {
+	return WEALTH_LOG_RULES.length;
 }

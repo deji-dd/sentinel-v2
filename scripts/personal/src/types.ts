@@ -221,7 +221,6 @@ export type {
 	WeeklyLogEntry,
 	WeeklyTotals,
 } from "../../../packages/schemas/src/company";
-
 /**
  * Stock portfolio payloads, re-exported from the shared contract the API is typed
  * against. Type-only, so nothing from the schemas package reaches the bundle.
@@ -231,7 +230,7 @@ export type {
 	StockBenefitKind,
 	StockBenefitProgress,
 	StockBenefitValuation,
-	StockCatalogEntry,
+	StockBlock,
 	StockClosedTerm,
 	StockHolding,
 	StockPortfolioResponse,
@@ -243,5 +242,23 @@ export type {
 	StockTermDividend,
 	StockTermLot,
 	StockTermSell,
-	StockValuationRates,
 } from "../../../packages/schemas/src/stocks";
+/**
+ * Wealth ledger payloads, re-exported from the shared contract the API is typed
+ * against. Type-only, so nothing from the schemas package reaches the bundle.
+ */
+export type {
+	WealthAccountKey,
+	WealthAnalyticsResponse,
+	WealthBalances,
+	WealthCategoryKey,
+	WealthCategoryRow,
+	WealthCoverage,
+	WealthEventItem,
+	WealthKPIs,
+	WealthLedgerState,
+	WealthStateResponse,
+	WealthTimelinePoint,
+	WealthTransaction,
+	WealthTransactionsResponse,
+} from "../../../packages/schemas/src/wealth";

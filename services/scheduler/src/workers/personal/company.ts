@@ -1,10 +1,4 @@
-import {
-	companyDailyProfits,
-	db,
-	eq,
-	ledgerEvents,
-	systemStates,
-} from "@sentinel/database";
+import { companyDailyProfits, db, eq, systemStates } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -241,38 +235,11 @@ export async function syncCompanyDailyProfit(): Promise<{
 				},
 			});
 
-		// 2. Record financial transaction into ledger_events
-		const eventId = `ledger_ev_company_profit_${timestampStr}`;
-		await db
-			.insert(ledgerEvents)
-			.values({
-				id: eventId,
-				logId: "0",
-				timestamp: now,
-				type: profit >= 0 ? "injection" : "loss",
-				categoryId: 9,
-				transactionName: "Daily Company Profit/Loss",
-				assetsAffected: [],
-				cashFlow: 0,
-				realizedPnl: profit,
-				rawLog: null,
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoUpdate({
-				target: ledgerEvents.id,
-				set: {
-					logId: "0",
-					timestamp: now,
-					type: profit >= 0 ? "injection" : "loss",
-					categoryId: 9,
-					transactionName: "Daily Company Profit/Loss",
-					assetsAffected: [],
-					cashFlow: 0,
-					realizedPnl: profit,
-					updatedAt: now,
-				},
-			});
+		// `ledger_events` is owned solely by the wealth engine, which reads this
+		// very table back and re-emits each day's profit as a company-account gain.
+		// A company balance earns between two API snapshots and no log records it,
+		// so it is the one contribution the log cannot express — but it still gets
+		// exactly one writer.
 
 		state.status = "completed";
 		state.lastInflow = inflow;

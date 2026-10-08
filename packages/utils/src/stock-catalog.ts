@@ -5,7 +5,6 @@ import type {
 	StockBenefitKind,
 	StockBenefitValuation,
 	StockResourceUnit,
-	StockValuationRates,
 } from "../../schemas/src/stocks";
 
 /**
@@ -553,10 +552,15 @@ const RESOURCE_LABELS: Record<StockResourceUnit, string> = {
  * `priced: false` is a real answer, not a failure: it means no honest dollar
  * figure exists for this payout, and every surface downstream is expected to show
  * a dash rather than a zero that would read as "this stock pays nothing".
+ *
+ * Only points are tradeable among the resources, so only points are priced — from
+ * the points market, the same price a player would pay to buy them. Energy, nerve
+ * and happiness cannot be sold for cash at any price, so valuing them would be an
+ * invented number; they stay unpriced, exactly like a passive benefit.
  */
 export function valueCatalogBenefit(
 	valuation: CatalogBenefitValuation,
-	rates: StockValuationRates,
+	pointsPrice: number,
 	itemPricesById: ReadonlyMap<number, number>,
 	itemPricesByName: ReadonlyMap<string, number>,
 ): StockBenefitValuation {
@@ -570,18 +574,18 @@ export function valueCatalogBenefit(
 	}
 
 	if (valuation.kind === "resource") {
-		const rate = rates[valuation.unit] ?? 0;
-		const valuePerCycle = rate > 0 ? rate * valuation.quantity : 0;
+		const priced = valuation.unit === "points" && pointsPrice > 0;
 		return {
 			kind: "resource",
 			resourceUnit: valuation.unit,
 			resourceQuantity: valuation.quantity,
-			valuePerCycle,
-			priced: valuePerCycle > 0,
-			pricingNote:
-				rate > 0
-					? undefined
-					: `Valued at $0 because no ${RESOURCE_LABELS[valuation.unit]} rate is set. Enter one to include this payout.`,
+			valuePerCycle: priced ? pointsPrice * valuation.quantity : 0,
+			priced,
+			pricingNote: priced
+				? undefined
+				: valuation.unit === "points"
+					? "No points-market price is on record, so this payout carries no dollar figure."
+					: `${RESOURCE_LABELS[valuation.unit]} cannot be sold for cash, so this payout is excluded from every money figure.`,
 		};
 	}
 

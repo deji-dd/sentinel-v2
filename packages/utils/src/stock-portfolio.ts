@@ -5,7 +5,7 @@ import type {
 	StockBenefit,
 	StockBenefitProgress,
 	StockBenefitValuation,
-	StockCatalogEntry,
+	StockBlock,
 	StockClosedTerm,
 	StockHolding,
 	StockPortfolioResponse,
@@ -16,7 +16,6 @@ import type {
 	StockTermDividend,
 	StockTermLot,
 	StockTermSell,
-	StockValuationRates,
 } from "../../schemas/src/stocks";
 import {
 	catalogStock,
@@ -54,12 +53,30 @@ import {
  *
  * WHAT IT REFUSES TO DO
  *
- * Invent prices. Dividends paid in energy, nerve, happiness or points are worth
- * whatever the reader says a unit is worth, and ammo packs, random properties and
- * passive benefits have no price at all. Those payouts carry `priced: false` and
+ * Invent prices. Dividends paid in energy, nerve or happiness cannot be sold for
+ * cash at any price, ammo packs and random properties have no single market price,
+ * and passive benefits pay nothing at all. Those payouts carry `priced: false` and
  * contribute nothing to the money totals, and the response lists them so the
  * reader can see the shape of what is missing instead of reading a zero as "this
- * stock pays nothing".
+ * stock pays nothing". Points are the exception: they trade on the points market,
+ * so they are priced at what it costs to buy one.
+ *
+ * WHAT ROI IS, AND IS NOT
+ *
+ * ROI is the return on capital committed to a position that can actually earn:
+ * one complete benefit block, a priceable payout, and a known cost basis. A
+ * passive block pays no dividend, and an active holding below its block size
+ * accrues nothing, so neither has a stock return — reporting the share-price
+ * movement as "ROI" for those would describe a return the stock never made. They
+ * still show market value, unrealised movement and a flat income of zero.
+ *
+ * INCREMENTS ARE CUMULATIVE
+ *
+ * Each block costs twice the previous one ON TOP of the previous one, so `n`
+ * blocks cost `(2^n − 1) × blockShares` shares. The catalogue's block table is
+ * built on that: the block being worked toward starts at `(2^n − 1) × blockShares`
+ * shares, which is what makes "I am 90% of the way to my second block" a number
+ * this module can produce.
  */
 
 const DAY_SECONDS = 86_400;
@@ -354,7 +371,8 @@ export interface StockReplayOptions {
 	asOfSeconds: number;
 	/** Dollar value already recorded for a dividend log id, when the ledger has one. */
 	recordedDividendValues: ReadonlyMap<string, number>;
-	rates: StockValuationRates;
+	/** Points-market price per point, used to value a points payout. */
+	pointsPrice: number;
 	itemPricesById: ReadonlyMap<number, number>;
 	itemNamesById: ReadonlyMap<number, string>;
 }
@@ -407,8 +425,13 @@ function priceDividend(
 	}
 
 	if (payment.kind === "resource") {
-		const rate = options.rates[payment.unit] ?? 0;
-		const value = rate > 0 ? rate * payment.quantity : 0;
+		// Points trade on the points market, so they have a real price. Energy,
+		// nerve and happiness cannot be sold for cash, so they stay unpriced rather
+		// than being valued at whatever the reader guesses.
+		const value =
+			payment.unit === "points" && options.pointsPrice > 0
+				? options.pointsPrice * payment.quantity
+				: 0;
 		return {
 			timestamp: event.timestamp,
 			value,
@@ -684,7 +707,7 @@ export interface StockReferenceRow {
 }
 
 export interface BenefitPricingContext {
-	rates: StockValuationRates;
+	pointsPrice: number;
 	itemPricesById: ReadonlyMap<number, number>;
 	itemPricesByName: ReadonlyMap<string, number>;
 }
@@ -749,7 +772,7 @@ export function resolveStockBenefit(
 
 	const valuation = valueCatalogBenefit(
 		catalog.valuation,
-		pricing.rates,
+		pricing.pointsPrice,
 		pricing.itemPricesById,
 		pricing.itemPricesByName,
 	);
@@ -960,7 +983,8 @@ export interface StockPortfolioInput {
 	/** Dollar values the ledger already recorded, keyed by dividend log id. */
 	recordedDividendValues: ReadonlyMap<string, number>;
 	stocks: readonly StockReferenceRow[];
-	rates: StockValuationRates;
+	/** Points-market price per point; 0 leaves points payouts unpriced. */
+	pointsPrice?: number;
 	itemPricesById: ReadonlyMap<number, number>;
 	itemPricesByName: ReadonlyMap<string, number>;
 	itemNamesById?: ReadonlyMap<number, string>;
@@ -968,36 +992,199 @@ export interface StockPortfolioInput {
 	pricesAsOfIso?: string | null;
 }
 
-function incrementCost(blockShares: number, increments: number): number {
-	const factor = 2 ** Math.min(increments, MAX_INCREMENTS);
-	return blockShares * factor;
+/** How many increments of one stock the block table lists. */
+const MAX_BLOCK_ROWS = 4;
+/** Blocks already held, plus the one being worked toward and the one after it. */
+const BLOCK_ROWS_AHEAD = 2;
+
+/**
+ * Shares needed to hold `increments` complete blocks.
+ *
+ * Increments are cumulative and each costs double the last: one block is `B`
+ * shares, two is `B + 2B = 3B`, three is `7B`, and so on. This is why "shares ÷
+ * block size" is the wrong way to count blocks — 6,000,000 of a 2,000,000-share
+ * block is two increments, not three.
+ */
+export function sharesForIncrements(
+	blockShares: number,
+	increments: number,
+): number {
+	if (blockShares <= 0 || increments <= 0) return 0;
+	return (2 ** Math.min(increments, MAX_INCREMENTS) - 1) * blockShares;
 }
 
 /**
- * Annualised yield of buying one more block, as a percentage.
+ * Complete increments a share count supports: the largest `n` with
+ * `(2^n − 1) × blockShares ≤ shares`.
+ */
+export function incrementsFromShares(
+	shares: number,
+	blockShares: number,
+): number {
+	if (blockShares <= 0 || shares < blockShares) return 0;
+	const ratio = shares / blockShares + 1;
+	const derived = Math.floor(Math.log2(ratio) + 1e-9);
+	return Math.max(0, Math.min(derived, MAX_INCREMENTS));
+}
+
+/** Annual income of one block paying `valuePerCycle` every `frequencyDays`. */
+function annualIncomeOf(
+	valuation: StockBenefitValuation,
+	frequencyDays: number | null,
+): number | null {
+	if (!valuation.priced || !frequencyDays || frequencyDays <= 0) return null;
+	return valuation.valuePerCycle * (365 / frequencyDays);
+}
+
+/**
+ * Annualised return of buying one more block, as a percentage.
  *
  * Each increment pays its own dividend, so the payout of the next block is one
  * cycle's benefit while its cost doubles with every block already held. That
  * spread — constant payout, doubling cost — is the whole reason a second block is
- * usually a worse deal than the first.
+ * usually a worse deal than the first. Null when the payout has no dollar figure,
+ * when the block is capped, or when there is no price to cost it at.
  */
-function forwardYieldPct(
+function forwardAprPct(
 	benefit: StockBenefit,
 	blockShares: number,
 	price: number,
 	increments: number,
-): number | null {
-	const { valuation, frequencyDays, maxIncrements } = benefit;
-	if (!valuation.priced || !frequencyDays || frequencyDays <= 0) return null;
-	if (blockShares <= 0 || price <= 0) return null;
-	if (maxIncrements !== null && increments >= maxIncrements) return null;
+): { aprPct: number | null; note?: string } {
+	if (benefit.passive) {
+		return { aprPct: null, note: "A passive block pays no dividend." };
+	}
+	if (benefit.maxIncrements !== null && increments >= benefit.maxIncrements) {
+		return {
+			aprPct: null,
+			note: `Capped at ${benefit.maxIncrements} blocks; no further increment can be bought.`,
+		};
+	}
+	if (blockShares <= 0 || price <= 0) {
+		return {
+			aprPct: null,
+			note: "No share price on record to cost the block at.",
+		};
+	}
+	const annualIncome = annualIncomeOf(benefit.valuation, benefit.frequencyDays);
+	if (annualIncome === null) {
+		return {
+			aprPct: null,
+			note: (
+				benefit.valuation.pricingNote ?? "This payout has no dollar value."
+			).replace(/\.?$/, "."),
+		};
+	}
+	const cost = blockShares * 2 ** Math.min(increments, MAX_INCREMENTS) * price;
+	if (cost <= 0) return { aprPct: null, note: "No share price on record." };
+	return { aprPct: (annualIncome / cost) * 100 };
+}
 
-	const sharesNeeded = incrementCost(blockShares, increments);
-	const cost = sharesNeeded * price;
-	if (cost <= 0) return null;
+/** One line describing what a payout is, e.g. "1× Drug Pack" or "100 points". */
+export function describePayout(benefit: StockBenefit): string {
+	const { valuation } = benefit;
+	if (valuation.kind === "cash" && valuation.cashPerCycle) {
+		return `$${valuation.cashPerCycle.toLocaleString("en-US")}`;
+	}
+	if (valuation.kind === "resource" && valuation.resourceUnit) {
+		return `${(valuation.resourceQuantity ?? 0).toLocaleString("en-US")} ${valuation.resourceUnit}`;
+	}
+	if (valuation.kind === "item" && valuation.itemName) {
+		return `${valuation.itemQuantity ?? 1}× ${valuation.itemName}`;
+	}
+	if (valuation.kind === "passive") return "Passive — no dividend";
+	return benefit.description;
+}
 
-	const annualIncome = valuation.valuePerCycle * (365 / frequencyDays);
-	return (annualIncome / cost) * 100;
+/**
+ * Builds the per-increment rows for one stock: the block being worked toward,
+ * the blocks already held, and the next couple of blocks after that.
+ *
+ * `nextToBuyAprPct` is set on exactly one row — the block a purchase can advance
+ * right now — and is computed against the cash still outstanding rather than the
+ * whole block, so a block that is 90% bought reads as the cheapest way to buy
+ * income today rather than as an almost-finished also-ran.
+ */
+function buildStockBlocks(input: {
+	stockId: number;
+	name: string;
+	acronym: string;
+	benefit: StockBenefit;
+	price: number;
+	shares: number;
+	increments: number;
+}): StockBlock[] {
+	const { stockId, name, acronym, benefit, price, shares, increments } = input;
+	const blockShares = benefit.requirementShares;
+	const payoutValue = benefit.valuation.priced
+		? benefit.valuation.valuePerCycle
+		: null;
+	const annualIncome = annualIncomeOf(benefit.valuation, benefit.frequencyDays);
+	const capped =
+		benefit.maxIncrements !== null && increments >= benefit.maxIncrements;
+	const payoutLabel = describePayout(benefit);
+
+	// Nothing to list when the game does not say how many shares a block needs.
+	if (blockShares <= 0) {
+		return [];
+	}
+
+	// A capped stock has no buyable increment left, so only the blocks held are
+	// listed rather than rows nobody could ever purchase.
+	const rowsAhead = capped ? 0 : BLOCK_ROWS_AHEAD;
+	const lastRow = Math.min(MAX_BLOCK_ROWS, Math.max(1, increments + rowsAhead));
+	const blocks: StockBlock[] = [];
+
+	for (let increment = 1; increment <= lastRow; increment++) {
+		const blockSize = blockShares * 2 ** (increment - 1);
+		const held = increments >= increment;
+		const heldBefore = sharesForIncrements(blockShares, increment - 1);
+		const sharesHeld = Math.max(0, Math.min(blockSize, shares - heldBefore));
+		const sharesRemaining = held ? 0 : blockSize - sharesHeld;
+		const cost = price > 0 ? blockSize * price : null;
+		const costRemaining =
+			price > 0 && sharesRemaining > 0 ? sharesRemaining * price : null;
+
+		// The one block a purchase can advance: the next unbought increment.
+		const actionable = increment === increments + 1;
+		const nextToBuyAprPct =
+			actionable && annualIncome !== null && costRemaining !== null
+				? (annualIncome / costRemaining) * 100
+				: null;
+
+		blocks.push({
+			stockId,
+			name,
+			acronym,
+			increment,
+			shares: blockSize,
+			blockShares,
+			price,
+			cost,
+			frequencyDays: benefit.frequencyDays,
+			payoutValue,
+			payoutLabel,
+			payoutNote: benefit.valuation.priced
+				? benefit.note
+				: benefit.valuation.pricingNote,
+			annualIncome,
+			annualizedAprPct:
+				annualIncome !== null && cost !== null && cost > 0
+					? (annualIncome / cost) * 100
+					: null,
+			sharesHeld,
+			progressPct: (sharesHeld / blockSize) * 100,
+			sharesRemaining,
+			costRemaining,
+			nextToBuyAprPct,
+			held,
+			capped,
+			passive: benefit.passive,
+			benefit: { ...benefit, increments },
+		});
+	}
+
+	return blocks;
 }
 
 export function computeStockPortfolio(
@@ -1009,7 +1196,7 @@ export function computeStockPortfolio(
 		events,
 		recordedDividendValues,
 		stocks,
-		rates,
+		pointsPrice = 0,
 		itemPricesById,
 		itemPricesByName,
 		itemNamesById = new Map<number, string>(),
@@ -1036,7 +1223,7 @@ export function computeStockPortfolio(
 	const replayOptions: StockReplayOptions = {
 		asOfSeconds,
 		recordedDividendValues,
-		rates,
+		pointsPrice,
 		itemPricesById,
 		itemNamesById,
 	};
@@ -1050,7 +1237,7 @@ export function computeStockPortfolio(
 
 		const reference = referenceById.get(holding.stockId);
 		const benefit = resolveStockBenefit(holding.stockId, reference, {
-			rates,
+			pointsPrice,
 			itemPricesById,
 			itemPricesByName,
 		});
@@ -1062,10 +1249,14 @@ export function computeStockPortfolio(
 		// ahead of it; and a holding that dropped below a block can lag behind it.
 		// Taking the larger of the two is right in both directions: shares justify at
 		// least this many blocks, and Torn confirms at least that many are live.
-		const derivedIncrements =
-			benefit.requirementShares > 0
-				? Math.floor(shares / benefit.requirementShares)
-				: 0;
+		//
+		// The derivation counts CUMULATIVE increments, not `shares ÷ blockShares`:
+		// two 2,000,000-share blocks of FHG cost 6,000,000 shares, not 4,000,000, so
+		// 6,000,000 shares is two increments however tempting the division is.
+		const derivedIncrements = incrementsFromShares(
+			shares,
+			benefit.requirementShares,
+		);
 		const increments = Math.max(
 			0,
 			Math.trunc(bonus.increment ?? 0),
@@ -1200,19 +1391,43 @@ export function computeStockPortfolio(
 		const profit = term.realized + term.dividendsValue + unrealized;
 		const invested = term.invested;
 		const hasBasis = invested > 0;
-		const measurable = hasBasis && price > 0 && basisKnown;
+
+		// ── Is there a stock return to measure at all? ───────────────────────
+		//
+		// Four things have to hold before "ROI" describes anything a stock did:
+		// a cost basis, a share price, a payout with a dollar figure, and at least
+		// one COMPLETE block. A passive block pays no dividend, an active holding
+		// below its block size accrues nothing, and an ammo pack or an unknown
+		// payout cannot be valued — so for all three the only thing left in `profit`
+		// is share-price movement, and calling that a stock ROI was exactly the bug
+		// that put a return on TCP, TGP and a part-built FHG.
+		const earns =
+			increments >= 1 && !benefit.passive && benefit.valuation.priced;
+		const measurable = hasBasis && price > 0 && basisKnown && earns;
 		const roiPct = measurable ? (profit / invested) * 100 : null;
+
+		let roiNote: string | undefined;
+		if (roiPct === null) {
+			roiNote = reconciliation.basisIncomplete
+				? "Part of this position carries no cost basis, so no ROI is claimed."
+				: reconciliation.source === "none"
+					? "No cost basis on record, so no ROI to measure."
+					: !hasBasis
+						? "Nothing invested in the open term."
+						: price <= 0
+							? "No share price on record, so the position cannot be marked to market."
+							: benefit.passive
+								? "A passive block pays no dividend, so there is no stock return to measure."
+								: increments <= 0
+									? `Below one block: ${shares.toLocaleString()} of ${benefit.requirementShares.toLocaleString()} shares, so no dividend is accruing and no stock return exists yet.`
+									: (benefit.valuation.pricingNote ??
+										"This payout has no dollar value, so no ROI is claimed.");
+		}
 
 		let annualizedRoiPct: number | null = null;
 		let annualizedNote: string | undefined;
 		if (roiPct === null) {
-			annualizedNote = reconciliation.basisIncomplete
-				? "Part of this position carries no cost basis, so no ROI is claimed."
-				: reconciliation.source === "none"
-					? "No cost basis on record, so no ROI to annualise."
-					: !hasBasis
-						? "Nothing invested in the open term."
-						: "No share price on record, so the position cannot be marked to market.";
+			annualizedNote = roiNote;
 		} else if (term.days === null || term.days < MIN_DAYS_TO_ANNUALISE) {
 			annualizedNote = `Term is under ${MIN_DAYS_TO_ANNUALISE} days old; annualising it would be noise.`;
 		} else if (roiPct <= -100) {
@@ -1280,11 +1495,29 @@ export function computeStockPortfolio(
 		}
 
 		const stockBenefit: StockBenefit = { ...benefit, increments };
-		const forward = forwardYieldPct(
+		const forward = forwardAprPct(
 			stockBenefit,
 			stockBenefit.requirementShares,
 			price,
 			increments,
+		);
+
+		// Progress toward the block being worked toward, on the cumulative model: it
+		// starts at (2^n − 1) × blockShares shares and needs 2^n × blockShares more.
+		const nextBlockShares =
+			stockBenefit.requirementShares *
+			2 ** Math.min(increments, MAX_INCREMENTS);
+		const sharesIntoNextBlock = Math.max(
+			0,
+			Math.min(
+				nextBlockShares,
+				shares -
+					sharesForIncrements(stockBenefit.requirementShares, increments),
+			),
+		);
+		const sharesToNextBlock = Math.max(
+			0,
+			nextBlockShares - sharesIntoNextBlock,
 		);
 
 		const catalogRow = catalogStock(holding.stockId);
@@ -1295,17 +1528,24 @@ export function computeStockPortfolio(
 			shares,
 			blockShares: stockBenefit.requirementShares,
 			increments,
+			nextBlockShares,
+			sharesToNextBlock,
+			nextBlockProgressPct:
+				nextBlockShares > 0 ? (sharesIntoNextBlock / nextBlockShares) * 100 : 0,
 			price,
 			marketValue,
 			avgCost: shares > 0 ? term.costBasis / shares : 0,
 			term,
 			previousTerm: replay.previousTerm,
 			unrealized,
+			income: term.dividendsValue,
 			profit,
 			roiPct,
+			roiNote,
 			annualizedRoiPct,
 			annualizedNote,
-			forwardYieldPct: forward,
+			nextBlockAprPct: forward.aprPct,
+			nextBlockNote: forward.note,
 			benefit: stockBenefit,
 			progress,
 			reconciliation,
@@ -1314,6 +1554,11 @@ export function computeStockPortfolio(
 	}
 
 	// ── Totals ──────────────────────────────────────────────────────────────
+	//
+	// Two different sets on purpose. Every position's money is summed (invested,
+	// value, income, profit), but ROI is taken only over positions that can earn:
+	// a complete, priceable block with a known basis. Averaging a passive block or
+	// a half-built one into it would report a stock return that cannot exist.
 	const totals = holdingsOut.reduce<StockPortfolioTotals>(
 		(acc, holding) => {
 			acc.holdingsCount++;
@@ -1322,54 +1567,52 @@ export function computeStockPortfolio(
 			acc.marketValue += holding.marketValue;
 			acc.unrealized += holding.unrealized;
 			acc.realized += holding.term.realized;
-			acc.dividendsValue += holding.term.dividendsValue;
+			acc.income += holding.term.dividendsValue;
 			acc.dividendsCount += holding.term.dividendsCount;
 			acc.dividendsUnpriced += holding.term.dividendsUnpriced;
 			acc.profit += holding.profit;
 
-			const benefitPriced = holding.benefit.valuation.priced;
-			const basisKnown = holding.reconciliation.source !== "none";
-			if (!benefitPriced) acc.unpricedHoldingsCount++;
-			// The like-for-like ROI: only holdings whose payout has a dollar figure,
-			// so the figure is not dragged down by benefits this build cannot value.
-			if (benefitPriced && basisKnown) {
-				acc.pricedInvested += holding.term.invested;
-				acc.pricedProfit += holding.profit;
+			if (!holding.benefit.valuation.priced) acc.unpricedHoldingsCount++;
+			if (holding.increments <= 0) acc.incompleteHoldingsCount++;
+			if (holding.roiPct !== null) {
+				acc.measuredHoldingsCount++;
+				acc.measuredInvested += holding.term.invested;
+				acc.measuredProfit += holding.profit;
 			}
 			return acc;
 		},
 		{
 			holdingsCount: 0,
 			unpricedHoldingsCount: 0,
+			incompleteHoldingsCount: 0,
+			measuredHoldingsCount: 0,
 			invested: 0,
 			costBasis: 0,
 			marketValue: 0,
 			unrealized: 0,
 			realized: 0,
-			dividendsValue: 0,
+			income: 0,
 			dividendsCount: 0,
 			dividendsUnpriced: 0,
 			profit: 0,
+			measuredInvested: 0,
+			measuredProfit: 0,
 			roiPct: null,
-			pricedInvested: 0,
-			pricedProfit: 0,
-			pricedRoiPct: null,
 			forwardAnnualIncome: 0,
 			forwardYieldOnCostPct: null,
 		},
 	);
 
-	if (totals.invested > 0)
-		totals.roiPct = (totals.profit / totals.invested) * 100;
-	if (totals.pricedInvested > 0) {
-		totals.pricedRoiPct = (totals.pricedProfit / totals.pricedInvested) * 100;
+	if (totals.measuredInvested > 0) {
+		totals.roiPct = (totals.measuredProfit / totals.measuredInvested) * 100;
 	}
 	for (const holding of holdingsOut) {
 		const { valuation, frequencyDays } = holding.benefit;
 		if (!valuation.priced || !frequencyDays || frequencyDays <= 0) continue;
-		// Income of the blocks actually held. A position below one block earns
-		// nothing today, however attractive the next block would be, so it does not
-		// contribute here — that is what the catalogue's yield column is for.
+		// Income of the blocks actually held, and of each block held — a second
+		// increment really does pay a second coupon. A position below one block
+		// earns nothing today, however attractive the next block would be, so it
+		// does not contribute here — that is what the block table is for.
 		if (holding.increments <= 0) continue;
 		totals.forwardAnnualIncome +=
 			valuation.valuePerCycle * (365 / frequencyDays) * holding.increments;
@@ -1379,11 +1622,11 @@ export function computeStockPortfolio(
 			(totals.forwardAnnualIncome / totals.costBasis) * 100;
 	}
 
-	// ── Catalogue: every stock, owned or not ────────────────────────────────
+	// ── Block table: every increment of every stock, owned or not ───────────
 	const holdingByStockId = new Map(holdingsOut.map((h) => [h.stockId, h]));
 	// Every stock the catalogue knows, plus anything held or reported that it does
-	// not — an unknown stock still gets a row, priced as unpriceable, so a new
-	// Torn listing shows up rather than disappearing from the list.
+	// not — an unknown stock still gets rows, priced as unpriceable, so a new Torn
+	// listing shows up rather than disappearing from the list.
 	const catalogIds = [
 		...new Set<number>([
 			...STOCK_CATALOG.map((s) => s.stockId),
@@ -1392,50 +1635,28 @@ export function computeStockPortfolio(
 		]),
 	].sort((a, b) => a - b);
 
-	const catalog: StockCatalogEntry[] = [];
+	const blocks: StockBlock[] = [];
 	for (const stockId of catalogIds) {
 		const reference = referenceById.get(stockId);
 		const catalogRow = catalogStock(stockId);
 		const benefit = resolveStockBenefit(stockId, reference, {
-			rates,
+			pointsPrice,
 			itemPricesById,
 			itemPricesByName,
 		});
 		const holding = holdingByStockId.get(stockId);
-		const incrementCount = holding?.increments ?? 0;
-		const price = reference?.price ?? 0;
-		const capped =
-			benefit.maxIncrements !== null && incrementCount >= benefit.maxIncrements;
-		const nextShares = incrementCost(benefit.requirementShares, incrementCount);
-		const nextCost = capped || price <= 0 ? null : nextShares * price;
 
-		catalog.push({
-			stockId,
-			name: reference?.name || catalogRow?.name || `Stock ${stockId}`,
-			acronym: reference?.acronym || catalogRow?.acronym || "?",
-			price,
-			benefit: { ...benefit, increments: incrementCount },
-			shares: holding?.shares ?? 0,
-			owned: holding !== undefined,
-			nextIncrementShares: nextShares,
-			nextIncrementCost: nextCost,
-			nextIncrementYieldPct: capped
-				? null
-				: forwardYieldPct(
-						benefit,
-						benefit.requirementShares,
-						price,
-						incrementCount,
-					),
-			firstIncrementYieldPct: forwardYieldPct(
+		blocks.push(
+			...buildStockBlocks({
+				stockId,
+				name: reference?.name || catalogRow?.name || `Stock ${stockId}`,
+				acronym: reference?.acronym || catalogRow?.acronym || "?",
 				benefit,
-				benefit.requirementShares,
-				price,
-				0,
-			),
-			termRoiPct: holding?.roiPct ?? null,
-			termProfit: holding?.profit ?? 0,
-		});
+				price: reference?.price ?? 0,
+				shares: holding?.shares ?? 0,
+				increments: holding?.increments ?? 0,
+			}),
+		);
 	}
 
 	// ── Warnings ────────────────────────────────────────────────────────────
@@ -1447,7 +1668,12 @@ export function computeStockPortfolio(
 	}
 	if (totals.unpricedHoldingsCount > 0) {
 		portfolioWarnings.push(
-			`${totals.unpricedHoldingsCount} holding${totals.unpricedHoldingsCount === 1 ? "'s benefit has" : "s' benefits have"} no dollar value in this build, so the portfolio profit and ROI below them understate the real return.`,
+			`${totals.unpricedHoldingsCount} holding${totals.unpricedHoldingsCount === 1 ? "'s benefit has" : "s' benefits have"} no dollar value in this build, so the portfolio income and profit below them understate the real return.`,
+		);
+	}
+	if (totals.incompleteHoldingsCount > 0) {
+		portfolioWarnings.push(
+			`${totals.incompleteHoldingsCount} holding${totals.incompleteHoldingsCount === 1 ? " is" : "s are"} below one complete block, so no dividend is accruing and no term ROI is claimed for ${totals.incompleteHoldingsCount === 1 ? "it" : "them"}.`,
 		);
 	}
 	if (totals.dividendsUnpriced > 0) {
@@ -1469,10 +1695,10 @@ export function computeStockPortfolio(
 		asOfIso: new Date(asOfSeconds * 1000).toISOString(),
 		positionAsOfIso: input.positionAsOfIso ?? null,
 		pricesAsOfIso,
-		rates,
+		pointsPrice,
 		totals,
 		holdings: holdingsOut.sort((a, b) => b.marketValue - a.marketValue),
-		catalog,
+		blocks,
 		warnings: portfolioWarnings,
 	};
 }

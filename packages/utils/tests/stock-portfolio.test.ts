@@ -190,7 +190,7 @@ describe("replayStockEvents — the term is the open holding period", () => {
 			["d2", 5_000_000],
 			["d3", 5_500_000],
 		]),
-		rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+		pointsPrice: 0,
 		itemPricesById: new Map<number, number>(),
 		itemNamesById: new Map<number, string>([[367, "Feathery Hotel Coupon"]]),
 	};
@@ -309,7 +309,7 @@ describe("replayStockEvents — splits and merges report the resulting total", (
 		const replay = replayStockEvents(eventsOf(rows), {
 			asOfSeconds: 2_000,
 			recordedDividendValues: new Map(),
-			rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+			pointsPrice: 0,
 			itemPricesById: new Map(),
 			itemNamesById: new Map(),
 		});
@@ -337,7 +337,7 @@ describe("replayStockEvents — splits and merges report the resulting total", (
 		const replay = replayStockEvents(bought, {
 			asOfSeconds: 2_000,
 			recordedDividendValues: new Map(),
-			rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+			pointsPrice: 0,
 			itemPricesById: new Map(),
 			itemNamesById: new Map(),
 		});
@@ -357,7 +357,7 @@ describe("replayStockEvents — splits and merges report the resulting total", (
 			{
 				asOfSeconds: 2_000,
 				recordedDividendValues: new Map(),
-				rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+				pointsPrice: 0,
 				itemPricesById: new Map(),
 				itemNamesById: new Map(),
 			},
@@ -420,8 +420,8 @@ describe("computeStockPortfolio", () => {
 		const rows: StockLogRow[] = [
 			log("b1", 5510, 1_750_000_000, {
 				stock: 15,
-				amount: 1_000_000,
-				worth: 900_000_000,
+				amount: 2_000_000,
+				worth: 1_800_000_000,
 				price: "900",
 			}),
 			log("d1", 5530, 1_750_000_000 + 7 * DAY, {
@@ -434,18 +434,18 @@ describe("computeStockPortfolio", () => {
 			holdings: [
 				{
 					stockId: 15,
-					shares: 1_000_000,
+					shares: 2_000_000,
 					transactions: [
-						{ shares: 1_000_000, price: 900, timestamp: 1_750_000_000 },
+						{ shares: 2_000_000, price: 900, timestamp: 1_750_000_000 },
 					],
-					bonus: { available: false, increment: 0, progress: 3, frequency: 7 },
+					bonus: { available: false, increment: 1, progress: 3, frequency: 7 },
 					updatedAt: "2026-01-01T00:00:00.000Z",
 				},
 			],
 			events: eventsOf(rows),
 			recordedDividendValues: new Map([["d1", 5_000_000]]),
 			stocks: referenceStocks,
-			rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+			pointsPrice: 0,
 			itemPricesById: new Map<number, number>([[367, 5_200_000]]),
 			itemPricesByName: new Map<string, number>(),
 			itemNamesById: new Map<number, string>([[367, "Feathery Hotel Coupon"]]),
@@ -462,27 +462,143 @@ describe("computeStockPortfolio", () => {
 		expect(holding).toBeDefined();
 		expect(holding?.reconciliation.source).toBe("logs");
 		expect(holding?.reconciliation.reconciled).toBe(true);
-		expect(holding?.term.invested).toBe(900_000_000);
+		expect(holding?.term.invested).toBe(1_800_000_000);
 		expect(holding?.term.dividendsValue).toBe(5_000_000);
-		expect(holding?.marketValue).toBe(950_000_000);
-		expect(holding?.unrealized).toBe(50_000_000);
-		expect(holding?.profit).toBe(55_000_000);
-		expect(holding?.roiPct).toBeCloseTo((55_000_000 / 900_000_000) * 100, 6);
+		// Income is what was actually paid out — flat, and separate from ROI.
+		expect(holding?.income).toBe(5_000_000);
+		expect(holding?.marketValue).toBe(1_900_000_000);
+		expect(holding?.unrealized).toBe(100_000_000);
+		expect(holding?.profit).toBe(105_000_000);
+		expect(holding?.increments).toBe(1);
+		expect(holding?.roiPct).toBeCloseTo((105_000_000 / 1_800_000_000) * 100, 6);
+		expect(holding?.roiNote).toBeUndefined();
 		// Ten days of holding is long enough to annualise, and the figure is loud.
 		expect(holding?.annualizedRoiPct).toBeCloseTo(
-			((1 + 55_000_000 / 900_000_000) ** (365 / 10) - 1) * 100,
+			((1 + 105_000_000 / 1_800_000_000) ** (365 / 10) - 1) * 100,
 			6,
 		);
 		expect(holding?.annualizedNote).toBeUndefined();
 
-		expect(portfolio.totals.invested).toBe(900_000_000);
-		expect(portfolio.totals.dividendsValue).toBe(5_000_000);
+		expect(portfolio.totals.invested).toBe(1_800_000_000);
+		expect(portfolio.totals.income).toBe(5_000_000);
+		expect(portfolio.totals.measuredHoldingsCount).toBe(1);
 		expect(portfolio.totals.roiPct).toBeCloseTo(
-			(55_000_000 / 900_000_000) * 100,
+			(105_000_000 / 1_800_000_000) * 100,
 			6,
 		);
-		expect(portfolio.totals.pricedRoiPct).toBe(portfolio.totals.roiPct);
+		expect(portfolio.totals.measuredInvested).toBe(1_800_000_000);
 		expect(portfolio.totals.unpricedHoldingsCount).toBe(0);
+	});
+
+	test("claims no ROI without a complete block, whatever the share price does", () => {
+		// Half of one FHG block: shares move, but no dividend accrues, so the only
+		// thing left in `profit` is market movement — not a stock return.
+		const portfolio = computeStockPortfolio(
+			input({
+				holdings: [
+					{
+						stockId: 15,
+						shares: 1_000_000,
+						transactions: [
+							{ shares: 1_000_000, price: 900, timestamp: 1_750_000_000 },
+						],
+						bonus: {
+							available: false,
+							increment: 0,
+							progress: 0,
+							frequency: 7,
+						},
+						updatedAt: null,
+					},
+				],
+				events: [],
+			}),
+		);
+
+		const holding = portfolio.holdings[0];
+		expect(holding?.increments).toBe(0);
+		expect(holding?.roiPct).toBeNull();
+		expect(holding?.roiNote).toContain("Below one block");
+		expect(holding?.income).toBe(0);
+		// The money is still reported: value, movement and progress all stand.
+		expect(holding?.marketValue).toBe(950_000_000);
+		expect(holding?.unrealized).toBe(50_000_000);
+		expect(holding?.nextBlockProgressPct).toBe(50);
+		expect(holding?.sharesToNextBlock).toBe(1_000_000);
+		expect(portfolio.totals.incompleteHoldingsCount).toBe(1);
+		expect(portfolio.totals.measuredHoldingsCount).toBe(0);
+		expect(portfolio.totals.roiPct).toBeNull();
+		expect(
+			portfolio.warnings.some((w) => w.includes("below one complete block")),
+		).toBe(true);
+	});
+
+	test("claims no ROI for a passive block, which pays no dividend at all", () => {
+		const portfolio = computeStockPortfolio(
+			input({
+				holdings: [
+					{
+						stockId: 13,
+						shares: 1_000_000,
+						transactions: [
+							{ shares: 1_000_000, price: 500, timestamp: 1_750_000_000 },
+						],
+						bonus: { available: true, increment: 1, progress: 7, frequency: 7 },
+						updatedAt: null,
+					},
+				],
+				events: [],
+				stocks: [
+					...referenceStocks,
+					{
+						stockId: 13,
+						name: "TC Media Productions",
+						acronym: "TCP",
+						price: 600,
+						requirementShares: 1_000_000,
+						passive: true,
+						frequencyDays: 7,
+						description: "a Company sales boost",
+					},
+				],
+			}),
+		);
+
+		const holding = portfolio.holdings[0];
+		expect(holding?.benefit.passive).toBe(true);
+		expect(holding?.increments).toBe(1);
+		expect(holding?.roiPct).toBeNull();
+		expect(holding?.roiNote).toContain("passive block pays no dividend");
+		expect(holding?.profit).toBe(100_000_000);
+		expect(holding?.nextBlockAprPct).toBeNull();
+		expect(holding?.nextBlockNote).toContain("passive block pays no dividend");
+	});
+
+	test("counts increments cumulatively, not as shares divided by block size", () => {
+		// 6,000,000 FHG shares is two increments (2M + 4M), never three: the third
+		// increment needs 8M more on top, for 14M in total.
+		const portfolio = computeStockPortfolio(
+			input({
+				holdings: [
+					{
+						stockId: 15,
+						shares: 6_000_000,
+						transactions: [
+							{ shares: 6_000_000, price: 900, timestamp: 1_750_000_000 },
+						],
+						bonus: null,
+						updatedAt: null,
+					},
+				],
+				events: [],
+			}),
+		);
+
+		const holding = portfolio.holdings[0];
+		expect(holding?.increments).toBe(2);
+		expect(holding?.nextBlockShares).toBe(8_000_000);
+		expect(holding?.sharesToNextBlock).toBe(8_000_000);
+		expect(holding?.nextBlockProgressPct).toBe(0);
 	});
 
 	test("leaves a resource dividend unpriced rather than counting it as zero", () => {
@@ -527,9 +643,9 @@ describe("computeStockPortfolio", () => {
 		expect(holding?.benefit.valuation.valuePerCycle).toBe(0);
 		expect(holding?.term.dividendsValue).toBe(0);
 		expect(holding?.term.dividendsUnpriced).toBe(1);
-		expect(holding?.warnings.some((w) => w.includes("no energy rate"))).toBe(
-			true,
-		);
+		expect(
+			holding?.warnings.some((w) => w.includes("cannot be sold for cash")),
+		).toBe(true);
 		expect(portfolio.totals.unpricedHoldingsCount).toBe(1);
 		expect(portfolio.warnings.some((w) => w.includes("no dollar value"))).toBe(
 			true,
@@ -537,27 +653,27 @@ describe("computeStockPortfolio", () => {
 		expect(portfolio.totals.forwardAnnualIncome).toBe(0);
 	});
 
-	test("prices a resource dividend once a rate is supplied", () => {
+	test("prices a points dividend at the points-market price", () => {
 		const rows: StockLogRow[] = [
-			log("mb", 5510, 1_750_000_000, {
-				stock: 29,
-				amount: 350_000,
-				worth: 280_000_000,
-				price: "800",
+			log("pb", 5510, 1_750_000_000, {
+				stock: 35,
+				amount: 10_000_000,
+				worth: 2_000_000_000,
+				price: "200",
 			}),
-			log("md", 5535, 1_750_000_000 + 7 * DAY, {
-				stock: 29,
-				energy_increased: 100,
+			log("pd", 5537, 1_750_000_000 + 7 * DAY, {
+				stock: 35,
+				points_increased: 100,
 			}),
 		];
 		const portfolio = computeStockPortfolio(
 			input({
 				holdings: [
 					{
-						stockId: 29,
-						shares: 350_000,
+						stockId: 35,
+						shares: 10_000_000,
 						transactions: [
-							{ shares: 350_000, price: 800, timestamp: 1_750_000_000 },
+							{ shares: 10_000_000, price: 200, timestamp: 1_750_000_000 },
 						],
 						bonus: {
 							available: false,
@@ -570,19 +686,20 @@ describe("computeStockPortfolio", () => {
 				],
 				events: eventsOf(rows),
 				recordedDividendValues: new Map(),
-				rates: { energy: 4_000, nerve: 0, happy: 0, points: 0 },
+				pointsPrice: 31_359,
 			}),
 		);
 
 		const holding = portfolio.holdings[0];
+		expect(holding?.benefit.valuation.kind).toBe("resource");
 		expect(holding?.benefit.valuation.priced).toBe(true);
-		// 100 energy at $4,000, paid every 7 days.
-		expect(holding?.benefit.valuation.valuePerCycle).toBe(400_000);
-		expect(holding?.term.dividendsValue).toBe(400_000);
+		// 100 points at the points-market price, every 7 days.
+		expect(holding?.benefit.valuation.valuePerCycle).toBe(3_135_900);
+		expect(holding?.term.dividendsValue).toBe(3_135_900);
+		expect(portfolio.pointsPrice).toBe(31_359);
 		expect(portfolio.totals.unpricedHoldingsCount).toBe(0);
-		// One block a week, annualised against a $280M position.
 		expect(portfolio.totals.forwardAnnualIncome).toBeCloseTo(
-			400_000 * (365 / 7),
+			3_135_900 * (365 / 7),
 			3,
 		);
 	});
@@ -593,10 +710,10 @@ describe("computeStockPortfolio", () => {
 				holdings: [
 					{
 						stockId: 15,
-						shares: 1_000_000,
+						shares: 2_000_000,
 						transactions: [
 							{ shares: 1_000_000, price: 100, timestamp: 1_600_000_000 },
-							{ shares: 1_000_000, price: 200, timestamp: 1_700_000_000 },
+							{ shares: 3_000_000, price: 200, timestamp: 1_700_000_000 },
 						],
 						bonus: null,
 						updatedAt: null,
@@ -608,11 +725,14 @@ describe("computeStockPortfolio", () => {
 
 		const holding = portfolio.holdings[0];
 		expect(holding?.reconciliation.source).toBe("transactions");
-		expect(holding?.term.invested).toBe(200_000_000);
+		// FIFO: the 2,000,000 shares still held are the most recent ones, so the
+		// basis is 2,000,000 × $200 and the term opened with the surviving lot.
+		expect(holding?.term.invested).toBe(400_000_000);
 		expect(holding?.term.realized).toBe(0);
 		expect(holding?.term.start).toBe(1_700_000_000);
+		expect(holding?.increments).toBe(1);
 		expect(holding?.roiPct).toBeCloseTo(
-			((950_000_000 - 200_000_000) / 200_000_000) * 100,
+			((1_900_000_000 - 400_000_000) / 400_000_000) * 100,
 			6,
 		);
 	});
@@ -645,21 +765,25 @@ describe("computeStockPortfolio", () => {
 		).toBe(true);
 	});
 
-	test("lists every catalogued stock with the doubling cost of the next increment", () => {
+	test("lists every catalogued stock as increments, with the doubling cost of each", () => {
 		const portfolio = computeStockPortfolio(input());
-		expect(portfolio.catalog).toHaveLength(STOCK_CATALOG.length);
+		// Two rows per unowned stock — the block itself and the one after it — plus
+		// one more for the stock held in the fixture, whose next block is listed too.
+		expect(portfolio.blocks).toHaveLength(STOCK_CATALOG.length * 2 + 1);
 
-		// A price row for MCS exists, so the next block can be costed — but with no
-		// energy rate its payout still cannot be valued, so no yield is claimed.
-		const mcs = portfolio.catalog.find((c) => c.acronym === "MCS");
-		expect(mcs?.nextIncrementShares).toBe(350_000);
-		expect(mcs?.nextIncrementCost).toBe(350_000 * 800);
-		expect(mcs?.firstIncrementYieldPct).toBeNull();
-		expect(portfolio.catalog.find((c) => c.acronym === "TSB")?.owned).toBe(
-			false,
+		// A price row for MCS exists, so the block can be costed — but energy cannot
+		// be sold for cash, so its payout carries no value and no APR is claimed.
+		const mcsFirst = portfolio.blocks.find(
+			(b) => b.acronym === "MCS" && b.increment === 1,
 		);
+		expect(mcsFirst?.shares).toBe(350_000);
+		expect(mcsFirst?.cost).toBe(350_000 * 800);
+		expect(mcsFirst?.payoutValue).toBeNull();
+		expect(mcsFirst?.annualizedAprPct).toBeNull();
+		expect(mcsFirst?.payoutNote).toContain("cannot be sold for cash");
+		expect(portfolio.blocks.some((b) => b.acronym === "TSB")).toBe(true);
 
-		// With a price row, the yield arithmetic runs end to end.
+		// With a price row, the APR arithmetic runs end to end.
 		const priced = computeStockPortfolio({
 			...input(),
 			stocks: [
@@ -676,15 +800,25 @@ describe("computeStockPortfolio", () => {
 				},
 			],
 		});
-		const pricedTsb = priced.catalog.find((c) => c.acronym === "TSB");
-		expect(pricedTsb?.nextIncrementCost).toBeCloseTo(3_000_000 * 1166.86, 3);
-		expect(pricedTsb?.firstIncrementYieldPct).toBeCloseTo(
+		const pricedTsb = priced.blocks.find(
+			(b) => b.acronym === "TSB" && b.increment === 1,
+		);
+		expect(pricedTsb?.cost).toBeCloseTo(3_000_000 * 1166.86, 3);
+		expect(pricedTsb?.payoutValue).toBe(50_000_000);
+		expect(pricedTsb?.annualizedAprPct).toBeCloseTo(
 			((50_000_000 * (365 / 31)) / (3_000_000 * 1166.86)) * 100,
 			6,
 		);
+		// Nothing of TSB is held, so the whole block is still to buy and the APR on
+		// the money outstanding is the APR on the block.
+		expect(pricedTsb?.nextToBuyAprPct).toBeCloseTo(
+			pricedTsb?.annualizedAprPct ?? 0,
+			6,
+		);
+		expect(pricedTsb?.progressPct).toBe(0);
 	});
 
-	test("halves the yield of a second increment, because its cost doubles", () => {
+	test("halves the APR of a second increment, because its cost doubles", () => {
 		const portfolio = computeStockPortfolio({
 			...input(),
 			holdings: [
@@ -712,16 +846,133 @@ describe("computeStockPortfolio", () => {
 			],
 		});
 
-		const tsb = portfolio.catalog.find((c) => c.acronym === "TSB");
-		expect(tsb?.nextIncrementShares).toBe(6_000_000);
-		expect(tsb?.firstIncrementYieldPct).toBeCloseTo(
+		const first = portfolio.blocks.find(
+			(b) => b.acronym === "TSB" && b.increment === 1,
+		);
+		const second = portfolio.blocks.find(
+			(b) => b.acronym === "TSB" && b.increment === 2,
+		);
+		expect(first?.shares).toBe(3_000_000);
+		expect(second?.shares).toBe(6_000_000);
+		expect(first?.held).toBe(true);
+		expect(first?.nextToBuyAprPct).toBeNull();
+		expect(first?.annualizedAprPct).toBeCloseTo(
 			((50_000_000 * (365 / 31)) / (3_000_000 * 1_000)) * 100,
 			6,
 		);
-		expect(tsb?.nextIncrementYieldPct).toBeCloseTo(
-			(tsb?.firstIncrementYieldPct ?? 0) / 2,
+		// The second block pays the same coupon for double the shares.
+		expect(second?.annualizedAprPct).toBeCloseTo(
+			(first?.annualizedAprPct ?? 0) / 2,
 			6,
 		);
+		// It is the block a purchase can advance, and none of it is held yet.
+		expect(second?.nextToBuyAprPct).toBeCloseTo(
+			second?.annualizedAprPct ?? 0,
+			6,
+		);
+		expect(second?.progressPct).toBe(0);
+	});
+
+	test("ranks a nearly complete block on the cash still outstanding", () => {
+		// The second TSB block adds 6,000,000 shares on top of the first 3,000,000, so
+		// holding 8,400,000 means 5,400,000 of that increment is already bought: 90%
+		// of it, so finishing costs a tenth of the block and returns the full coupon
+		// — ten times the APR on a block bought from zero.
+		const portfolio = computeStockPortfolio({
+			...input(),
+			holdings: [
+				{
+					stockId: 1,
+					shares: 8_400_000,
+					transactions: [
+						{ shares: 8_400_000, price: 1_000, timestamp: 1_750_000_000 },
+					],
+					bonus: { available: false, increment: 1, progress: 4, frequency: 31 },
+					updatedAt: null,
+				},
+			],
+			stocks: [
+				{
+					stockId: 1,
+					name: "Torn & Shanghai Banking",
+					acronym: "TSB",
+					price: 1_000,
+					requirementShares: 3_000_000,
+					passive: false,
+					frequencyDays: 31,
+					description: "$50,000,000",
+				},
+			],
+		});
+
+		const holding = portfolio.holdings[0];
+		expect(holding?.increments).toBe(1);
+		expect(holding?.nextBlockProgressPct).toBeCloseTo(90, 6);
+
+		const second = portfolio.blocks.find(
+			(b) => b.acronym === "TSB" && b.increment === 2,
+		);
+		expect(second?.sharesHeld).toBe(5_400_000);
+		expect(second?.progressPct).toBeCloseTo(90, 6);
+		expect(second?.sharesRemaining).toBe(600_000);
+		expect(second?.costRemaining).toBe(600_000_000);
+		expect(second?.nextToBuyAprPct).toBeCloseTo(
+			(second?.annualizedAprPct ?? 0) * 10,
+			6,
+		);
+	});
+
+	test("does not claim an APR for a passive block at any increment", () => {
+		const portfolio = computeStockPortfolio({
+			...input(),
+			stocks: [
+				...referenceStocks,
+				{
+					stockId: 13,
+					name: "TC Media Productions",
+					acronym: "TCP",
+					price: 556.64,
+					requirementShares: 1_000_000,
+					passive: true,
+					frequencyDays: 7,
+					description: "a Company sales boost",
+				},
+			],
+		});
+
+		const tcp = portfolio.blocks.filter((b) => b.acronym === "TCP");
+		expect(tcp.length).toBeGreaterThan(0);
+		for (const block of tcp) {
+			expect(block.passive).toBe(true);
+			expect(block.payoutValue).toBeNull();
+			expect(block.annualizedAprPct).toBeNull();
+			expect(block.nextToBuyAprPct).toBeNull();
+		}
+	});
+
+	test("lists only the blocks held once a capped stock is at its cap", () => {
+		const portfolio = computeStockPortfolio({
+			...input(),
+			holdings: [
+				{
+					stockId: 29,
+					shares: 358_050_000,
+					transactions: [
+						{ shares: 358_050_000, price: 800, timestamp: 1_750_000_000 },
+					],
+					bonus: { available: false, increment: 10, progress: 4, frequency: 7 },
+					updatedAt: null,
+				},
+			],
+		});
+
+		const mcs = portfolio.blocks.filter((b) => b.acronym === "MCS");
+		expect(mcs).toHaveLength(4);
+		for (const block of mcs) {
+			expect(block.capped).toBe(true);
+			expect(block.held).toBe(true);
+			expect(block.nextToBuyAprPct).toBeNull();
+		}
 	});
 });
 
@@ -739,7 +990,7 @@ describe("buildBenefitProgress", () => {
 			description: "1x Feathery Hotel Coupon",
 		},
 		{
-			rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+			pointsPrice: 0,
 			itemPricesById: new Map(),
 			itemPricesByName: new Map(),
 		},
@@ -789,7 +1040,7 @@ describe("buildBenefitProgress", () => {
 				description: "a Company sales boost",
 			},
 			{
-				rates: { energy: 0, nerve: 0, happy: 0, points: 0 },
+				pointsPrice: 0,
 				itemPricesById: new Map(),
 				itemPricesByName: new Map(),
 			},

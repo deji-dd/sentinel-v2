@@ -144,6 +144,104 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 		expect(manager.getAlert(mockContract.id, 1002)).toBeUndefined();
 	});
 
+	it("includes a level-100 member when the contract range tops out at 100", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		// Both endpoints are inclusive, so 100 must qualify when the upper bound
+		// is 100. Level 100 sits exactly on the bound, which is where an
+		// exclusive comparison would silently drop the highest-level targets.
+		for (const [id, level] of [
+			[11001, 1],
+			[11002, 99],
+			[11003, 100],
+		] as const) {
+			await manager.processMember(
+				{
+					...mockContract,
+					id: `contract-level-${level}`,
+					terms: { ...mockContract.terms, levelRange: [1, 100] },
+				},
+				"guild-1",
+				"targets",
+				"role-merc-123",
+				createMockMember({ id, level }),
+				nowSec,
+				nowMs,
+			);
+			expect(manager.getAlert(`contract-level-${level}`, id)).toBeDefined();
+		}
+
+		// Level 101 is genuinely out of range and must still be rejected.
+		await manager.processMember(
+			{
+				...mockContract,
+				id: "contract-level-101",
+				terms: { ...mockContract.terms, levelRange: [1, 100] },
+			},
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({ id: 11004, level: 101 }),
+			nowSec,
+			nowMs,
+		);
+		expect(manager.getAlert("contract-level-101", 11004)).toBeUndefined();
+	});
+
+	it("includes a level-100 member on war-start terms capped at 100", async () => {
+		const manager = new MercTargetManager();
+		const warStartSec = 1_700_000_000;
+		const nowSec = warStartSec + 300;
+		const nowMs = nowSec * 1000;
+
+		const contract: MercContract = {
+			...mockContract,
+			id: "contract-level-war-start",
+			warStatusAtCreation: "upcoming",
+			warStart: warStartSec,
+			warEnd: warStartSec + 3600,
+			changeTermsOnWarStart: true,
+			terms: {
+				...mockContract.terms,
+				levelRange: [1, 50],
+				statuses: { online: false, idle: false, offline: true },
+				offlineDurationMinutes: null,
+			},
+			warStartTerms: {
+				...mockContract.terms,
+				levelRange: [1, 100],
+				statuses: { online: false, idle: false, offline: true },
+				offlineDurationMinutes: 10,
+			},
+		};
+
+		const member = createMockMember({
+			id: 12001,
+			level: 100,
+			last_action: {
+				status: "Offline",
+				timestamp: nowSec - 30 * 60,
+				relative: "30 minutes ago",
+			},
+		});
+
+		await manager.processMember(
+			contract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			member,
+			nowSec,
+			nowMs,
+		);
+
+		// The base terms cap at 50, so a pass here proves the war-start range is
+		// the one being applied and that its 100 bound is inclusive.
+		expect(manager.getAlert(contract.id, 12001)).toBeDefined();
+	});
+
 	it("disqualifies member whose is_revivable is true and deletes any existing alert", async () => {
 		const manager = new MercTargetManager();
 		const nowSec = Math.floor(Date.now() / 1000);
