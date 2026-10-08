@@ -10,5 +10,5 @@
 		"noUncheckedIndexedAccess": true,
 		"types": ["bun"]
 	},
-	"include": ["src/**/*", "build.ts"]
+	"include": ["src/**/*", "tests/**/*", "build.ts"]
 }

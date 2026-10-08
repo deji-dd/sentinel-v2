@@ -109,7 +109,7 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 			host.includes("elims-dashboard") ||
 			origin.includes("elims")
 		) {
-			appDir = "web/elims-dashboard/dist";
+			appDir = "web/dashboard/dist";
 		} else if (
 			host.includes("subversive.") ||
 			host.includes("subversive-dashboard") ||

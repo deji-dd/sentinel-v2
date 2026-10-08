@@ -77,7 +77,14 @@ export interface CompanyKPIs {
 	fillPct: number;
 	barrelPrice: number;
 	dailySold: number;
+	/**
+	 * Extraction smoothed over the last few measured days. It is a RATE, not one
+	 * day's output: it lags a change of direction, so any display of it must say so
+	 * and pair it with `dailyProducedLatest`.
+	 */
 	dailyProduced?: number;
+	/** The single most recent measured day, which is what "today" would mean. */
+	dailyProducedLatest?: number;
 	/** How much the production figure above deserves to be trusted. */
 	dailyProducedConfidence?: CompanyConfidence;
 }
@@ -200,6 +207,12 @@ export interface CompanySellThroughResponse {
 /** How a day's extraction figure was established. */
 export interface CompanyProductionEstimate {
 	dailyProduced?: number;
+	/**
+	 * The newest single measured day. `dailyProduced` is a median over several
+	 * days and describes the extraction RATE, so it lags a change of direction;
+	 * this is the day the current fill/drain verdict was taken from.
+	 */
+	latestMeasured?: number;
 	/** Measured days the estimate rests on. */
 	samples: number;
 	confidence: CompanyConfidence;

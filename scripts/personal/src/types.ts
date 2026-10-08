@@ -221,3 +221,27 @@ export type {
 	WeeklyLogEntry,
 	WeeklyTotals,
 } from "../../../packages/schemas/src/company";
+
+/**
+ * Stock portfolio payloads, re-exported from the shared contract the API is typed
+ * against. Type-only, so nothing from the schemas package reaches the bundle.
+ */
+export type {
+	StockBenefit,
+	StockBenefitKind,
+	StockBenefitProgress,
+	StockBenefitValuation,
+	StockCatalogEntry,
+	StockClosedTerm,
+	StockHolding,
+	StockPortfolioResponse,
+	StockPortfolioTotals,
+	StockReconciliation,
+	StockResourceUnit,
+	StocksLedgerState,
+	StockTerm,
+	StockTermDividend,
+	StockTermLot,
+	StockTermSell,
+	StockValuationRates,
+} from "../../../packages/schemas/src/stocks";

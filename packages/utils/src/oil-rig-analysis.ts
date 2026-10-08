@@ -223,11 +223,12 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 	});
 
 	// ---- Capacity regime, then the roster that regime implies ----------------
+	// Evaluated from the per-day history rather than from the single-day stock
+	// flags: the regime's entry rule is "two consecutive measured fill days", which
+	// history can answer and a single day's flag cannot.
 	const regime = assessCapacityRegime({
 		history,
 		fillPct: stock.fillPct,
-		isFillingUp: stock.isFillingUp,
-		warehouseCritical: stock.warehouseCritical,
 		previousRegime: input.previousRegime?.regime,
 		previousSince: input.previousRegime?.since,
 		asOfSeconds,
@@ -288,7 +289,6 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		openSeats,
 		staffCount: snapshot.employees.length,
 		baseline: input.baseline,
-		asOfSeconds,
 	});
 
 	return {

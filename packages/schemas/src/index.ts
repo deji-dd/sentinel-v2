@@ -4,4 +4,5 @@ export * from "./ipc";
 export * from "./rw-channels";
 export * from "./rw-displays";
 export * from "./stock-alerts";
+export * from "./stocks";
 export * from "./torn/index";

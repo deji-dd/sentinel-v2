@@ -901,6 +901,18 @@ export type ProductionConfidence = "none" | "low" | "medium" | "high";
 export interface ProductionEstimate {
 	/** Smoothed barrels/day, or undefined when extraction was never measurable. */
 	dailyProduced?: number;
+	/**
+	 * The newest single measured day, or undefined when nothing is measured.
+	 *
+	 * `dailyProduced` is a median, which answers "how fast does this rig extract"
+	 * - the question a roster decision needs. It does NOT answer "which way is
+	 * storage moving today": on the day the flow reverses, every day in the
+	 * window but the newest still describes the old regime, so the median can
+	 * report the sign of the trend that has just ended. This field is the only
+	 * evidence about the CURRENT direction, and the drain model uses it for
+	 * exactly that reason.
+	 */
+	latestMeasured?: number;
 	/** Measured days the estimate rests on. */
 	samples: number;
 	confidence: ProductionConfidence;
@@ -949,6 +961,11 @@ export function measuredProductionValues(
  * restructuring the roster, so the estimate is the median of the last few
  * *measured* days, and the confidence is reported alongside it so the advice can
  * downgrade itself when the sample is thin.
+ *
+ * The median is a RATE, not a direction. `latestMeasured` carries the newest
+ * measured day separately, because a caller asking "is storage filling or
+ * draining right now" cannot be answered by a median that still contains the
+ * days before a reversal.
  */
 export function estimateMeasuredProduction(
 	history: OilRigHistoryRecord[],
@@ -965,6 +982,7 @@ export function estimateMeasuredProduction(
 		measured.push(options.latestMeasured);
 	}
 
+	const latestMeasured = measured[measured.length - 1];
 	const values = measured.slice(-policy.smoothedProductionDays);
 	const lastRecord = history[history.length - 1];
 	const capped =
@@ -997,13 +1015,23 @@ export function estimateMeasuredProduction(
 				? "medium"
 				: "low";
 
+	// The newest day is stated separately. Without it the summary reads as a claim
+	// about the day just recorded, so a reader could not tell a smoothed rate from
+	// the day's own measurement - which is how the brief came to report extraction
+	// below sales on a day storage visibly gained 62,138 bbl.
+	const latestClause =
+		latestMeasured !== undefined && latestMeasured !== dailyProduced
+			? ` The most recent measured day was ${latestMeasured.toLocaleString()} bbl/day.`
+			: "";
+
 	return {
 		dailyProduced,
+		latestMeasured,
 		samples: values.length,
 		confidence,
 		values,
 		capped,
-		summary: `Extraction of about ${dailyProduced.toLocaleString()} bbl/day, the median of ${values.length} measured day${values.length === 1 ? "" : "s"} (${confidence} confidence).${
+		summary: `Extraction of about ${dailyProduced.toLocaleString()} bbl/day, the median of ${values.length} measured day${values.length === 1 ? "" : "s"} (${confidence} confidence).${latestClause}${
 			capped
 				? " Storage was at or above the critical fill on the most recent record, where the stock delta is clamped at zero, so true extraction is at least this high."
 				: ""
@@ -1286,17 +1314,32 @@ export function analyzeStockAndPricing(params: {
 		policy: policy.capacity,
 		latestMeasured: params.dailyProduced,
 	});
-	const measuredProduced = production.dailyProduced;
-
 	// Drain model. `daysOfSales` means "days until the warehouse empties", so it
 	// is only finite when sales genuinely outpace extraction.
+	//
+	// WHICH EXTRACTION FIGURE ANSWERS THIS. The net of extraction and sales is a
+	// question about the CURRENT direction of storage, and only the newest
+	// measured day answers it: that day's net IS the stock delta, exactly. The
+	// median does not, because on the day the flow reverses every other day in
+	// its window still describes the regime that just ended.
+	//
+	// Reproduced against real state on 2026-10-08: the median of 315,177 /
+	// 321,560 / 395,024 is 321,560, which is less than that day's sales of
+	// 332,886. The brief therefore reported "draining 11,326 bbl/day" - and
+	// `daysOfSales: 43.1` - from the very tick that measured storage GAINING
+	// 62,138 bbl. The newest day alone says 395,024 produced, which fills.
+	//
+	// The median still governs the extraction RATE (discard sizing, roster
+	// rebalancing), where smoothing a single unusual day is the point.
+	const latestProduced = production.latestMeasured;
+
 	let daysOfSales = INFINITE_DAYS_OF_SALES;
 	let netDrainPerDay: number | undefined;
 	let netFillPerDay: number | undefined;
 	let isFillingUp = false;
 
-	if (measuredProduced !== undefined && measuredProduced > 0) {
-		const netChange = measuredProduced - params.dailySold;
+	if (latestProduced !== undefined && latestProduced > 0) {
+		const netChange = latestProduced - params.dailySold;
 		if (netChange < 0) {
 			netDrainPerDay = Math.abs(netChange);
 			daysOfSales = Number((params.inStock / netDrainPerDay).toFixed(1));
@@ -1862,23 +1905,20 @@ export function formatWeekToDateTable(summary: WeekToDateSummary): string {
 	return `\`\`\`\n${header}\n${divider}\n${rows.join("\n")}\n${divider}\n${totalsRow}\n\`\`\``;
 }
 
+/**
+ * The week-to-date totals, kept to the two figures the advice actually turns on.
+ *
+ * Operating costs, barrels sold and barrels produced were removed: operating costs
+ * are already the daily wages plus the daily ad budget on the telemetry line, and
+ * the volumes are columns of the week-to-date table printed directly above this
+ * block. Restating them here made the summary the longest part of the brief while
+ * adding no decision the table did not already support.
+ */
 export function formatWeekToDateSummary(summary: WeekToDateSummary): string {
 	const profitSign = summary.totalProfit >= 0 ? "+" : "";
-	const operatingCosts = summary.totalWages + summary.totalAd;
-	const measuredDays = summary.entries.filter(
-		(e) => e.producedBarrels !== undefined,
-	);
-	const unmeasuredDays = summary.entries.length - measuredDays.length;
-	const producedVal = measuredDays.reduce(
-		(s, e) => s + (e.producedBarrels ?? 0) * e.barrelPrice,
-		0,
-	);
 
 	return `• **WTD Net Profit:** **${profitSign}$${summary.totalProfit.toLocaleString()}**
-• **WTD Gross Revenue:** **$${summary.totalRevenue.toLocaleString()}**
-• **Operating Costs:** **$${operatingCosts.toLocaleString()}** (Wages: $${(summary.totalWages / 1_000_000).toFixed(1)}M | Ad: $${(summary.totalAd / 1_000_000).toFixed(1)}M)
-• **Barrels Sold:** **${summary.totalSold.toLocaleString()}** bbl
-• **Barrels Produced:** **${summary.totalProduced.toLocaleString()}** bbl${producedVal > 0 ? ` ($${producedVal.toLocaleString()} value, measured days only)` : ""}${unmeasuredDays > 0 ? `\n• **Production coverage:** ${measuredDays.length} of ${summary.entries.length} days measurable; extraction on the remaining ${unmeasuredDays} could not be derived from a stock delta and is excluded rather than estimated.` : ""}`;
+• **WTD Gross Revenue:** **$${summary.totalRevenue.toLocaleString()}**`;
 }
 
 export function formatHistoryTable(history: OilRigHistoryRecord[]): string {
@@ -2267,12 +2307,31 @@ export interface CapacityRegime {
  * consecutive measured days of drain AND storage back at or below
  * `exitMaxFillPct`. The asymmetry is the point: a rig that has just started
  * draining is not yet proven to have a sell-through surplus.
+ *
+ * TWO PARAMETERS WERE DELETED FROM THIS SIGNATURE, deliberately rather than by
+ * accident, because they were accepted and then never read:
+ *
+ *  - `isFillingUp`. Entry already requires `enterConsecutiveFillDays` consecutive
+ *    measured fill days taken from per-day history, which is strictly stronger
+ *    evidence than one day's flag. Wiring it in would let the regime enter on a
+ *    single day, which is precisely the limit cycle the hysteresis exists to
+ *    prevent. `planCapacityRebalance` no longer infers a regime of its own, so
+ *    this function is the only thing that decides whether a rig is
+ *    extraction-bound and there is no second, single-day answer to reconcile it
+ *    with.
+ *  - `warehouseCritical`. The cap test below reads `fillPct` against
+ *    `criticalEnterPct` on purpose. The hysteretic flag stays true down to a
+ *    lower exit threshold, so feeding it in would let the regime ENTER at, say,
+ *    91% full, which is not a critical fill at all. Wiring the flag up here would
+ *    loosen entry rather than tighten it.
+ *
+ * A parameter that looks like it matters and is ignored is worse than a missing
+ * one: it reads as a wired signal and invites a caller to believe it steers the
+ * regime. Both were removed so the signature states what this function uses.
  */
 export function assessCapacityRegime(input: {
 	history: OilRigHistoryRecord[];
 	fillPct: number;
-	isFillingUp: boolean;
-	warehouseCritical: boolean;
 	previousRegime?: CapacityRegimeName;
 	/** When the previous regime began, so `since` survives across briefs. */
 	previousSince?: number;
@@ -2484,14 +2543,24 @@ export interface CapacityPlanInput {
 	 * Omitting it falls back to reporting the blueprint-to-target quota move.
 	 */
 	currentCounts?: Record<string, number>;
-	/** Hysteretic regime, preferred over the raw stock flags when supplied. */
-	regime?: CapacityRegime;
+	/**
+	 * The hysteretic capacity regime this plan acts on. REQUIRED.
+	 *
+	 * It used to be optional, with an empty-history `assessCapacityRegime` call as
+	 * the fallback. That fallback could only ever see critical fill, so it reported
+	 * `balanced` for a rig that was filling below the cap, while `extractionBound`
+	 * was taken from the single-day stock flags and could say the opposite - the
+	 * plan's own `extractionBound` and `regime.regime` could disagree. Removing the
+	 * fallback makes the regime the single source of truth, and a caller that has
+	 * no regime yet must now compute one from real history (see
+	 * `assessCapacityRegime`), which is the evidence the entry rule needs anyway.
+	 */
+	regime: CapacityRegime;
 	/** Measured top-rig baseline, when one is available. */
 	baseline?: RosterBaseline;
 	/** True when the discarded figure rests on too few measured days. */
 	discardedEvidenceThin?: boolean;
 	policy?: OilRigCapacityPolicy;
-	asOfSeconds?: number;
 }
 
 /**
@@ -2513,15 +2582,18 @@ export interface CapacityPlanInput {
  *  - it acted whenever extraction outran sales, with no hysteresis, which is what
  *    drove the add-two-remove-three cycle. The regime now enters and exits under
  *    different conditions.
+ *
+ * The regime is taken as a required input rather than recomputed or guessed here.
+ * There is exactly one place that decides whether the rig is extraction-bound, so
+ * this plan cannot reach a different conclusion from the roster solver that was
+ * built against the same regime.
  */
 export function planCapacityRebalance(
 	params: CapacityPlanInput,
 ): CapacityRebalancePlan {
 	const policy = params.policy ?? OIL_RIG_POLICY.capacity;
-	const { stock } = params;
-	const extractionBound = params.regime
-		? params.regime.regime === "extraction_bound"
-		: stock.isFillingUp || stock.warehouseCritical;
+	const { stock, regime } = params;
+	const extractionBound = regime.regime === "extraction_bound";
 
 	// Barrels are only DISCARDED when the warehouse is at its cap and extraction
 	// outruns sales. While the rig is draining, production is being sold and the
@@ -2539,17 +2611,6 @@ export function planCapacityRebalance(
 	// and the historical median is the best available estimate of the true loss.
 	const discarded = currentlyDiscarding ? historicallyDiscarded : 0;
 	const discardedValuePerDay = discarded * params.barrelPrice;
-
-	const regime: CapacityRegime =
-		params.regime ??
-		assessCapacityRegime({
-			history: [],
-			fillPct: stock.fillPct,
-			isFillingUp: stock.isFillingUp,
-			warehouseCritical: stock.warehouseCritical,
-			asOfSeconds: params.asOfSeconds,
-			policy,
-		});
 
 	const holdCondition = `sales outpace extraction for ${policy.exitConsecutiveDrainDays} consecutive recorded days with storage at or below ${policy.exitMaxFillPct}% full`;
 	const revertCondition = `Revert once ${holdCondition}.`;

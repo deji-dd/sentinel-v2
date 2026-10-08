@@ -42,7 +42,6 @@ export interface CompanyDirectiveInputs {
 	/** Staff count the blueprint quotas are derived from. */
 	staffCount: number;
 	baseline?: RosterBaseline;
-	asOfSeconds?: number;
 }
 
 export function buildCompanyDirectives(
@@ -61,7 +60,6 @@ export function buildCompanyDirectives(
 		regime: inputs.regime,
 		baseline: inputs.baseline,
 		discardedEvidenceThin: inputs.discarded.evidenceThin,
-		asOfSeconds: inputs.asOfSeconds,
 	});
 
 	const capacityRebalance: CompanyCapacityRebalance = {
@@ -118,6 +116,7 @@ export function buildCompanyDirectives(
 		structuralAdvice: inputs.stock.structuralAdvice,
 		production: {
 			dailyProduced: inputs.stock.production.dailyProduced,
+			latestMeasured: inputs.stock.production.latestMeasured,
 			samples: inputs.stock.production.samples,
 			confidence: inputs.stock.production.confidence,
 			capped: inputs.stock.production.capped,

@@ -199,7 +199,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 		expect(response.status).toBe(200);
 	});
 
-	it("GET / serves elims-dashboard static SPA when Host contains elims", async () => {
+	it("GET / serves dashboard static SPA when Host contains elims", async () => {
 		const response = await app.handle(
 			new Request("http://localhost/", {
 				headers: {
@@ -210,7 +210,7 @@ describe("Elysia API Server - Health & In-House Session Auth", () => {
 
 		expect(response.status).toBe(200);
 		const html = await response.text();
-		expect(html).toContain('<div id="root"></div>');
+		expect(html).toContain('id="root"');
 	});
 
 	it("identifies subversive-dashboard client context from origin and host", async () => {

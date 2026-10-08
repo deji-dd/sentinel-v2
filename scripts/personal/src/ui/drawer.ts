@@ -1,25 +1,64 @@
-import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../config";
+import {
+	DEFAULT_SETTINGS,
+	escapeHtml,
+	isDocumentVisible,
+	POLLING_CONFIG,
+	STORAGE_KEYS,
+} from "../config";
 import { BattlestatsTab } from "../modules/battlestats-tab";
 import { CompanyTab } from "../modules/company-tab";
 import { CrimesTab } from "../modules/crimes-tab";
+import { StocksTab } from "../modules/stocks-tab";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
 declare function GM_setValue<T>(key: string, value: T): void;
 
+/** Tabs that render a body. `wealth` remains a stub in the markup only. */
+export type DrawerTabName =
+	| "crimes"
+	| "battlestats"
+	| "company"
+	| "stocks"
+	| "settings";
+
+/** The lifecycle every tab body implements, so the drawer has one code path. */
+interface DrawerTab {
+	init(): void | Promise<void>;
+	render(): void;
+	refresh(): Promise<void>;
+}
+
+const TAB_LABELS: Record<DrawerTabName, string> = {
+	crimes: "Crimes",
+	battlestats: "Battlestats",
+	company: "Company",
+	stocks: "Stocks",
+	settings: "Settings",
+};
+
+const TAB_ORDER: DrawerTabName[] = [
+	"crimes",
+	"battlestats",
+	"company",
+	"stocks",
+	"settings",
+];
+
+/**
+ * The drawer shell.
+ *
+ * Every tab used to be handled by its own branch in five separate places (mount,
+ * switch, poll, manual refresh, open), and the copies drifted: switching to Crimes
+ * constructed the tab and rendered its loading state without ever fetching, so an
+ * open from a crime badge showed an empty panel until the next poll. One registry
+ * with one lifecycle removes the class of bug rather than that instance of it.
+ */
 export class DrawerPanel {
 	private overlay: HTMLElement;
 	private drawer: HTMLElement;
-	private crimesTab: CrimesTab | null = null;
-	private battlestatsTab: BattlestatsTab | null = null;
-	private companyTab: CompanyTab | null = null;
+	private tabs = new Map<DrawerTabName, DrawerTab>();
+	private activeTabName: DrawerTabName = "crimes";
 	private onRatioChange?: () => void;
-	private activeTabName:
-		| "crimes"
-		| "battlestats"
-		| "company"
-		| "stocks"
-		| "wealth"
-		| "settings" = "crimes";
 	private onSettingsSaved?: () => void;
 	private onOpenChange?: (isOpen: boolean) => void;
 
@@ -31,9 +70,11 @@ export class DrawerPanel {
 		this.onSettingsSaved = onSettingsSaved;
 		this.onRatioChange = onRatioChange;
 		this.onOpenChange = onOpenChange;
-		this.activeTabName = GM_getValue<
-			"crimes" | "battlestats" | "company" | "stocks" | "wealth" | "settings"
-		>(STORAGE_KEYS.activeTab, "crimes");
+
+		// A tab name written by an older build must not mount nothing.
+		const stored = GM_getValue<string>(STORAGE_KEYS.activeTab, "crimes");
+		this.activeTabName = this.isTabName(stored) ? stored : "crimes";
+
 		this.overlay = document.createElement("div");
 		this.overlay.className = "blasted-drawer-overlay";
 
@@ -46,6 +87,10 @@ export class DrawerPanel {
 
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
 
+	private isTabName(value: string): value is DrawerTabName {
+		return Object.hasOwn(TAB_LABELS, value);
+	}
+
 	public getElements(): { overlay: HTMLElement; drawer: HTMLElement } {
 		return { overlay: this.overlay, drawer: this.drawer };
 	}
@@ -54,15 +99,7 @@ export class DrawerPanel {
 		return this.drawer.classList.contains("open");
 	}
 
-	public open(
-		tab?:
-			| "crimes"
-			| "battlestats"
-			| "company"
-			| "stocks"
-			| "wealth"
-			| "settings",
-	): void {
+	public open(tab?: DrawerTabName): void {
 		if (tab) {
 			this.switchTab(tab);
 		}
@@ -70,12 +107,12 @@ export class DrawerPanel {
 		this.overlay.classList.add("open");
 		GM_setValue(STORAGE_KEYS.panelOpen, true);
 		this.onOpenChange?.(true);
-		if (this.activeTabName === "crimes" && this.crimesTab) {
-			this.crimesTab.refresh();
-		} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
-			this.battlestatsTab.refresh();
-		} else if (this.activeTabName === "company" && this.companyTab) {
-			this.companyTab.refresh();
+		// A tab mounted for the first time is already fetching; one that was already
+		// up is refreshed, so opening the panel after a while does not show the
+		// payload from whenever it was last polled.
+		const { created } = this.ensureTab(this.activeTabName);
+		if (!created) {
+			void this.refreshActiveTab().catch(() => {});
 		}
 		this.startPolling();
 	}
@@ -95,14 +132,11 @@ export class DrawerPanel {
 				this.stopPolling();
 				return;
 			}
-			if (this.activeTabName === "crimes" && this.crimesTab) {
-				this.crimesTab.refresh().catch(() => {});
-			} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
-				this.battlestatsTab.refresh().catch(() => {});
-			} else if (this.activeTabName === "company" && this.companyTab) {
-				this.companyTab.refresh().catch(() => {});
-			}
-		}, 15000);
+			// Nothing to poll into a panel the player is not looking at; the same
+			// check gates the page observers.
+			if (!isDocumentVisible()) return;
+			void this.refreshActiveTab().catch(() => {});
+		}, POLLING_CONFIG.DRAWER_INTERVAL_MS);
 	}
 
 	private stopPolling(): void {
@@ -133,28 +167,75 @@ export class DrawerPanel {
 		this.switchTab("settings");
 	}
 
+	/**
+	 * Constructs a tab on first use and starts it.
+	 *
+	 * Returns immediately: the drawer never blocks on a request, and each tab
+	 * renders its own loading state while it fetches.
+	 */
+	private ensureTab(name: DrawerTabName): { tab: DrawerTab; created: boolean } {
+		const existing = this.tabs.get(name);
+		if (existing) return { tab: existing, created: false };
+
+		if (name === "settings") {
+			const settingsTab: DrawerTab = {
+				init: () => this.renderSettings(),
+				render: () => this.renderSettings(),
+				refresh: async () => this.renderSettings(),
+			};
+			this.tabs.set("settings", settingsTab);
+			return { tab: settingsTab, created: true };
+		}
+
+		const body = this.drawer.querySelector<HTMLElement>("#drawer-body");
+		if (!body) throw new Error("#drawer-body is missing from the drawer");
+
+		let tab: DrawerTab;
+		if (name === "crimes") {
+			tab = new CrimesTab(body, () => this.openSettings());
+		} else if (name === "battlestats") {
+			tab = new BattlestatsTab(
+				body,
+				() => this.openSettings(),
+				() => {
+					this.onRatioChange?.();
+				},
+			);
+		} else if (name === "company") {
+			tab = new CompanyTab(body, () => this.openSettings());
+		} else {
+			tab = new StocksTab(body, () => this.openSettings());
+		}
+
+		this.tabs.set(name, tab);
+		void Promise.resolve(tab.init()).catch((err) => {
+			console.error(
+				`[Blasted's Script] Failed to initialise the ${name} tab:`,
+				err,
+			);
+			this.setStatus("Error", "error");
+		});
+		return { tab, created: true };
+	}
+
+	private async refreshActiveTab(): Promise<void> {
+		const { tab } = this.ensureTab(this.activeTabName);
+		await tab.refresh();
+	}
+
 	private buildSkeleton(): void {
+		const tabButtons = TAB_ORDER.map(
+			(name) =>
+				`<button class="drawer-tab ${this.activeTabName === name ? "active" : ""}" data-tab="${name}">${TAB_LABELS[name]}</button>`,
+		).join("");
+
 		this.drawer.innerHTML = `
 			<!-- Header with Tabs and Actions -->
 			<div class="drawer-header">
 				<div class="drawer-tabs">
-					<button class="drawer-tab ${this.activeTabName === "crimes" ? "active" : ""}" data-tab="crimes">
-						Crimes
-					</button>
-					<button class="drawer-tab ${this.activeTabName === "battlestats" ? "active" : ""}" data-tab="battlestats">
-						Battlestats
-					</button>
-					<button class="drawer-tab ${this.activeTabName === "company" ? "active" : ""}" data-tab="company">
-						Company
-					</button>
-					<button class="drawer-tab disabled" data-tab="stocks" title="Coming soon">
-						Stocks <span class="tab-badge">Soon</span>
-					</button>
-					<button class="drawer-tab disabled" data-tab="wealth" title="Coming soon">
+					${tabButtons}
+					<button class="drawer-tab disabled" data-tab="wealth" disabled title="Not built yet">
 						Wealth <span class="tab-badge">Soon</span>
-					</button>
-					<button class="drawer-tab ${this.activeTabName === "settings" ? "active" : ""}" data-tab="settings">
-						Settings
 					</button>
 				</div>
 				<div class="drawer-actions">
@@ -184,138 +265,56 @@ export class DrawerPanel {
 		this.drawer
 			.querySelector("#btn-close")
 			?.addEventListener("click", () => this.close());
+
 		this.drawer.querySelector("#btn-refresh")?.addEventListener("click", () => {
-			if (this.activeTabName === "crimes" && this.crimesTab) {
-				this.setStatus("Syncing...", "loading");
-				this.crimesTab
-					.refresh()
-					.then(() => {
-						this.setStatus("Connected", "ok");
-					})
-					.catch((_e) => {
-						this.setStatus("Error", "error");
-					});
-			} else if (this.activeTabName === "battlestats" && this.battlestatsTab) {
-				this.setStatus("Syncing...", "loading");
-				this.battlestatsTab
-					.refresh()
-					.then(() => {
-						this.setStatus("Connected", "ok");
-					})
-					.catch((_e) => {
-						this.setStatus("Error", "error");
-					});
-			} else if (this.activeTabName === "company" && this.companyTab) {
-				this.setStatus("Syncing...", "loading");
-				this.companyTab
-					.refresh()
-					.then(() => {
-						this.setStatus("Connected", "ok");
-					})
-					.catch((_e) => {
-						this.setStatus("Error", "error");
-					});
-			}
+			this.setStatus("Syncing...", "loading");
+			this.refreshActiveTab()
+				.then(() => this.setStatus("Connected", "ok"))
+				.catch(() => this.setStatus("Error", "error"));
 		});
 
-		// Attach tab switching events
 		this.drawer
 			.querySelectorAll<HTMLButtonElement>("button[data-tab]")
 			.forEach((btn) => {
 				btn.addEventListener("click", () => {
-					const tabName = btn.getAttribute("data-tab") as
-						| "crimes"
-						| "battlestats"
-						| "company"
-						| "stocks"
-						| "wealth"
-						| "settings";
-					if (tabName && !btn.classList.contains("disabled")) {
+					const tabName = btn.getAttribute("data-tab");
+					if (tabName && this.isTabName(tabName) && !btn.disabled) {
 						this.switchTab(tabName);
 					}
 				});
 			});
 
-		// Mount initial active Tab
-		const body = this.drawer.querySelector<HTMLElement>("#drawer-body");
-		if (body) {
-			if (this.activeTabName === "crimes") {
-				this.crimesTab = new CrimesTab(body, () => this.openSettings());
-				this.crimesTab.init();
-			} else if (this.activeTabName === "battlestats") {
-				this.battlestatsTab = new BattlestatsTab(
-					body,
-					() => this.openSettings(),
-					() => {
-						if (this.onRatioChange) this.onRatioChange();
-					},
-				);
-				this.battlestatsTab.init();
-			} else if (this.activeTabName === "company") {
-				this.companyTab = new CompanyTab(body, () => this.openSettings());
-				this.companyTab.init();
-			} else if (this.activeTabName === "settings") {
-				this.renderSettings(body);
-			}
-		}
+		// Mount whatever was active when the script last ran.
+		this.ensureTab(this.activeTabName);
+		// `open()` calls this too; nothing here refreshes on mount.
 	}
 
-	public switchTab(
-		tab:
-			| "crimes"
-			| "battlestats"
-			| "company"
-			| "stocks"
-			| "wealth"
-			| "settings",
-	): void {
+	public switchTab(tab: DrawerTabName): void {
 		this.activeTabName = tab;
 		GM_setValue(STORAGE_KEYS.activeTab, tab);
 		this.drawer
 			.querySelectorAll<HTMLButtonElement>("button[data-tab]")
 			.forEach((btn) => {
-				if (btn.getAttribute("data-tab") === tab) {
-					btn.classList.add("active");
-				} else {
-					btn.classList.remove("active");
-				}
+				btn.classList.toggle("active", btn.getAttribute("data-tab") === tab);
 			});
 
-		const body = this.drawer.querySelector<HTMLElement>("#drawer-body");
-		if (!body) return;
+		if (!this.drawer.querySelector<HTMLElement>("#drawer-body")) return;
 
-		if (tab === "crimes") {
-			if (!this.crimesTab) {
-				this.crimesTab = new CrimesTab(body, () => this.openSettings());
-			}
-			this.crimesTab.render();
-		} else if (tab === "battlestats") {
-			if (!this.battlestatsTab) {
-				this.battlestatsTab = new BattlestatsTab(
-					body,
-					() => this.openSettings(),
-					() => {
-						if (this.onRatioChange) this.onRatioChange();
-					},
-				);
-				this.battlestatsTab.init();
-			} else {
-				this.battlestatsTab.render();
-			}
-		} else if (tab === "company") {
-			if (!this.companyTab) {
-				this.companyTab = new CompanyTab(body, () => this.openSettings());
-				this.companyTab.init();
-			} else {
-				this.companyTab.render();
-			}
-		} else if (tab === "settings") {
-			this.renderSettings(body);
-		}
+		const { tab: tabInstance, created } = this.ensureTab(tab);
+		// A tab mounted for the first time has just rendered its loading state and
+		// started fetching; repainting now would wipe that request's output.
+		if (!created) tabInstance.render();
 	}
 
-	private renderSettings(container: HTMLElement): void {
+	private renderSettings(): void {
+		const container = this.drawer.querySelector<HTMLElement>("#drawer-body");
+		if (!container) return;
+
 		const currentKey = GM_getValue<string>(STORAGE_KEYS.apiKey, "");
+		const currentUrl = GM_getValue<string>(
+			STORAGE_KEYS.apiUrl,
+			DEFAULT_SETTINGS.apiUrl,
+		);
 		const showBadges = GM_getValue<boolean>(
 			STORAGE_KEYS.showBadges,
 			DEFAULT_SETTINGS.showBadges,
@@ -327,14 +326,36 @@ export class DrawerPanel {
 
 				<label class="settings-label">
 					Sentinel API Key (Personal)
-					<input id="input-api-key" type="password" class="input-text" value="${currentKey}" placeholder="Enter your secret API key..." />
-					<span style="font-size: 11px; color: #64748b;">Used to authenticate requests to your personal crime ledger & telemetry.</span>
+					<input id="input-api-key" type="password" class="input-text" value="${escapeHtml(currentKey)}" placeholder="Enter your secret API key..." />
+					<span style="font-size: 11px; color: #94a3b8;">Used to authenticate requests to your personal crime ledger &amp; telemetry.</span>
+				</label>
+
+				<label class="settings-label">
+					API Base URL
+					<input id="input-api-url" type="text" class="input-text" value="${escapeHtml(currentUrl)}" placeholder="${escapeHtml(DEFAULT_SETTINGS.apiUrl)}" />
+					<span style="font-size: 11px; color: #94a3b8;">
+						Your key is only ever sent to api.blasted-labs.tech, sentinel.blasted-labs.tech or
+						localhost. Any other host is refused rather than handed the key.
+					</span>
 				</label>
 
 				<label class="checkbox-row" style="margin-top: 6px;">
 					<input id="chk-show-badges" type="checkbox" ${showBadges ? "checked" : ""} />
-					<span>Show ROI & Profit badges directly on Torn crime cards</span>
+					<span>Show ROI &amp; Profit badges directly on Torn crime cards</span>
 				</label>
+
+				<div class="tos-table">
+					<div class="tos-title">How your API key is used</div>
+					<table>
+						<tbody>
+							<tr><th>Data storage</th><td>Your key is kept in your userscript manager's storage on this device. The ledger data it produces is stored on the Sentinel server to build the analytics shown here.</td></tr>
+							<tr><th>Data sharing</th><td>Nobody. Nothing is shared with your faction, your friends, or any third party.</td></tr>
+							<tr><th>Purpose of use</th><td>Non-malicious statistical analysis and personal gain: crime, battlestats, company, stock and wealth analytics for your own account.</td></tr>
+							<tr><th>Key storage</th><td>Stored encrypted server-side and never shared. Requests from this script are authenticated with the key you enter above.</td></tr>
+							<tr><th>Key access level</th><td>Limited or custom: the selections this script needs (personal logs, battlestats, stocks, company, money). Nothing beyond that is requested.</td></tr>
+						</tbody>
+					</table>
+				</div>
 
 				<button id="btn-save-settings" class="btn-primary" style="margin-top: 8px;">Save Settings</button>
 			</div>
@@ -345,23 +366,27 @@ export class DrawerPanel {
 			?.addEventListener("click", () => {
 				const keyInput =
 					container.querySelector<HTMLInputElement>("#input-api-key");
+				const urlInput =
+					container.querySelector<HTMLInputElement>("#input-api-url");
 				const badgesInput =
 					container.querySelector<HTMLInputElement>("#chk-show-badges");
 
 				if (keyInput) {
 					GM_setValue(STORAGE_KEYS.apiKey, keyInput.value.trim());
 				}
+				if (urlInput) {
+					const url = urlInput.value.trim();
+					GM_setValue(
+						STORAGE_KEYS.apiUrl,
+						url.length > 0 ? url : DEFAULT_SETTINGS.apiUrl,
+					);
+				}
 				if (badgesInput) {
 					GM_setValue(STORAGE_KEYS.showBadges, badgesInput.checked);
 				}
 
-				this.setStatus("Settings saved!", "ok");
-				if (this.onSettingsSaved) {
-					this.onSettingsSaved();
-				}
-				setTimeout(() => {
-					this.switchTab("crimes");
-				}, 600);
+				this.setStatus("Settings saved", "ok");
+				this.onSettingsSaved?.();
 			});
 	}
 }

@@ -1,14 +1,15 @@
 import { apiClient } from "../api";
 import {
-	calculateGymGainBreakdown,
 	DEFAULT_SETTINGS,
 	formatCompactNumber,
 	formatDecimal,
 	GYM_DEFINITIONS,
 	getTargetRatios,
+	isDocumentVisible,
 	POLLING_CONFIG,
 	STORAGE_KEYS,
 } from "../config";
+import { analyseStatPriority } from "../lib/stat-priority";
 import type {
 	BattlestatsAnalyticsResponse,
 	EfficiencyDataPayload,
@@ -23,6 +24,7 @@ export class GymDomObserver {
 	private observer: MutationObserver | null = null;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+	private visibilityHandler: (() => void) | null = null;
 	private currentPollInterval: number = POLLING_CONFIG.SLOW_INTERVAL_MS;
 	private efficiencyData: EfficiencyDataPayload | null = null;
 	private analyticsData: BattlestatsAnalyticsResponse | null = null;
@@ -39,6 +41,7 @@ export class GymDomObserver {
 				this.reloadData().catch(() => {});
 			}
 			this.backgroundPollTimer = setInterval(() => {
+				if (!isDocumentVisible()) return;
 				this.reloadData().catch(() => {});
 			}, this.currentPollInterval);
 		}
@@ -53,6 +56,9 @@ export class GymDomObserver {
 		this.scanAndInject();
 
 		this.observer = new MutationObserver(() => {
+			// Torn's rules forbid reading an unfocused page for data, and no badge
+			// on this page is visible while it is in the background.
+			if (!isDocumentVisible()) return;
 			if (this.debounceTimer) clearTimeout(this.debounceTimer);
 			this.debounceTimer = setTimeout(() => {
 				this.scanAndInject();
@@ -66,8 +72,18 @@ export class GymDomObserver {
 		});
 
 		this.backgroundPollTimer = setInterval(() => {
+			if (!isDocumentVisible()) return;
 			this.reloadData().catch(() => {});
 		}, this.currentPollInterval);
+
+		// Coming back to the tab should not wait for the next tick to be correct.
+		this.visibilityHandler = () => {
+			if (!isDocumentVisible()) return;
+			this.reloadData()
+				.then(() => this.scanAndInject())
+				.catch(() => {});
+		};
+		document.addEventListener("visibilitychange", this.visibilityHandler);
 	}
 
 	public stop(): void {
@@ -78,6 +94,10 @@ export class GymDomObserver {
 		if (this.debounceTimer) {
 			clearTimeout(this.debounceTimer);
 			this.debounceTimer = null;
+		}
+		if (this.visibilityHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityHandler);
+			this.visibilityHandler = null;
 		}
 		if (this.backgroundPollTimer) {
 			clearInterval(this.backgroundPollTimer);
@@ -191,63 +211,28 @@ export class GymDomObserver {
 			const totalStats =
 				stats.strength + stats.defense + stats.speed + stats.dexterity;
 			const maxHappy = this.efficiencyData?.maxHappy ?? 5025;
-			const perks = this.efficiencyData?.perks ?? {
-				strength: 1,
-				defense: 1,
-				speed: 1,
-				dexterity: 1,
-			};
 
-			// 3. Calculate gains and priority
-			const statTypes: StatType[] = [
-				"strength",
-				"defense",
-				"speed",
-				"dexterity",
-			];
-			const rows = statTypes.map((st) => {
-				const current = stats[st];
-				const target = totalStats * ratios[st];
-				const diff = current - target;
-				const dots = gymDef[st];
-				const perk = perks[st];
-
-				const breakdown = calculateGymGainBreakdown(
-					st,
-					current,
-					maxHappy,
-					dots,
-					gymDef.energy,
-					perk,
-				);
-
-				return {
-					statType: st,
-					current,
-					target,
-					diff,
-					dots,
-					gainPerE: breakdown.gainPerE,
-					gainPerTrain: breakdown.totalGain,
-				};
+			// 3. Calculate gains and priority with the shared engine, so the badge
+			// here and the Battlestats tab's KPI always name the same stat.
+			const priority = analyseStatPriority({
+				stats,
+				ratios,
+				// Every stat is trained at the gym the player has selected on this page.
+				gyms: {
+					strength: gymDef,
+					defense: gymDef,
+					speed: gymDef,
+					dexterity: gymDef,
+				},
+				fallbackGym: gymDef,
+				maxHappy,
+				perks: this.efficiencyData?.perks,
 			});
 
-			const maxGainPerE = Math.max(...rows.map((r) => r.gainPerE));
-
-			const scored = rows.map((r) => {
-				if (r.current >= r.target) {
-					return { ...r, priorityScore: -1 };
-				}
-				const ratioDeficit = (r.target - r.current) / (r.target || 1);
-				const relativeEfficiency =
-					maxGainPerE > 0 ? r.gainPerE / maxGainPerE : 0;
-				const priorityScore = ratioDeficit * 0.5 + relativeEfficiency * 0.5;
-				return { ...r, priorityScore };
-			});
-
-			const bestStat = [...scored].sort(
-				(a, b) => b.priorityScore - a.priorityScore,
-			)[0]?.statType;
+			const scored = priority.rows;
+			// Null when nothing is behind its target: nothing gets highlighted, rather
+			// than pointing at whichever stat happens to sort first.
+			const bestStat = priority.recommended?.statType ?? null;
 
 			// 4. Inject pills and priority badges into each stat card
 			for (const row of scored) {

@@ -1,4 +1,9 @@
-import { DEFAULT_SETTINGS, POLLING_CONFIG, STORAGE_KEYS } from "./config";
+import {
+	DEFAULT_SETTINGS,
+	isDocumentVisible,
+	POLLING_CONFIG,
+	STORAGE_KEYS,
+} from "./config";
 import { CompanyDomObserver } from "./modules/company-observer";
 import { CrimesDomObserver } from "./modules/crimes-observer";
 import { GymDomObserver } from "./modules/gym-observer";
@@ -57,7 +62,9 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	}
 
 	function updateObserverPollRates(drawerOpen: boolean): void {
-		const active = drawerOpen || isHudCyclingActive();
+		// A backgrounded tab has no visible badge, and Torn's rules forbid reading
+		// an unfocused page for data, so nothing ramps up while it is hidden.
+		const active = isDocumentVisible() && (drawerOpen || isHudCyclingActive());
 		crimesObserver?.setRampedUp(active);
 		gymObserver?.setRampedUp(active);
 		companyObserver?.setRampedUp(active);
@@ -93,16 +100,31 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	);
 
 	if (showBadges) {
-		crimesObserver = new CrimesDomObserver(() => {
+		// An observer that cannot start must not take the panel down with it: a
+		// rejected promise here used to surface as an unhandled rejection while the
+		// rest of the script carried on as if the badges were live.
+		const startObserver = (label: string, start: () => Promise<void>): void => {
+			start().catch((err) => {
+				console.error(
+					`[Blasted's Script] ${label} observer failed to start:`,
+					err,
+				);
+			});
+		};
+
+		const crimes = new CrimesDomObserver(() => {
 			drawer.open("crimes");
 		});
-		crimesObserver.start();
+		crimesObserver = crimes;
+		startObserver("Crimes", () => crimes.start());
 
-		gymObserver = new GymDomObserver();
-		gymObserver.start();
+		const gym = new GymDomObserver();
+		gymObserver = gym;
+		startObserver("Gym", () => gym.start());
 
-		companyObserver = new CompanyDomObserver();
-		companyObserver.start();
+		const company = new CompanyDomObserver();
+		companyObserver = company;
+		startObserver("Company", () => company.start());
 
 		updateObserverPollRates(drawer.isOpen());
 	}
@@ -110,12 +132,14 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	// Periodically evaluate HUD cycling state to ramp down observers when idle
 	setInterval(() => {
 		updateObserverPollRates(drawer.isOpen());
-	}, 10000);
+	}, POLLING_CONFIG.HUD_ACTIVITY_TIMEOUT_MS / 6);
 
-	window.addEventListener("storage", (e) => {
-		if (e.key === POLLING_CONFIG.STORAGE_HUD_CYCLE) {
-			updateObserverPollRates(drawer.isOpen());
-		}
+	// The HUD writes its cycle stamp in this same document, where a `storage`
+	// event never fires — it only fires in *other* documents. Listening for
+	// `visibilitychange` is what actually picks the work back up when the player
+	// returns to the tab.
+	document.addEventListener("visibilitychange", () => {
+		updateObserverPollRates(drawer.isOpen());
 	});
 
 	// 5. Restore open state if persistOpen is enabled

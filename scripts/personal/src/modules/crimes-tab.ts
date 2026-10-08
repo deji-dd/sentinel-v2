@@ -1,11 +1,72 @@
 import { apiClient } from "../api";
-import { formatMoney, formatNumber } from "../config";
+import {
+	escapeHtml,
+	formatMoney,
+	formatNumber,
+	parseDateOnly,
+	STORAGE_KEYS,
+} from "../config";
+
+declare function GM_getValue<T>(key: string, defaultValue?: T): T;
+declare function GM_setValue<T>(key: string, value: T): void;
+
 import type {
 	CrimeAnalyticsResponse,
+	CrimeCategoryAnalytics,
 	CrimeLedgerState,
 	DailyCrimeTimeline,
 } from "../types";
 import { renderSvgChart } from "../ui/svg-chart";
+import {
+	bindSortableHeaders,
+	matchesQuery,
+	nextSortState,
+	type SortAccessors,
+	type SortDirection,
+	type SortState,
+	sortIndicator,
+	sortRows,
+} from "../ui/table-sort";
+
+type CrimeSortKey =
+	| "crimeName"
+	| "count"
+	| "nerve"
+	| "value"
+	| "efficiency"
+	| "percentage";
+
+/** Every column the category table can be ordered by. */
+const CRIME_SORT_KEYS: CrimeSortKey[] = [
+	"crimeName",
+	"count",
+	"nerve",
+	"value",
+	"efficiency",
+	"percentage",
+];
+
+/** Columns that read best largest-first. */
+const CRIME_SORT_DEFAULT: Record<CrimeSortKey, SortDirection> = {
+	crimeName: "asc",
+	count: "desc",
+	nerve: "desc",
+	value: "desc",
+	efficiency: "desc",
+	percentage: "desc",
+};
+
+const CRIME_SORT_ACCESSORS: SortAccessors<
+	CrimeCategoryAnalytics,
+	CrimeSortKey
+> = {
+	crimeName: (row) => row.crimeName,
+	count: (row) => row.count,
+	nerve: (row) => row.nerve,
+	value: (row) => row.value,
+	efficiency: (row) => row.efficiency,
+	percentage: (row) => row.percentage,
+};
 
 export class CrimesTab {
 	private container: HTMLElement;
@@ -13,11 +74,27 @@ export class CrimesTab {
 	private analytics: CrimeAnalyticsResponse | null = null;
 	private currentTimeframe: "7d" | "30d" | "90d" | "all" = "30d";
 	private currentMetricMode: "financials" | "activity" = "financials";
+	private sort: SortState<CrimeSortKey> = {
+		key: "efficiency",
+		direction: "desc",
+	};
+	private filterQuery = "";
 	private onOpenSettings: () => void;
 
 	constructor(container: HTMLElement, onOpenSettings: () => void) {
 		this.container = container;
 		this.onOpenSettings = onOpenSettings;
+		// The selected period is restored on load: without it the cached payload
+		// (of whatever period was last fetched) rendered under a "30D" pill.
+		const stored = GM_getValue<string>(STORAGE_KEYS.crimesTimeframe, "30d");
+		if (
+			stored === "7d" ||
+			stored === "30d" ||
+			stored === "90d" ||
+			stored === "all"
+		) {
+			this.currentTimeframe = stored;
+		}
 	}
 
 	public async init(): Promise<void> {
@@ -27,16 +104,22 @@ export class CrimesTab {
 		await this.refresh();
 	}
 
+	/** Guards against an older, slower response overwriting a newer selection. */
+	private requestSeq = 0;
+
 	public async refresh(): Promise<void> {
+		const seq = ++this.requestSeq;
 		try {
 			const [stateRes, analyticsRes] = await Promise.all([
 				apiClient.getCrimeLedgerState(),
 				apiClient.getCrimeAnalytics(this.currentTimeframe),
 			]);
+			if (seq !== this.requestSeq) return;
 			this.state = stateRes;
 			this.analytics = analyticsRes;
 			this.render();
 		} catch (err) {
+			if (seq !== this.requestSeq) return;
 			console.error("[Blasted's Script] Error refreshing crime data:", err);
 			this.renderError(err instanceof Error ? err.message : String(err));
 		}
@@ -44,7 +127,8 @@ export class CrimesTab {
 
 	public setTimeframe(tf: "7d" | "30d" | "90d" | "all"): void {
 		this.currentTimeframe = tf;
-		this.refresh();
+		GM_setValue(STORAGE_KEYS.crimesTimeframe, tf);
+		void this.refresh();
 	}
 
 	public setMetricMode(mode: "financials" | "activity"): void {
@@ -160,7 +244,7 @@ export class CrimesTab {
 				</div>
 
 				<!-- Scrubber Status Strip -->
-				<div id="chart-scrub-strip" class="chart-scrub-strip">
+				<div id="chart-scrub-strip" class="chart-scrub-strip" role="status" aria-live="polite">
 					<span>Scrub chart to view daily breakdown</span>
 				</div>
 
@@ -172,21 +256,27 @@ export class CrimesTab {
 			<div class="table-card">
 				<div class="table-header-title">
 					<span>Crime Category Rankings</span>
-					<span style="font-size: 11px; font-weight: normal; color: #94a3b8;">Sorted by Efficiency ($/N)</span>
+					<span id="crime-table-count" class="table-header-meta">${escapeHtml(this.tableSummary())}</span>
+				</div>
+				<div class="table-filter-row">
+					<label class="table-filter">
+						<span class="sr-only">Filter crimes by name</span>
+						<input id="crime-filter" type="search" class="input-text" placeholder="Filter by crime name…" value="${escapeHtml(this.filterQuery)}" />
+					</label>
 				</div>
 				<div class="table-wrap">
-					<table>
+					<table class="sortable-table">
 						<thead>
 							<tr>
-								<th class="text-left">Crime</th>
-								<th class="text-right">Attempts</th>
-								<th class="text-right">Nerve</th>
-								<th class="text-right">Loot Value</th>
-								<th class="text-right">ROI ($/N)</th>
-								<th class="text-right">Share</th>
+								${this.sortableHeader("crimeName", "Crime", "text-left")}
+								${this.sortableHeader("count", "Attempts", "text-right")}
+								${this.sortableHeader("nerve", "Nerve", "text-right")}
+								${this.sortableHeader("value", "Loot Value", "text-right")}
+								${this.sortableHeader("efficiency", "ROI ($/N)", "text-right")}
+								${this.sortableHeader("percentage", "Share", "text-right")}
 							</tr>
 						</thead>
-						<tbody>
+						<tbody id="crime-category-rows">
 							${this.renderCategoryRows()}
 						</tbody>
 					</table>
@@ -195,24 +285,131 @@ export class CrimesTab {
 		`;
 
 		this.attachEventListeners();
+		this.attachTableEvents();
 		this.renderChartOnly();
 	}
 
+	/** A column header that sorts the table, reachable by mouse and keyboard. */
+	private sortableHeader(
+		key: CrimeSortKey,
+		label: string,
+		align: string,
+	): string {
+		const active = this.sort.key === key;
+		const ariaSort = active
+			? this.sort.direction === "asc"
+				? "ascending"
+				: "descending"
+			: "none";
+		return `
+			<th class="${align} sortable ${active ? "sorted" : ""}" data-sort="${key}"
+				tabindex="0" role="button" aria-sort="${ariaSort}"
+				title="Sort by ${escapeHtml(label)}">
+				${escapeHtml(label)} ${sortIndicator(active, this.sort.direction)}
+			</th>
+		`;
+	}
+
+	private attachTableEvents(): void {
+		bindSortableHeaders(this.container, CRIME_SORT_KEYS, (key) => {
+			this.sort = nextSortState(
+				this.sort,
+				key as CrimeSortKey,
+				CRIME_SORT_DEFAULT[key as CrimeSortKey],
+			);
+			GM_setValue(STORAGE_KEYS.crimesSort, this.sort);
+			this.rerenderCategoryTable();
+		});
+
+		const filterInput =
+			this.container.querySelector<HTMLInputElement>("#crime-filter");
+		filterInput?.addEventListener("input", () => {
+			this.filterQuery = filterInput.value;
+			// Only the rows and the count change, so the input keeps focus and its
+			// caret while the list narrows under it.
+			this.rerenderCategoryTable();
+		});
+	}
+
+	private rerenderCategoryTable(): void {
+		const container = this.container.querySelector<HTMLElement>(
+			"#crime-category-rows",
+		);
+		if (container) container.innerHTML = this.renderCategoryRows();
+
+		const countEl =
+			this.container.querySelector<HTMLElement>("#crime-table-count");
+		if (countEl) countEl.textContent = this.tableSummary();
+
+		// Header state: arrows and aria-sort, without re-rendering the headers.
+		this.container
+			.querySelectorAll<HTMLElement>("th[data-sort]")
+			.forEach((header) => {
+				const key = header.getAttribute("data-sort") as CrimeSortKey | null;
+				if (!key) return;
+				const active = this.sort.key === key;
+				header.classList.toggle("sorted", active);
+				header.setAttribute(
+					"aria-sort",
+					active
+						? this.sort.direction === "asc"
+							? "ascending"
+							: "descending"
+						: "none",
+				);
+				const indicator = header.querySelector(".sort-hint, .sort-active");
+				if (indicator) {
+					indicator.outerHTML = sortIndicator(active, this.sort.direction);
+				}
+			});
+	}
+
+	private tableSummary(): string {
+		const total = this.categoryRows().length;
+		const shown = this.sortedCategoryRows().length;
+		const column =
+			this.sort.key === "crimeName"
+				? "crime name"
+				: this.sort.key === "count"
+					? "attempts"
+					: this.sort.key === "nerve"
+						? "nerve"
+						: this.sort.key === "value"
+							? "loot value"
+							: this.sort.key === "percentage"
+								? "share"
+								: "ROI ($/N)";
+		const filtered = shown !== total ? `${shown} of ${total}` : `${total}`;
+		return `${filtered} · sorted by ${column} ${this.sort.direction === "asc" ? "↑" : "↓"}`;
+	}
+
+	private categoryRows(): CrimeCategoryAnalytics[] {
+		return this.analytics?.categories ?? this.state?.allTimeCategories ?? [];
+	}
+
+	private sortedCategoryRows(): CrimeCategoryAnalytics[] {
+		const filtered = this.categoryRows().filter((row) =>
+			matchesQuery(row.crimeName, this.filterQuery),
+		);
+		return sortRows(filtered, this.sort, CRIME_SORT_ACCESSORS);
+	}
+
 	private renderCategoryRows(): string {
-		const categories =
-			this.analytics?.categories ?? this.state?.allTimeCategories ?? [];
+		const categories = this.categoryRows();
 		if (categories.length === 0) {
-			return `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 20px;">No categories classified yet.</td></tr>`;
+			return `<tr><td colspan="6" style="text-align: center; color: #94a3b8; padding: 20px;">No categories classified yet.</td></tr>`;
 		}
 
-		// Sort by efficiency descending
-		const sorted = [...categories].sort((a, b) => b.efficiency - a.efficiency);
+		const sorted = this.sortedCategoryRows();
+		if (sorted.length === 0) {
+			return `<tr><td colspan="6" style="text-align: center; color: #94a3b8; padding: 20px;">No crime matches “${escapeHtml(this.filterQuery.trim())}”.</td></tr>`;
+		}
 
 		return sorted
 			.map((cat) => {
 				return `
 					<tr>
-						<td class="text-left" style="font-weight: 600; color: #f1f5f9;">${cat.crimeName}</td>
+						<td class="text-left" style="font-weight: 600; color: #f1f5f9;">${escapeHtml(cat.crimeName)}</td>
 						<td class="text-right">${formatNumber(cat.count)}</td>
 						<td class="text-right" style="color: #fbbf24;">${formatNumber(cat.nerve)}</td>
 						<td class="text-right" style="color: #38bdf8;">${formatMoney(cat.value)}</td>
@@ -247,7 +444,7 @@ export class CrimesTab {
 					return;
 				}
 
-				const dateObj = new Date(item.date);
+				const dateObj = parseDateOnly(item.date);
 				const dateFormatted = !Number.isNaN(dateObj.getTime())
 					? dateObj.toLocaleDateString("en-US", {
 							month: "short",

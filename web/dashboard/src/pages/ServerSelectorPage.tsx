@@ -109,12 +109,8 @@ const SERVER_TYPE_CONFIGS: ServerTypeMeta[] = [
 		title: "Eliminations Server",
 		badgeClass: "bg-rose-500/10 text-rose-400 border-rose-500/30",
 		icon: Trophy,
-		actionLabel: "Open Elims",
-		getDestination: (guildId) =>
-			window.location.hostname.includes("blasted-labs.tech")
-				? "https://elims.blasted-labs.tech"
-				: `/guilds/${guildId}?type=elims`,
-		isExternal: true,
+		actionLabel: "Open Dashboard",
+		getDestination: (guildId) => `/guilds/${guildId}?type=elims`,
 	},
 	{
 		type: "owner",
@@ -529,6 +525,17 @@ export default function ServerSelectorPage() {
 															className="h-8 px-3 text-xs opacity-60 text-amber-500 border-amber-500/30 cursor-not-allowed"
 														>
 															<span>Role Required</span>
+														</Button>
+													) : config.type === "elims" && isOwner ? (
+														<Button
+															size="sm"
+															onClick={() =>
+																navigate("/guilds/elims/setup?type=elims")
+															}
+															className="h-8 px-3 gap-1.5 text-xs font-medium cursor-pointer"
+														>
+															<span>Setup Elims</span>
+															<ArrowRight className="size-3.5" />
 														</Button>
 													) : (
 														<Badge

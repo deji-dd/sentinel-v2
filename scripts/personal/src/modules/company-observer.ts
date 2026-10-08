@@ -1,5 +1,5 @@
 import { apiClient } from "../api";
-import { POLLING_CONFIG } from "../config";
+import { isDocumentVisible, POLLING_CONFIG } from "../config";
 import type { CompanyEmployee, CompanyStateResponse } from "../types";
 
 export class CompanyDomObserver {
@@ -7,6 +7,7 @@ export class CompanyDomObserver {
 	private observer: MutationObserver | null = null;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+	private visibilityHandler: (() => void) | null = null;
 	private currentPollInterval: number = POLLING_CONFIG.SLOW_INTERVAL_MS;
 
 	public setRampedUp(active: boolean): void {
@@ -35,6 +36,9 @@ export class CompanyDomObserver {
 		this.scanAndInject();
 
 		this.observer = new MutationObserver(() => {
+			// Nothing here is needed while the page is in the background, and Torn's
+			// rules forbid reading an unfocused page for data.
+			if (!isDocumentVisible()) return;
 			if (this.debounceTimer) clearTimeout(this.debounceTimer);
 			this.debounceTimer = setTimeout(() => {
 				this.scanAndInject();
@@ -47,8 +51,18 @@ export class CompanyDomObserver {
 		});
 
 		this.backgroundPollTimer = setInterval(() => {
+			if (!isDocumentVisible()) return;
 			this.reloadData().catch(() => {});
 		}, this.currentPollInterval);
+
+		// Coming back to the tab should not wait for the next tick to be correct.
+		this.visibilityHandler = () => {
+			if (!isDocumentVisible()) return;
+			this.reloadData()
+				.then(() => this.scanAndInject())
+				.catch(() => {});
+		};
+		document.addEventListener("visibilitychange", this.visibilityHandler);
 	}
 
 	public stop(): void {
@@ -59,6 +73,10 @@ export class CompanyDomObserver {
 		if (this.debounceTimer) {
 			clearTimeout(this.debounceTimer);
 			this.debounceTimer = null;
+		}
+		if (this.visibilityHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityHandler);
+			this.visibilityHandler = null;
 		}
 		if (this.backgroundPollTimer) {
 			clearInterval(this.backgroundPollTimer);
@@ -85,7 +103,9 @@ export class CompanyDomObserver {
 
 	private populateMap(state: CompanyStateResponse): void {
 		this.employeeMap.clear();
-		for (const emp of state.employees) {
+		// A cached payload from an older build may carry no employee list at all;
+		// iterating it threw from inside the catch that was meant to be the safe path.
+		for (const emp of state.employees ?? []) {
 			this.employeeMap.set(emp.id, emp);
 		}
 	}

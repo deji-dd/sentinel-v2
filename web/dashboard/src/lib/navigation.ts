@@ -1,7 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import {
+	BarChart2,
+	Gift,
 	Hash,
 	MapPin,
+	Package,
 	Settings,
 	ShieldAlert,
 	Smile,
@@ -9,6 +12,7 @@ import {
 	TrendingUp,
 	UserCheck,
 	UserPlus,
+	Users,
 } from "lucide-react";
 
 export interface NavItem {
@@ -33,6 +37,7 @@ export interface NavContext {
 	isMerc: boolean;
 	isFaction: boolean;
 	isAlliance: boolean;
+	isElims: boolean;
 }
 
 /** Build the `#/guilds/:id/...` href for a nav item, preserving the type param. */
@@ -56,7 +61,53 @@ export function getNavSections({
 	isMerc,
 	isFaction,
 	isAlliance,
+	isElims,
 }: NavContext): NavSection[] {
+	if (isElims) {
+		return [
+			{
+				title: "Elims Administration",
+				items: [
+					{
+						label: "Guild Configuration",
+						subPath: "",
+						icon: Settings,
+						accent: "text-primary",
+					},
+				],
+			},
+			{
+				title: "Tournament Operations",
+				items: [
+					{
+						label: "Elims Report",
+						subPath: "/elims-report",
+						icon: BarChart2,
+						accent: "text-rose-400",
+					},
+					{
+						label: "Team Breakdown",
+						subPath: "/team-breakdown",
+						icon: Users,
+						accent: "text-info",
+					},
+					{
+						label: "Item Requests",
+						subPath: "/item-requests",
+						icon: Package,
+						accent: "text-warning",
+					},
+					{
+						label: "Giveaways",
+						subPath: "/giveaways",
+						icon: Gift,
+						accent: "text-success",
+					},
+				],
+			},
+		];
+	}
+
 	const featureItems: NavItem[] = isMerc
 		? [
 				{
@@ -170,6 +221,8 @@ export function getPageLabel(
 	sections: NavSection[],
 ): string | undefined {
 	const normalized = subPath === "" ? "/" : subPath;
+	if (normalized === "/guild-config") return "Guild Configuration";
+	if (normalized === "/setup") return "Guild Setup";
 	for (const section of sections) {
 		for (const item of section.items) {
 			if (item.subPath === "" && normalized === "/") return item.label;

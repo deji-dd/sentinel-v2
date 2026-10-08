@@ -2,7 +2,9 @@ import { describe, expect, it } from "bun:test";
 import type { CompanyDirectives } from "../../schemas/src/company";
 import {
 	assessCapacityRegime,
+	type CapacityRegime,
 	deriveRosterBaseline,
+	INFINITE_DAYS_OF_SALES,
 	type OilRigHistoryRecord,
 	quotaFromBaseline,
 } from "../src/oil-rig";
@@ -25,6 +27,7 @@ import {
 	buildAnalystPrompt,
 	clipNotes,
 	DISCORD_MESSAGE_LIMIT,
+	renderCompanyDetails,
 	renderDeterministicBriefing,
 	splitDiscordMessages,
 	validateAnalystNotes,
@@ -393,8 +396,6 @@ describe("Capacity regime hysteresis", () => {
 		const oneDay = assessCapacityRegime({
 			history: filling(1, 90, 290_000, 280_000),
 			fillPct: 90,
-			isFillingUp: true,
-			warehouseCritical: false,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(oneDay.regime).toBe("balanced");
@@ -402,8 +403,6 @@ describe("Capacity regime hysteresis", () => {
 		const twoDays = assessCapacityRegime({
 			history: filling(3, 90, 290_000, 280_000),
 			fillPct: 90,
-			isFillingUp: true,
-			warehouseCritical: false,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(twoDays.regime).toBe("extraction_bound");
@@ -414,8 +413,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: [],
 			fillPct: 98,
-			isFillingUp: false,
-			warehouseCritical: true,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(regime.regime).toBe("extraction_bound");
@@ -429,8 +426,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: filling(3, 79, 293_942, 318_000),
 			fillPct: 79,
-			isFillingUp: false,
-			warehouseCritical: false,
 			previousRegime: "extraction_bound",
 			previousSince: FIXED_NOW - 10 * DAY,
 			asOfSeconds: FIXED_NOW,
@@ -445,8 +440,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: filling(5, 70, 240_000, 318_000),
 			fillPct: 70,
-			isFillingUp: false,
-			warehouseCritical: false,
 			previousRegime: "extraction_bound",
 			asOfSeconds: FIXED_NOW,
 		});
@@ -458,8 +451,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: filling(5, 55, 240_000, 318_000),
 			fillPct: 55,
-			isFillingUp: false,
-			warehouseCritical: false,
 			previousRegime: "extraction_bound",
 			previousSince: FIXED_NOW - 20 * DAY,
 			asOfSeconds: FIXED_NOW,
@@ -477,8 +468,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: filling(5, 46, 293_942, 283_942),
 			fillPct: 46,
-			isFillingUp: true,
-			warehouseCritical: false,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(regime.regime).toBe("balanced");
@@ -489,8 +478,6 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: filling(5, 82, 293_942, 283_942),
 			fillPct: 82,
-			isFillingUp: true,
-			warehouseCritical: false,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(regime.regime).toBe("extraction_bound");
@@ -513,12 +500,51 @@ describe("Capacity regime hysteresis", () => {
 		const regime = assessCapacityRegime({
 			history: unmeasured,
 			fillPct: 80,
-			isFillingUp: false,
-			warehouseCritical: false,
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(regime.regime).toBe("balanced");
 		expect(regime.fillingDays).toBe(0);
+	});
+
+	it("cannot be entered by one day's reading, which is why it takes no single-day flag", () => {
+		// `assessCapacityRegime` accepts no `isFillingUp`: entry is decided from
+		// consecutive measured days in the history, and a single day's flag could only
+		// ever be a weaker signal than the rule it would bypass. This pins the rule
+		// from the outside - a run of draining days followed by ONE filling day does
+		// not enter, however emphatic that day is.
+		const popped = [
+			...filling(5, 90, 240_000, 300_000),
+			record({
+				timestamp: FIXED_NOW,
+				producedMeasured: true,
+				dailyProduced: 400_000,
+				stock: {
+					barrelPrice: 180,
+					inStock: Math.round(0.9 * 750_000),
+					soldAmount: 300_000,
+					fillPct: 90,
+				},
+			}),
+		];
+		const regime = assessCapacityRegime({
+			history: popped,
+			fillPct: 90,
+			asOfSeconds: FIXED_NOW,
+		});
+		// Storage IS above the pressure threshold and the newest day fills, yet one
+		// day is not a trend.
+		expect(regime.regime).toBe("balanced");
+		expect(regime.fillingDays).toBeGreaterThan(0);
+	});
+
+	it("still enters once the same fill is sustained, with no flag supplied", () => {
+		const sustained = assessCapacityRegime({
+			history: filling(3, 90, 340_000, 300_000),
+			fillPct: 90,
+			asOfSeconds: FIXED_NOW,
+		});
+		expect(sustained.regime).toBe("extraction_bound");
+		expect(sustained.reason).toContain("entered");
 	});
 });
 
@@ -1687,5 +1713,415 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		expect(analysis.regime.reason).not.toContain("0 consecutive");
 		expect(analysis.regime.reason).toContain("held");
 		expect(analysis.regime.reason).toContain("66.4%");
+	});
+
+	/**
+	 * A held extraction-bound regime on a rig that is FILLING with room left: the
+	 * newest measured day extracts 62,138 bbl more than it sells, at 65% fill.
+	 *
+	 * This is the shape that produced the false cause. The regime is held (so the
+	 * capacity section renders its cost line), nothing is being discarded (the
+	 * warehouse is nowhere near its cap), and the old renderer read "no sized
+	 * discard" as "storage is pinned at the cap" and asserted a present loss at
+	 * 65% fill.
+	 */
+	const fillingWithRoom = (cappedEvidence: boolean) => {
+		const days = [45, 52, 58, 62, 64].map((fillPct, i) =>
+			record({
+				timestamp: FIXED_NOW - (7 - i) * DAY,
+				producedMeasured: i !== 0,
+				dailyProduced: 323_942,
+				stock: {
+					barrelPrice: 176,
+					inStock: Math.round((fillPct / 100) * 750_000),
+					soldAmount: 283_942,
+					fillPct,
+				},
+			}),
+		);
+		if (cappedEvidence) {
+			// A day that WAS at the cap and still out-produced sales, which is the only
+			// way `discardedCappedLowerBound` becomes non-zero.
+			days.push(
+				record({
+					timestamp: FIXED_NOW - 2 * DAY,
+					producedMeasured: true,
+					dailyProduced: 363_942,
+					stock: {
+						barrelPrice: 176,
+						inStock: 750_000,
+						soldAmount: 283_942,
+						fillPct: 100,
+					},
+				}),
+			);
+		}
+		// The newest measured day: extraction beats sales, so storage FILLS.
+		days.push(
+			record({
+				timestamp: FIXED_NOW,
+				producedMeasured: true,
+				dailyProduced: 346_080,
+				stock: {
+					barrelPrice: 176,
+					inStock: Math.round(0.65 * 750_000),
+					soldAmount: 283_942,
+					fillPct: 65,
+				},
+			}),
+		);
+		return days;
+	};
+
+	const fillingWithRoomAnalysis = (cappedEvidence: boolean) =>
+		analyzeOilRig({
+			snapshot: snapshot(65, 176),
+			history: fillingWithRoom(cappedEvidence),
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+		});
+
+	it("does not claim the cap is binding when the warehouse is at 65% and filling", () => {
+		const analysis = fillingWithRoomAnalysis(false);
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		// The preconditions that make the cost line render at all.
+		expect(analysis.regime.regime).toBe("extraction_bound");
+		expect(analysis.stock.isFillingUp).toBe(true);
+		expect(analysis.stock.warehouseCritical).toBe(false);
+		expect(analysis.directives.capacityRebalance.extractionBound).toBe(true);
+
+		expect(advice).toContain("Cannot drain");
+		// The defect: this said "storage is pinned at the cap" at 65% fill.
+		expect(advice).not.toContain("pinned at the cap");
+		expect(advice).not.toContain("Losing");
+		expect(advice).toContain("Nothing lost yet");
+	});
+
+	it("does not report a historical capped-day surplus as a present loss", () => {
+		const analysis = fillingWithRoomAnalysis(true);
+		const plan = analysis.directives.capacityRebalance;
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		// The evidence exists - days at the cap really did out-produce sales - but the
+		// cap is not binding now, so it is context, not a current loss.
+		expect(plan.discardedCappedLowerBound).toBeGreaterThan(0);
+		expect(plan.discardedBarrelsPerDay).toBe(0);
+		expect(analysis.stock.warehouseCritical).toBe(false);
+
+		expect(advice).not.toContain("Losing");
+		expect(advice).toContain("Nothing lost yet");
+	});
+
+	it("still says the loss cannot be sized when the cap really is binding", () => {
+		// Every recorded day at the cap with the delta clamped to zero: extraction
+		// matches sales, so nothing is measurable AND nothing is sized.
+		const allCapped = Array.from({ length: 6 }, (_, i) =>
+			record({
+				timestamp: FIXED_NOW - (6 - i) * DAY,
+				producedMeasured: i !== 0,
+				dailyProduced: 283_942,
+				stock: {
+					barrelPrice: 176,
+					inStock: 750_000,
+					soldAmount: 283_942,
+					fillPct: 100,
+				},
+			}),
+		);
+		const analysis = analyzeOilRig({
+			snapshot: {
+				...snapshot(100, 176),
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 176,
+						in_stock: 750_000,
+						sold_amount: 283_942,
+						sold_worth: 49_973_792,
+					},
+				],
+			},
+			history: allCapped,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		expect(analysis.stock.warehouseCritical).toBe(true);
+		expect(analysis.directives.capacityRebalance.discardedBarrelsPerDay).toBe(
+			0,
+		);
+		expect(advice).toContain("pinned at the cap");
+		expect(advice).not.toContain("Nothing lost yet");
+	});
+});
+
+/**
+ * A median is a RATE, not a direction.
+ *
+ * REGRESSION, reproduced from production on 2026-10-08. The last three measured
+ * days of extraction were 315,177 / 321,560 / 395,024 bbl/day against sales of
+ * 408,372 / 393,305 / 332,886, so storage drained, drained, then GAINED 62,138
+ * bbl. The median of that window is 321,560, which is below the latest day's
+ * sales of 332,886 - so the drain model read the reversal backwards and the
+ * brief reported "draining 11,326 bbl/day, 43.1 days of sales left" from the very
+ * tick that measured the warehouse filling.
+ *
+ * The numbers below are the real ones, so the test fails if the smoothing window
+ * is ever allowed to set the direction again.
+ */
+describe("Extraction direction comes from the newest measured day", () => {
+	const PROD_SNAPSHOT: CompanySnapshot = {
+		profile: {
+			id: 90288,
+			name: "Succession Oil",
+			rating: 7,
+			funds: 400_000_000,
+			efficiency: 92,
+			environment: 90,
+			popularity: 38,
+			income: { daily: 59_586_594, weekly: 500_000_000 },
+			customers: { daily: 6, weekly: 42 },
+			employees: { hired: 19, capacity: 21 },
+			upgrades: { storage_capacity: 750_000 },
+			advertisement_budget: 5_000_000,
+		},
+		stock: [
+			{
+				name: "Crude Oil",
+				price: 179,
+				in_stock: 488_033,
+				sold_amount: 332_886,
+				sold_worth: 59_586_594,
+			},
+		],
+		employees: [],
+	};
+
+	/** The three recorded days before the reversal, plus the reversal day itself. */
+	const drainingDay = record({
+		timestamp: FIXED_NOW - 3 * DAY,
+		producedMeasured: true,
+		dailyProduced: 315_177,
+		stock: {
+			barrelPrice: 179,
+			inStock: 497_640,
+			soldAmount: 408_372,
+			fillPct: 66.4,
+		},
+	});
+	const lastDrainingDay = record({
+		timestamp: FIXED_NOW - 2 * DAY,
+		producedMeasured: true,
+		dailyProduced: 321_560,
+		stock: {
+			barrelPrice: 179,
+			inStock: 425_895,
+			soldAmount: 393_305,
+			fillPct: 56.8,
+		},
+	});
+	/** The day storage reversed: 332,886 sold but the warehouse GAINED 62,138. */
+	const reversalDay = record({
+		timestamp: FIXED_NOW - DAY,
+		producedMeasured: true,
+		dailyProduced: 395_024,
+		stock: {
+			barrelPrice: 179,
+			inStock: 488_033,
+			soldAmount: 332_886,
+			fillPct: 65.1,
+		},
+	});
+	const history: OilRigHistoryRecord[] = [
+		drainingDay,
+		lastDrainingDay,
+		reversalDay,
+	];
+
+	const analyze = () =>
+		analyzeOilRig({
+			snapshot: PROD_SNAPSHOT,
+			history,
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+		});
+
+	it("reads the reversal as filling, from the latest day's own delta", () => {
+		const analysis = analyze();
+
+		// The median is still reported - it is the extraction RATE, and it is what
+		// the discard and roster engines size against.
+		expect(analysis.stock.production.dailyProduced).toBe(321_560);
+		expect(analysis.stock.production.samples).toBe(3);
+		expect(analysis.stock.production.confidence).toBe("high");
+		// The newest measured day is carried separately, and it is the one the
+		// direction verdict is taken from.
+		expect(analysis.stock.production.latestMeasured).toBe(395_024);
+
+		expect(analysis.stock.isFillingUp).toBe(true);
+		expect(analysis.stock.netFillPerDay).toBe(62_138);
+		expect(analysis.stock.netDrainPerDay).toBeUndefined();
+		// 43.1 "days of sales left" was the old, backwards reading.
+		expect(analysis.stock.daysOfSales).toBe(INFINITE_DAYS_OF_SALES);
+	});
+
+	it("does not print a falling net beside its own rising stock figure", () => {
+		const analysis = analyze();
+		const briefing = renderDeterministicBriefing(analysis);
+		const details = renderCompanyDetails(analysis);
+
+		// Any net the brief states must have the sign of the measured stock change.
+		for (const text of [briefing.advice, briefing.actionText, details]) {
+			expect(text).not.toContain("storage is falling");
+			expect(text).not.toContain("draining");
+		}
+		// The day the direction was taken from is named in the details block.
+		expect(details).toContain("latest day 395,024");
+	});
+
+	it("quotes the same day in the flow sentence as in the net it reports", () => {
+		// Holding an extraction-bound regime makes the capacity flow sentence
+		// render. It used to quote the median there beside a net taken from the
+		// newest day: "sales 332,886 vs extraction 321,560 bbl/day, so storage is
+		// falling 11,326 bbl/day" - two different days in one sentence, and the
+		// wrong sign for the day it was describing.
+		const heldRegime: CapacityRegime = {
+			regime: "extraction_bound",
+			held: true,
+			transition: "held",
+			dwellDays: 2,
+			fillingDays: 2,
+			drainingDays: 1,
+			since: FIXED_NOW - 2 * DAY,
+			reason: "held",
+			shortReason: "held",
+		};
+		const analysis = analyzeOilRig({
+			snapshot: PROD_SNAPSHOT,
+			history,
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+		});
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		expect(analysis.stock.production.dailyProduced).toBe(321_560);
+		expect(advice).toContain("extraction 395,024 vs sales 332,886");
+		expect(advice).not.toContain("321,560 vs sales");
+		expect(advice).not.toContain("Draining");
+	});
+
+	it("states each telemetry metric as its own labelled field", () => {
+		const details = renderCompanyDetails(analyze(), {
+			efficiency: 92,
+			environment: 90,
+			popularity: 38,
+			employees: { hired: 19, capacity: 21 },
+		});
+		const lines = details.split("\n");
+
+		// The old format packed four metrics into one line behind "·" separators -
+		// "Daily: revenue A · wages B · ads C · profit D" - so a figure could only
+		// be found by counting separators. One metric per labelled field now.
+		expect(lines.every((line) => /^• \*\*[^*]+:\*\* .+$/.test(line))).toBe(
+			true,
+		);
+		expect(lines.length).toBe(13);
+
+		expect(details).toContain("• **Daily revenue:** $40,000,000");
+		expect(details).toContain("• **Daily wages:** $20,000,000");
+		expect(details).toContain("• **Daily ads:** $3,000,000");
+		expect(details).toContain("• **Daily profit:** +$18,000,000");
+		expect(details).toContain("• **Stock:** 488,033/750,000 (65.1%)");
+		expect(details).toContain("• **Barrels sold:** 332,886 bbl/day");
+		expect(details).toContain("• **Barrel price:** $179/barrel");
+		expect(details).toContain("• **Ad budget:** $5,000,000/day");
+		expect(details).toContain("• **Efficiency:** 92%");
+		expect(details).toContain("• **Environment:** 90%");
+		expect(details).toContain("• **Popularity:** 38%");
+		expect(details).toContain("• **Staff:** 19/21");
+
+		// The recorded ad spend and the live ad setting are equal here but come from
+		// different sources, so they must stay separately named.
+		expect(details).toContain("Daily ads");
+		expect(details).toContain("Ad budget");
+	});
+
+	it("labels the smoothed figure so it cannot pass for the day's extraction", () => {
+		const analysis = analyze();
+		const details = renderCompanyDetails(analysis);
+
+		// The old line read "produced 321,560 bbl/day (high confidence)", which
+		// looks like today's measurement and contradicts the stock level beside it.
+		expect(details).toContain(
+			"• **Barrels produced:** 321,560 bbl/day (3-day median, high confidence · latest day 395,024)",
+		);
+
+		// The analyst prompt puts the day's own figure under the day's own header.
+		const prompt = buildAnalystPrompt({
+			analysis,
+			history,
+			actionText: "",
+		}).prompt;
+		const dayLine = prompt
+			.split("\n")
+			.find((line) => line.includes("Barrels sold"));
+		expect(dayLine).toBeDefined();
+		expect(dayLine).toContain("extraction on this day 395,024 bbl/day");
+		expect(dayLine).toContain("3-day median 321,560 bbl/day");
+		// And the authoritative summary states both, so the model cannot cite the
+		// median as the day's output.
+		expect(analysis.stock.production.summary).toContain(
+			"The most recent measured day was 395,024 bbl/day.",
+		);
+	});
+
+	it("still reads a genuine drain as draining", () => {
+		// The day before the reversal: sales 393,305 against extraction 321,560.
+		const draining = analyzeOilRig({
+			snapshot: {
+				...PROD_SNAPSHOT,
+				stock: [
+					{
+						name: "Crude Oil",
+						price: 179,
+						in_stock: 425_895,
+						sold_amount: 393_305,
+						sold_worth: 70_401_595,
+					},
+				],
+			},
+			history: [drainingDay, lastDrainingDay],
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+		});
+		expect(draining.stock.isFillingUp).toBe(false);
+		expect(draining.stock.netDrainPerDay).toBe(71_745);
+		expect(renderCompanyDetails(draining)).toContain("latest day 321,560");
+	});
+
+	it("falls back to sales-days when extraction is unmeasured", () => {
+		// One record is not a pair, so nothing is measured and no direction may be
+		// asserted - the fix must not turn "unknown" into "filling". The loader
+		// flags such a row explicitly, exactly as this does.
+		const unmeasured = analyzeOilRig({
+			snapshot: PROD_SNAPSHOT,
+			history: [{ ...reversalDay, producedMeasured: false }],
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+		});
+		expect(unmeasured.stock.production.latestMeasured).toBeUndefined();
+		expect(unmeasured.stock.production.dailyProduced).toBeUndefined();
+		expect(unmeasured.stock.isFillingUp).toBe(false);
+		expect(unmeasured.stock.netFillPerDay).toBeUndefined();
+		expect(unmeasured.stock.daysOfSales).toBe(1.5);
+		expect(renderCompanyDetails(unmeasured)).toContain(
+			"• **Barrels produced:** unmeasurable",
+		);
 	});
 });

@@ -7,6 +7,7 @@ import {
 	analyzeStockAndPricing,
 	assessCapacityRegime,
 	buildBottleneckQuotas,
+	type CapacityRegime,
 	calcRoleFit,
 	calcStatScore,
 	deriveRosterBaseline,
@@ -1104,6 +1105,35 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 		dailyIncome: 49_973_792,
 	});
 
+	/**
+	 * Regimes the plan is given rather than left to infer. `planCapacityRebalance`
+	 * requires one, because its old empty-history fallback could report `balanced`
+	 * for a rig that was filling, contradicting the plan's own `extractionBound`.
+	 */
+	const boundRegime: CapacityRegime = {
+		regime: "extraction_bound",
+		held: false,
+		transition: "entered",
+		dwellDays: 2,
+		fillingDays: 2,
+		drainingDays: 0,
+		since: 1_790_705_443,
+		reason:
+			"storage at 100%, where output above the sales rate cannot be stored",
+		shortReason: "storage at 100%",
+	};
+	const balancedRegime: CapacityRegime = {
+		regime: "balanced",
+		held: false,
+		transition: "none",
+		dwellDays: 0,
+		fillingDays: 0,
+		drainingDays: 0,
+		since: 1_790_705_443,
+		reason: "extraction and sell-through balanced",
+		shortReason: "extraction and sell-through balanced",
+	};
+
 	it("moves seats from extraction into sell-through without changing headcount", () => {
 		const base = getOptimalRoleQuotas(19);
 		expect(base.Driller).toBe(6);
@@ -1151,12 +1181,16 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 	});
 
 	it("produces a coherent plan with a rebalance and a hire action", () => {
+		// The regime is a premise of this test, not its subject: the plan takes it as
+		// input now rather than inferring one, so the fixture states it outright. The
+		// engine's own entry rules are covered by the regime tests.
 		const plan = planCapacityRebalance({
 			staffCount: 19,
 			stock: fullWarehouseStock,
 			barrelPrice: 176,
 			openSeats: 2,
 			discardedBarrelsPerDay: 94_517,
+			regime: boundRegime,
 		});
 
 		expect(plan.extractionBound).toBe(true);
@@ -1182,10 +1216,53 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 			stock: healthy,
 			barrelPrice: 181,
 			openSeats: 2,
+			regime: balancedRegime,
 		});
 		expect(plan.extractionBound).toBe(false);
 		expect(plan.actions).toEqual([]);
 		expect(plan.quotaShifts).toEqual([]);
+	});
+
+	it("cannot contradict the regime, which is now its only verdict", () => {
+		// THE DEFECT THIS REPLACES: the plan used to infer a regime from EMPTY history
+		// (so it could only ever see critical fill) while taking `extractionBound` from
+		// the single-day stock flags. A rig that was filling below the cap therefore
+		// produced `extractionBound: true` beside `regime: "balanced"`.
+		const fillingBelowPressure = analyzeStockAndPricing({
+			inStock: 375_000, // 50% full, under the 78% pressure threshold
+			storageCap: 750_000,
+			dailySold: 283_942,
+			dailyProduced: 323_942, // extraction outruns sales, so storage IS filling
+			currentPrice: 176,
+			adBudget: 4_500_000,
+			dailyIncome: 49_973_792,
+		});
+		// The raw single-day flag really does say "filling" - it is what used to drive
+		// the plan, and it is why the two fields could disagree.
+		expect(fillingBelowPressure.isFillingUp).toBe(true);
+		expect(fillingBelowPressure.warehouseCritical).toBe(false);
+
+		// The regime says balanced: net fill below the healthy buffer is desirable, not
+		// a bottleneck, and one day is not a trend.
+		const regime = assessCapacityRegime({
+			history: [],
+			fillPct: fillingBelowPressure.fillPct,
+			asOfSeconds: 1_790_705_443,
+		});
+		expect(regime.regime).toBe("balanced");
+
+		const plan = planCapacityRebalance({
+			staffCount: 19,
+			stock: fillingBelowPressure,
+			barrelPrice: 176,
+			openSeats: 0,
+			regime,
+		});
+
+		// Both fields follow the regime, and it is passed through unrecomputed.
+		expect(plan.regime).toBe(regime);
+		expect(plan.extractionBound).toBe(false);
+		expect(plan.summary).not.toContain("still need to move");
 	});
 
 	it("keeps the target lineup and the rebalance advice in agreement", () => {
@@ -1952,8 +2029,6 @@ describe("Unmeasured extraction must not fake a bottleneck", () => {
 		const regime = assessCapacityRegime({
 			history: singleSnapshotHistory,
 			fillPct: stock.fillPct,
-			isFillingUp: stock.isFillingUp,
-			warehouseCritical: stock.warehouseCritical,
 			asOfSeconds: 1_790_705_443,
 		});
 		expect(regime.regime).toBe("balanced");
@@ -1966,7 +2041,6 @@ describe("Unmeasured extraction must not fake a bottleneck", () => {
 			regime,
 			currentCounts: { Driller: 5, "Sales Executive": 4 },
 			discardedEvidenceThin: true,
-			asOfSeconds: 1_790_705_443,
 		});
 		expect(plan.extractionBound).toBe(false);
 		expect(plan.actions).toEqual([]);

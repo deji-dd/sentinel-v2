@@ -198,6 +198,10 @@ export const companyRoutes = new Elysia({ prefix: "/company" })
 				barrelPrice: decision.currentPrice,
 				dailySold: decision.dailySold,
 				dailyProduced: stock.production.dailyProduced,
+				// The rate above is a median over several days, so it lags a change of
+				// direction. This is the newest measured day, which is the one a
+				// "produced today" reading would mean.
+				dailyProducedLatest: stock.production.latestMeasured,
 				// How much the production figure above deserves to be trusted.
 				dailyProducedConfidence: stock.production.confidence,
 			},

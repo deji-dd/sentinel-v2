@@ -114,7 +114,19 @@ describe("Torn reference sync — stocks", () => {
 
 		await runTornReferenceSync();
 
-		const rows = await db.select().from(tornStocks);
-		expect(rows).toHaveLength(0);
+		// Scoped to the malformed entries themselves. This used to assert the whole
+		// table was empty, which only held on a database where nothing had ever
+		// written a stock row — so anyone who had run the API (which refreshes prices
+		// on demand) saw it fail for the wrong reason, and it could not distinguish
+		// "wrote nothing" from "wrote nothing new".
+		const malformed = await db.query.tornStocks.findFirst({
+			where: eq(tornStocks.name, "No id here"),
+		});
+		expect(malformed).toBeUndefined();
+
+		const testRow = await db.query.tornStocks.findFirst({
+			where: eq(tornStocks.id, String(TEST_STOCK_ID)),
+		});
+		expect(testRow).toBeUndefined();
 	});
 });

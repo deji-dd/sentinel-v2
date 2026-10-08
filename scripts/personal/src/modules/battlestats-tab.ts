@@ -1,15 +1,16 @@
 import { apiClient } from "../api";
 import {
-	calculateGymGainBreakdown,
 	DEFAULT_SETTINGS,
 	formatCompactNumber,
 	formatDecimal,
 	formatNumber,
 	GYM_DEFINITIONS,
 	getTargetRatios,
+	parseDateOnly,
 	parseShorthandNumber,
 	STORAGE_KEYS,
 } from "../config";
+import { analyseStatPriority, type GymProfile } from "../lib/stat-priority";
 import type {
 	BattlestatsAnalyticsResponse,
 	BattlestatsLedgerState,
@@ -60,7 +61,11 @@ export class BattlestatsTab {
 		await this.refresh();
 	}
 
+	/** Guards against an older, slower response overwriting a newer selection. */
+	private requestSeq = 0;
+
 	public async refresh(): Promise<void> {
+		const seq = ++this.requestSeq;
 		try {
 			const [stateRes, analyticsRes, efficiencyRes, prefsRes] =
 				await Promise.all([
@@ -72,12 +77,14 @@ export class BattlestatsTab {
 			this.state = stateRes;
 			this.analytics = analyticsRes;
 			this.efficiencyData = efficiencyRes;
+			if (seq !== this.requestSeq) return;
 			if (prefsRes) {
 				GM_setValue(STORAGE_KEYS.ratioType, prefsRes.ratioType);
 				GM_setValue(STORAGE_KEYS.mainStat, prefsRes.mainStat);
 			}
 			this.render();
 		} catch (err) {
+			if (seq !== this.requestSeq) return;
 			console.error(
 				"[Blasted's Script] Error refreshing battlestats data:",
 				err,
@@ -167,69 +174,30 @@ export class BattlestatsTab {
 			avgGainPerEnergy: 0,
 		};
 
-		const numDays =
-			this.currentTimeframe === "7d"
-				? 7
-				: this.currentTimeframe === "14d"
-					? 14
-					: this.currentTimeframe === "30d"
-						? 30
-						: this.currentTimeframe === "90d"
-							? 90
-							: Math.max(timeline.length, 1);
+		// A fixed window is its own length. "All" is the span the log actually
+		// covers, measured from the first to the last recorded day — dividing by the
+		// number of days *with* records overstated the pace (30 logged days across
+		// two years read as 30 days of training, about 24x too fast) and every ETA
+		// built on it inherited the error.
+		const numDays = this.effectiveWindowDays(timeline);
 
 		const avgGainPerDay = summary.totalGained / Math.max(numDays, 1);
 		const avgEnergyPerDay = summary.totalEnergyUsed / Math.max(numDays, 1);
 
-		// Efficiency & Priority Stat computation
-		const gymDef = GYM_DEFINITIONS[24]; // Reference George's dots
+		// Efficiency, targets and the recommendation all come from the shared engine,
+		// which is also what the gym page badges use — so the KPI here and the
+		// highlight there can no longer disagree.
 		const maxHappy = this.efficiencyData?.maxHappy ?? 5025;
-		const perks = this.efficiencyData?.perks ?? {
-			strength: 1,
-			defense: 1,
-			speed: 1,
-			dexterity: 1,
-		};
-
-		const statList: StatType[] = ["strength", "defense", "speed", "dexterity"];
-		const scoredRows = statList.map((st) => {
-			const current = stats[st];
-			const target = totalStats * ratios[st];
-			const diff = current - target;
-			const dots = gymDef?.[st] ?? 7.5;
-			const perk = perks[st];
-			const breakdown = calculateGymGainBreakdown(
-				st,
-				current,
-				maxHappy,
-				dots,
-				gymDef?.energy ?? 10,
-				perk,
-			);
-			return {
-				statType: st,
-				current,
-				target,
-				diff,
-				gainPerE: breakdown.gainPerE,
-			};
+		const priority = analyseStatPriority({
+			stats,
+			ratios,
+			gyms: this.efficiencyData?.activeGyms,
+			fallbackGym: GYM_DEFINITIONS[24] as GymProfile,
+			maxHappy,
+			perks: this.efficiencyData?.perks,
 		});
 
-		const maxGainPerE = Math.max(...scoredRows.map((r) => r.gainPerE), 1);
-		const rankedStats = scoredRows.map((row) => {
-			if (row.current >= row.target) {
-				return { ...row, priorityScore: -1 };
-			}
-			const ratioDeficit = (row.target - row.current) / (row.target || 1);
-			const relativeEfficiency =
-				maxGainPerE > 0 ? row.gainPerE / maxGainPerE : 0;
-			const priorityScore = ratioDeficit * 0.5 + relativeEfficiency * 0.5;
-			return { ...row, priorityScore };
-		});
-
-		const recommendedStat = [...rankedStats].sort(
-			(a, b) => b.priorityScore - a.priorityScore,
-		)[0];
+		const recommendedStat = priority.recommended;
 
 		const recCurPct = recommendedStat
 			? (recommendedStat.current / (totalStats || 1)) * 100
@@ -276,9 +244,9 @@ export class BattlestatsTab {
 						${recommendedStat?.statType ?? "Balanced"}
 					</div>
 					<div class="kpi-sub">${
-						recommendedStat && recommendedStat.diff < 0
+						recommendedStat
 							? `-${formatCompactNumber(Math.abs(recommendedStat.diff))} deficit`
-							: "On target"
+							: "Every stat is on target"
 					}</div>
 				</div>
 				<div class="kpi-card">
@@ -361,21 +329,21 @@ export class BattlestatsTab {
 					</div>
 					<div style="font-size: 11px;">
 						${
-							recommendedStat && recommendedStat.diff < 0
+							recommendedStat
 								? `<span style="color: #f87171; font-weight: 600;">Deficit: -${formatCompactNumber(Math.abs(recommendedStat.diff))} • ${recPctFormatted}</span>`
-								: `<span style="color: #34d399; font-weight: 600;">All stats meet ratio target</span>`
+								: `<span style="color: #34d399; font-weight: 600;">All stats meet ratio target — train whichever you like</span>`
 						}
 					</div>
 				</div>
 
 				<!-- Visual Ratio Bars -->
 				<div class="stat-ratio-bars">
-					${statList
-						.map((st) => {
-							const cur = stats[st];
-							const curPct = (cur / (totalStats || 1)) * 100;
+					${priority.rows
+						.map((row) => {
+							const st = row.statType;
+							const curPct = (row.current / (totalStats || 1)) * 100;
 							const targetPct = ratios[st] * 100;
-							const diff = cur - totalStats * ratios[st];
+							const diff = row.diff;
 							const isDeficit = diff < 0;
 							const diffSign = isDeficit ? "-" : "+";
 							const diffFormatted = `${diffSign}${formatCompactNumber(Math.abs(diff))}`;
@@ -458,7 +426,7 @@ export class BattlestatsTab {
 				</div>
 
 				<!-- Scrubber Status Strip -->
-				<div id="chart-scrub-strip" class="chart-scrub-strip">
+				<div id="chart-scrub-strip" class="chart-scrub-strip" role="status" aria-live="polite">
 					<span>Hover or drag across chart to inspect daily breakdown</span>
 				</div>
 
@@ -474,6 +442,35 @@ export class BattlestatsTab {
 			ratios,
 		);
 		this.renderChartOnly();
+	}
+
+	/**
+	 * The window the pace figures are divided by, in days.
+	 *
+	 * Fixed timeframes are their own length. "All" is the span the recorded timeline
+	 * actually covers — measured first day to last — because dividing by the number
+	 * of days that happen to have records turns "30 days of training spread over two
+	 * years" into "30 days of training", and the pace, the average-per-day and every
+	 * ETA built on them come out roughly 24x too optimistic.
+	 */
+	private effectiveWindowDays(
+		timeline: readonly DailyBattlestatsTimeline[],
+	): number {
+		if (this.currentTimeframe !== "all") {
+			return Number.parseInt(this.currentTimeframe.replace("d", ""), 10) || 30;
+		}
+		const first = timeline[0]?.date;
+		const last = timeline[timeline.length - 1]?.date;
+		if (!first || !last) return 1;
+
+		const firstMs = parseDateOnly(first).getTime();
+		const lastMs = parseDateOnly(last).getTime();
+		if (!Number.isFinite(firstMs) || !Number.isFinite(lastMs)) {
+			return Math.max(timeline.length, 1);
+		}
+		// Inclusive of both end days, and never below one.
+		const days = Math.round((lastMs - firstMs) / 86_400_000) + 1;
+		return Math.max(days, 1);
 	}
 
 	private renderChartOnly(): void {

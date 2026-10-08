@@ -1,5 +1,6 @@
 import { apiClient } from "../api";
 import {
+	escapeHtml,
 	formatCompactNumber,
 	formatMoney,
 	formatNumber,
@@ -11,11 +12,77 @@ import type {
 	CompanyKPIs,
 	CompanyStateResponse,
 	CompanyWeeklyLogsResponse,
+	WeeklyLogEntry,
 } from "../types";
 import { renderCompanySvgChart } from "../ui/svg-chart";
+import {
+	bindSortableHeaders,
+	nextSortState,
+	type SortAccessors,
+	type SortDirection,
+	type SortState,
+	sortIndicator,
+	sortRows,
+} from "../ui/table-sort";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
 declare function GM_setValue<T>(key: string, value: T): void;
+
+type LedgerSortKey =
+	| "dayOfWeek"
+	| "isoDate"
+	| "revenue"
+	| "expenses"
+	| "profit"
+	| "soldBarrels"
+	| "producedBarrels"
+	| "barrelPrice";
+
+const LEDGER_SORT_KEYS: LedgerSortKey[] = [
+	"dayOfWeek",
+	"isoDate",
+	"revenue",
+	"expenses",
+	"profit",
+	"soldBarrels",
+	"producedBarrels",
+	"barrelPrice",
+];
+
+/** Days read in week order; every money and volume column reads largest-first. */
+const LEDGER_SORT_DEFAULT: Record<LedgerSortKey, SortDirection> = {
+	dayOfWeek: "asc",
+	isoDate: "asc",
+	revenue: "desc",
+	expenses: "desc",
+	profit: "desc",
+	soldBarrels: "desc",
+	producedBarrels: "desc",
+	barrelPrice: "desc",
+};
+
+const LEDGER_SORT_ACCESSORS: SortAccessors<WeeklyLogEntry, LedgerSortKey> = {
+	// The ledger is a week, so its natural order is the day of that week, not the
+	// alphabet — sorting "Friday" before "Monday" would be nonsense.
+	dayOfWeek: (row) => WEEKDAY_ORDER.indexOf(row.dayOfWeek),
+	isoDate: (row) => row.isoDate,
+	revenue: (row) => row.revenue,
+	expenses: (row) => row.expenses,
+	profit: (row) => row.profit,
+	soldBarrels: (row) => row.soldBarrels,
+	producedBarrels: (row) => row.producedBarrels ?? 0,
+	barrelPrice: (row) => row.barrelPrice,
+};
+
+const WEEKDAY_ORDER = [
+	"Monday",
+	"Tuesday",
+	"Wednesday",
+	"Thursday",
+	"Friday",
+	"Saturday",
+	"Sunday",
+];
 
 export class CompanyTab {
 	private container: HTMLElement;
@@ -24,6 +91,10 @@ export class CompanyTab {
 	private history: CompanyHistoryEntry[] = [];
 	private currentChartMode: "financials" | "production" = "financials";
 	private currentWeekOffset = 0;
+	private ledgerSort: SortState<LedgerSortKey> = {
+		key: "isoDate",
+		direction: "asc",
+	};
 	private onOpenSettings: () => void;
 
 	constructor(container: HTMLElement, onOpenSettings: () => void) {
@@ -37,6 +108,21 @@ export class CompanyTab {
 			STORAGE_KEYS.companyWeeklyOffset,
 			0,
 		);
+
+		const storedSort = GM_getValue<Partial<SortState<LedgerSortKey>>>(
+			STORAGE_KEYS.companySort,
+			{},
+		);
+		if (
+			storedSort.key &&
+			LEDGER_SORT_KEYS.includes(storedSort.key) &&
+			(storedSort.direction === "asc" || storedSort.direction === "desc")
+		) {
+			this.ledgerSort = {
+				key: storedSort.key,
+				direction: storedSort.direction,
+			};
+		}
 	}
 
 	public async init(): Promise<void> {
@@ -158,7 +244,7 @@ export class CompanyTab {
 				</div>
 
 				<!-- Scrubber Status Strip -->
-				<div id="company-chart-scrub-strip" class="chart-scrub-strip">
+				<div id="company-chart-scrub-strip" class="chart-scrub-strip" role="status" aria-live="polite">
 					<span>Hover or drag across chart to inspect daily breakdown</span>
 				</div>
 
@@ -173,6 +259,7 @@ export class CompanyTab {
 		`;
 
 		this.bindEvents();
+		this.bindLedgerSort();
 		this.renderChartOnly();
 	}
 
@@ -270,7 +357,11 @@ export class CompanyTab {
 				const revert = action.temporary
 					? ' <em style="color: #94a3b8;">(revert once stock normalises)</em>'
 					: "";
-				itemsHtml += row("tag-capacity", label, `${action.reason}${revert}`);
+				itemsHtml += row(
+					"tag-capacity",
+					label,
+					`${escapeHtml(action.reason)}${revert}`,
+				);
 			}
 		} else if (planState === "holding") {
 			// Neutral by design: the seats are already where they need to be, so
@@ -310,7 +401,7 @@ export class CompanyTab {
 					row(
 						"tag-role",
 						"Role",
-						`<strong>${t.name}</strong> (${t.statsStr}): ${t.fromRole} ➔ <strong>${t.toRole}</strong>`,
+						`<strong>${escapeHtml(t.name)}</strong> (${escapeHtml(t.statsStr)}): ${escapeHtml(t.fromRole)} ➔ <strong>${escapeHtml(t.toRole)}</strong>`,
 					),
 				)
 				.join("");
@@ -342,15 +433,27 @@ export class CompanyTab {
 		);
 
 		// 6. Extraction. The figure is only actionable to the degree it could be
-		//    measured, so the confidence is never shown apart from it.
+		//    measured, so the confidence is never shown apart from it. It is also a
+		//    median over the last few measured days, NOT one day's output, so the
+		//    window is named and the newest day is shown beside it - otherwise the
+		//    number reads as "produced today" and contradicts the stock level.
+		const latest = production.latestMeasured;
+		const smoothed =
+			production.samples > 1 &&
+			latest !== undefined &&
+			latest !== production.dailyProduced;
 		itemsHtml += row(
 			"tag-insight",
 			"Extraction",
 			`${
 				production.dailyProduced !== undefined
-					? `<strong>${formatNumber(production.dailyProduced)}</strong> bbl/day`
+					? `<strong>${formatNumber(production.dailyProduced)}</strong> bbl/day <em style="color: #94a3b8;">${production.samples > 1 ? `${production.samples}-day median` : "measured"}</em>`
 					: "<strong>unmeasurable</strong>"
 			} <em style="color: #94a3b8;">(${production.confidence} confidence, ${production.samples} measured day${production.samples === 1 ? "" : "s"})</em>${
+				smoothed
+					? ` <span style="color: #94a3b8;">latest day ${formatNumber(latest)} bbl/day</span>`
+					: ""
+			}${
 				production.confidence === "low" || production.confidence === "none"
 					? ` <span style="color: #94a3b8;">${production.summary}</span>`
 					: ""
@@ -369,13 +472,17 @@ export class CompanyTab {
 		if (hasRehab) {
 			if (t1.length > 0) {
 				const names = t1
-					.map((e) => `<strong>${e.name}</strong> (${e.penalty} pts)`)
+					.map(
+						(e) => `<strong>${escapeHtml(e.name)}</strong> (${e.penalty} pts)`,
+					)
 					.join(" • ");
 				itemsHtml += row("tag-rehab", "Tier 1", `Send Today: ${names}`);
 			}
 			if (t2.length > 0) {
 				const names = t2
-					.map((e) => `<strong>${e.name}</strong> (${e.penalty} pts)`)
+					.map(
+						(e) => `<strong>${escapeHtml(e.name)}</strong> (${e.penalty} pts)`,
+					)
 					.join(" • ");
 				itemsHtml += row("tag-rehab-sub", "Tier 2", `Send Next: ${names}`);
 			}
@@ -415,7 +522,7 @@ export class CompanyTab {
 				(warning) => `
 			<div class="directive-row">
 				<span class="directive-tag tag-insight">Caveat</span>
-				<span class="directive-text" style="color: #94a3b8;">${warning}</span>
+				<span class="directive-text" style="color: #94a3b8;">${escapeHtml(warning)}</span>
 			</div>
 		`,
 			)
@@ -539,10 +646,16 @@ export class CompanyTab {
 			`;
 		}
 
+		const orderedEntries = sortRows(
+			wtd.entries,
+			this.ledgerSort,
+			LEDGER_SORT_ACCESSORS,
+		);
+
 		const rowsHtml =
 			wtd.entries.length === 0
-				? `<tr><td colspan="8" style="text-align: center; color: #64748b; padding: 20px;">No snapshot entries recorded for this accounting week.</td></tr>`
-				: wtd.entries
+				? `<tr><td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No snapshot entries recorded for this accounting week.</td></tr>`
+				: orderedEntries
 						.map((e) => {
 							const profitSign = e.profit >= 0 ? "+" : "";
 							const profitClass = e.profit >= 0 ? "profit-pos" : "profit-neg";
@@ -597,16 +710,16 @@ export class CompanyTab {
 
 				<!-- Responsive Table -->
 				<div class="weekly-table-scroll">
-					<table class="company-ledger-table">
+					<table class="company-ledger-table sortable-table">
 						<thead>
 							<tr>
-								<th>Day</th>
-								<th>Date</th>
-								<th>Revenue</th>
-								<th>Expenses</th>
-								<th>Net Profit</th>
-								<th>Sold</th>
-								<th>Produced</th>
+								${this.ledgerHeader("dayOfWeek", "Day")}
+								${this.ledgerHeader("isoDate", "Date")}
+								${this.ledgerHeader("revenue", "Revenue")}
+								${this.ledgerHeader("expenses", "Expenses")}
+								${this.ledgerHeader("profit", "Net Profit")}
+								${this.ledgerHeader("soldBarrels", "Sold")}
+								${this.ledgerHeader("producedBarrels", "Produced")}
 								<th>Price</th>
 							</tr>
 						</thead>
@@ -638,6 +751,42 @@ export class CompanyTab {
 
 		tableContainer.innerHTML = this.renderWeeklyTableHtml();
 		this.bindPaginatorEvents();
+		this.bindLedgerSort();
+	}
+
+	/** A ledger column header that sorts the week, by mouse or keyboard. */
+	private ledgerHeader(key: LedgerSortKey, label: string): string {
+		const active = this.ledgerSort.key === key;
+		const ariaSort = active
+			? this.ledgerSort.direction === "asc"
+				? "ascending"
+				: "descending"
+			: "none";
+		return `
+			<th class="sortable ${active ? "sorted" : ""}" data-sort="${key}"
+				tabindex="0" role="button" aria-sort="${ariaSort}"
+				title="Sort by ${escapeHtml(label)}">
+				${escapeHtml(label)} ${sortIndicator(active, this.ledgerSort.direction)}
+			</th>
+		`;
+	}
+
+	private bindLedgerSort(): void {
+		const tableContainer = this.container.querySelector<HTMLElement>(
+			"#company-weekly-table-container",
+		);
+		if (!tableContainer) return;
+
+		bindSortableHeaders(tableContainer, LEDGER_SORT_KEYS, (key) => {
+			this.ledgerSort = nextSortState(
+				this.ledgerSort,
+				key as LedgerSortKey,
+				LEDGER_SORT_DEFAULT[key as LedgerSortKey],
+			);
+			GM_setValue(STORAGE_KEYS.companySort, this.ledgerSort);
+			// Only the table is re-rendered, so the chart and its scrubber survive.
+			this.renderWeeklyTableOnly();
+		});
 	}
 
 	private bindEvents(): void {

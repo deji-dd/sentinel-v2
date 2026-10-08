@@ -130,6 +130,13 @@ type UserStocksApiResponse = {
 
 /**
  * Synchronizes user stock positions from Torn API (`/user/stocks`) to `user_stocks`.
+ *
+ * Positions Torn no longer reports are removed. A sold-out holding used to keep its
+ * last known share count forever, which made `user_stocks` answer "what is held
+ * right now?" with a position that had been closed — the portfolio surface reads
+ * this table as the live position, so a stale row showed up as shares that are not
+ * held. A response that reports no `stocks` key at all is left alone, since that is
+ * a partial payload rather than an empty portfolio.
  */
 export async function syncUserStocks(): Promise<void> {
 	const keyEntry = await getPersonalKey();
@@ -149,8 +156,10 @@ export async function syncUserStocks(): Promise<void> {
 				: Object.values(res.stocks);
 
 			const now = new Date();
+			const heldIds = new Set<string>();
 			for (const stock of stocksArray) {
 				const stockIdStr = String(stock.id);
+				heldIds.add(stockIdStr);
 				await db
 					.insert(userStocks)
 					.values({
@@ -170,6 +179,17 @@ export async function syncUserStocks(): Promise<void> {
 							updatedAt: now,
 						},
 					});
+			}
+
+			const stored = await db.select({ id: userStocks.id }).from(userStocks);
+			const closed = stored
+				.map((row) => row.id)
+				.filter((id) => !heldIds.has(id));
+			if (closed.length > 0) {
+				await db.delete(userStocks).where(inArray(userStocks.id, closed));
+				logger.info(
+					`Removed ${closed.length} closed stock position(s): ${closed.join(", ")}.`,
+				);
 			}
 
 			logger.info(

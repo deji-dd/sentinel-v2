@@ -5,6 +5,7 @@ import { env } from "../../config/env";
 import { battlestatsLedgerRoutes } from "./battlestats-ledger";
 import { companyRoutes } from "./company";
 import { crimeLedgerRoutes } from "./crime-ledger";
+import { stocksLedgerRoutes } from "./stocks-ledger";
 
 export interface AuthUser {
 	id: number;
@@ -19,6 +20,7 @@ export const systemRoutes = new Elysia({ prefix: "/system" })
 	.use(crimeLedgerRoutes)
 	.use(battlestatsLedgerRoutes)
 	.use(companyRoutes)
+	.use(stocksLedgerRoutes)
 	.derive(async ({ cookie }) => {
 		const sessionToken = cookie.sentinel_session?.value;
 		if (typeof sessionToken !== "string" || !sessionToken) {

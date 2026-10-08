@@ -21,7 +21,6 @@ COPY services/api/package.json ./services/api/
 COPY services/bot/package.json ./services/bot/
 COPY services/scheduler/package.json ./services/scheduler/
 COPY web/dashboard/package.json ./web/dashboard/
-COPY web/elims-dashboard/package.json ./web/elims-dashboard/
 COPY web/tt-selector/package.json ./web/tt-selector/
 
 RUN bun install --frozen-lockfile || bun install

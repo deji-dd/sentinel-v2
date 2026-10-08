@@ -11,18 +11,27 @@ import {
 	SheetTitle,
 } from "@/components/ui/sheet";
 import { useAuth } from "../contexts/AuthContext";
+import { ElimsProvider, useElims } from "../contexts/ElimsContext";
 import { useTheme } from "../hooks/useTheme";
 import { api } from "../lib/api";
 import { getNavSections, getPageLabel } from "../lib/navigation";
 import { DibsConfigPage } from "../pages/DibsConfigPage";
+import { ElimsGuildConfigPage } from "../pages/ElimsGuildConfigPage";
+import { ElimsReportPage } from "../pages/ElimsReportPage";
+import { GiveawaysPage } from "../pages/GiveawaysPage";
 import GeneralSettingsPage from "../pages/GuildSettingsPage";
+import { GuildSetupPage } from "../pages/GuildSetupPage";
+import { ItemRequestsPage } from "../pages/ItemRequestsPage";
 import { MercChannelsPage } from "../pages/MercChannelsPage";
 import { MercContractsPage } from "../pages/MercContractsPage";
 import ReactionRolesPage from "../pages/ReactionRolesPage";
 import { RecruitmentPage } from "../pages/RecruitmentPage";
 import { RwChannelsPage } from "../pages/RwChannelsPage";
 import { StocksPage } from "../pages/StocksPage";
+import { TeamBreakdownPage } from "../pages/TeamBreakdownPage";
 import TerritoryPage from "../pages/TerritoryPage";
+import { UnauthorizedPage } from "../pages/UnauthorizedPage";
+import { UnconfiguredPage } from "../pages/UnconfiguredPage";
 import VerificationPage from "../pages/VerificationPage";
 import { useRouter } from "../router";
 import { GuildSidebar } from "./GuildSidebar";
@@ -58,6 +67,8 @@ export default function GuildShell() {
 		faction?: string | null;
 		merc?: string | null;
 		alliance?: string | null;
+		elims?: string | null;
+		owner?: string | null;
 	}>({});
 
 	useEffect(() => {
@@ -71,6 +82,8 @@ export default function GuildShell() {
 							faction?: string | null;
 							merc?: string | null;
 							alliance?: string | null;
+							elims?: string | null;
+							owner?: string | null;
 						},
 					);
 				}
@@ -82,7 +95,13 @@ export default function GuildShell() {
 	}, []);
 
 	const paramType =
-		(queryParams.type as "faction" | "merc" | "alliance" | undefined) ?? null;
+		(queryParams.type as
+			| "faction"
+			| "merc"
+			| "alliance"
+			| "elims"
+			| "owner"
+			| undefined) ?? null;
 
 	const [storedType, setStoredType] = useState<string | null>(() => {
 		if (!guildId) return null;
@@ -111,7 +130,9 @@ export default function GuildShell() {
 				? "merc"
 				: serverTypes.alliance === guildId
 					? "alliance"
-					: null);
+					: serverTypes.elims === guildId
+						? "elims"
+						: null);
 
 	const isMerc =
 		activeServerType === "merc" ||
@@ -133,6 +154,10 @@ export default function GuildShell() {
 		activeServerType === "alliance" ||
 		(!activeServerType &&
 			Boolean(serverTypes.alliance && guildId === serverTypes.alliance));
+	const isElims =
+		activeServerType === "elims" ||
+		(!activeServerType &&
+			Boolean(serverTypes.elims && guildId === serverTypes.elims));
 
 	// Auth guard
 	useEffect(() => {
@@ -143,6 +168,16 @@ export default function GuildShell() {
 
 	if (authLoading || !authenticated || !guildId) {
 		return <PageLoader label="Loading Server Config..." />;
+	}
+
+	if (isElims) {
+		return (
+			<ElimsGuildShell
+				guildId={guildId}
+				subPath={subPath}
+				activeServerType={activeServerType}
+			/>
+		);
 	}
 
 	const renderPage = () => {
@@ -197,6 +232,7 @@ export default function GuildShell() {
 		isMerc,
 		isFaction,
 		isAlliance,
+		isElims: false,
 	});
 	const pageLabel = getPageLabel(subPath, sections) ?? "Dashboard";
 
@@ -285,6 +321,174 @@ export default function GuildShell() {
 
 				{/* Scroll container. `min-h-0` is what actually lets it scroll
 				    inside a flex column on mobile Safari. */}
+				<main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+					<div className="px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
+						{renderPage()}
+					</div>
+				</main>
+			</div>
+		</div>
+	);
+}
+
+function ElimsGuildShell({
+	guildId,
+	subPath,
+	activeServerType,
+}: {
+	guildId: string;
+	subPath: string;
+	activeServerType: string | null;
+}) {
+	return (
+		<ElimsProvider>
+			<ElimsGuildShellInner
+				guildId={guildId}
+				subPath={subPath}
+				activeServerType={activeServerType}
+			/>
+		</ElimsProvider>
+	);
+}
+
+function ElimsGuildShellInner({
+	guildId,
+	subPath,
+	activeServerType,
+}: {
+	guildId: string;
+	subPath: string;
+	activeServerType: string | null;
+}) {
+	const { configured, isOwner, hasAdminAccess, loading } = useElims();
+	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const { path } = useRouter();
+	const { theme, toggle } = useTheme();
+
+	useEffect(() => {
+		setSidebarOpen(false);
+	}, [path]);
+
+	if (loading) {
+		return <PageLoader label="Loading Elims Server..." />;
+	}
+
+	if (!configured) {
+		if (isOwner) return <GuildSetupPage />;
+		return <UnconfiguredPage />;
+	}
+
+	if (!hasAdminAccess) {
+		return <UnauthorizedPage />;
+	}
+
+	if (subPath === "/setup" && isOwner) {
+		return <GuildSetupPage />;
+	}
+
+	const renderPage = () => {
+		if (subPath === "/" || subPath === "" || subPath === "/guild-config") {
+			return <ElimsGuildConfigPage />;
+		}
+		if (subPath === "/elims-report") {
+			return <ElimsReportPage />;
+		}
+		if (subPath === "/team-breakdown") {
+			return <TeamBreakdownPage />;
+		}
+		if (subPath === "/item-requests") {
+			return <ItemRequestsPage />;
+		}
+		if (subPath === "/giveaways") {
+			return <GiveawaysPage />;
+		}
+		return <NotFound />;
+	};
+
+	const sections = getNavSections({
+		guildId,
+		effectiveType: activeServerType,
+		isMerc: false,
+		isFaction: false,
+		isAlliance: false,
+		isElims: true,
+	});
+	const pageLabel = getPageLabel(subPath, sections) ?? "Elims Dashboard";
+
+	return (
+		<div className="relative flex h-dvh w-full overflow-hidden bg-background font-sans text-foreground">
+			<div className="app-glow" aria-hidden="true" />
+
+			{/* Desktop rail */}
+			<div className="relative z-20 hidden shrink-0 border-r border-border/80 lg:block lg:w-72">
+				<GuildSidebar guildId={guildId} activeServerType={activeServerType} />
+			</div>
+
+			{/* Mobile drawer */}
+			<Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+				<SheetContent
+					side="left"
+					showCloseButton={false}
+					className="w-[86vw] max-w-xs border-r border-border/80 bg-card/95 p-0 backdrop-blur-xl lg:hidden"
+				>
+					<SheetHeader className="sr-only">
+						<SheetTitle>Server navigation</SheetTitle>
+						<SheetDescription>
+							Choose a section of this server's dashboard.
+						</SheetDescription>
+					</SheetHeader>
+					<GuildSidebar
+						guildId={guildId}
+						activeServerType={activeServerType}
+						onNavigate={() => setSidebarOpen(false)}
+					/>
+				</SheetContent>
+			</Sheet>
+
+			{/* Main column */}
+			<div className="relative z-10 flex min-w-0 flex-1 flex-col">
+				<header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border/80 bg-background/85 px-3 backdrop-blur-xl sm:h-16 sm:px-4 lg:px-6">
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onClick={() => setSidebarOpen(true)}
+						aria-label="Open navigation"
+						className="shrink-0 rounded-full lg:hidden"
+					>
+						<Menu className="size-4" />
+					</Button>
+
+					<div className="flex min-w-0 flex-1 items-center gap-2">
+						<span className="truncate text-sm font-semibold tracking-tight lg:hidden">
+							{pageLabel}
+						</span>
+						<span className="hidden font-mono text-sm font-bold tracking-widest text-foreground uppercase lg:inline">
+							Sentinel
+						</span>
+						<Badge
+							variant="outline"
+							className="hidden shrink-0 px-1.5 py-0 text-[9px] font-mono text-rose-400 border-rose-500/30 bg-rose-500/10 sm:inline-flex"
+						>
+							ELIMS
+						</Badge>
+					</div>
+
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onClick={toggle}
+						aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+						title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+						className="shrink-0 rounded-full border border-border/60 bg-card/60"
+					>
+						{theme === "dark" ? (
+							<Sun className="size-4" />
+						) : (
+							<Moon className="size-4" />
+						)}
+					</Button>
+				</header>
+
 				<main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
 					<div className="px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
 						{renderPage()}

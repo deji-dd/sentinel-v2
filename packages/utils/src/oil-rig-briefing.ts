@@ -610,9 +610,16 @@ export async function generateDirectorBriefing(
 		? `${deterministic.advice}\n\n### Analyst Notes\n${notesText}`
 		: deterministic.advice;
 
-	const detailsBlock = `${companyDetails}\n\n### Provenance\n${provenanceText}${
-		outcome ? `\n\n### Previous Brief Outcome\n• ${outcome.summary}` : ""
-	}`;
+	// The previous brief's outcome is still computed and persisted, because it is
+	// the audit trail for "did following the advice work". It is NOT printed: the
+	// director already saw those changes happen, so the section restated history
+	// they had lived through, in the middle of the brief.
+	const detailsBlock = [
+		companyDetails,
+		provenanceText ? `### Provenance\n${provenanceText}` : "",
+	]
+		.filter((part) => part.length > 0)
+		.join("\n\n");
 
 	// ---- Console ------------------------------------------------------------
 	logger.info("================ EXECUTIVE BRIEFING ================");
@@ -642,7 +649,6 @@ export async function generateDirectorBriefing(
 		notesText ? `### Analyst Notes\n${notesText}` : "",
 		companyDetails,
 		provenanceText,
-		outcome ? `_Since the last brief: ${outcome.summary}_` : "",
 		`### Week To Date\n${wtdTable}${wtdSummaryText ? `\n${wtdSummaryText}` : ""}`,
 	]
 		.filter((section) => section.length > 0)

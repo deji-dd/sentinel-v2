@@ -195,7 +195,13 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 	const d = analysis.directives;
 	const plan = d.capacityRebalance;
 	const lines: string[] = [];
-	const produced = analysis.stock.production.dailyProduced;
+	// The flow sentence below describes the direction storage is moving NOW, and it
+	// sits beside a net figure the drain model took from the newest measured day.
+	// Quoting the multi-day median here put two different days in one sentence:
+	// "sales 332,886 vs extraction 321,560 bbl/day, so storage is falling" was
+	// printed beside a net that had been measured as storage RISING 62,138 bbl.
+	const production = analysis.stock.production;
+	const produced = production.latestMeasured ?? production.dailyProduced;
 	const sold = analysis.decision.dailySold;
 	const draining = analysis.stock.netDrainPerDay !== undefined;
 
@@ -220,18 +226,38 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 			);
 		}
 
-		// A loss is only reported while one is actually happening.
+		// A loss is only reported while one is actually happening, and only where one
+		// can happen at all.
+		//
+		// The first branch is genuinely present-tense: the plan zeroes
+		// `discardedBarrelsPerDay` unless the warehouse is at its cap AND filling.
+		// The two branches after it keyed off HISTORICAL cap evidence alone, so on a
+		// held extraction-bound regime at 65% fill they asserted a present loss and
+		// said storage was "pinned at the cap" when it was nowhere near it. A rig
+		// with room left is storing its excess, not throwing it away; the loss begins
+		// when storage reaches the cap. Old evidence about past capped days still
+		// supports a number, but only once the cap is binding again.
+		const atCap = d.stock.warehouseCritical;
+
 		if (plan.discardedBarrelsPerDay > 0) {
 			lines.push(
 				`• **Losing ~${plan.discardedBarrelsPerDay.toLocaleString()} bbl/day** (~${formatMoneyShort(plan.discardedValuePerDay)}/day) to the cap.`,
 			);
-		} else if (!draining && plan.discardedCappedLowerBound > 0) {
+		} else if (atCap && !draining && plan.discardedCappedLowerBound > 0) {
 			lines.push(
-				`• **Losing at least ~${plan.discardedCappedLowerBound.toLocaleString()} bbl/day** — a lower bound, because storage was at the cap on every recorded day and a full warehouse clamps the stock delta.`,
+				`• **Losing at least ~${plan.discardedCappedLowerBound.toLocaleString()} bbl/day** — a lower bound, because on days storage sat at the cap the stock delta was clamped, so the excess above the sales rate could not be measured.`,
 			);
-		} else if (!draining) {
+		} else if (atCap && !draining) {
 			lines.push(
 				"• **Loss cannot be sized** while storage is pinned at the cap: a full warehouse clamps the stock delta to zero.",
+			);
+		} else if (!draining) {
+			// Filling, with room left. Reporting a sized loss here would be inventing
+			// one; reporting nothing would leave the capacity section silent about
+			// cost, which is the question it exists to answer. The fill level is NOT
+			// restated, because the flow line directly above already states it.
+			lines.push(
+				`• **Nothing lost yet** — the excess above the sales rate is being stored. Barrels begin to be discarded at ${OIL_RIG_POLICY.inventory.criticalEnterPct}% full.`,
 			);
 		}
 
@@ -386,26 +412,127 @@ export interface BriefingProfile {
 	employees: { hired: number; capacity: number };
 }
 
-/** The telemetry lines reused by the console output, the return value and the DM. */
+/**
+ * The parts of an extraction estimate, worded so a median cannot pass for a day.
+ *
+ * The headline extraction figure is a median over the last few measured days, so
+ * on its own it reads as "this is what the rig produced today". A reader who
+ * checked it against the stock level saw a contradiction that was not in the
+ * arithmetic but in the label: the brief printed "sold 332,886 · produced
+ * 321,560" beside a stock figure that had risen 62,138 bbl, which is impossible
+ * for a single day. Naming the window and stating the newest day separately is
+ * what lets the two numbers be reconciled.
+ */
+function extractionWording(production: OilRigAnalysis["stock"]["production"]): {
+	median?: number;
+	latest?: number;
+	/** e.g. "3-day median", or "the only measured day" when the window is one. */
+	label: string;
+	confidence: string;
+	/** True when the headline is a median of more than the newest day. */
+	smoothed: boolean;
+} {
+	const median = production.dailyProduced;
+	const latest = production.latestMeasured;
+	return {
+		median,
+		latest,
+		label:
+			production.samples > 1
+				? `${production.samples}-day median`
+				: "the only measured day",
+		confidence: production.confidence,
+		smoothed:
+			production.samples > 1 && latest !== undefined && latest !== median,
+	};
+}
+
+/** The telemetry summary of extraction, for the details block. */
+function describeExtraction(
+	production: OilRigAnalysis["stock"]["production"],
+): string {
+	const { median, latest, label, confidence, smoothed } =
+		extractionWording(production);
+	if (median === undefined) return "unmeasurable";
+	const fromLatest = smoothed
+		? ` · latest day ${latest?.toLocaleString()}`
+		: "";
+	return `${median.toLocaleString()} bbl/day (${label}, ${confidence} confidence${fromLatest})`;
+}
+
+/** One labelled telemetry field: a bold label, then its single value. */
+interface TelemetryField {
+	label: string;
+	value: string;
+}
+
+/**
+ * The telemetry, one field per metric.
+ *
+ * These were four dense lines whose metrics were separated by "·", so a single
+ * line carried four unrelated numbers and one had to be found by counting
+ * separators - "Daily: revenue A · wages B · ads C · profit D". Each metric is now
+ * its own labelled field, which is what makes a figure addressable: a field can be
+ * named, compared against the same field on the previous brief, and read on a
+ * phone without parsing position.
+ *
+ * The labels are deliberately distinct where the SOURCE is distinct. "Daily ads"
+ * is the advertising spend recorded in the last whole day; "Ad budget" is the live
+ * setting. They are equal unless a change is in flight, and naming them the same
+ * thing would hide exactly the case where they differ.
+ */
 export function renderCompanyDetails(
 	analysis: OilRigAnalysis,
 	profile?: BriefingProfile,
 ): string {
 	const { decision, stock } = analysis;
 	const sign = (value: number) => (value >= 0 ? "+" : "");
-	const produced = stock.production.dailyProduced;
 
-	const lines = [
-		`• **Daily:** revenue ${formatMoney(decision.recordedDailyRevenue)} · wages ${formatMoney(decision.recordedDailyWages)} · ads ${formatMoney(decision.recordedAdBudget)} · profit ${sign(decision.recordedDailyProfit)}${formatMoney(decision.recordedDailyProfit)}`,
-		`• **Stock:** ${decision.inStock.toLocaleString()}/${decision.storageCap.toLocaleString()} (${decision.fillPct}%) · sold ${decision.dailySold.toLocaleString()} bbl/day · produced ${produced !== undefined ? `${produced.toLocaleString()} bbl/day (${stock.production.confidence} confidence)` : "unmeasurable"}`,
-		`• **Settings:** price $${decision.currentPrice}/barrel · ads ${formatMoney(decision.currentAdBudget)}/day`,
+	const fields: TelemetryField[] = [
+		{
+			label: "Daily revenue",
+			value: formatMoney(decision.recordedDailyRevenue),
+		},
+		{ label: "Daily wages", value: formatMoney(decision.recordedDailyWages) },
+		{ label: "Daily ads", value: formatMoney(decision.recordedAdBudget) },
+		{
+			label: "Daily profit",
+			value: `${sign(decision.recordedDailyProfit)}${formatMoney(decision.recordedDailyProfit)}`,
+		},
+		{
+			label: "Stock",
+			value: `${decision.inStock.toLocaleString()}/${decision.storageCap.toLocaleString()} (${decision.fillPct}%)`,
+		},
+		{
+			label: "Barrels sold",
+			value: `${decision.dailySold.toLocaleString()} bbl/day`,
+		},
+		{
+			label: "Barrels produced",
+			value: describeExtraction(stock.production),
+		},
+		{ label: "Barrel price", value: `$${decision.currentPrice}/barrel` },
+		{
+			label: "Ad budget",
+			value: `${formatMoney(decision.currentAdBudget)}/day`,
+		},
 	];
+
 	if (profile) {
-		lines.push(
-			`• **Rig:** efficiency ${profile.efficiency}% · environment ${profile.environment}% · popularity ${profile.popularity}% · staff ${profile.employees.hired}/${profile.employees.capacity}`,
+		fields.push(
+			{ label: "Efficiency", value: `${profile.efficiency}%` },
+			{ label: "Environment", value: `${profile.environment}%` },
+			{ label: "Popularity", value: `${profile.popularity}%` },
+			{
+				label: "Staff",
+				value: `${profile.employees.hired}/${profile.employees.capacity}`,
+			},
 		);
 	}
-	return lines.join("\n");
+
+	return fields
+		.map((field) => `• **${field.label}:** ${field.value}`)
+		.join("\n");
 }
 
 /**
@@ -437,33 +564,26 @@ export function clipNotes(text: string, budget: number): string {
 }
 
 /**
- * The basis and caveats block, so "why does this say something different?" is
- * answerable without reading the code.
+ * The caveats block, so "why does this say something different?" is answerable
+ * without reading the code.
  *
- * The per-field provenance map is deliberately NOT printed: eight field
- * explanations ran to 850 characters to convey one rule. The rule is stated, and
- * the exact per-field map stays in the API payload and the stored brief for audit.
+ * TWO THINGS WERE DELIBERATELY DROPPED from this block:
+ *
+ *  - The per-field provenance map, which ran to 850 characters to convey one
+ *    rule. The exact map stays in the API payload and the stored brief for audit.
+ *  - The "**Data:**" bullet, which restated which figures are live and which come
+ *    from the recorded tick. It was the longest line in the brief and the least
+ *    actionable: the tick date is already in the header and the analyst prompt,
+ *    and a reader does not need it to act on the advice.
+ *
+ * What remains is warnings only, so an empty return means the whole section must
+ * be omitted rather than printed as a bare heading.
  */
 export function renderProvenance(analysis: OilRigAnalysis): string {
-	const lines: string[] = [];
-	// Says what the reader needs to know to interpret a number that did not move
-	// when they changed something: the rate figures are not live.
-	const tick = analysis.provenance.tickIsoDate
-		? `come from the ${analysis.provenance.tickIsoDate} daily snapshot${
-				analysis.provenance.tickAgeMinutes !== undefined
-					? ` (${Math.round(analysis.provenance.tickAgeMinutes / 60)}h ago)`
-					: ""
-			}`
-		: "have no snapshot yet, so they fall back to the current live values";
-	lines.push(
-		`• **Data:** price, ads, roster and stock are read live. Sales, revenue and wages ${tick}, so they hold their value until the next one.`,
-	);
-	if (analysis.warnings.length > 0) {
-		lines.push(
-			`• **Read with care:**\n${analysis.warnings.map((w) => `   – ${w}`).join("\n")}`,
-		);
-	}
-	return lines.join("\n");
+	if (analysis.warnings.length === 0) return "";
+	return `• **Read with care:**\n${analysis.warnings
+		.map((w) => `   – ${w}`)
+		.join("\n")}`;
 }
 
 export interface AnalystPromptArgs {
@@ -518,6 +638,19 @@ export function buildAnalystPrompt(args: AnalystPromptArgs): AnalystPrompt {
 		args.history[args.history.length - 1]?.stock.barrelPrice ??
 		analysis.decision.currentPrice;
 
+	// This line sits under "TELEMETRY — LAST RECORDED DAY", so the day's own
+	// measurement must lead. Printing the multi-day median here told the analyst
+	// that 321,560 bbl/day was what the rig extracted on a day it extracted
+	// 395,024 - and that is how a filling warehouse came to be described as
+	// draining. The smoothed rate follows, labelled as a rate.
+	const extraction = extractionWording(stock.production);
+	const extractionLine =
+		extraction.latest === undefined
+			? "unmeasured"
+			: extraction.smoothed
+				? `${extraction.latest.toLocaleString()} bbl/day · ${extraction.label} ${extraction.median?.toLocaleString()} bbl/day (${extraction.confidence} confidence, ${stock.production.samples} measured days)`
+				: `${extraction.latest.toLocaleString()} bbl/day (${extraction.confidence} confidence)`;
+
 	const employeeRows = analysis.roster.lockedEmployees.length;
 	const employeeTableNote = `${decision.staffCount} staff, ${employeeRows} already in their target role, roster matrix omitted to keep this analysis-only.`;
 
@@ -546,7 +679,7 @@ HARD RULES:
 
 ### TELEMETRY — LAST RECORDED DAY${tickLabel}
 • Revenue ${formatMoney(decision.recordedDailyRevenue)} · wages ${formatMoney(decision.recordedDailyWages)} · advertising ${formatMoney(decision.recordedAdBudget)} · profit ${formatMoney(decision.recordedDailyProfit)}
-• Barrels sold ${decision.dailySold.toLocaleString()} at $${tickPrice}/barrel · extraction ${stock.production.dailyProduced !== undefined ? `${stock.production.dailyProduced.toLocaleString()} bbl/day (${stock.production.confidence} confidence, ${stock.production.samples} measured day(s))` : "unmeasured"}${stock.production.capped ? " · storage was at the cap, so true extraction is at least this high" : ""}
+• Barrels sold ${decision.dailySold.toLocaleString()} at $${tickPrice}/barrel · extraction on this day ${extractionLine}${stock.production.capped ? " · storage was at the cap, so true extraction is at least this high" : ""}
 • The game's own weekly revenue figure at that point: ${formatMoney(decision.recordedWeeklyRevenue)}
 
 ### TELEMETRY — WEEK TO DATE (Mon ${wtdWindow})

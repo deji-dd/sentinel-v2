@@ -19,6 +19,7 @@
 		"radix-ui": "latest",
 		"react": "latest",
 		"react-dom": "latest",
+		"recharts": "latest",
 		"shadcn": "latest",
 		"sonner": "latest",
 		"tailwind-merge": "latest",

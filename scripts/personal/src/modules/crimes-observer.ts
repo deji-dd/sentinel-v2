@@ -1,5 +1,10 @@
 import { apiClient } from "../api";
-import { CRIME_SLUG_MAP, formatMoney, POLLING_CONFIG } from "../config";
+import {
+	CRIME_SLUG_MAP,
+	formatMoney,
+	isDocumentVisible,
+	POLLING_CONFIG,
+} from "../config";
 import type { CrimeCategoryAnalytics } from "../types";
 
 export class CrimesDomObserver {
@@ -8,6 +13,7 @@ export class CrimesDomObserver {
 	private onOpenDrawer: () => void;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+	private visibilityHandler: (() => void) | null = null;
 	private currentPollInterval: number = POLLING_CONFIG.SLOW_INTERVAL_MS;
 
 	constructor(onOpenDrawer: () => void) {
@@ -40,6 +46,9 @@ export class CrimesDomObserver {
 		this.scanAndInject();
 
 		this.observer = new MutationObserver(() => {
+			// Nothing here is needed while the page is in the background, and Torn's
+			// rules forbid reading an unfocused page for data.
+			if (!isDocumentVisible()) return;
 			if (this.debounceTimer) clearTimeout(this.debounceTimer);
 			this.debounceTimer = setTimeout(() => {
 				this.scanAndInject();
@@ -52,8 +61,18 @@ export class CrimesDomObserver {
 		});
 
 		this.backgroundPollTimer = setInterval(() => {
+			if (!isDocumentVisible()) return;
 			this.reloadData().catch(() => {});
 		}, this.currentPollInterval);
+
+		// Coming back to the tab should not wait for the next tick to be correct.
+		this.visibilityHandler = () => {
+			if (!isDocumentVisible()) return;
+			this.reloadData()
+				.then(() => this.scanAndInject())
+				.catch(() => {});
+		};
+		document.addEventListener("visibilitychange", this.visibilityHandler);
 	}
 
 	public stop(): void {
@@ -64,6 +83,10 @@ export class CrimesDomObserver {
 		if (this.debounceTimer) {
 			clearTimeout(this.debounceTimer);
 			this.debounceTimer = null;
+		}
+		if (this.visibilityHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityHandler);
+			this.visibilityHandler = null;
 		}
 		if (this.backgroundPollTimer) {
 			clearInterval(this.backgroundPollTimer);
@@ -86,10 +109,11 @@ export class CrimesDomObserver {
 			}
 		} catch {
 			const cached = apiClient.getCachedState();
-			if (cached?.allTimeCategories) {
-				for (const cat of cached.allTimeCategories) {
-					this.categoryMap.set(cat.crimeId, cat);
-				}
+			// Replaced, not merged: merging left categories the server had stopped
+			// reporting in the map, and their badges stayed on the page.
+			this.categoryMap.clear();
+			for (const cat of cached?.allTimeCategories ?? []) {
+				this.categoryMap.set(cat.crimeId, cat);
 			}
 		}
 	}

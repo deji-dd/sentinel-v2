@@ -25,10 +25,12 @@ function ServerTypeBadge({
 	isMerc,
 	isFaction,
 	isAlliance,
+	isElims,
 }: {
 	isMerc: boolean;
 	isFaction: boolean;
 	isAlliance: boolean;
+	isElims: boolean;
 }) {
 	if (isMerc) {
 		return (
@@ -60,6 +62,16 @@ function ServerTypeBadge({
 			</Badge>
 		);
 	}
+	if (isElims) {
+		return (
+			<Badge
+				variant="outline"
+				className="border-rose-500/30 bg-rose-500/10 px-1.5 py-0 text-[9px] font-mono text-rose-400"
+			>
+				ELIMS
+			</Badge>
+		);
+	}
 	return (
 		<Badge
 			variant="outline"
@@ -85,7 +97,9 @@ function NavList({
 
 	const isActive = (subPath: string) => {
 		const target = `/guilds/${guildId}${subPath}`;
-		if (subPath === "") return path === target;
+		if (subPath === "") {
+			return path === target || path === `/guilds/${guildId}/guild-config`;
+		}
 		return path === target || path.startsWith(`${target}/`);
 	};
 
@@ -217,6 +231,10 @@ export function GuildSidebar({
 		effectiveType === "alliance" ||
 		(!effectiveType &&
 			Boolean(serverTypes.alliance && guildId === serverTypes.alliance));
+	const isElims =
+		effectiveType === "elims" ||
+		(!effectiveType &&
+			Boolean(serverTypes.elims && guildId === serverTypes.elims));
 
 	const avatarUrl = (() => {
 		try {
@@ -239,6 +257,7 @@ export function GuildSidebar({
 		isMerc,
 		isFaction,
 		isAlliance,
+		isElims,
 	});
 
 	return (
@@ -272,6 +291,7 @@ export function GuildSidebar({
 						isMerc={isMerc}
 						isFaction={isFaction}
 						isAlliance={isAlliance}
+						isElims={isElims}
 					/>
 				</div>
 

@@ -22,6 +22,13 @@ export const STORAGE_KEYS = {
 	cachedCompanyState: "blasted_cached_company_state",
 	companyChartMode: "blasted_company_chart_mode",
 	companyWeeklyOffset: "blasted_company_weekly_offset",
+	cachedStockPortfolio: "blasted_cached_stock_portfolio",
+	stockRates: "blasted_stock_rates",
+	stockSort: "blasted_stock_sort",
+	stockFilter: "blasted_stock_filter",
+	crimesTimeframe: "blasted_crimes_timeframe",
+	crimesSort: "blasted_crimes_sort",
+	companySort: "blasted_company_sort",
 };
 
 export const POLLING_CONFIG = {
@@ -29,6 +36,10 @@ export const POLLING_CONFIG = {
 	SLOW_INTERVAL_MS: 120000,
 	DRAWER_INTERVAL_MS: 15000,
 	HUD_ACTIVITY_TIMEOUT_MS: 60000,
+	/** Longest a single Sentinel request may hang before it is abandoned. */
+	REQUEST_TIMEOUT_MS: 20000,
+	/** The portfolio replays the whole log, so it is not polled as hard as a tab. */
+	STOCK_PORTFOLIO_MIN_INTERVAL_MS: 45000,
 	STORAGE_HUD_CYCLE: "sentinel_last_hud_cycle",
 } as const;
 
@@ -82,6 +93,74 @@ export const CRIME_SLUG_MAP: Record<string, number> = {
 	"arson-robbery": 13,
 };
 
+/**
+ * Escapes text before it is interpolated into an `innerHTML` template.
+ *
+ * Everything this script renders comes from an API response or from Torn's own
+ * payloads, and both are rendered inside an open shadow root — where an injected
+ * `<img onerror>` is just as live as it would be in the page. Any string that is
+ * not a number this script computed itself goes through here first.
+ */
+export function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
+/**
+ * Parses a date-only string (`2026-10-08`) as local midnight.
+ *
+ * `new Date("2026-10-08")` is UTC midnight, so west of UTC it renders as the 8th
+ * toLocaleDateString's caller and as the 7th to the reader. Anything that is
+ * already a full timestamp is passed through untouched.
+ */
+export function parseDateOnly(value: string): Date {
+	if (value.length === 10 && value[4] === "-") {
+		return new Date(`${value}T00:00:00`);
+	}
+	return new Date(value);
+}
+
+/** Unix seconds as a short local date and time, e.g. "8 Oct, 14:05". */
+export function formatTimestamp(seconds: number | null | undefined): string {
+	if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) {
+		return "—";
+	}
+	return new Date(seconds * 1000).toLocaleString(undefined, {
+		day: "numeric",
+		month: "short",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
+/** Signed, colour-agnostic percentage for display. */
+export function formatPercent(
+	value: number | null | undefined,
+	decimals = 1,
+): string {
+	if (value === null || value === undefined || !Number.isFinite(value))
+		return "—";
+	const sign = value > 0 ? "+" : "";
+	return `${sign}${value.toFixed(decimals)}%`;
+}
+
+/**
+ * Whether the page this script is running in is actually being looked at.
+ *
+ * Torn's scripting rules prohibit extracting data from unfocused pages, and every
+ * page read this script performs is for a badge the player can only see while the
+ * tab is focused. Both the DOM observers and the drawer's poller check this before
+ * doing any work.
+ */
+export function isDocumentVisible(): boolean {
+	if (typeof document === "undefined") return true;
+	return document.visibilityState !== "hidden";
+}
+
 export function formatMoney(val: number): string {
 	if (!Number.isFinite(val) || val === 0) return "$0";
 	const abs = Math.abs(val);
@@ -94,6 +173,11 @@ export function formatMoney(val: number): string {
 	}
 	if (abs >= 1e3) {
 		return `${sign}$${(abs / 1e3).toFixed(1)}k`;
+	}
+	// Sub-dollar figures used to round to "$0", which read as "this earned
+	// nothing" on the crime ROI badges for small amounts.
+	if (abs < 1) {
+		return `${sign}$${abs.toFixed(2)}`;
 	}
 	return `${sign}$${Math.round(abs).toLocaleString()}`;
 }

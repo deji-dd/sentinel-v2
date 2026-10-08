@@ -84,10 +84,12 @@ let cacheInitialized = false;
  * Dynamically resolves from environment variables so that configuration changes are immediately live.
  */
 export async function getServerTypeMappings(): Promise<ServerTypeMapping> {
+	const envElims = getEnvVar("ELIMS_GUILD_ID", "DISCORD_ELIMS_GUILD_ID");
+	const elimsId = envElims || (await getElimsGuildId());
 	return {
 		alliance: getEnvVar("ALLIANCE_GUILD_ID", "DISCORD_ALLIANCE_GUILD_ID"),
 		faction: getEnvVar("FACTION_GUILD_ID", "DISCORD_FACTION_GUILD_ID"),
-		elims: getEnvVar("ELIMS_GUILD_ID", "DISCORD_ELIMS_GUILD_ID"),
+		elims: elimsId,
 		owner: getEnvVar("OWNER_GUILD_ID", "DISCORD_OWNER_GUILD_ID"),
 		merc:
 			getEnvVar("MERC_GUILD_ID", "DISCORD_MERC_GUILD_ID") ||

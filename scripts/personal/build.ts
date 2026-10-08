@@ -50,7 +50,7 @@ function getMetadataBanner(version: string): string {
 // @connect      api.blasted-labs.tech
 // @connect      sentinel.blasted-labs.tech
 // @connect      localhost
-// @connect      *
+// @connect      127.0.0.1
 // @downloadURL  https://api.blasted-labs.tech/v2/personal/script.user.js
 // @updateURL    https://api.blasted-labs.tech/v2/personal/script.user.js
 // @run-at       document-idle

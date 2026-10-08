@@ -13,11 +13,107 @@ export const SHADOW_STYLES = `
 }
 
 /* ─── Floating Launcher ─── */
+/* Keyboard focus must be visible: the launcher, the tabs, sortable headers and the
+   charts are all reachable with Tab, and none of them are links. */
+.blasted-launcher:focus-visible,
+.drawer-tab:focus-visible,
+.btn-icon:focus-visible,
+.btn-pill:focus-visible,
+.btn-chip:focus-visible,
+.btn-paginator:focus-visible,
+.btn-primary:focus-visible,
+.input-text:focus-visible,
+.sortable-table th.sortable:focus-visible,
+.chart-focusable:focus-visible {
+	outline: 2px solid #38bdf8;
+	outline-offset: 2px;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* ─── Sortable Tables ─── */
+.table-header-meta {
+	font-size: 11px;
+	font-weight: 400;
+	color: #94a3b8;
+}
+
+.table-filter-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 12px 10px;
+}
+
+.table-filter {
+	flex: 1;
+	min-width: 0;
+}
+
+.table-filter .input-text {
+	width: 100%;
+	font-size: 12px;
+	padding: 6px 8px;
+}
+
+.sortable-table th.sortable {
+	cursor: pointer;
+	user-select: none;
+	white-space: nowrap;
+}
+
+.sortable-table th.sortable:hover {
+	color: #e2e8f0;
+}
+
+.sortable-table th.sorted {
+	color: #38bdf8;
+}
+
+.sort-hint,
+.sort-active {
+	opacity: 0.55;
+	font-size: 9px;
+	margin-left: 2px;
+}
+
+.sort-active {
+	opacity: 1;
+}
+
+/* ─── Chart Affordances ─── */
+.chart-focusable {
+	cursor: crosshair;
+}
+
+.chart-empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #94a3b8;
+	font-size: 12px;
+	font-family: ui-monospace, monospace;
+	text-align: center;
+	padding: 0 12px;
+}
+
 .blasted-launcher {
 	position: fixed;
 	width: 44px;
 	height: 44px;
+	padding: 0;
 	border-radius: 50%;
+	appearance: none;
 	background: linear-gradient(135deg, #0ea5e9, #6366f1);
 	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 12px rgba(99, 102, 241, 0.35);
 	cursor: grab;
@@ -92,12 +188,6 @@ export const SHADOW_STYLES = `
 
 .blasted-drawer.open {
 	transform: translateX(0);
-}
-
-@media (max-width: 640px) {
-	.blasted-drawer {
-		width: 100vw;
-	}
 }
 
 /* ─── Drawer Header ─── */
@@ -240,6 +330,11 @@ export const SHADOW_STYLES = `
 
 /* ─── Drawer Content Area ─── */
 .drawer-body {
+	/* The container every inner layout query measures. Without this the @container
+	   rules below have no container to match, and a 580px drawer on a wide screen
+	   keeps the narrow two-column layout. */
+	container-type: inline-size;
+	container-name: blasted-drawer;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -282,7 +377,7 @@ export const SHADOW_STYLES = `
 	gap: 10px;
 }
 
-@media (min-width: 480px) {
+@container blasted-drawer (min-width: 470px) {
 	.kpi-grid {
 		grid-template-columns: repeat(3, 1fr);
 	}
@@ -317,7 +412,7 @@ export const SHADOW_STYLES = `
 
 .kpi-sub {
 	font-size: 11px;
-	color: #64748b;
+	color: #94a3b8;
 }
 
 .val-green { color: #34d399 !important; }
@@ -408,6 +503,7 @@ export const SHADOW_STYLES = `
 	height: auto;
 	display: block;
 	user-select: none;
+	overflow: visible;
 }
 
 /* ─── Category Breakdown Table ─── */
@@ -620,7 +716,7 @@ tr:hover td {
 .goal-input-wrap .goal-prefix {
 	font-size: 11px;
 	font-weight: 700;
-	color: #64748b;
+	color: #94a3b8;
 	margin-right: 6px;
 	text-transform: uppercase;
 }
@@ -667,7 +763,7 @@ tr:hover td {
 	margin-top: 10px;
 }
 
-@media (min-width: 480px) {
+@container blasted-drawer (min-width: 470px) {
 	.prediction-results-grid {
 		grid-template-columns: repeat(3, 1fr);
 	}
@@ -700,7 +796,7 @@ tr:hover td {
 
 .prediction-sub {
 	font-size: 11px;
-	color: #64748b;
+	color: #94a3b8;
 }
 
 /* ─── Company Directives & Action Items ─── */
@@ -947,7 +1043,7 @@ tr:hover td {
 }
 
 .td-date {
-	color: #64748b;
+	color: #94a3b8;
 }
 
 .td-num {
@@ -985,6 +1081,404 @@ tr:hover td {
 	letter-spacing: 0.5px;
 	color: #94a3b8;
 	font-size: 10px;
+}
+
+/* ─── Stocks Tab ─── */
+
+.stock-toolbar {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.stock-toolbar-meta {
+	min-width: 0;
+}
+
+.stock-toolbar-title {
+	font-size: 14px;
+	font-weight: 700;
+	color: #f8fafc;
+}
+
+.stock-toolbar-sub {
+	font-size: 11px;
+	color: #94a3b8;
+	margin-top: 2px;
+	line-height: 1.45;
+}
+
+.btn-stocks-sync {
+	width: auto;
+	flex-shrink: 0;
+	padding: 7px 12px;
+	font-size: 11.5px;
+	border-radius: 6px;
+}
+
+.kpi-grid-stocks {
+	grid-template-columns: 1fr 1fr;
+	margin-top: 4px;
+}
+
+.stock-next-payout {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	margin-top: 10px;
+	padding: 8px 10px;
+	border-radius: 6px;
+	background: rgba(15, 23, 42, 0.6);
+	border: 1px solid #334155;
+	font-size: 11.5px;
+	color: #cbd5e1;
+	line-height: 1.45;
+}
+
+.stock-next-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #64748b;
+	flex-shrink: 0;
+}
+
+.stock-next-dot.ready {
+	background: #34d399;
+	box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+}
+
+.stock-table {
+	min-width: 560px;
+}
+
+.stock-catalog-table {
+	min-width: 620px;
+}
+
+.stock-table th[data-sort] {
+	cursor: pointer;
+	user-select: none;
+}
+
+.stock-table th.sorted {
+	color: #38bdf8;
+}
+
+.stock-row {
+	cursor: pointer;
+}
+
+.stock-row.open {
+	background: rgba(56, 189, 248, 0.08);
+}
+
+.stock-owned .stock-acronym {
+	color: #34d399;
+}
+
+.stock-name {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.stock-acronym {
+	font-weight: 700;
+	color: #38bdf8;
+}
+
+.stock-full {
+	font-size: 10px;
+	color: #94a3b8;
+	white-space: normal;
+}
+
+.stock-flags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 3px;
+	margin-top: 3px;
+}
+
+.stock-chip {
+	display: inline-block;
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: 0.3px;
+	text-transform: uppercase;
+	background: rgba(148, 163, 184, 0.14);
+	color: #cbd5e1;
+	border: 1px solid rgba(148, 163, 184, 0.25);
+	white-space: nowrap;
+}
+
+.stock-chip.passive {
+	background: rgba(168, 85, 247, 0.14);
+	border-color: rgba(168, 85, 247, 0.35);
+	color: #d8b4fe;
+}
+
+.stock-chip.owned {
+	background: rgba(52, 211, 153, 0.14);
+	border-color: rgba(52, 211, 153, 0.35);
+	color: #6ee7b7;
+}
+
+.stock-chip.ready {
+	background: rgba(52, 211, 153, 0.2);
+	border-color: rgba(52, 211, 153, 0.45);
+	color: #a7f3d0;
+}
+
+.stock-chip.warn {
+	background: rgba(251, 191, 36, 0.12);
+	border-color: rgba(251, 191, 36, 0.32);
+	color: #fcd34d;
+}
+
+.stock-detail-row td {
+	background: rgba(2, 6, 23, 0.55);
+	padding: 12px 10px 14px;
+	white-space: normal;
+}
+
+.stock-detail-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.stock-detail-stat {
+	min-width: 0;
+}
+
+.stock-detail-label {
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: #94a3b8;
+}
+
+.stock-detail-value {
+	font-size: 12px;
+	font-weight: 700;
+	color: #f1f5f9;
+}
+
+.stock-detail-line {
+	font-size: 11.5px;
+	color: #cbd5e1;
+	line-height: 1.5;
+	margin-bottom: 6px;
+}
+
+.stock-detail-sub {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: #94a3b8;
+	margin: 10px 0 5px;
+}
+
+.stock-benefit-block {
+	border: 1px solid #334155;
+	border-radius: 6px;
+	padding: 9px 10px;
+	background: rgba(15, 23, 42, 0.5);
+}
+
+.stock-benefit-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.stock-benefit-desc {
+	font-size: 11.5px;
+	color: #e2e8f0;
+}
+
+.stock-benefit-meta {
+	font-size: 11px;
+	color: #94a3b8;
+	line-height: 1.55;
+	margin-top: 6px;
+}
+
+.stock-progress {
+	margin-top: 8px;
+}
+
+.stock-progress-track {
+	height: 5px;
+	border-radius: 3px;
+	background: rgba(148, 163, 184, 0.18);
+	overflow: hidden;
+}
+
+.stock-progress-fill {
+	height: 100%;
+	background: #38bdf8;
+	border-radius: 3px;
+}
+
+.stock-progress-fill.ready {
+	background: #34d399;
+}
+
+.stock-progress-label {
+	font-size: 10.5px;
+	color: #94a3b8;
+	margin-top: 5px;
+	line-height: 1.45;
+}
+
+.stock-mini-row {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	font-size: 11px;
+	color: #cbd5e1;
+	padding: 3px 0;
+	border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+}
+
+.stock-mini-what {
+	flex: 1;
+	min-width: 0;
+	color: #94a3b8;
+}
+
+.stock-warning-list {
+	margin: 0;
+	padding-left: 16px;
+}
+
+.stock-warning-list li {
+	font-size: 11px;
+	color: #fcd34d;
+	line-height: 1.5;
+	margin-bottom: 3px;
+}
+
+.stock-rates-body {
+	margin-top: 8px;
+}
+
+.stock-rates-help {
+	font-size: 11px;
+	color: #94a3b8;
+	line-height: 1.55;
+	margin-bottom: 8px;
+}
+
+.stock-rates-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.stock-rate-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: #94a3b8;
+}
+
+.stock-rates-summary {
+	font-size: 11px;
+	color: #cbd5e1;
+	margin-top: 6px;
+}
+
+.stock-catalog-note {
+	font-size: 11px;
+	color: #94a3b8;
+	line-height: 1.5;
+	padding: 0 12px 10px;
+}
+
+.stock-benefit-cell {
+	white-space: normal;
+	font-size: 11px;
+	color: #e2e8f0;
+	min-width: 150px;
+}
+
+.stock-unpriced-note {
+	display: block;
+	font-size: 10px;
+	color: #94a3b8;
+	margin-top: 3px;
+	line-height: 1.4;
+}
+
+.tos-table {
+	margin-top: 12px;
+	border: 1px solid #334155;
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.tos-title {
+	font-size: 11px;
+	font-weight: 700;
+	color: #f1f5f9;
+	padding: 7px 10px;
+	background: rgba(15, 23, 42, 0.7);
+	border-bottom: 1px solid #334155;
+}
+
+.tos-table table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.tos-table th {
+	text-align: left;
+	vertical-align: top;
+	width: 34%;
+	padding: 6px 10px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: #94a3b8;
+	background: rgba(15, 23, 42, 0.35);
+	border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.tos-table td {
+	padding: 6px 10px;
+	font-size: 11px;
+	color: #cbd5e1;
+	line-height: 1.5;
+	border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+/* Touch targets: 21px pills were below every recommended minimum. */
+.btn-pill {
+	min-height: 28px;
+	padding: 6px 10px;
+}
+
+.btn-icon {
+	min-width: 30px;
+	min-height: 30px;
+}
+
+.drawer-tab {
+	min-height: 32px;
 }
 `;
 
@@ -1045,7 +1539,7 @@ export const IN_PAGE_BADGE_STYLES = `
 }
 
 .blasted-crime-badge .badge-sep {
-	color: #64748b;
+	color: #94a3b8;
 }
 
 /* --- Torn Gym In-Page Styles --- */
