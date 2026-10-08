@@ -1,5 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { db, eq, tornStocks, userStocks } from "@sentinel/database";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+	db,
+	eq,
+	systemStates,
+	tornStocks,
+	userStocks,
+} from "@sentinel/database";
 import type { StockPortfolioResponse } from "@sentinel/schemas";
 import { app } from "../src/app";
 
@@ -15,6 +21,9 @@ import { app } from "../src/app";
  * database holding a live account without touching its rows. It writes nothing to
  * `personal_logs` on purpose: the scheduler's ledger tests reconcile that table
  * globally, so a stray row from another test file makes them fail.
+ *
+ * The one shared row it may write is the points-market price, and only when the
+ * database has never synced one; see `seedPointsPrice`.
  */
 
 const TEST_STOCK_ID = 9_000_001;
@@ -23,6 +32,87 @@ const SHARES = 1_000;
 const BUY_PRICE = 200;
 const MARKET_PRICE = 250;
 const DAY = 86_400;
+
+/** State row the route prices payouts paid in points from. */
+const POINTS_PRICE_STATE_ID = "points_market_price";
+/** Stand-in points price, used only when the database holds no synced one. */
+const TEST_POINTS_PRICE = 31_359;
+
+/**
+ * Supplies the points-market price when the database has none.
+ *
+ * `points_market_price` is written by the scheduler's daily Torn reference sync
+ * and by nothing else, so a freshly migrated database — CI, or a new deployment
+ * before the sync has run — has no row at all. The route then reports every
+ * payout paid in points as unpriced, and the assertions below, which cover the
+ * wiring between that row and the payload, would be measuring the presence of
+ * the sync rather than the route.
+ *
+ * A row that is already there is left exactly as it is: on a database holding a
+ * live account it is the real synced price, and a test must not overwrite it.
+ * Only a fixture this file wrote is undone again.
+ */
+let seededPointsPrice = false;
+let originalPointsPrice: typeof systemStates.$inferSelect | undefined;
+
+/** The price a state row carries, mirroring how the route reads it. */
+function readPointsPrice(data: unknown): number {
+	if (!data || typeof data !== "object") return 0;
+	const price = (data as Record<string, unknown>).price;
+	return typeof price === "number" && Number.isFinite(price) && price > 0
+		? price
+		: 0;
+}
+
+async function seedPointsPrice(): Promise<void> {
+	const existing = await db.query.systemStates.findFirst({
+		where: eq(systemStates.id, POINTS_PRICE_STATE_ID),
+	});
+	if (readPointsPrice(existing?.data) > 0) return;
+
+	originalPointsPrice = existing;
+	const now = new Date();
+	await db
+		.insert(systemStates)
+		.values({
+			id: POINTS_PRICE_STATE_ID,
+			data: { price: TEST_POINTS_PRICE },
+			createdAt: now,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: systemStates.id,
+			set: { data: { price: TEST_POINTS_PRICE }, updatedAt: now },
+		});
+	seededPointsPrice = true;
+}
+
+/** Puts back whatever the fixture replaced, so no test leaves state behind. */
+async function restorePointsPrice(): Promise<void> {
+	if (!seededPointsPrice) return;
+	seededPointsPrice = false;
+
+	const original = originalPointsPrice;
+	originalPointsPrice = undefined;
+	if (!original) {
+		await db
+			.delete(systemStates)
+			.where(eq(systemStates.id, POINTS_PRICE_STATE_ID));
+		return;
+	}
+
+	await db
+		.insert(systemStates)
+		.values(original)
+		.onConflictDoUpdate({
+			target: systemStates.id,
+			set: {
+				init: original.init,
+				data: original.data,
+				updatedAt: original.updatedAt,
+			},
+		});
+}
 
 async function cleanup(): Promise<void> {
 	await db.delete(userStocks).where(eq(userStocks.id, TEST_STOCK_ID_STR));
@@ -71,8 +161,13 @@ async function getPortfolio(query = ""): Promise<StockPortfolioResponse> {
 }
 
 describe("Stock portfolio route", () => {
+	beforeAll(async () => {
+		await seedPointsPrice();
+	});
+
 	afterAll(async () => {
 		await cleanup();
+		await restorePointsPrice();
 	});
 
 	test("GET /v2/system/stocks-ledger/state reports the ledger state shape", async () => {
