@@ -1,11 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import {
+	clearStuckBackfillTracking,
 	deriveDirection,
 	hasReachedWatermark,
+	isBackfillCursorStuck,
 	nextPageCursor,
 	normaliseAttack,
+	resolveBackfillWarStart,
+	trackBackfillCursor,
 } from "../src/workers/merc/faction-attack-feed-worker";
-import { isWithinPausedWindow } from "../src/workers/merc/merc-attack-validator-worker";
+import {
+	findStalledFactions,
+	isWithinPausedWindow,
+} from "../src/workers/merc/merc-attack-validator-worker";
 import {
 	qualifiesAsRetal,
 	RETAL_WINDOW_SECONDS,
@@ -134,6 +141,200 @@ describe("Faction Attack Feed - Ingestion & Watermarks", () => {
 			// The feed relies on this comparison to detect the collision and step
 			// the cursor back a second instead of declaring itself caught up.
 			expect(next !== null && next >= cursor).toBe(true);
+		});
+	});
+
+	describe("resolveBackfillWarStart", () => {
+		/** 2026-10-08T16:11Z — "now" at the point the incident was diagnosed. */
+		const NOW = 1_791_475_866;
+		/** Faction 2013's war 50527: declared Oct 6, starting 2026-10-09T13:00Z. */
+		const WAR_50527_START = 1_791_550_800;
+		/** The watermark value faction 2013 froze on: 2026-10-06T11:55:09Z. */
+		const FROZEN_WATERMARK_TS = 1_791_287_709;
+
+		it("ignores a scheduled war, whose start is still in the future", () => {
+			expect(
+				resolveBackfillWarStart(
+					{ warId: 50527, start: WAR_50527_START, opponentFactionId: 10174 },
+					NOW,
+				),
+			).toBeNull();
+		});
+
+		it("keeps the start of a war that has actually begun", () => {
+			const context = {
+				warId: 50527,
+				start: WAR_50527_START,
+				opponentFactionId: 10174,
+			};
+			expect(resolveBackfillWarStart(context, WAR_50527_START)).toBe(
+				WAR_50527_START,
+			);
+			expect(resolveBackfillWarStart(context, WAR_50527_START + 3_600)).toBe(
+				WAR_50527_START,
+			);
+		});
+
+		it("returns null with no war, or a war with no start", () => {
+			expect(resolveBackfillWarStart(null, NOW)).toBeNull();
+			expect(
+				resolveBackfillWarStart(
+					{ warId: 1, start: null, opponentFactionId: null },
+					NOW,
+				),
+			).toBeNull();
+		});
+
+		// The regression this guards: anchoring on a future war start made the
+		// backfill precondition trivially true, so the feed pinned `backfillCursor` at
+		// the newest watermark timestamp. Every later cycle then re-read that same
+		// page, matched the watermark on its first row and returned zero events, so
+		// the watermark could never advance and the pin was re-applied forever —
+		// faction 2013's ingestion stayed dead for two days and lost every merc hit
+		// it landed, including $57M of payable hits on a live contract.
+		it("cannot satisfy the backfill precondition with an unstarted war", () => {
+			// The raw comparison that used to create the pin, which is unavoidable
+			// against a start that has not happened yet.
+			expect(FROZEN_WATERMARK_TS < WAR_50527_START).toBe(true);
+
+			// Anchored through the resolver, that comparison can never be reached.
+			const anchoredWarStart = resolveBackfillWarStart(
+				{ warId: 50527, start: WAR_50527_START, opponentFactionId: 10174 },
+				NOW,
+			);
+			expect(anchoredWarStart).toBeNull();
+			expect(
+				anchoredWarStart !== null && FROZEN_WATERMARK_TS < anchoredWarStart,
+			).toBe(false);
+		});
+	});
+
+	// The deadlock detector. This is the hard invariant that replaces relying on
+	// silence heuristics: a cursor at or past the newest ingested attack cannot make
+	// progress no matter how long it is left alone, which was the true state of
+	// faction 2013's watermark for two days (cursor 1791287709 == lastAttackTimestamp).
+	describe("isBackfillCursorStuck", () => {
+		const watermark = (overrides: {
+			lastAttackTimestamp: number;
+			backfillCursor: number | null;
+		}) => ({
+			lastAttackId: 521733930,
+			lastAttackTimestamp: overrides.lastAttackTimestamp,
+			backfillCursor: overrides.backfillCursor,
+			backfilledWarStart: null,
+			updatedAt: "",
+		});
+
+		it("flags a cursor sitting exactly on the newest ingested attack", () => {
+			expect(
+				isBackfillCursorStuck(
+					watermark({
+						lastAttackTimestamp: 1_791_287_709,
+						backfillCursor: 1_791_287_709,
+					}),
+				),
+			).toBe(true);
+		});
+
+		it("flags a cursor ahead of the newest ingested attack", () => {
+			expect(
+				isBackfillCursorStuck(
+					watermark({
+						lastAttackTimestamp: 1_791_287_709,
+						backfillCursor: 1_791_300_000,
+					}),
+				),
+			).toBe(true);
+		});
+
+		it("accepts a cursor walking strictly behind the watermark", () => {
+			expect(
+				isBackfillCursorStuck(
+					watermark({
+						lastAttackTimestamp: 1_791_287_709,
+						backfillCursor: 1_791_287_709 - 1,
+					}),
+				),
+			).toBe(false);
+		});
+
+		it("accepts a cleared cursor and a missing watermark", () => {
+			expect(
+				isBackfillCursorStuck(
+					watermark({
+						lastAttackTimestamp: 1_791_287_709,
+						backfillCursor: null,
+					}),
+				),
+			).toBe(false);
+			expect(isBackfillCursorStuck(null)).toBe(false);
+			expect(isBackfillCursorStuck(undefined)).toBe(false);
+		});
+	});
+
+	describe("trackBackfillCursor", () => {
+		const FACTION = 2013;
+		type CursorState = {
+			lastAttackId: number;
+			lastAttackTimestamp: number;
+			backfillCursor: number | null;
+			backfilledWarStart: number | null;
+			updatedAt: string;
+		};
+		const stuck: CursorState = {
+			lastAttackId: 1,
+			lastAttackTimestamp: 1_791_287_709,
+			backfillCursor: 1_791_287_709,
+			backfilledWarStart: null,
+			updatedAt: "",
+		};
+		const healthy: CursorState = { ...stuck, backfillCursor: null };
+
+		const observe = (cycles: number, wm: CursorState | null) => {
+			const seen: (string | null)[] = [];
+			for (let i = 0; i < cycles; i += 1) {
+				seen.push(trackBackfillCursor(FACTION, wm));
+			}
+			return seen;
+		};
+
+		it("waits for consecutive stuck cycles before reporting", () => {
+			clearStuckBackfillTracking();
+			// A cursor is legitimately re-written mid-drain, so one cycle proves nothing.
+			expect(observe(2, stuck)).toEqual([null, null]);
+			expect(trackBackfillCursor(FACTION, stuck)).toBe("stuck");
+		});
+
+		it("reports a stalled drain only once", () => {
+			clearStuckBackfillTracking();
+			observe(3, stuck);
+			expect(observe(5, stuck)).toEqual([null, null, null, null, null]);
+		});
+
+		it("reports recovery when the cursor clears, then re-arms", () => {
+			clearStuckBackfillTracking();
+			observe(3, stuck);
+			expect(trackBackfillCursor(FACTION, healthy)).toBe("recovered");
+			expect(trackBackfillCursor(FACTION, healthy)).toBeNull();
+			// A later stall is a new outage and must be reported again.
+			observe(3, stuck);
+			expect(trackBackfillCursor(FACTION, stuck)).toBeNull();
+		});
+
+		it("never reports a healthy faction", () => {
+			clearStuckBackfillTracking();
+			expect(observe(10, healthy)).toEqual(Array(10).fill(null));
+		});
+
+		it("counts each faction independently", () => {
+			clearStuckBackfillTracking();
+			expect(trackBackfillCursor(2013, stuck)).toBeNull();
+			expect(trackBackfillCursor(2013, stuck)).toBeNull();
+			// 27312 starting its own run must not inherit 2013's count.
+			expect(trackBackfillCursor(27312, stuck)).toBeNull();
+			expect(trackBackfillCursor(27312, stuck)).toBeNull();
+			expect(trackBackfillCursor(2013, stuck)).toBe("stuck");
+			expect(trackBackfillCursor(27312, stuck)).toBe("stuck");
 		});
 	});
 
@@ -378,6 +579,82 @@ describe("Merc Attack Validator - Contract Gating", () => {
 				startTime: new Date(now - 60_000).toISOString(),
 			};
 			expect(isStartTimeEditable(contract, now)).toBe(false);
+		});
+	});
+});
+
+describe("Merc Attack Validator - Feed Liveness", () => {
+	const MINUTE_MS = 60_000;
+	const THRESHOLD_MS = 10 * MINUTE_MS;
+	const NOW_MS = 1_791_475_866_000;
+
+	describe("findStalledFactions", () => {
+		it("reports a faction silent past the threshold", () => {
+			expect(
+				findStalledFactions({
+					factionIds: [2013, 27312],
+					lastEventAtByFaction: new Map([
+						[2013, NOW_MS - 11 * MINUTE_MS],
+						[27312, NOW_MS - MINUTE_MS],
+					]),
+					nowMs: NOW_MS,
+					thresholdMs: THRESHOLD_MS,
+					alreadyWarned: new Set(),
+				}),
+			).toEqual([{ factionId: 2013, silentSeconds: 660 }]);
+		});
+
+		it("stays quiet for a faction that is merely between attacks", () => {
+			expect(
+				findStalledFactions({
+					factionIds: [2013],
+					lastEventAtByFaction: new Map([[2013, NOW_MS - 9 * MINUTE_MS]]),
+					nowMs: NOW_MS,
+					thresholdMs: THRESHOLD_MS,
+					alreadyWarned: new Set(),
+				}),
+			).toEqual([]);
+		});
+
+		it("does not repeat a warning for the same outage", () => {
+			expect(
+				findStalledFactions({
+					factionIds: [2013],
+					lastEventAtByFaction: new Map([[2013, NOW_MS - 3_600_000]]),
+					nowMs: NOW_MS,
+					thresholdMs: THRESHOLD_MS,
+					alreadyWarned: new Set([2013]),
+				}),
+			).toEqual([]);
+		});
+
+		// The caller seeds a faction the first time it sees it, so that a fresh boot
+		// is not reported as silent since the epoch.
+		it("ignores a faction that has never been observed", () => {
+			expect(
+				findStalledFactions({
+					factionIds: [2013, 27312],
+					lastEventAtByFaction: new Map([[27312, NOW_MS - MINUTE_MS]]),
+					nowMs: NOW_MS,
+					thresholdMs: THRESHOLD_MS,
+					alreadyWarned: new Set(),
+				}),
+			).toEqual([]);
+		});
+
+		it("never reports a faction we do not ingest", () => {
+			expect(
+				findStalledFactions({
+					factionIds: [27312],
+					lastEventAtByFaction: new Map([
+						[2013, NOW_MS - 3_600_000],
+						[27312, NOW_MS - MINUTE_MS],
+					]),
+					nowMs: NOW_MS,
+					thresholdMs: THRESHOLD_MS,
+					alreadyWarned: new Set(),
+				}),
+			).toEqual([]);
 		});
 	});
 });

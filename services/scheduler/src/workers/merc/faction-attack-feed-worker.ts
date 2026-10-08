@@ -25,7 +25,10 @@ import {
 } from "../../lib/family-master-keys";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
-import { getEngagedWarContext } from "../subversive/ranked-war-worker";
+import {
+	type EngagedWarContext,
+	getEngagedWarContext,
+} from "../subversive/ranked-war-worker";
 
 const logger = new Logger("Scheduler", "FactionAttackFeed");
 
@@ -238,6 +241,101 @@ export function clearAttackWatermarkCache(): void {
 }
 
 /**
+ * Cycles a faction must spend with an unprogressable cursor before it is reported.
+ * A cursor is legitimately re-written mid-cycle while a drain is in flight, so a
+ * single observation is not enough to call it stuck.
+ */
+const STUCK_BACKFILL_REPORT_CYCLES = 3;
+
+/** Consecutive cycles each faction's persisted backfill cursor has been stuck. */
+const stuckBackfillCycles = new Map<number, number>();
+/** Factions already reported stuck, so one stalled drain logs one error. */
+const reportedStuckBackfill = new Set<number>();
+
+/** Test seam: drops cursor-stall tracking so cases start from a clean slate. */
+export function clearStuckBackfillTracking(): void {
+	stuckBackfillCycles.clear();
+	reportedStuckBackfill.clear();
+}
+
+/**
+ * Whether a persisted backfill cursor sits somewhere it can never make progress.
+ *
+ * A cursor must be strictly behind the newest ingested attack. Otherwise paging
+ * `to=<cursor>` returns that already-ingested attack first, `hasReachedWatermark`
+ * stops the loop on it, and the cycle ends with zero events — so the watermark never
+ * advances, the cursor is re-written identically, and forward ingestion for that
+ * faction is halted indefinitely. Healthy cursors walk strictly backwards (or are
+ * cleared), so this predicate does not fire on a working drain.
+ */
+export function isBackfillCursorStuck(
+	watermark: AttackWatermark | null | undefined,
+): boolean {
+	if (!watermark) return false;
+	const cursor = watermark.backfillCursor;
+	if (cursor === null) return false;
+	return cursor >= watermark.lastAttackTimestamp;
+}
+
+/**
+ * Counts consecutive stuck cycles for a faction and reports the two transitions
+ * worth logging: the cursor becoming stuck, and the cursor clearing again.
+ * Returns null while nothing changes.
+ */
+export function trackBackfillCursor(
+	factionId: number,
+	watermark: AttackWatermark | null,
+): "stuck" | "recovered" | null {
+	if (!isBackfillCursorStuck(watermark)) {
+		stuckBackfillCycles.delete(factionId);
+		return reportedStuckBackfill.delete(factionId) ? "recovered" : null;
+	}
+
+	const cycles = (stuckBackfillCycles.get(factionId) ?? 0) + 1;
+	stuckBackfillCycles.set(factionId, cycles);
+
+	if (
+		cycles < STUCK_BACKFILL_REPORT_CYCLES ||
+		reportedStuckBackfill.has(factionId)
+	) {
+		return null;
+	}
+
+	reportedStuckBackfill.add(factionId);
+	return "stuck";
+}
+
+/**
+ * Independent watchdog for the one state this worker can enter that silently halts
+ * ingestion for a faction: a backfill cursor that cannot progress. This is a hard
+ * invariant rather than a timing heuristic, so it stays quiet through ordinary
+ * quiet periods and fires only when the persisted state is provably stuck.
+ *
+ * It exists because this failure is otherwise invisible — the feed keeps polling,
+ * keeps persisting state, and keeps looking healthy from the outside, while every
+ * attack by that faction is dropped. Guarding the code path that created the cursor
+ * is the fix; this is what makes a future recurrence impossible to miss.
+ */
+export async function assertBackfillCursorIsProgressing(
+	factionId: number,
+): Promise<void> {
+	// Reads the in-memory watermark the cycle just settled, so this reflects the
+	// cursor this cycle persisted rather than a stale row.
+	const settled = await getAttackWatermark(factionId);
+	const transition = trackBackfillCursor(factionId, settled);
+
+	if (transition === "stuck") {
+		logger.error(
+			`Faction ${factionId}: backfill cursor ${settled?.backfillCursor} is at or past the newest ingested attack (lastAttackId=${settled?.lastAttackId}, lastAttackTimestamp=${settled?.lastAttackTimestamp}). Paging to that cursor can only return attacks already ingested, so this faction's feed is ingesting NOTHING and its watermark cannot advance — merc hits, retal tracking and war tallies are all blind for it. Clear the stuck cursor and check what anchored the backfill.`,
+		);
+	} else if (transition === "recovered") {
+		logger.info(
+			`Faction ${factionId}: backfill cursor cleared; forward ingestion resumed.`,
+		);
+	}
+}
+
+/**
  * Derives an attack's direction relative to the faction that surfaced it.
  *
  * `/faction/attacks` is queried without a `filters` param so both directions
@@ -329,6 +427,33 @@ export function nextPageCursor(
 	return typeof oldest === "number" && oldest > 0 ? oldest : null;
 }
 
+/**
+ * Resolves the war start that may anchor a backfill walk, or null when no war has
+ * actually begun.
+ *
+ * A ranked war shows up in the war cache while it is still `scheduled`, carrying a
+ * *future* start. Treating that future timestamp as a war start made
+ * `warNeedsBackfill` trivially true — the watermark is always older than a future
+ * timestamp — so the feed pinned `backfillCursor` at the newest watermark value and
+ * then issued `to=<that value>` on every cycle, stopping on the watermark
+ * immediately: zero events, a watermark that could never advance, and the pin
+ * re-applied forever. `historyFloor` was equally unreachable (it pointed into the
+ * future), so the loop never terminated and forward ingestion for that faction
+ * stayed dead until the war ended. Faction 2013 lost every merc hit it landed for
+ * two days this way, including $57M of payable hits on a live contract.
+ *
+ * An unstarted war contributes nothing to backfill: there is no war history to walk
+ * to yet, and the live feed will capture the war from its first second.
+ */
+export function resolveBackfillWarStart(
+	warContext: EngagedWarContext | null,
+	nowSec: number,
+): number | null {
+	const start = warContext?.start;
+	if (start == null) return null;
+	return start <= nowSec ? start : null;
+}
+
 interface IngestResult {
 	events: FactionAttackEvent[];
 	/** False when the burst page budget ran out with backlog remaining. */
@@ -356,8 +481,12 @@ async function ingestFaction(
 	const watermark = await getAttackWatermark(key.factionId);
 	const nowSec = Math.floor(Date.now() / 1000);
 
-	const warContext = getEngagedWarContext(key.factionId);
-	const warStart = warContext?.start ?? null;
+	// An upcoming war deliberately does not anchor backfill: see
+	// `resolveBackfillWarStart` for why a future war start deadlocks this loop.
+	const warStart = resolveBackfillWarStart(
+		getEngagedWarContext(key.factionId),
+		nowSec,
+	);
 	const backfillSeconds =
 		warStart !== null ? WAR_BACKFILL_SECONDS : BACKFILL_SECONDS;
 
@@ -507,10 +636,24 @@ async function ingestFaction(
 			});
 		} else if (!caughtUp && cursor !== null) {
 			await saveAttackWatermark(key.factionId, { backfillCursor: cursor });
-		} else if (watermark && watermark.lastAttackTimestamp > 0) {
-			// Forward run caught up to recent watermark; schedule backfill from watermark down to war start
+		} else if (caughtUp) {
+			// Caught up with no cursor left to walk, so there is nothing below the
+			// watermark left to reconcile: the drain above reads back from the newest
+			// edge until it meets the watermark or runs out of history, which covers
+			// every attack since the watermark — including the whole war, because this
+			// branch is only reachable while the watermark predates the war start.
+			// Converge the war marker instead of scheduling a walk.
+			//
+			// The previous code pinned `backfillCursor` at the watermark timestamp here,
+			// and that cursor can never make progress: paging `to=<watermark timestamp>`
+			// returns the watermark attack first, `hasReachedWatermark` stops the loop on
+			// it, and the history-floor check is never reached. Every cycle then ingested
+			// nothing, re-pinned the identical cursor, and the watermark froze — forward
+			// ingestion for that faction was dead until the war ended. It cost faction
+			// 2013 two days of merc hits ($57M payable) and would equally have been
+			// triggered by an ordinary war starting while the faction was quiet.
 			await saveAttackWatermark(key.factionId, {
-				backfillCursor: watermark.lastAttackTimestamp,
+				backfilledWarStart: warStart,
 			});
 		}
 	} else if (!caughtUp && cursor !== null) {
@@ -525,6 +668,9 @@ async function ingestFaction(
 	) {
 		await saveAttackWatermark(key.factionId, { backfilledWarStart: warStart });
 	}
+
+	// Checked last so it judges the cursor this cycle actually persisted.
+	await assertBackfillCursorIsProgressing(key.factionId);
 
 	return { events, caughtUp };
 }

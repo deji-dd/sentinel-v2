@@ -13,8 +13,12 @@ import {
 import { Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
 import { schedulerEvents } from "../../lib/events";
+import { getFamilyMasterApiKeys } from "../../lib/family-master-keys";
 import type { WorkerStarter } from "../registry";
-import type { FactionAttackEvent } from "./faction-attack-feed-worker";
+import {
+	type FactionAttackEvent,
+	getAttackWatermark,
+} from "./faction-attack-feed-worker";
 import { mercTargetManager } from "./merc-contract-worker";
 
 const logger = new Logger("Scheduler", "MercAttackValidator");
@@ -312,42 +316,162 @@ export async function handleIngestedAttacks(
  * The validator deliberately has no second API path: the feed is the only
  * reader of `/v2/faction/attacks`, so a direct poll here would double the call
  * rate against rate-limited master keys for no additional coverage. The risk
- * worth guarding instead is silence — if the feed stalls while merc contracts
- * are open, hits would stop crediting unnoticed. This detects that and shouts
- * about it instead of silently double-polling.
+ * worth guarding instead is silence — if a faction's feed stalls while merc
+ * contracts are open, its hits would stop crediting unnoticed.
+ *
+ * The guard is per faction, because the feed is per faction: one faction's
+ * ingestion can die while a busy sibling keeps the feed looking healthy overall.
+ * A feed-wide silence check used to live here and was removed, because it was
+ * wrong in both directions: it announced "feed recovered" off a sibling's traffic
+ * while the dead faction stayed dead, and it said nothing at all during the two
+ * days a faction was genuinely blind, since it only spoke while a contract was
+ * open. Its 90s threshold was also mis-calibrated against a stream whose ordinary
+ * inter-attack gaps run from seconds to tens of minutes, so it fired on normal
+ * peacetime pacing.
+ *
+ * Severity is deliberate. A quiet faction is evidence, not proof — with no second
+ * API path, silence cannot be distinguished from a faction that simply is not
+ * attacking, so this warns. The provable case, a backfill cursor that cannot
+ * progress, is a hard error raised by the feed worker itself (see
+ * `assertBackfillCursorIsProgressing`).
  */
-const FEED_STALEN_WARN_MS = 90_000;
-let lastFeedEventAtMs = Date.now();
-let hasWarnedAboutStaleFeed = false;
+/**
+ * Per-faction threshold, deliberately far longer than any per-event cadence: a single
+ * faction can legitimately be quiet for minutes, because a resolved Torn attack takes
+ * minutes and only *completed* attacks reach the feed. Silence this long from a faction
+ * whose members are being paid to hit a live contract target is worth looking at, and
+ * is the failure a feed-wide check cannot attribute to anyone.
+ */
+const FACTION_STALEN_WARN_MS = 10 * 60_000;
 
-/** Called on every feed emission; also seeds the clock so a quiet feed is fine. */
-function markFeedAlive(): void {
-	lastFeedEventAtMs = Date.now();
-	if (hasWarnedAboutStaleFeed) {
-		logger.info(
-			"Faction attack feed recovered; merc validation is receiving data.",
-		);
-		hasWarnedAboutStaleFeed = false;
+/** Newest feed event seen per faction, so one faction's death is visible. */
+const lastFeedEventAtMsByFaction = new Map<number, number>();
+/** Factions already reported as stalled, so one outage logs one warning. */
+const stalledFactionWarnings = new Set<number>();
+
+/**
+ * Records liveness for each faction in a batch, and notes a faction's recovery.
+ *
+ * Per faction rather than one shared clock: a shared clock let any faction's attack
+ * clear the alarm for every faction, which is exactly how a completely blind faction
+ * looked healthy for two days.
+ */
+function markFeedAlive(attacks: FactionAttackEvent[]): void {
+	const nowMs = Date.now();
+
+	for (const attack of attacks) {
+		lastFeedEventAtMsByFaction.set(attack.factionId, nowMs);
+		if (stalledFactionWarnings.delete(attack.factionId)) {
+			logger.info(
+				`Faction ${attack.factionId} attack feed recovered; its merc hits are being validated again.`,
+			);
+		}
 	}
 }
 
 /**
- * Logs loudly when contracts are creditable but no feed data has arrived for an
- * unusually long stretch. An idle faction legitimately produces no attacks, so
- * this only fires while there is something to validate.
+ * Factions whose feeds have gone quiet long enough to be worth looking at.
+ *
+ * A feed-wide check cannot see this: one faction's ingestion can die while another
+ * keeps emitting, which is exactly how faction 2013's merc hits went uncredited for
+ * two days with nothing worse in the log than a flapping "feed recovered" message.
+ * Factions we do not ingest are never considered, unobserved factions must be seeded
+ * by the caller first, and each stalled faction is reported only once per outage.
+ */
+export function findStalledFactions(input: {
+	factionIds: readonly number[];
+	lastEventAtByFaction: ReadonlyMap<number, number>;
+	nowMs: number;
+	thresholdMs: number;
+	alreadyWarned: ReadonlySet<number>;
+}): { factionId: number; silentSeconds: number }[] {
+	const {
+		factionIds,
+		lastEventAtByFaction,
+		nowMs,
+		thresholdMs,
+		alreadyWarned,
+	} = input;
+
+	const stalled: { factionId: number; silentSeconds: number }[] = [];
+
+	for (const factionId of factionIds) {
+		if (alreadyWarned.has(factionId)) continue;
+
+		const lastEventAtMs = lastEventAtByFaction.get(factionId);
+		if (lastEventAtMs === undefined) continue;
+
+		const silentMs = nowMs - lastEventAtMs;
+		if (silentMs < thresholdMs) continue;
+
+		stalled.push({
+			factionId,
+			silentSeconds: Math.round(silentMs / 1000),
+		});
+	}
+
+	return stalled;
+}
+
+/**
+ * Reports factions whose ingestion has stalled while merc contracts are open.
+ *
+ * This is the check that would have caught the pinned-backfill-cursor deadlock in
+ * `faction-attack-feed-worker` immediately instead of two days later, so the stored
+ * watermark is included: a non-null `backfillCursor` is the signature of that
+ * specific stall and says outright that forward ingestion is halted.
+ */
+async function warnAboutStalledFactions(openContracts: number): Promise<void> {
+	const keys = await getFamilyMasterApiKeys();
+	if (keys.length === 0) return;
+
+	const nowMs = Date.now();
+	const factionIds = keys.map((key) => key.factionId);
+
+	// Seed factions on first sight: a faction is measured from when we started
+	// watching it, so a fresh boot is never reported as silent since epoch.
+	for (const factionId of factionIds) {
+		if (!lastFeedEventAtMsByFaction.has(factionId)) {
+			lastFeedEventAtMsByFaction.set(factionId, nowMs);
+		}
+	}
+
+	const stalled = findStalledFactions({
+		factionIds,
+		lastEventAtByFaction: lastFeedEventAtMsByFaction,
+		nowMs,
+		thresholdMs: FACTION_STALEN_WARN_MS,
+		alreadyWarned: stalledFactionWarnings,
+	});
+
+	for (const faction of stalled) {
+		stalledFactionWarnings.add(faction.factionId);
+
+		const watermark = await getAttackWatermark(faction.factionId);
+		const pinnedCursor = watermark?.backfillCursor ?? null;
+
+		// Warned, not errored: silence alone cannot distinguish a broken feed from a
+		// faction that simply is not attacking, and this alert only sees the former.
+		// A pinned cursor is the one case where silence has a stated cause, and that
+		// same condition is raised as a hard error by the feed worker itself.
+		logger.warn(
+			`No faction attack data for faction ${faction.factionId} in ${faction.silentSeconds}s while ${openContracts} merc contract(s) are open — hits by its members ${pinnedCursor !== null ? "are not being validated" : "may be going unvalidated if it is active"}. (watermark: lastAttackId=${watermark?.lastAttackId ?? "none"}, lastAttackTimestamp=${watermark?.lastAttackTimestamp ?? "none"}${pinnedCursor !== null ? `, backfillCursor=${pinnedCursor} PINNED — forward ingestion is halted until the cursor clears` : ""})`,
+		);
+	}
+}
+
+/**
+ * Reports per-faction feed silence while merc contracts are creditable.
+ *
+ * An idle faction legitimately produces no completed attacks for minutes at a time, so
+ * this only runs while something is being paid for, and only warns — see the severity
+ * note in `warnAboutStalledFactions`.
  */
 async function assertFeedIsAlive(): Promise<void> {
 	const contracts = await getValidatableContracts();
 	if (contracts.length === 0) return;
 
-	const silentMs = Date.now() - lastFeedEventAtMs;
-	if (silentMs < FEED_STALEN_WARN_MS) return;
-
-	if (hasWarnedAboutStaleFeed) return;
-	hasWarnedAboutStaleFeed = true;
-	logger.error(
-		`No faction attack data for ${Math.round(silentMs / 1000)}s while ${contracts.length} merc contract(s) are open. Hit validation is stalled — check the '${"subversive:faction_attack_feed"}' worker and master API keys.`,
-	);
+	await warnAboutStalledFactions(contracts.length);
 }
 
 let isSubscriptionActive = false;
@@ -359,8 +483,12 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null;
  * Validation is driven entirely by the shared faction attack feed, which is the
  * sole reader of `/v2/faction/attacks`. Polling here as well would double the
  * call rate against rate-limited master keys without adding coverage, so instead
- * the worker runs a watchdog: if the feed goes silent while contracts are open,
- * that is logged as an error rather than silently stalling payouts.
+ * the worker runs a watchdog: while contracts are creditable, any faction whose feed
+ * has gone quiet is warned about by name, rather than stalling payouts unnoticed.
+ *
+ * That is a heuristic on purpose. The state that provably halts ingestion — a
+ * backfill cursor that cannot progress — is guarded where it is written, in
+ * `faction-attack-feed-worker`, and raised there as an error.
  */
 export const startMercAttackValidatorWorker: WorkerStarter = () => {
 	if (isSubscriptionActive) return;
@@ -369,7 +497,7 @@ export const startMercAttackValidatorWorker: WorkerStarter = () => {
 	schedulerEvents.on(
 		"faction_attacks_ingested",
 		(attacks: FactionAttackEvent[]) => {
-			markFeedAlive();
+			markFeedAlive(attacks);
 			void handleIngestedAttacks(attacks).catch((err: unknown) => {
 				logger.warn(
 					`Merc attack validation failed for an ingested batch: ${err instanceof Error ? err.message : String(err)}`,
