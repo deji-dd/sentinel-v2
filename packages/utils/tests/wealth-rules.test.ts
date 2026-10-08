@@ -136,6 +136,95 @@ describe("mirror pairs", () => {
 	});
 });
 
+describe("rules that were deliberately dropped", () => {
+	test("9027, 6283 and 6222 carry no rule", () => {
+		// Ammo gain is not tracked, and company advertising budget and director pay
+		// are logged without an amount worth reading. Letting them fall to their
+		// band makes them plain neutral history rather than rules the coverage
+		// report has to keep explaining.
+		for (const logId of [9027, 6283, 6222]) {
+			expect(getWealthRule(logId), `log ${logId} still has a rule`).toBeNull();
+		}
+	});
+
+	test("dropping them did not leave them looking unpriced", () => {
+		// A band fallback is unpriced only when the payload could carry value. These
+		// payloads hold nothing the ledger would ever value, so they are neutral
+		// rather than gaps.
+		for (const logId of [9027, 6283, 6222]) {
+			expect(getWealthBand(logId)?.priced).toBe(false);
+		}
+	});
+});
+
+describe("points", () => {
+	test("every point-spend log id declares points leaving, not arriving", () => {
+		// The first version of this table omitted the sign on the points terms,
+		// which defaulted to "+" and made every refill read as points ARRIVING.
+		const spendIds = [
+			4900, 4905, 4910, 4915, 4925, 4930, 4935, 4940, 4945, 4950, 4955, 4965,
+			4970, 4976, 4977,
+		];
+		for (const logId of spendIds) {
+			const rule = getWealthRule(logId);
+			expect(rule, `log ${logId} has no rule`).not.toBeNull();
+			const points = rule?.units?.find((unit) => unit.unit === "points");
+			expect(points, `log ${logId} does not move points`).toBeDefined();
+			expect(points?.sign, `log ${logId} moves points the wrong way`).toBe(-1);
+			expect(points?.fields).toContain("points_used");
+		}
+	});
+
+	test("buying and selling points are mirror-signed swaps", () => {
+		const buy = getWealthRule(5010)?.units?.find((u) => u.unit === "points");
+		const sell = getWealthRule(5011)?.units?.find((u) => u.unit === "points");
+		// Buying receives points, selling gives them away.
+		expect(buy?.sign ?? 1).toBe(1);
+		expect(sell?.sign).toBe(-1);
+	});
+
+	test("no rule reads a points count out of a dollar field", () => {
+		// The points market logs legitimately call the count `quantity`, so field
+		// names alone cannot be the test. What matters is the reverse: a field that
+		// holds MONEY must never be multiplied by the price of a point. That
+		// mistake on 4220 (`total_value`, a dollar figure) added $6.9 trillion to
+		// the ledger before the audit caught it.
+		//
+		// Only units the engine has a RATE for can inflate a total, and points is
+		// currently the only one. `8800`'s `cost` really is a token count (6
+		// tokens), and casino tokens have no rate, so that shape cannot do harm.
+		const RATED_UNITS = new Set(["points"]);
+		const DOLLAR_FIELDS = new Set([
+			"total_value",
+			"value_each",
+			"cost",
+			"cost_each",
+			"cost_total",
+			"worth",
+			"price",
+			"price_each",
+			"price_total",
+			"money",
+			"profit",
+			"final_price",
+			"bid_price",
+			"upkeep_paid",
+			"upkeep_due",
+		]);
+		for (const rule of WEALTH_LOG_RULES) {
+			for (const unit of rule.units ?? []) {
+				if (!RATED_UNITS.has(unit.unit)) continue;
+				for (const field of unit.fields) {
+					expect(
+						DOLLAR_FIELDS.has(field),
+						`log ${rule.logId} values \`${field}\`, which holds money, as a ${unit.unit} count`,
+					).toBe(false);
+				}
+			}
+		}
+	});
+});
+
 describe("bands", () => {
 	test("bands are ordered and do not overlap", () => {
 		for (let index = 1; index < WEALTH_LOG_BANDS.length; index += 1) {

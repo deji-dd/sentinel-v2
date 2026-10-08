@@ -463,8 +463,8 @@ export class WealthTab {
 							</tr>
 							${accountRows}
 							<tr>
-								<td>Items at market value</td>
-								<td class="text-right">${formatMoney(balances.itemsValue)}</td>
+								<td>Items &amp; points at market value</td>
+								<td class="text-right">${formatMoney(balances.holdingsValue)}</td>
 							</tr>
 							<tr>
 								<td><strong>Tracked net worth</strong></td>
@@ -883,8 +883,9 @@ export class WealthTab {
 					coverage.unpricedEvents > 0
 						? `<div style="padding: 0 14px 12px; font-size: 12px; color: #fbbf24;">
 								${formatNumber(coverage.unpricedEvents)} events could not be fully priced,
-								carrying ${formatMoney(coverage.unpricedAmount)} of movement. Those
-								amounts are excluded from the totals rather than counted as zero.
+								carrying ${formatMoney(coverage.unpricedAmount)} of recorded movement.
+								What could be measured is included and the rest is not, so these totals
+								are a floor rather than a total.
 								<button id="wealth-show-unpriced" class="btn-pill" style="margin-left: 6px;">Review them ↓</button>
 							</div>`
 						: ""

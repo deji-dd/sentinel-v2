@@ -87,6 +87,8 @@ export type WealthEvent = {
 	/** Market value of `itemsIn`, in dollars. Zero when nothing could be priced. */
 	itemsInValue: number;
 	itemsOutValue: number;
+	/** Dollars the `units` on this event were worth, signed. */
+	unitsValue: number;
 	netWorthDelta: number;
 	/** False when any part of the effect could not be established. */
 	priced: boolean;
@@ -102,6 +104,16 @@ export type WealthEvent = {
 export type WealthClassifyContext = {
 	/** Item market prices keyed by item id, as strings. Missing means unpriced. */
 	itemPrices: ReadonlyMap<string, number>;
+	/**
+	 * Dollars per unit for resources that trade: currently `points`.
+	 *
+	 * Points are money in every sense that matters — they are bought, sold and
+	 * hold a market price — so spending 25 of them on an energy refill is a real
+	 * cost, and buying them is a swap rather than an expense. A unit with no rate
+	 * here contributes nothing and is reported as such, never as a zero that reads
+	 * like "worthless".
+	 */
+	unitRates?: ReadonlyMap<string, number>;
 };
 
 // ─── Payload reading ─────────────────────────────────────────────────────────
@@ -388,13 +400,19 @@ export function classifyWealthLog(
 	const itemsOut = rule?.itemsOut ? readItems(payload, rule.itemsOut) : [];
 
 	const units: WealthUnitRef[] = [];
+	let unitsValue = 0;
+	let valuedUnitSeen = false;
 	if (rule?.units) {
 		for (const unit of rule.units) {
 			const quantity = evaluateTerms(payload, [
 				{ fields: unit.fields, sign: unit.sign ?? 1 },
 			]);
-			if (quantity !== null && quantity !== 0) {
-				units.push({ unit: unit.unit, quantity });
+			if (quantity === null || quantity === 0) continue;
+			units.push({ unit: unit.unit, quantity });
+			const rate = ctx.unitRates?.get(unit.unit);
+			if (rate !== undefined && rate > 0) {
+				valuedUnitSeen = true;
+				unitsValue += quantity * rate;
 			}
 		}
 	}
@@ -415,14 +433,25 @@ export function classifyWealthLog(
 	// forum post moved nothing. Only a payload that does carry something stays
 	// unpriced, which is what keeps the coverage count meaningful instead of
 	// padding it with every message the account has ever sent.
-	const rulePriced = rule
-		? (rule.priced ?? true)
-		: !payloadCarriesValue(payload);
+	let rulePriced = rule ? (rule.priced ?? true) : !payloadCarriesValue(payload);
+
+	// A rule whose only declared effect is units has nothing to value unless a
+	// rate for one of them is known. Reporting that as priced-zero would say "this
+	// cost nothing" about a refill that cost 25 points.
+	if (rule && !valuedUnitSeen && units.length > 0) {
+		const unitsAreTheOnlyEffect =
+			rule.wallet === undefined &&
+			rule.account === undefined &&
+			rule.itemsIn === undefined &&
+			rule.itemsOut === undefined;
+		if (unitsAreTheOnlyEffect) rulePriced = false;
+	}
+
 	const priced =
 		rulePriced && amountResolved && inValue.complete && outValue.complete;
 
 	const netWorthDelta =
-		walletDelta + accountDelta + inValue.value - outValue.value;
+		walletDelta + accountDelta + inValue.value - outValue.value + unitsValue;
 
 	return {
 		id: `ledger_ev_${row.id}`,
@@ -439,6 +468,7 @@ export function classifyWealthLog(
 		units,
 		itemsInValue: inValue.value,
 		itemsOutValue: outValue.value,
+		unitsValue,
 		netWorthDelta,
 		priced,
 		mirrored: rule ? !resolveMirror(rule) : false,
@@ -459,6 +489,8 @@ export type WealthTotals = {
 	accountDeltas: Record<WealthAccount, number>;
 	itemsInValue: number;
 	itemsOutValue: number;
+	/** Dollars the `units` on this event were worth, signed. */
+	unitsValue: number;
 	netWorthDelta: number;
 	eventCount: number;
 	pricedEvents: number;
@@ -497,6 +529,7 @@ export function summariseWealth(events: readonly WealthEvent[]): WealthTotals {
 		accountDeltas: emptyAccountDeltas(),
 		itemsInValue: 0,
 		itemsOutValue: 0,
+		unitsValue: 0,
 		netWorthDelta: 0,
 		eventCount: 0,
 		pricedEvents: 0,
@@ -516,6 +549,7 @@ export function summariseWealth(events: readonly WealthEvent[]): WealthTotals {
 		}
 		totals.itemsInValue += event.itemsInValue;
 		totals.itemsOutValue += event.itemsOutValue;
+		totals.unitsValue += event.unitsValue;
 		totals.netWorthDelta += event.netWorthDelta;
 		if (event.walletDelta > 0) totals.walletIn += event.walletDelta;
 		if (event.walletDelta < 0) totals.walletOut += -event.walletDelta;
@@ -639,12 +673,13 @@ export function computeLedgerNetWorthChange(
  */
 export function deriveOpeningBalances(input: {
 	observedWallet: number;
-	observedItemsValue: number;
+	/** Observed value of everything held that is not cash: items and points. */
+	observedHoldingsValue: number;
 	observedAccounts: Partial<Record<WealthAccount, number>>;
 	todayEvents: readonly WealthEvent[];
 }): {
 	wallet: number;
-	itemsValue: number;
+	holdingsValue: number;
 	accounts: Partial<Record<WealthAccount, number>>;
 } {
 	const totals = summariseWealth(input.todayEvents);
@@ -658,8 +693,12 @@ export function deriveOpeningBalances(input: {
 
 	return {
 		wallet: input.observedWallet - totals.walletNet,
-		itemsValue:
-			input.observedItemsValue - (totals.itemsInValue - totals.itemsOutValue),
+		// Holdings cover items AND traded resources (points). Leaving the points leg
+		// out would unwind only half of the day's holding movement and anchor the
+		// ledger on a figure that is too high.
+		holdingsValue:
+			input.observedHoldingsValue -
+			(totals.itemsInValue - totals.itemsOutValue + totals.unitsValue),
 		accounts,
 	};
 }
@@ -674,9 +713,10 @@ export function deriveOpeningBalances(input: {
 export function computeTrackedNetWorth(input: {
 	wallet: number;
 	accounts: Partial<Record<WealthAccount, number>>;
-	itemsValue: number;
+	/** Items and traded resources, valued at market. */
+	holdingsValue: number;
 }): number {
-	let total = input.wallet + input.itemsValue;
+	let total = input.wallet + input.holdingsValue;
 	for (const value of Object.values(input.accounts)) {
 		if (typeof value === "number") total += value;
 	}

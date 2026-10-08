@@ -137,8 +137,14 @@ export interface WealthBalances {
 	wallet: number;
 	/** Every non-wallet balance the player owns, keyed by account. */
 	accounts: Partial<Record<WealthAccountKey, number>>;
-	/** Value of items the ledger has seen move since day zero. */
-	itemsValue: number;
+	/**
+	 * Value of everything held that is not cash, at market: items AND points.
+	 *
+	 * Points are included because they trade and therefore have a price, and
+	 * excluding them would make spending 25 points on a refill a one-way loss
+	 * against a holding the ledger never counted.
+	 */
+	holdingsValue: number;
 	/** `wallet + accounts + itemsValue`, as far as the ledger can account for it. */
 	trackedNetWorth: number;
 	/** Torn's own net worth figure, or null when it could not be read. */
@@ -218,6 +224,12 @@ export interface WealthKPIs {
 	walletOut: number;
 	walletNet: number;
 	accountNet: number;
+	/**
+	 * Non-cash movement: items and points together.
+	 *
+	 * The ledger stores their sum rather than the split, so this is the figure a
+	 * window can honestly report.
+	 */
 	itemsInValue: number;
 	itemsOutValue: number;
 	netWorthDelta: number;

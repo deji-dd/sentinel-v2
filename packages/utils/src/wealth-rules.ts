@@ -437,6 +437,49 @@ export function payloadCarriesValue(payload: Record<string, unknown>): boolean {
 }
 
 /**
+ * Spending points.
+ *
+ * Torn charges a fixed price in points for each of these — 25 for an energy or
+ * nerve refill, 250 for a merit, 50 for a racing licence — and `points_used` is
+ * in every payload, so the cost is read rather than assumed. A handful of rows
+ * carry `points_used: 0` (a free refill from a merit or a faction perk), and
+ * those correctly cost nothing.
+ *
+ * The sign is negative: the points leave. Getting that wrong was a real bug in
+ * the first version of this table, where the omitted sign defaulted to "+" and
+ * every refill read as points *arriving*.
+ */
+function POINTS_SPEND_RULES(): WealthRule[] {
+	const ids: Array<[number, string]> = [
+		[4900, "Points spent on an energy refill"],
+		[4905, "Points spent on a nerve refill"],
+		[4910, "Points spent on casino tokens"],
+		[4915, "Points spent unlocking the stock ticker"],
+		[4925, "Points spent on enemy capacity"],
+		[4930, "Points spent unlocking the racing licence"],
+		[4935, "Points spent unlocking city watch"],
+		[4940, "Points spent unlocking the display case"],
+		[4945, "Points spent unlocking the bazaar"],
+		[4950, "Points spent on a merit"],
+		[4955, "Points spent resetting merits"],
+		[4965, "Points spent unlocking an honour"],
+		[4970, "Points spent unlocking a hairstyle"],
+		[4976, "Points spent equipping a hairstyle"],
+		[4977, "Points spent unequipping a hairstyle"],
+	];
+	return ids.map(([logId, label]) =>
+		rule({
+			logId,
+			label,
+			category: "items",
+			units: [{ unit: "points", fields: ["points_used"], sign: -1 }],
+			evidence:
+				"`points_used` is in the payload (25 for a refill, 250 for a merit), and points trade on the points market, so this is a real cost rather than an unpriced event.",
+		}),
+	);
+}
+
+/**
  * Containers that pay out what was inside them.
  *
  * The generic consumable rule below records an item leaving and nothing else,
@@ -797,10 +840,10 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		logId: 4220,
 		label: "Shop sale (points)",
 		category: "shops",
-		units: [{ unit: "points", fields: ["total_value"] }],
+		...NEUTRAL,
 		priced: false,
 		evidence:
-			"Payload is `{ quantity, value_each, total_value }` with no item id, so which stack was sold cannot be established and the event is flagged rather than half-booked.",
+			"Payload is `{ quantity, value_each: 45000, total_value }` with no item id. `total_value` is a DOLLAR figure — treating it as a points count multiplied it by the points price and added trillions to the ledger — and with the stack unnamed there is nothing to value. Left flagged rather than guessed at.",
 	}),
 
 	// ─── Auctions ──────────────────────────────────────────────────────────────
@@ -1040,41 +1083,26 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 	}),
 
 	// ─── Points ────────────────────────────────────────────────────────────────
-	rule({
-		logId: 4900,
-		label: "Points spent on energy refill",
-		category: "items",
-		units: [{ unit: "points", fields: ["points_used"] }],
-		priced: false,
-	}),
-	rule({
-		logId: 4905,
-		label: "Points spent on nerve refill",
-		category: "items",
-		units: [{ unit: "points", fields: ["points_used"] }],
-		priced: false,
-	}),
-	rule({
-		logId: 4910,
-		label: "Points spent on casino tokens",
-		category: "items",
-		units: [{ unit: "points", fields: ["points_used"] }],
-		priced: false,
-	}),
+	// Points are the one resource that trades, so spending them is a real cost of
+	// `points_used × the points-market price` rather than an unpriced event. Every
+	// log id in the 4900-4999 band carries the same `points_used` field, so the
+	// family is generated and the field cannot drift between them.
+	...POINTS_SPEND_RULES(),
 	rule({
 		logId: 5000,
 		label: "Points listed for sale",
 		category: "points_market",
 		units: [{ unit: "points", fields: ["quantity"], sign: -1 }],
-		priced: false,
 	}),
 	rule({
 		logId: 5001,
 		label: "Points listing removed",
 		category: "points_market",
 		units: [{ unit: "points", fields: ["quantity"] }],
-		priced: false,
 	}),
+	// Buying and selling points are SWAPS once the points side is valued: cash out
+	// against points in, and the reverse. Leaving the points side at zero made
+	// buying points look like a pure loss and selling them like pure profit.
 	rule({
 		logId: 5010,
 		label: "Points purchased",
@@ -1087,7 +1115,7 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Points sold",
 		category: "points_market",
 		wallet: [{ fields: ["cost_total"], sign: 1 }],
-		units: [{ unit: "points", fields: ["quantity"] }],
+		units: [{ unit: "points", fields: ["quantity"], sign: -1 }],
 	}),
 
 	// ─── Merits, awards, levels ────────────────────────────────────────────────
@@ -1127,7 +1155,7 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		units: [{ unit: "points", fields: ["points"] }],
 		...NEUTRAL,
 		evidence:
-			"Payload is `{ item: 571, item2: 367, level: 10, points: 250, donator_days: 31 }` — two items and points, all arriving.",
+			"Payload is `{ item: 571, item2: 367, level: 10, points: 250, donator_days: 31 }` — two items and some points, all arriving.",
 	}),
 
 	// ─── Gym, jail, medical ────────────────────────────────────────────────────
@@ -1515,10 +1543,10 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		logId: 5585,
 		label: "Donation reward",
 		category: "events",
+		units: [{ unit: "points", fields: ["points"] }],
 		...NEUTRAL,
-		priced: false,
 		evidence:
-			"A donation reward: `points` and `donator_days`, neither of which is Torn cash. The real-money subscription price is not the player's money either.",
+			"`points` and `donator_days`. The days are not tradeable; the points are, and arrive.",
 	}),
 	rule({
 		logId: 5600,
@@ -1584,7 +1612,9 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Crime points gain",
 		category: "crime",
 		units: [{ unit: "points", fields: ["points_gained"] }],
-		priced: false,
+		...NEUTRAL,
+		evidence:
+			"Points arriving are worth what points are worth, so the gain is valued the same way a spend is — otherwise points would only ever cost the ledger money.",
 	}),
 	rule({
 		logId: 9000,
@@ -1623,14 +1653,7 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Crime points gain",
 		category: "crime",
 		units: [{ unit: "points", fields: ["points_gained"] }],
-		priced: false,
-	}),
-	rule({
-		logId: 9027,
-		label: "Crime ammo gain",
-		category: "crime",
-		units: [{ unit: "ammo", fields: ["ammo_gained"] }],
-		priced: false,
+		...NEUTRAL,
 	}),
 	rule({
 		logId: 9030,
@@ -2129,13 +2152,6 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 			"`pay` is dollars and ranges 0 to 2,500,000 across the account's history; `job_points` beside it is the separate points figure.",
 	}),
 	rule({
-		logId: 6222,
-		label: "Director pay",
-		category: "company",
-		...NEUTRAL,
-		priced: false,
-	}),
-	rule({
 		logId: 6263,
 		label: "Company train sent",
 		category: "company",
@@ -2184,13 +2200,6 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Company stock order",
 		category: "company",
 		wallet: [{ fields: ["cost"], sign: -1 }],
-	}),
-	rule({
-		logId: 6283,
-		label: "Company advertising budget",
-		category: "company",
-		...NEUTRAL,
-		priced: false,
 	}),
 	rule({
 		logId: 6290,
@@ -2315,7 +2324,8 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Faction points deposit",
 		category: "faction",
 		units: [{ unit: "points", fields: ["points_deposited"], sign: -1 }],
-		priced: false,
+		evidence:
+			"Points leaving for the faction bank, the points equivalent of the 6726 money deposit.",
 	}),
 	rule({
 		logId: 6725,
@@ -2412,17 +2422,18 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		logId: 6740,
 		label: "Faction points given",
 		category: "faction",
-		units: [{ unit: "points", fields: ["points_given"], sign: -1 }],
-		mirrorOf: 6741,
-		priced: false,
+		...NEUTRAL,
+		evidence:
+			"The send line, naming a `receiver` who can be any member; the points come out of the faction's balance, not the player's holding. 6741 is the receive side and is the one to book.",
 	}),
 	rule({
 		logId: 6741,
 		label: "Faction points received",
 		category: "faction",
 		units: [{ unit: "points", fields: ["points_given"] }],
-		mirrorOf: 6740,
-		priced: false,
+		...NEUTRAL,
+		evidence:
+			"The receive line, shaped exactly like the money pair: the player either took points from the faction or was given them, and points arrive either way.",
 	}),
 	rule({
 		logId: 6742,
@@ -2934,7 +2945,7 @@ export const WEALTH_LOG_RULES: readonly WealthRule[] = [
 		label: "Wheel spin won points",
 		category: "casino",
 		units: [{ unit: "points", fields: ["points"] }],
-		priced: false,
+		...NEUTRAL,
 	}),
 	rule({
 		logId: 8376,

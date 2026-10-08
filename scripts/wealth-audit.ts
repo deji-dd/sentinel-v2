@@ -56,8 +56,10 @@ import {
 	and,
 	closeDatabase,
 	db,
+	eq,
 	gte,
 	personalLogs,
+	systemStates,
 	tornItems,
 } from "../packages/database";
 import {
@@ -171,6 +173,25 @@ async function main(): Promise<void> {
 
 	console.log("Loading item market prices...");
 	const prices = await loadItemPrices();
+
+	// The same daily figure the worker and the stocks ledger read, so the audit
+	// values points exactly as the ledger will.
+	const [pointsState] = await db
+		.select({ data: systemStates.data })
+		.from(systemStates)
+		.where(eq(systemStates.id, "points_market_price"))
+		.limit(1);
+	const pointsPrice =
+		pointsState?.data && typeof pointsState.data === "object"
+			? readNumber((pointsState.data as Record<string, unknown>).price)
+			: null;
+	const unitRates = new Map<string, number>();
+	if (pointsPrice !== null && pointsPrice > 0) {
+		unitRates.set("points", pointsPrice);
+	}
+	console.log(
+		`Points priced at ${pointsPrice !== null && pointsPrice > 0 ? `$${pointsPrice.toLocaleString("en-US")}` : "UNPRICED (no reference sync yet)"}.\n`,
+	);
 	console.log(
 		`Priced ${prices.size} items (of ${(await db.select({ id: tornItems.id }).from(tornItems)).length}).\n`,
 	);
@@ -191,7 +212,10 @@ async function main(): Promise<void> {
 			timestamp: row.timestamp,
 			data: row.data,
 		};
-		const event = classifyWealthLog(wealthRow, { itemPrices: prices });
+		const event = classifyWealthLog(wealthRow, {
+			itemPrices: prices,
+			unitRates,
+		});
 
 		const report =
 			byType.get(event?.logType ?? row.log) ??

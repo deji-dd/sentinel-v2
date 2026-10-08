@@ -323,7 +323,7 @@ async function loadBalances(
 		return {
 			wallet: 0,
 			accounts: {},
-			itemsValue: 0,
+			holdingsValue: 0,
 			trackedNetWorth: 0,
 			tornNetWorth: null,
 			netWorthDrift: null,
@@ -367,9 +367,9 @@ async function loadBalances(
 		accounts[key] = (accounts[key] ?? 0) + Number(row.total);
 	}
 
-	const itemsValue = anchor.itemsValue + (assetNet - walletNet - accountNet);
+	const holdingsValue = anchor.itemsValue + (assetNet - walletNet - accountNet);
 	const wallet = anchor.wallet + walletNet;
-	let trackedNetWorth = wallet + itemsValue;
+	let trackedNetWorth = wallet + holdingsValue;
 	for (const value of Object.values(accounts)) {
 		if (typeof value === "number") trackedNetWorth += value;
 	}
@@ -386,7 +386,7 @@ async function loadBalances(
 	return {
 		wallet,
 		accounts,
-		itemsValue,
+		holdingsValue,
 		trackedNetWorth,
 		tornNetWorth,
 		netWorthDrift:
@@ -463,9 +463,9 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 				.from(ledgerEvents)
 				.where(where);
 
-			// Item legs are recovered from assetDelta, which is by construction
-			// wallet + account + items.
-			const itemsInValue =
+			// The non-cash legs are recovered from netWorthDelta, which is by
+			// construction wallet + account + items + points.
+			const nonCashValue =
 				Number(totals?.netWorthDelta ?? 0) -
 				Number(totals?.walletNet ?? 0) -
 				Number(totals?.accountNet ?? 0);
@@ -475,7 +475,7 @@ export const wealthLedgerRoutes = new Elysia({ prefix: "/wealth-ledger" })
 				walletOut: Number(totals?.walletOut ?? 0),
 				walletNet: Number(totals?.walletNet ?? 0),
 				accountNet: Number(totals?.accountNet ?? 0),
-				itemsInValue,
+				itemsInValue: nonCashValue,
 				itemsOutValue: 0,
 				netWorthDelta: Number(totals?.netWorthDelta ?? 0),
 				events: Number(totals?.events ?? 0),

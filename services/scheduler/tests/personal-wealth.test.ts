@@ -127,6 +127,30 @@ describe("ledger readiness", () => {
 	});
 });
 
+describe("concurrent anchoring", () => {
+	test("a second caller waits for the anchor instead of starting a rival one", async () => {
+		// Both the module's startup call and the runner's immediate first tick
+		// reach init on the same boot. Two rebuilds would interleave their deletes
+		// and race for the same anchor row.
+		const { initWealthTracking, resetWealthInitGuard } = await import(
+			"../src/workers/personal/wealth"
+		);
+		resetWealthInitGuard();
+
+		// In a test process init refuses to run, but the guard is what is under
+		// test: the second call must receive the SAME promise, not a new attempt.
+		const first = initWealthTracking();
+		const second = initWealthTracking();
+		expect(second).toBe(first);
+
+		await first;
+		// Once it settles the guard clears, so the hourly retry can try again.
+		const third = initWealthTracking();
+		expect(third).not.toBe(first);
+		await third;
+	});
+});
+
 describe("balance snapshot", () => {
 	test("reads the v2 nested money selection", async () => {
 		tornApi.get = (async (path: string) => {

@@ -180,6 +180,50 @@ export function getWealthState(): WealthState {
 
 // ─── Reference data ──────────────────────────────────────────────────────────
 
+/**
+ * The id `torn:references` writes the daily points-market average under.
+ *
+ * That worker already samples the top 5,000 points of the points market and
+ * stores a volume-weighted average here once a day, and the stocks ledger reads
+ * it for the same reason this one does: points are the one resource with a real
+ * market price, so anything paid in points can be valued honestly. Reading it
+ * beats fetching a second copy and disagreeing about the price.
+ */
+const POINTS_PRICE_STATE_ID = "points_market_price";
+
+/**
+ * Dollars per point, or 0 when the reference sync has not run yet.
+ *
+ * Zero means "unknown", never "worthless": the classifier treats a unit with no
+ * rate as unvalued and reports it, rather than quietly counting it as nothing.
+ */
+export async function loadPointsPrice(): Promise<number> {
+	try {
+		const record = await db.query.systemStates.findFirst({
+			where: eq(systemStates.id, POINTS_PRICE_STATE_ID),
+		});
+		const data =
+			record?.data && typeof record.data === "object"
+				? (record.data as Record<string, unknown>)
+				: {};
+		const price = readNumber(data.price);
+		return price !== null && price > 0 ? price : 0;
+	} catch (error) {
+		logger.warn(
+			`Could not read the points market price: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return 0;
+	}
+}
+
+/** Unit rates the engine values resources with. */
+async function loadUnitRates(): Promise<Map<string, number>> {
+	const points = await loadPointsPrice();
+	const rates = new Map<string, number>();
+	if (points > 0) rates.set("points", points);
+	return rates;
+}
+
 let cachedItemPrices: Map<string, number> | null = null;
 let cachedItemPricesAt = 0;
 const ITEM_PRICE_TTL_MS = 15 * 60_000;
@@ -344,7 +388,10 @@ export type BaselineSnapshot = {
 	caymanBank: number;
 	tornNetWorth: number | null;
 	items: ObservedItem[];
-	itemsValue: number;
+	/** Items AND points, valued at market. */
+	holdingsValue: number;
+	/** The points holding on its own, for the log line. */
+	pointsValue: number;
 	/** Categories whose inventory page could not be read, by name. */
 	failures: string[];
 	raw: Record<string, unknown>;
@@ -518,6 +565,11 @@ export async function snapshotBalances(
 		itemsValue += (prices.get(item.itemId) ?? 0) * item.quantity;
 	}
 
+	// Points are held, trade, and have a daily price from the reference sync, so
+	// they belong in the same figure the item holdings do.
+	const pointsPrice = await loadPointsPrice();
+	const pointsValue = points * pointsPrice;
+
 	return {
 		wallet,
 		points,
@@ -527,7 +579,8 @@ export async function snapshotBalances(
 		caymanBank,
 		tornNetWorth,
 		items,
-		itemsValue,
+		holdingsValue: itemsValue + pointsValue,
+		pointsValue,
 		failures,
 		raw: {
 			money: money as Record<string, unknown>,
@@ -559,8 +612,11 @@ function toWealthRow(row: PersonalLogRow): WealthLogRow {
 }
 
 async function classifyRows(rows: PersonalLogRow[]): Promise<WealthEvent[]> {
-	const prices = await loadItemPrices();
-	const ctx = { itemPrices: prices };
+	const [prices, unitRates] = await Promise.all([
+		loadItemPrices(),
+		loadUnitRates(),
+	]);
+	const ctx = { itemPrices: prices, unitRates };
 	const events: WealthEvent[] = [];
 	for (const row of rows) {
 		const event = classifyWealthLog(toWealthRow(row), ctx);
@@ -860,7 +916,7 @@ export async function computeBalances(): Promise<WealthBalances> {
 		return {
 			wallet: 0,
 			accounts: {},
-			itemsValue: 0,
+			holdingsValue: 0,
 			trackedNetWorth: 0,
 			tornNetWorth: null,
 			netWorthDrift: null,
@@ -904,18 +960,18 @@ export async function computeBalances(): Promise<WealthBalances> {
 		accounts[key] = (accounts[key] ?? 0) + Number(row.total);
 	}
 
-	const itemsValue = anchor.itemsValue + (assetNet - walletNet - accountNet);
+	const holdingsValue = anchor.itemsValue + (assetNet - walletNet - accountNet);
 	const wallet = anchor.wallet + walletNet;
 	const trackedNetWorth = computeTrackedNetWorth({
 		wallet,
 		accounts,
-		itemsValue,
+		holdingsValue,
 	});
 
 	return {
 		wallet,
 		accounts,
-		itemsValue,
+		holdingsValue,
 		trackedNetWorth,
 		tornNetWorth: anchor.tornNetWorth,
 		netWorthDrift:
@@ -1009,9 +1065,38 @@ export type InitResult = {
  * happened since the anchor, so the same activity is never counted in the
  * balances and in the ledger.
  */
-export async function initWealthTracking(
+let initInFlight: Promise<InitResult> | null = null;
+
+/**
+ * Anchors the ledger, at most once at a time.
+ *
+ * Two callers reach this on the same boot: the module's own startup call and the
+ * event runner's first tick, which fires immediately unless a stagger is
+ * configured. Both see "no anchor" and both would rebuild — interleaving their
+ * deletes and inserts, and racing to write the same anchor row. Sharing the
+ * in-flight promise makes the second caller wait for the first instead.
+ */
+export function initWealthTracking(
 	startTimestampSec?: number,
 ): Promise<InitResult> {
+	if (initInFlight) {
+		logger.info(
+			"An anchor is already being written; waiting for it instead of starting a second.",
+		);
+		return initInFlight;
+	}
+	initInFlight = runWealthInit(startTimestampSec).finally(() => {
+		initInFlight = null;
+	});
+	return initInFlight;
+}
+
+/** Test seam: clears the in-flight anchor guard. */
+export function resetWealthInitGuard(): void {
+	initInFlight = null;
+}
+
+async function runWealthInit(startTimestampSec?: number): Promise<InitResult> {
 	const now = new Date();
 	const requested = readNumber(startTimestampSec);
 	const anchorTimestamp =
@@ -1045,7 +1130,8 @@ export async function initWealthTracking(
 				caymanBank: 0,
 				tornNetWorth: null,
 				items: [],
-				itemsValue: 0,
+				holdingsValue: 0,
+				pointsValue: 0,
 				failures: [],
 				raw: {},
 			},
@@ -1087,7 +1173,8 @@ export async function initWealthTracking(
 					caymanBank: 0,
 					tornNetWorth: null,
 					items: [],
-					itemsValue: 0,
+					holdingsValue: 0,
+					pointsValue: 0,
 					failures: ["no API key"],
 					raw: {},
 				},
@@ -1108,7 +1195,7 @@ export async function initWealthTracking(
 		const events = await classifyRows(logs);
 		const opening = deriveOpeningBalances({
 			observedWallet: baseline.wallet,
-			observedItemsValue: baseline.itemsValue,
+			observedHoldingsValue: baseline.holdingsValue,
 			observedAccounts: {
 				vault: baseline.vault,
 				company: baseline.company,
@@ -1128,28 +1215,54 @@ export async function initWealthTracking(
 		await db.delete(wealthAccountSnapshots);
 
 		const anchorId = `wealth_anchor_${anchorTimestamp}`;
-		await db.insert(wealthAccountSnapshots).values({
-			id: anchorId,
-			timestamp: anchorDate,
-			source: "anchor",
-			wallet: opening.wallet,
-			points: baseline.points,
-			vault: opening.accounts.vault ?? 0,
-			company: opening.accounts.company ?? 0,
-			cityBank: opening.accounts.bank ?? 0,
-			caymanBank: opening.accounts.cayman ?? 0,
-			piggyBank: opening.accounts.piggy ?? 0,
-			bookie: opening.accounts.bookie ?? 0,
-			itemsValue: opening.itemsValue,
-			trackedNetWorth: computeTrackedNetWorth({
+		await db
+			.insert(wealthAccountSnapshots)
+			.values({
+				id: anchorId,
+				timestamp: anchorDate,
+				source: "anchor",
 				wallet: opening.wallet,
-				accounts: opening.accounts,
-				itemsValue: opening.itemsValue,
-			}),
-			tornNetWorth: baseline.tornNetWorth,
-			netWorthDrift: null,
-			raw: baseline.raw,
-		});
+				points: baseline.points,
+				vault: opening.accounts.vault ?? 0,
+				company: opening.accounts.company ?? 0,
+				cityBank: opening.accounts.bank ?? 0,
+				caymanBank: opening.accounts.cayman ?? 0,
+				piggyBank: opening.accounts.piggy ?? 0,
+				bookie: opening.accounts.bookie ?? 0,
+				itemsValue: opening.holdingsValue,
+				trackedNetWorth: computeTrackedNetWorth({
+					wallet: opening.wallet,
+					accounts: opening.accounts,
+					holdingsValue: opening.holdingsValue,
+				}),
+				tornNetWorth: baseline.tornNetWorth,
+				netWorthDrift: null,
+				raw: baseline.raw,
+			})
+			.onConflictDoUpdate({
+				target: wealthAccountSnapshots.id,
+				set: {
+					timestamp: anchorDate,
+					source: "anchor",
+					wallet: opening.wallet,
+					points: baseline.points,
+					vault: opening.accounts.vault ?? 0,
+					company: opening.accounts.company ?? 0,
+					cityBank: opening.accounts.bank ?? 0,
+					caymanBank: opening.accounts.cayman ?? 0,
+					piggyBank: opening.accounts.piggy ?? 0,
+					bookie: opening.accounts.bookie ?? 0,
+					itemsValue: opening.holdingsValue,
+					trackedNetWorth: computeTrackedNetWorth({
+						wallet: opening.wallet,
+						accounts: opening.accounts,
+						holdingsValue: opening.holdingsValue,
+					}),
+					tornNetWorth: baseline.tornNetWorth,
+					netWorthDrift: null,
+					raw: baseline.raw,
+				},
+			});
 
 		const written = await writeEvents(events);
 		const companyEvents = await writeCompanyProfitEvents(anchorDate);
@@ -1169,7 +1282,7 @@ export async function initWealthTracking(
 		logger.info(
 			`Wealth ledger anchored. ${written + companyEvents} events indexed, ` +
 				`opening wallet $${opening.wallet.toLocaleString()}, ` +
-				`items $${opening.itemsValue.toLocaleString()}.`,
+				`holdings $${opening.holdingsValue.toLocaleString()}.`,
 		);
 
 		return { state, eventsWritten: written + companyEvents, baseline };
@@ -1190,7 +1303,8 @@ export async function initWealthTracking(
 				caymanBank: 0,
 				tornNetWorth: null,
 				items: [],
-				itemsValue: 0,
+				holdingsValue: 0,
+				pointsValue: 0,
 				failures: ["init failed"],
 				raw: {},
 			},
@@ -1213,7 +1327,10 @@ export async function handleIncomingWealthLogs(
 	);
 	if (fresh.length === 0) return 0;
 
-	const prices = await loadItemPrices();
+	const [prices, unitRates] = await Promise.all([
+		loadItemPrices(),
+		loadUnitRates(),
+	]);
 	const events: WealthEvent[] = [];
 	for (const log of fresh) {
 		const details = log.details as { id?: number; title?: string } | undefined;
@@ -1227,7 +1344,7 @@ export async function handleIncomingWealthLogs(
 				// shape `personal_logs.data` holds, so one classifier serves both.
 				data: log as unknown as Record<string, unknown>,
 			},
-			{ itemPrices: prices },
+			{ itemPrices: prices, unitRates },
 		);
 		if (event) events.push(event);
 	}
@@ -1356,7 +1473,7 @@ export async function recordSnapshot(): Promise<WealthBalances> {
 				caymanBank: observed.caymanBank,
 				piggyBank: 0,
 				bookie: balances.accounts.bookie ?? 0,
-				itemsValue: observed.itemsValue,
+				itemsValue: observed.holdingsValue,
 				trackedNetWorth: tracked,
 				tornNetWorth: observed.tornNetWorth,
 				netWorthDrift: drift,

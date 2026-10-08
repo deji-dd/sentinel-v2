@@ -506,6 +506,118 @@ describe("income and costs", () => {
 	});
 });
 
+describe("points have a value", () => {
+	// The points market price comes from the daily reference sync, which already
+	// samples the top 5,000 points and stores a volume-weighted average.
+	const WITH_POINTS = {
+		...NO_PRICES,
+		unitRates: new Map([["points", 31_000]]),
+	};
+
+	test("a refill costs what its points cost", () => {
+		// 4900: 25 points for 145 energy. The payload carries the count, so the
+		// cost is read rather than assumed.
+		const event = mustRow(
+			row("a", 4900, {
+				faction: " ",
+				points_used: 25,
+				energy_increased: 145,
+			}),
+			WITH_POINTS,
+		);
+		expect(event.units).toEqual([{ unit: "points", quantity: -25 }]);
+		expect(event.unitsValue).toBe(-775_000);
+		expect(event.walletDelta).toBe(0);
+		expect(event.netWorthDelta).toBe(-775_000);
+		expect(event.priced).toBe(true);
+	});
+
+	test("a free refill costs nothing, because the payload says zero", () => {
+		const event = mustRow(
+			row("a", 4900, { faction: " ", points_used: 0, energy_increased: 150 }),
+			WITH_POINTS,
+		);
+		expect(event.units).toEqual([]);
+		expect(event.netWorthDelta).toBe(0);
+	});
+
+	test("without a price a refill is unpriced, not free", () => {
+		// No rate means we do not know what the points were worth. Reporting a
+		// zero would say the refill cost nothing.
+		const event = mustRow(
+			row("a", 4905, { faction: null, points_used: 25, nerve_increased: 53 }),
+			NO_PRICES,
+		);
+		expect(event.units).toEqual([{ unit: "points", quantity: -25 }]);
+		expect(event.priced).toBe(false);
+	});
+
+	test("every points unlock is the same shape", () => {
+		const unlock = mustRow(
+			row("a", 4950, {
+				points_used: 250,
+				merits_total: 340,
+				merits_increased: 1,
+			}),
+			WITH_POINTS,
+		);
+		expect(unlock.unitsValue).toBe(-7_750_000);
+		expect(unlock.priced).toBe(true);
+	});
+
+	test("buying points is a swap, not an expense", () => {
+		// Sold at the market rate: cash out, points in, worth the same. Leaving the
+		// points side at zero made buying points look like a total loss.
+		const bought = mustRow(
+			row("a", 5010, {
+				seller: 1,
+				quantity: 100,
+				cost_each: 31_000,
+				cost_total: 3_100_000,
+			}),
+			WITH_POINTS,
+		);
+		expect(bought.walletDelta).toBe(-3_100_000);
+		expect(bought.unitsValue).toBe(3_100_000);
+		expect(bought.netWorthDelta).toBe(0);
+
+		const sold = mustRow(
+			row("b", 5011, {
+				buyer: 1,
+				quantity: 100,
+				cost_each: 31_000,
+				cost_total: 3_100_000,
+			}),
+			WITH_POINTS,
+		);
+		expect(sold.walletDelta).toBe(3_100_000);
+		expect(sold.unitsValue).toBe(-3_100_000);
+		expect(sold.netWorthDelta).toBe(0);
+	});
+
+	test("earning points is valued the same way spending them is", () => {
+		// Otherwise points would only ever cost the ledger money.
+		const gained = mustRow(
+			row("a", 9025, { points_gained: 10, nerve: 3, crime_action: "x" }),
+			WITH_POINTS,
+		);
+		expect(gained.unitsValue).toBe(310_000);
+		expect(gained.netWorthDelta).toBe(310_000);
+	});
+
+	test("points spent and earned net out over the same price", () => {
+		const spent = mustRow(
+			row("a", 4900, { points_used: 25, energy_increased: 145 }),
+			WITH_POINTS,
+		);
+		const earned = mustRow(
+			row("b", 9025, { points_gained: 25, nerve: 3, crime_action: "x" }),
+			WITH_POINTS,
+		);
+		expect(summariseWealth([spent, earned]).netWorthDelta).toBe(0);
+	});
+});
+
 describe("aggregation", () => {
 	test("live and backfilled rows produce the same event", () => {
 		// The live stream hands the classifier the parsed log object; the backfill
@@ -627,7 +739,7 @@ describe("the 00:00 UTC anchor", () => {
 		];
 		const opening = deriveOpeningBalances({
 			observedWallet: 10_750,
-			observedItemsValue: 0,
+			observedHoldingsValue: 0,
 			observedAccounts: { vault: 5_000 },
 			todayEvents: events,
 		});
@@ -641,7 +753,7 @@ describe("the 00:00 UTC anchor", () => {
 		const events = [mustRow(row("a", 5850, { deposited: 2_000 }))];
 		const opening = deriveOpeningBalances({
 			observedWallet: 8_000,
-			observedItemsValue: 0,
+			observedHoldingsValue: 0,
 			observedAccounts: { vault: 7_000 },
 			todayEvents: events,
 		});
