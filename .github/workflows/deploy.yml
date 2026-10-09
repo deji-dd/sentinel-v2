@@ -116,6 +116,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ensure the mirrored base image exists
+        run: |
+          set -euo pipefail
+          # The Dockerfile is the source of truth for which base image the build
+          # needs, so a Bun bump self-seeds here instead of failing on a tag GHCR
+          # has never seen. Day to day this is one manifest lookup against GHCR
+          # and no Docker Hub request at all.
+          base="$(grep -m1 -oE '^FROM [^ ]+' Dockerfile | awk '{print $2}')"
+          if docker manifest inspect "${base}" >/dev/null 2>&1; then
+            echo "${base} is already mirrored."
+            exit 0
+          fi
+
+          # First use of a new tag (or a rebuilt mirror) has to read Docker Hub.
+          # Its auth service returns transient 504s, so retry rather than letting
+          # one bad gateway response fail an otherwise healthy build.
+          upstream="oven/bun:${base##*:}"
+          for attempt in 1 2 3; do
+            if docker pull "${upstream}"; then
+              docker tag "${upstream}" "${base}"
+              docker push "${base}"
+              echo "Mirrored ${upstream} -> ${base}."
+              exit 0
+            fi
+            echo "Docker Hub pull failed (attempt ${attempt} of 3)." >&2
+            sleep $((attempt * 5))
+          done
+          echo "Could not fetch ${upstream} from Docker Hub; the mirror cannot be seeded." >&2
+          exit 1
+
       - name: Extract Docker Metadata
         id: meta
         uses: docker/metadata-action@v5

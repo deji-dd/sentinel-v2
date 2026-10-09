@@ -3,7 +3,13 @@
 # crypto behaviour that the scheduler's hot paths are tuned against, so an
 # upgrade should be a deliberate change. Bump this together with the
 # `bun-version` in .github/workflows/deploy.yml.
-FROM oven/bun:1.4.2 AS base
+#
+# Sourced from our own GHCR mirror instead of `oven/bun` directly. Docker Hub
+# rate-limits anonymous pulls from GitHub's shared runner IPs (100 per 6h), and
+# its auth service has returned 504s mid-build; both failed this pipeline. The
+# "Build & Push Container Image" job mirrors a missing tag on its way to the
+# build, and .github/workflows/mirror-bun-base.yml does it by hand.
+FROM ghcr.io/deji-dd/bun-base:1.4.2 AS base
 WORKDIR /app
 
 # Install build dependencies & curl for healthchecks
