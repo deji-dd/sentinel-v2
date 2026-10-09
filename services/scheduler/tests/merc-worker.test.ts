@@ -403,6 +403,38 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 		expect(alert?.hospitalUntil).toBe(nowSec + 45);
 	});
 
+	it("never raises a hospital-exit alert for a stay outside Torn", async () => {
+		const manager = new MercTargetManager();
+		const nowSec = Math.floor(Date.now() / 1000);
+		const nowMs = Date.now();
+
+		// Inside the 60-second lead on Torn's clock, but the bed is in Japan: Torn
+		// reports the same Hospital state, and a mercenary cannot reach the target
+		// without flying, so no alert may be posted.
+		const overseasMember = createMockMember({
+			id: 1007,
+			status: {
+				description: "In a Japanese hospital for 45 seconds",
+				details: null,
+				state: "Hospital",
+				color: "red",
+				until: nowSec + 45,
+			},
+		});
+
+		await manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			overseasMember,
+			nowSec,
+			nowMs,
+		);
+
+		expect(manager.getAlert(mockContract.id, 1007)).toBeUndefined();
+	});
+
 	it("invalidates member if hospital duration is greater than 60 seconds", async () => {
 		const manager = new MercTargetManager();
 		const nowSec = Math.floor(Date.now() / 1000);

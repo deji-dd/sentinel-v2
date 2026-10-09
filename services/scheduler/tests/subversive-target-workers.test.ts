@@ -102,6 +102,95 @@ describe("Subversive Target Finder Workers & Key Pool", () => {
 		}
 	});
 
+	it("expires real hospital stays but never promotes a target that is away", async () => {
+		const keySpy = spyOn(
+			keyPoolModule,
+			"hasActiveSubversiveKeys",
+		).mockImplementation(async () => false);
+
+		const hospitalId = 999_401;
+		const awayId = 999_402;
+		const now = new Date();
+		const past = new Date(now.getTime() - 60_000);
+		const stale = new Date(now.getTime() - 60 * 60 * 1000);
+
+		try {
+			await databaseModule.db
+				.insert(databaseModule.subversiveTargetFinderTargets)
+				.values([
+					{
+						targetId: hospitalId,
+						name: "ExpiredHospitalTarget",
+						level: 20,
+						inHospital: true,
+						hospitalUntil: past,
+						status: "hospital",
+						estimatedBs: 1_000_000,
+						estimatedScore: 2_000,
+						updatedAt: stale,
+					},
+					{
+						// A target that is away carries no hospital timer at all: nothing
+						// about it expires on its own, so the maintenance sweep must leave it
+						// out of the pool instead of declaring it attackable again.
+						targetId: awayId,
+						name: "AwayTarget",
+						level: 20,
+						inHospital: true,
+						hospitalUntil: null,
+						status: "traveling",
+						estimatedBs: 1_000_000,
+						estimatedScore: 2_000,
+						updatedAt: stale,
+					},
+				])
+				.onConflictDoUpdate({
+					target: databaseModule.subversiveTargetFinderTargets.targetId,
+					set: {
+						inHospital: databaseModule.sql`excluded.in_hospital`,
+						hospitalUntil: databaseModule.sql`excluded.hospital_until`,
+						status: databaseModule.sql`excluded.status`,
+						updatedAt: databaseModule.sql`excluded.updated_at`,
+					},
+				});
+
+			await runTargetFinderCycle();
+
+			const rows = await databaseModule.db
+				.select()
+				.from(databaseModule.subversiveTargetFinderTargets)
+				.where(
+					databaseModule.inArray(
+						databaseModule.subversiveTargetFinderTargets.targetId,
+						[hospitalId, awayId],
+					),
+				);
+			const hospitalRow = rows.find((r) => r.targetId === hospitalId);
+			const awayRow = rows.find((r) => r.targetId === awayId);
+
+			// The hospital stay ran out, so the target is back in the ready pool.
+			expect(hospitalRow?.inHospital).toBe(false);
+			expect(hospitalRow?.status).toBe("okay");
+			expect(hospitalRow?.hospitalUntil).toBeNull();
+
+			// The away target is untouched and still unavailable.
+			expect(awayRow?.inHospital).toBe(true);
+			expect(awayRow?.status).toBe("traveling");
+			expect(awayRow?.hospitalUntil).toBeNull();
+		} finally {
+			keySpy.mockRestore();
+			// Cleanup test rows
+			await databaseModule.db
+				.delete(databaseModule.subversiveTargetFinderTargets)
+				.where(
+					databaseModule.inArray(
+						databaseModule.subversiveTargetFinderTargets.targetId,
+						[hospitalId, awayId],
+					),
+				);
+		}
+	});
+
 	it("SubversiveKeyPool falls back to load balance with system keys when only 1 user key is available", async () => {
 		const userKeysSpy = spyOn(
 			keyPoolModule,

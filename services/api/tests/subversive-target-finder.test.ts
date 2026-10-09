@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	db,
+	inArray,
+	sql,
+	subversiveTargetFinderTargets,
+} from "@sentinel/database";
 import { app } from "../src/app";
 import {
 	type CurrentWarInfo,
@@ -880,6 +886,88 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 		expect(idsAfterHosp).not.toContain(601);
 	});
 
+	it("never dispatches to a target hospitalised abroad", () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		const hospitalOpponent = (
+			id: number,
+			name: string,
+			description: string,
+		): RankedWarOpponent => ({
+			id,
+			name,
+			level: 70,
+			daysInFaction: 30,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Offline", timestamp: nowSec, relative: "" },
+			status: {
+				description,
+				details: null,
+				state: "Hospital",
+				color: "red",
+				until: nowSec + 20,
+			},
+			estimatedBs: 1_000_000_000,
+			estimatedScore: 63_245,
+		});
+
+		const war: CurrentWarInfo = {
+			state: "active",
+			warId: 9100,
+			start: nowSec - 3600,
+			target: 150,
+			winner: null,
+			opponent: { id: 7100, name: "Gamma Pack", score: 5, chain: 1 },
+			subversive: {
+				id: 2013,
+				name: "Subversive Alliance",
+				score: 15,
+				chain: 2,
+			},
+			lastUpdated: Date.now(),
+		};
+
+		subversiveTargetCache.setWarState(war, 2013);
+
+		// Only an overseas exit is available: dispatch must decline rather than send
+		// a member at a target they cannot reach.
+		subversiveTargetCache.setWarOpponents(
+			[
+				hospitalOpponent(
+					9001,
+					"OverseasExit",
+					"In a Japanese hospital for 24 mins",
+				),
+			],
+			2013,
+		);
+		expect(
+			subversiveTargetCache.getNextWarTarget({ attackerBsScore: 60_000 }),
+		).toBeNull();
+
+		// With a Torn hospital in the same queue, that one is chosen.
+		subversiveTargetCache.setWarOpponents(
+			[
+				hospitalOpponent(
+					9001,
+					"OverseasExit",
+					"In a Japanese hospital for 24 mins",
+				),
+				hospitalOpponent(9002, "HomeExit", "In hospital for 2 mins"),
+			],
+			2013,
+		);
+
+		const picked = subversiveTargetCache.getNextWarTarget({
+			attackerBsScore: 60_000,
+		});
+		expect(picked?.id).toBe(9002);
+		expect(picked?.statusCategory).toBe("hosp_exit");
+	});
+
 	it("tracks ranked war state, rosters and hospital queues per family faction", () => {
 		const nowSec = Math.floor(Date.now() / 1000);
 
@@ -1016,5 +1104,65 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 
 		expect(subversiveTargetCache.getWarState(2013).warId).toBe(7777);
 		expect(subversiveTargetCache.getWarState(27312).warId).toBe(9002);
+	});
+
+	it("never loads a pool row that is away, even when it is flagged out of hospital", async () => {
+		const readyId = 999_501;
+		const awayId = 999_502;
+		const now = new Date();
+
+		try {
+			await db
+				.insert(subversiveTargetFinderTargets)
+				.values([
+					{
+						targetId: readyId,
+						name: "PoolReadyTarget",
+						level: 20,
+						inHospital: false,
+						status: "okay",
+						estimatedBs: 1_000_000,
+						estimatedScore: 0.5,
+						updatedAt: now,
+					},
+					{
+						// Flagged out of hospital but last seen traveling — the inconsistency
+						// the ready-pool load has to defend against, since a row like this
+						// would otherwise be handed out as a farm target.
+						targetId: awayId,
+						name: "PoolAwayTarget",
+						level: 20,
+						inHospital: false,
+						status: "traveling",
+						estimatedBs: 1_000_000,
+						estimatedScore: 0.4,
+						updatedAt: now,
+					},
+				])
+				.onConflictDoUpdate({
+					target: subversiveTargetFinderTargets.targetId,
+					set: {
+						inHospital: sql`excluded.in_hospital`,
+						status: sql`excluded.status`,
+						estimatedScore: sql`excluded.estimated_score`,
+						updatedAt: sql`excluded.updated_at`,
+					},
+				});
+
+			await subversiveTargetCache.syncReadyPoolFromDb();
+
+			const ids = subversiveTargetCache
+				.getReadyTargets({ attackerBsScore: 60_000, limit: 1000 })
+				.map((t) => t.id);
+
+			expect(ids).toContain(readyId);
+			expect(ids).not.toContain(awayId);
+		} finally {
+			await db
+				.delete(subversiveTargetFinderTargets)
+				.where(
+					inArray(subversiveTargetFinderTargets.targetId, [readyId, awayId]),
+				);
+		}
 	});
 });

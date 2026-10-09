@@ -5,6 +5,7 @@ import {
 	gt,
 	isNull,
 	lt,
+	ne,
 	or,
 	sql,
 	subversiveTargetFinderTargets,
@@ -16,13 +17,28 @@ import {
 	type ManagedApiKey,
 	tornApi,
 } from "@sentinel/torn-api";
-import { Logger } from "@sentinel/utils";
+import {
+	isAttackableInTorn,
+	isHospitalStatus,
+	Logger,
+	tornStateSlug,
+} from "@sentinel/utils";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
-import { hasActiveSubversiveKeys } from "./subversive-key-pool";
+import {
+	getSubversiveUserKeys,
+	hasActiveSubversiveKeys,
+} from "./subversive-key-pool";
 import { computeScoreFromEstimate } from "./target-utils";
 
 const logger = new Logger("SubversiveTargetFinderWorker");
+
+/**
+ * How long a target may stay out of the ready pool before its state is
+ * re-checked against Torn. Matches the maintenance cadence, so an unavailable
+ * target is eligible for exactly one verification per cycle.
+ */
+const RECHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * Enriches targets with battle stats from the FFScouter 30-day cache.
@@ -119,6 +135,14 @@ export async function enrichTargetStats(): Promise<number> {
 
 /**
  * Clears hospital status for targets whose hospital time has expired.
+ *
+ * Only rows whose last known state is `hospital` are promoted. A hospital stay
+ * is the one unavailability that ends on its own, so re-admitting it on its
+ * timer is safe. Rows left unavailable for any other reason — traveling,
+ * abroad, jailed — carry no `hospitalUntil` at all and are re-checked by
+ * `verifyReadyTargetsHospitalStatus` instead; promoting those on a timer would
+ * put a member back in the ready pool without ever asking Torn whether they can
+ * be attacked.
  */
 async function clearExpiredHospitalStatus(): Promise<number> {
 	const now = new Date();
@@ -133,6 +157,7 @@ async function clearExpiredHospitalStatus(): Promise<number> {
 		.where(
 			and(
 				eq(subversiveTargetFinderTargets.inHospital, true),
+				eq(subversiveTargetFinderTargets.status, "hospital"),
 				or(
 					isNull(subversiveTargetFinderTargets.hospitalUntil),
 					lt(subversiveTargetFinderTargets.hospitalUntil, now),
@@ -144,14 +169,33 @@ async function clearExpiredHospitalStatus(): Promise<number> {
 }
 
 /**
- * Verifies a slice of ready targets to ensure they haven't been hospitalized externally.
+ * Re-verifies a slice of targets against Torn and rewrites their availability.
+ *
+ * Two kinds of row need this:
+ *
+ * - rows sitting in the ready pool, so an external hospitalisation is caught
+ *   before the target is offered again;
+ * - rows kept out of the pool for a reason Torn gives no timer for — traveling,
+ *   abroad, jailed. `clearExpiredHospitalStatus` cannot bring those back
+ *   (there is no hospital timer to expire), so without this poll they would
+ *   stay out of the pool forever.
+ *
+ * The write-back applies the same availability rule as the API's dispatch path:
+ * `status` records what Torn actually said, and only a hospital stay carries a
+ * `hospitalUntil`. Anything else leaves the row out of the pool with no timer.
  */
 export async function verifyReadyTargetsHospitalStatus(
 	userKeys: ManagedApiKey[],
 ): Promise<number> {
 	if (userKeys.length === 0) return 0;
 
-	// Pick least-recently verified active ready targets scaled to key pool size
+	// Unavailability with no timer is not self-healing, so a row is only polled
+	// once it has been out of action for a full maintenance cadence. Without the
+	// bound, a backlog of freshly unavailable rows would monopolise the batch and
+	// starve the pool rows this worker exists to protect.
+	const recheckBefore = new Date(Date.now() - RECHECK_INTERVAL_MS);
+
+	// Pick least-recently verified targets scaled to key pool size
 	const batchSize = Math.min(60, Math.max(15, userKeys.length * 12));
 	const targetsToCheck = await db
 		.select({
@@ -160,9 +204,22 @@ export async function verifyReadyTargetsHospitalStatus(
 		.from(subversiveTargetFinderTargets)
 		.where(
 			and(
-				eq(subversiveTargetFinderTargets.inHospital, false),
-				eq(subversiveTargetFinderTargets.status, "okay"),
 				gt(subversiveTargetFinderTargets.estimatedScore, 0),
+				or(
+					// In the ready pool: catch an external hospitalisation.
+					and(
+						eq(subversiveTargetFinderTargets.inHospital, false),
+						eq(subversiveTargetFinderTargets.status, "okay"),
+					),
+					// Out of the pool with no timer to expire: poll it back.
+					and(
+						lt(subversiveTargetFinderTargets.updatedAt, recheckBefore),
+						or(
+							eq(subversiveTargetFinderTargets.inHospital, true),
+							ne(subversiveTargetFinderTargets.status, "okay"),
+						),
+					),
+				),
 			),
 		)
 		.orderBy(subversiveTargetFinderTargets.updatedAt)
@@ -179,7 +236,7 @@ export async function verifyReadyTargetsHospitalStatus(
 		);
 
 		const now = new Date();
-		let hospitalizedCount = 0;
+		let unavailableCount = 0;
 		// Collected first, then written in one statement: as in `enrichTargetStats`,
 		// only the per-row profile values differ, so a single
 		// `UPDATE ... FROM (VALUES ...)` replaces up to 60 awaited statements.
@@ -215,26 +272,26 @@ export async function verifyReadyTargetsHospitalStatus(
 							14 * 24 * 60 * 60 * 1000
 						: false;
 
-				const state = statusObj?.state;
-				const inHospital = state === "Hospital";
+				const attackable = isAttackableInTorn(statusObj);
+				const isHospitalStay = isHospitalStatus(statusObj);
 				const untilSeconds = statusObj?.until ?? 0;
 				const hospitalUntil =
-					untilSeconds > 0 ? new Date(untilSeconds * 1000) : null;
+					isHospitalStay && untilSeconds > 0
+						? new Date(untilSeconds * 1000)
+						: null;
+
+				if (!attackable) unavailableCount++;
 
 				verified.push({
 					targetId: target.targetId,
-					inHospital,
+					inHospital: !attackable,
 					hospitalUntil,
-					status: inHospital ? "hospital" : "okay",
+					status: tornStateSlug(statusObj),
 					lastAction: lastActionDate,
 					isInactive,
 					factionId,
 					isFactionless,
 				});
-
-				if (inHospital) {
-					hospitalizedCount++;
-				}
 			}
 		}
 
@@ -265,12 +322,12 @@ export async function verifyReadyTargetsHospitalStatus(
 				.where(eq(subversiveTargetFinderTargets.targetId, sql`v.target_id`));
 		}
 
-		if (hospitalizedCount > 0) {
+		if (unavailableCount > 0) {
 			logger.info(
-				`Detected ${hospitalizedCount} externally hospitalized targets; marked in DB.`,
+				`Detected ${unavailableCount} targets that are no longer attackable (hospital, traveling or abroad); marked in DB.`,
 			);
 		}
-		return hospitalizedCount;
+		return unavailableCount;
 	} catch (error) {
 		logger.error("Failed to verify ready targets hospital status:", error);
 		return 0;
@@ -279,12 +336,17 @@ export async function verifyReadyTargetsHospitalStatus(
 
 /**
  * Main Target Finder maintenance cycle.
- * Runs on a 15-minute quiet cadence to clear expired hospital timers and enrich candidate stats.
+ *
+ * Runs on a 15-minute quiet cadence: expiry first (a hospital stay that ended on
+ * its own goes straight back into the pool), then a slice of Torn verification
+ * so nothing is offered as a target without Torn vouching for it, then stat
+ * enrichment for rows that still lack a score.
  */
 export async function runTargetFinderCycle(): Promise<void> {
 	await clearExpiredHospitalStatus();
 	const activeKeys = await hasActiveSubversiveKeys();
 	if (activeKeys) {
+		await verifyReadyTargetsHospitalStatus(await getSubversiveUserKeys());
 		await enrichTargetStats();
 	}
 }

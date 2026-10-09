@@ -1,4 +1,5 @@
 import type { RwDisplayBuckets, RwOpponentLine } from "@sentinel/schemas";
+import { isInTornHospital } from "@sentinel/utils";
 import type { RankedWarOpponent } from "../workers/subversive/ranked-war-worker";
 
 /**
@@ -42,12 +43,17 @@ function toLine(opponent: RankedWarOpponent): RwOpponentLine {
  *
  * `until` is unix seconds. A player whose timer has already elapsed is no
  * longer a departure target even if Torn still reports the Hospital state.
+ *
+ * The stay must also be inside Torn: Torn reports a member hospitalised abroad
+ * with the same Hospital state, and only the description says where. Those
+ * opponents cannot be attacked without flying, so they do not belong in a
+ * bucket a member reads as "hit this when the timer runs out".
  */
 function isLeavingHospital(
 	opponent: RankedWarOpponent,
 	nowSec: number,
 ): boolean {
-	if (opponent.status?.state !== STATE_HOSPITAL) return false;
+	if (!isInTornHospital(opponent.status)) return false;
 	const until = opponent.status?.until ?? null;
 	return until !== null && until > nowSec;
 }

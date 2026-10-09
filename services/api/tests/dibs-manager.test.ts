@@ -323,6 +323,107 @@ describe("SubversiveDibsManager", () => {
 		);
 	});
 
+	it("keeps overseas hospitalisations and airborne targets out of dibs", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		// Each of these is inside the lead time, and the first two both report
+		// Torn's Hospital state: a member hospitalised overseas is only
+		// distinguishable by a description that names the foreign hospital. None
+		// of them can be attacked from Torn, so none may produce a callout.
+		const opponent = (
+			id: number,
+			name: string,
+			state: string,
+			description: string,
+		): RankedWarOpponent => ({
+			id,
+			name,
+			level: 75,
+			daysInFaction: 40,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Offline", timestamp: 0, relative: "2m" },
+			status: {
+				description,
+				details: null,
+				state,
+				color: "red",
+				until: nowSec + 120,
+			},
+			estimatedBs: 400_000_000,
+			estimatedScore: 35_000,
+		});
+
+		subversiveTargetCache.setWarState(mockWar);
+		subversiveTargetCache.setWarOpponents([
+			opponent(
+				4001,
+				"OverseasTarget",
+				"Hospital",
+				"In a Japanese hospital for 2 mins",
+			),
+			opponent(4002, "HomeTarget", "Hospital", "In hospital for 2 mins"),
+			opponent(
+				4003,
+				"FlyingTarget",
+				"Traveling",
+				"Traveling from Torn to Japan",
+			),
+		]);
+
+		expect(
+			subversiveTargetCache
+				.getHospitalQueue({ limit: 25, attackerBsScore: 0 })
+				.map((entry) => entry.id),
+		).toEqual([4002]);
+
+		await subversiveDibsManager.evaluateHospitalQueue();
+
+		expect(subversiveDibsManager.getDibsByTargetId(4001)).toBeUndefined();
+		expect(subversiveDibsManager.getDibsByTargetId(4003)).toBeUndefined();
+		expect(subversiveDibsManager.getDibsByTargetId(4002)?.status).toBe("open");
+	});
+
+	it("refuses an on-demand claim for a target hospitalised overseas", async () => {
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		subversiveTargetCache.setWarState(mockWar);
+		subversiveTargetCache.setWarOpponents([
+			{
+				id: 4101,
+				name: "OverseasOnDemand",
+				level: 75,
+				daysInFaction: 40,
+				position: "Member",
+				isOnWall: false,
+				isInOc: false,
+				hasEarlyDischarge: false,
+				lastAction: { status: "Offline", timestamp: 0, relative: "2m" },
+				status: {
+					description: "In an Emirati hospital for 2 mins",
+					details: null,
+					state: "Hospital",
+					color: "red",
+					until: nowSec + 120,
+				},
+				estimatedBs: 400_000_000,
+				estimatedScore: 35_000,
+			},
+		]);
+
+		const res = await subversiveDibsManager.claimDibs(4101, {
+			tornId: 42424,
+			tornName: "HopefulClaimant",
+			platform: "script",
+		});
+
+		expect(res.success).toBe(false);
+		expect(res.reason).toBe("Target is not currently available for dibs.");
+		expect(subversiveDibsManager.getDibsByTargetId(4101)).toBeUndefined();
+	});
+
 	it("associates Discord channel and message IDs via recordDiscordMessage", () => {
 		const dibs = subversiveDibsManager.getDibsByTargetId(3001);
 		expect(dibs).toBeDefined();

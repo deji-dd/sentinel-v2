@@ -63,6 +63,59 @@ describe("classifyOpponentsIntoRwBuckets", () => {
 			expect(buckets.hospital).toHaveLength(0);
 		});
 
+		it("excludes a stay in a hospital abroad", () => {
+			// Torn reports an overseas hospitalisation with the same Hospital state
+			// and a live timer; only the description names the foreign hospital. A
+			// member cannot attack that opponent without flying, so it must not be
+			// advertised as a departure target.
+			const buckets = classifyOpponentsIntoRwBuckets(
+				[
+					opponent({
+						id: 1,
+						name: "Overseas",
+						status: {
+							description: "In a Japanese hospital for 24 mins",
+							details: null,
+							state: "Hospital",
+							color: "red",
+							until: NOW_SEC + 600,
+						},
+					}),
+				],
+				NOW_SEC,
+			);
+
+			expect(buckets.hospital).toHaveLength(0);
+		});
+
+		it("keeps an overseas-hospital opponent on the revivable list", () => {
+			// The revivable list is a permission list, not a target list: it names
+			// opponents who allow revives whether they are down, okay or abroad, and
+			// a reviver can travel to them. Only the hospital bucket is reachability
+			// filtered, so this stays a deliberate asymmetry.
+			const buckets = classifyOpponentsIntoRwBuckets(
+				[
+					opponent({
+						id: 1,
+						name: "Overseas",
+						isRevivable: true,
+						status: {
+							description: "In a Japanese hospital for 24 mins",
+							details: null,
+							state: "Hospital",
+							color: "red",
+							until: NOW_SEC + 600,
+						},
+					}),
+				],
+				NOW_SEC,
+			);
+
+			expect(buckets.hospital).toHaveLength(0);
+			expect(buckets.revivable.map((line) => line.id)).toEqual([1]);
+			expect(buckets.revivable[0]?.hospitalUntil).toBe(NOW_SEC + 600);
+		});
+
 		it("excludes players reporting Hospital with a null until", () => {
 			const buckets = classifyOpponentsIntoRwBuckets(
 				[

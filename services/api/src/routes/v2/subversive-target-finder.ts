@@ -21,9 +21,12 @@ import {
 import {
 	describeSubversiveFamilyFactions,
 	getSubversiveFactionName,
+	isAttackableInTorn,
+	isHospitalStatus,
 	isSubversiveFamilyFaction,
 	Logger,
 	resolveSubversiveFactionId,
+	tornStateSlug,
 } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
 import { getAvailableSubversiveKeyPool } from "../../lib/subversive-key-pool";
@@ -540,8 +543,9 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				const lastActionTimestamp =
 					profileData.profile?.last_action?.timestamp ?? 0;
 				const statusObj = profileData.profile?.status;
-				const state = statusObj?.state;
-				const untilSec = statusObj?.until ?? nowSec + 15 * 60;
+				// Torn only reports `until` for a live status (hospital, jail); a traveler or
+				// an Abroad member has none, and that absence must stay an absence.
+				const untilSec = statusObj?.until ?? null;
 
 				// Inactivity check: Permanently active (logged in < 3 days ago)?
 				// If player has been active within 3 days, remove from DB & cache permanently
@@ -559,18 +563,26 @@ export const subversiveTargetFinderRoutes = new Elysia({
 					continue;
 				}
 
-				// Hospital / abroad check
-				if (state !== "Okay") {
-					const hospitalUntil = new Date(untilSec * 1000);
+				// Unattackable states. Only a hospital stay carries a Torn timer, so it is
+				// the only one that may write `hospitalUntil`: every other state
+				// (Traveling, Abroad, Jail, Federal, Fallen) has none, and inventing a
+				// 15-minute "hospital exit" for them made the maintenance sweep declare
+				// them attackable again without ever re-checking Torn. They record their
+				// real state instead, stay out of the ready pool, and are re-verified
+				// before they can be offered again.
+				if (!isAttackableInTorn(statusObj)) {
+					const isHospitalStay = isHospitalStatus(statusObj);
+					const hospitalUntil =
+						isHospitalStay && untilSec !== null
+							? new Date(untilSec * 1000)
+							: null;
+
 					await db
 						.update(subversiveTargetFinderTargets)
 						.set({
 							inHospital: true,
 							hospitalUntil,
-							status:
-								state === "Hospital"
-									? "hospital"
-									: (state?.toLowerCase() ?? "other"),
+							status: tornStateSlug(statusObj),
 							lastAction:
 								lastActionTimestamp > 0
 									? new Date(lastActionTimestamp * 1000)
@@ -581,10 +593,17 @@ export const subversiveTargetFinderRoutes = new Elysia({
 							eq(subversiveTargetFinderTargets.targetId, candidate.targetId),
 						)
 						.catch(() => {});
-					subversiveTargetCache.markHospital(
-						candidate.targetId,
-						untilSec * 1000,
-					);
+
+					if (hospitalUntil) {
+						subversiveTargetCache.markHospital(
+							candidate.targetId,
+							hospitalUntil.getTime(),
+						);
+					} else {
+						// No timer to expire: the target is simply out until a verification
+						// finds them free again.
+						subversiveTargetCache.evict(candidate.targetId);
+					}
 					continue;
 				}
 

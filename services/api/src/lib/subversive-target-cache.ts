@@ -9,6 +9,7 @@ import {
 import { getPlayerStats } from "@sentinel/torn-api";
 import {
 	getSubversiveFactionName,
+	isInTornHospital,
 	Logger,
 	PRIMARY_SUBVERSIVE_FACTION_ID,
 	resolveSubversiveFactionId,
@@ -216,7 +217,11 @@ class SubversiveTargetCache {
 
 	/**
 	 * Syncs the in-memory ready pool from the database.
-	 * Only loads targets that are NOT in hospital and have an estimatedScore > 0.
+	 *
+	 * A row only qualifies when it is both flagged out of hospital and last seen
+	 * `okay`. The state check is what keeps a member who is traveling, abroad or
+	 * jailed out of the pool: those rows are unavailable without being
+	 * hospitalised, so the flag alone cannot be trusted to mean "attackable".
 	 */
 	async syncReadyPoolFromDb(): Promise<number> {
 		const rows = await db
@@ -225,6 +230,7 @@ class SubversiveTargetCache {
 			.where(
 				and(
 					eq(subversiveTargetFinderTargets.inHospital, false),
+					eq(subversiveTargetFinderTargets.status, "okay"),
 					gt(subversiveTargetFinderTargets.estimatedScore, 0),
 				),
 			);
@@ -947,11 +953,12 @@ class SubversiveTargetCache {
 			return state === "okay";
 		});
 
-		// 2. Hospital exiting in <= 30 seconds
+		// 2. Hospital exiting in <= 30 seconds, inside Torn
 		const hospExitSoonList = scored
 			.filter((opp) => {
-				const state = opp.status.state?.toLowerCase() ?? "";
-				if (state !== "hospital") return false;
+				// Dispatch sends the member straight at this target, so a stay abroad —
+				// which Torn reports with the same Hospital state — must not qualify.
+				if (!isInTornHospital(opp.status)) return false;
 				const until = opp.status.until;
 				if (!until) return false;
 				const remaining = until - nowSec;
@@ -1009,11 +1016,15 @@ class SubversiveTargetCache {
 		const retalIds = new Set(this.getRetalIds(factionId));
 		return Array.from(this.opponentsFor(factionId).values())
 			.filter((opp) => {
-				const state = opp.status.state?.toLowerCase() ?? "";
+				// Torn reports a member hospitalised abroad with the same Hospital
+				// state as one hospitalised in Torn ("In a Japanese hospital for 24
+				// mins"), so checking the state alone puts unreachable targets on the
+				// board and into dibs. Airborne and Abroad members are excluded by the
+				// state itself, an overseas hospital by its description.
+				if (!isInTornHospital(opp.status)) return false;
 				return (
-					state === "hospital" &&
-					((opp.status.until !== null && opp.status.until > nowSec) ||
-						opp.hasEarlyDischarge)
+					(opp.status.until !== null && opp.status.until > nowSec) ||
+					opp.hasEarlyDischarge
 				);
 			})
 			.map((opp) => {

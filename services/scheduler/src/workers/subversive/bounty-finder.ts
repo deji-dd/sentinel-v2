@@ -11,7 +11,7 @@ import {
 	tornApi,
 	UserRateLimiter,
 } from "@sentinel/torn-api";
-import { Logger } from "@sentinel/utils";
+import { isInTornHospital, Logger } from "@sentinel/utils";
 import { getActiveIpcServer } from "../../lib/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
@@ -634,7 +634,16 @@ export async function runBountyFinderCycle(
 			}
 
 			const stateLower = (cached.statusState || "").toLowerCase();
-			if (stateLower === "hospital") {
+			// Only a stay inside Torn is worth catching the exit of: an overseas
+			// hospitalisation keeps the Hospital state but ends somewhere the user
+			// cannot attack from, so it is re-checked on the slow staleness tier
+			// instead of being inspected every cycle.
+			const inTornHospital = isInTornHospital({
+				state: cached.statusState,
+				description: cached.statusDescription,
+			});
+
+			if (inTornHospital) {
 				const until = cached.statusUntil ?? 0;
 				if (until <= nowSec) {
 					// Hospital stay expired: Priority 1 (Most urgent to attack upon exit!)
@@ -804,7 +813,16 @@ export async function runBountyFinderCycle(
 			};
 
 			const stateLower = (profile.statusState || "").toLowerCase();
-			if (stateLower === "hospital") {
+			// A wait-for-the-exit entry only makes sense for a bed in Torn: Torn reports
+			// an overseas hospitalisation with the same Hospital state and a live timer,
+			// but the wait ends where the user cannot attack from. Like Traveling and
+			// Abroad bounties, it belongs in neither list.
+			if (
+				isInTornHospital({
+					state: profile.statusState,
+					description: profile.statusDescription,
+				})
+			) {
 				const until = profile.statusUntil ?? nowSec;
 				const remaining = Math.max(0, until - nowSec);
 				hospitalQueue.push({

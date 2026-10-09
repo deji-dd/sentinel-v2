@@ -16,5 +16,6 @@ export * from "./src/oil-rig-render";
 export * from "./src/stock-catalog";
 export * from "./src/stock-portfolio";
 export * from "./src/subversive-factions";
+export * from "./src/torn-status";
 export * from "./src/wealth";
 export * from "./src/wealth-rules";

@@ -176,6 +176,18 @@ describe("Personal Bounty Target Finder Worker", () => {
 								reason: null,
 							},
 							{
+								target_id: 107,
+								target_name: "TargetInOverseasHospital",
+								target_level: 16,
+								reward: 450_000,
+								quantity: 1,
+								is_anonymous: false,
+								valid_until: Math.floor(Date.now() / 1000) + 86400,
+								lister_id: 1,
+								lister_name: "Lister",
+								reason: null,
+							},
+							{
 								target_id: 999,
 								target_name: "TargetTinyReward",
 								target_level: 5,
@@ -248,6 +260,24 @@ describe("Personal Bounty Target Finder Worker", () => {
 							},
 						} as unknown as ReturnType<typeof managerModule.tornApi.get>;
 					}
+
+					if (id === 107) {
+						// Torn keeps the Hospital state for an overseas stay; only the
+						// description names the foreign hospital.
+						return {
+							profile: {
+								id: 107,
+								name: "TargetInOverseasHospital",
+								level: 20,
+								age: 200, // >= 14d
+								status: {
+									state: "Hospital",
+									description: "In a Japanese hospital for 24 mins",
+									until: Math.floor(Date.now() / 1000) + 300,
+								},
+							},
+						} as unknown as ReturnType<typeof managerModule.tornApi.get>;
+					}
 				}
 
 				return {} as unknown as ReturnType<typeof managerModule.tornApi.get>;
@@ -286,6 +316,11 @@ describe("Personal Bounty Target Finder Worker", () => {
 		// Target 106 (in hospital) -> in hospitalQueue
 		const hospIds = data.hospitalQueue.map((t) => t.id);
 		expect(hospIds).toContain(106);
+
+		// Target 107 (hospitalised abroad) -> neither list: the exit timer would end
+		// somewhere the user cannot attack from, so it is not a wait-for-exit target.
+		expect(data.readyTargets.map((t) => t.id)).not.toContain(107);
+		expect(hospIds).not.toContain(107);
 
 		// Verify zero calls to /user/battlestats
 		expect(tornApiGetSpy).not.toHaveBeenCalledWith(

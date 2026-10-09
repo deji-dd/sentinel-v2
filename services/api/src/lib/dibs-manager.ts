@@ -6,6 +6,7 @@ import {
 	type SubversiveDibsConfig,
 } from "@sentinel/schemas";
 import {
+	isInTornHospital,
 	Logger,
 	PRIMARY_SUBVERSIVE_FACTION_ID,
 	resolveSubversiveFactionId,
@@ -668,47 +669,47 @@ class SubversiveDibsManager {
 			const war = subversiveTargetCache.getWarState(factionId);
 			if (war.state === "active" || war.state === "scheduled") {
 				const opp = subversiveTargetCache.getWarOpponent(targetId, factionId);
-				if (opp) {
+				// Same gate as the hospital queue: a member hospitalised overseas is
+				// reported with the Hospital state but cannot be attacked from Torn, so
+				// it is not a dibs target however close its timer is.
+				if (opp && isInTornHospital(opp.status)) {
 					const nowSec = Math.floor(Date.now() / 1000);
-					const state = opp.status.state?.toLowerCase() ?? "";
-					if (state === "hospital") {
-						const until =
-							opp.status.until !== null && opp.status.until > 0
-								? opp.status.until
-								: nowSec;
-						const secondsRemaining = Math.max(0, until - nowSec);
-						const leadTimeSec = config.claimLeadTime * 60;
-						if (
-							secondsRemaining <= leadTimeSec &&
-							(secondsRemaining > 0 || opp.hasEarlyDischarge)
-						) {
-							const rawFF =
-								opp.estimatedScore > 0
-									? 1 + (8 / 3) * (opp.estimatedScore / 1)
-									: 1.0;
-							const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
-							const createdDibs: DibsRecord = {
-								targetId: opp.id,
-								factionId,
-								targetName: opp.name,
-								targetLevel: opp.level,
-								estimatedBs: opp.estimatedBs,
-								fairFight,
-								hospitalUntil: until,
-								status: "open",
-								createdAt: Date.now(),
-								discordChannelId: config.channelId ?? undefined,
-							};
-							dibs = createdDibs;
-							this.activeDibs.set(opp.id, createdDibs);
+					const until =
+						opp.status.until !== null && opp.status.until > 0
+							? opp.status.until
+							: nowSec;
+					const secondsRemaining = Math.max(0, until - nowSec);
+					const leadTimeSec = config.claimLeadTime * 60;
+					if (
+						secondsRemaining <= leadTimeSec &&
+						(secondsRemaining > 0 || opp.hasEarlyDischarge)
+					) {
+						const rawFF =
+							opp.estimatedScore > 0
+								? 1 + (8 / 3) * (opp.estimatedScore / 1)
+								: 1.0;
+						const fairFight = Math.max(1.0, Number(rawFF.toFixed(2)));
+						const createdDibs: DibsRecord = {
+							targetId: opp.id,
+							factionId,
+							targetName: opp.name,
+							targetLevel: opp.level,
+							estimatedBs: opp.estimatedBs,
+							fairFight,
+							hospitalUntil: until,
+							status: "open",
+							createdAt: Date.now(),
+							discordChannelId: config.channelId ?? undefined,
+						};
+						dibs = createdDibs;
+						this.activeDibs.set(opp.id, createdDibs);
 
-							// Send alert to Discord Bot if a dibs channel is configured
-							if (config.channelId) {
-								void notifyBotAction("post_dibs_alert", {
-									channelId: config.channelId,
-									dibs,
-								});
-							}
+						// Send alert to Discord Bot if a dibs channel is configured
+						if (config.channelId) {
+							void notifyBotAction("post_dibs_alert", {
+								channelId: config.channelId,
+								dibs,
+							});
 						}
 					}
 				}

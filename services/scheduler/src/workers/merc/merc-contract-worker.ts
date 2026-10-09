@@ -18,7 +18,7 @@ import {
 	TornError,
 	tornApi,
 } from "@sentinel/torn-api";
-import { Logger } from "@sentinel/utils";
+import { isInTornHospital, Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
@@ -615,8 +615,19 @@ export class MercTargetManager {
 		const secondsInHosp =
 			hospUntil && hospUntil > nowSec ? hospUntil - nowSec : 0;
 
+		/**
+		 * A hospital stay in Torn, i.e. one the mercenary can act on the moment it
+		 * ends. Torn reports a member hospitalised abroad with the same Hospital
+		 * state ("In a Japanese hospital for 24 mins"), and a contract cannot be
+		 * fulfilled by flying out to them, so that stay must not raise a
+		 * hospital-exit alert. The tracker below still records it: the RW hit
+		 * immunity that follows a hospital exit is what the 60-second cooldown
+		 * models, and that applies wherever the bed was.
+		 */
+		const inTornHospital = isInTornHospital(m.status);
+
 		const isHospitalLead =
-			targetState === "Hospital" && secondsInHosp <= 60 && secondsInHosp > 0;
+			inTornHospital && secondsInHosp <= 60 && secondsInHosp > 0;
 		const isOkay = targetState === "Okay";
 
 		// Track hospital state persistently across polling ticks even if alert is unposted/deleted

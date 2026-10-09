@@ -1,6 +1,7 @@
 import { db, eq, systemStates } from "@sentinel/database";
 import type { UserProfileResponse } from "@sentinel/schemas";
 import { getPersonalKey, tornApi, UserRateLimiter } from "@sentinel/torn-api";
+import { isInTornHospital } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
 import { notifyBountyDefeated } from "../../lib/scheduler-ipc";
 import { resolveUserSession } from "./subversive-target-finder";
@@ -327,10 +328,15 @@ export const personalBountiesRoutes = new Elysia({
 				const nextReady = state.readyTargets.filter((t) => t.id !== targetId);
 				const nextHosp = state.hospitalQueue.filter((t) => t.id !== targetId);
 
+				// Only a stay inside Torn is a wait-for-the-exit target: Torn reports a
+				// member hospitalised abroad with the same Hospital state and a live
+				// timer, and that timer ends somewhere the user cannot attack from Torn.
+				// Traveling, Abroad and Jail bounties are already dropped from both lists;
+				// an overseas hospital now behaves the same way.
 				const stLower = (profile.status.state || "").toLowerCase();
 				if (stLower === "okay") {
 					nextReady.push(updatedTarget);
-				} else if (stLower === "hospital") {
+				} else if (isInTornHospital(profile.status)) {
 					const until = profile.status.until ?? nowSec;
 					nextHosp.push({
 						...updatedTarget,
