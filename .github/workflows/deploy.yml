@@ -17,21 +17,18 @@ permissions:
 jobs:
   validate-and-test:
     name: Validate & Test
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: sentinel_db
-          POSTGRES_USER: sentinel_user
-          POSTGRES_PASSWORD: sentinel_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+    # Pinned rather than `ubuntu-latest`: this job relies on the runner's
+    # preinstalled PostgreSQL 16 (see "Start PostgreSQL" below), so the Ubuntu
+    # release is part of the contract, not an incidental detail.
+    runs-on: ubuntu-24.04
+    # No `services: postgres` container on purpose. Job-level service images are
+    # pulled by the runner's Docker daemon *before* any step runs, so they cannot
+    # be authenticated from inside the job, and anonymous Docker Hub pulls are
+    # capped at 100 per 6 hours per source IP — a quota GitHub-hosted runners
+    # share with every other workflow on their Azure egress pool, which surfaced
+    # as `toomanyrequests` failures. The runner image already ships PostgreSQL 16
+    # (the same major as `postgres:16-alpine`), so the database is started from
+    # the host instead and no registry pull happens at all.
 
     env:
       POSTGRES_HOST: localhost
@@ -65,6 +62,34 @@ jobs:
 
       - name: Build Userscripts
         run: bun run scripts:build
+
+      - name: Start PostgreSQL
+        run: |
+          set -euo pipefail
+          sudo systemctl start postgresql.service
+          # The preinstalled cluster only has the `postgres` superuser, so the
+          # role and database the app expects are created here. Auth is
+          # scram-sha-256 over TCP, matching POSTGRES_* above.
+          sudo -u postgres psql -v ON_ERROR_STOP=1 \
+            -c "CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}';"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
+          # systemctl returns once the unit is up, but the cluster can still be
+          # finishing its first start, so wait for a real TCP login before the
+          # migration step depends on it.
+          for attempt in $(seq 1 15); do
+            if PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+              -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" \
+              -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+              -c "SELECT 1" >/dev/null 2>&1; then
+              echo "PostgreSQL is accepting connections."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "PostgreSQL did not accept a connection within 15s." >&2
+          sudo systemctl status postgresql.service --no-pager >&2 || true
+          exit 1
 
       - name: Run Database Migrations
         run: bun run db:migrate
