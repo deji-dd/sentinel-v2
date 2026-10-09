@@ -4,7 +4,12 @@ name: Mirror CI Images
 # on anonymous Docker Hub pulls. Docker Hub caps those at 100 per 6 hours per
 # source IP — a budget GitHub-hosted runners share with every other workflow on
 # their egress pool — and its token endpoint intermittently stalls or returns
-# 504. All three failure modes have hit this repository's pipeline.
+# 504. All three failure modes have hit this repository's pipeline, including
+# the pull that was meant to seed the mirror itself.
+#
+# Seeding therefore prefers mirror.gcr.io, Google's public Docker Hub cache,
+# which needs no token exchange at all, and falls back to Docker Hub. See
+# .github/scripts/mirror-image.sh.
 #
 # Mirrored images:
 #   - the Bun base image, pinned by the Dockerfile's FROM tag;
@@ -12,7 +17,7 @@ name: Mirror CI Images
 #
 # The "Build & Push Container Image" job seeds a missing image on its way to the
 # build, so this workflow is for pre-seeding, repairing, and forcing a refresh
-# of the moving BuildKit tag. See .github/scripts/mirror-image.sh.
+# of the moving BuildKit tag.
 
 on:
   workflow_dispatch:
@@ -37,6 +42,10 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+      # Optional: set both as repository secrets to authenticate the Docker Hub
+      # fallback (200 pulls per 6 hours instead of 100).
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
@@ -74,6 +83,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub (optional)
+        if: env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Mirror the Bun base image
         run: |

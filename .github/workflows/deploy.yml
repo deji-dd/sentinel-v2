@@ -104,8 +104,16 @@ jobs:
     env:
       # The builder image the docker-container driver boots. Every CI run pulls
       # it fresh on a cold runner, so it is mirrored into GHCR alongside the Bun
-      # base image — see .github/scripts/mirror-image.sh for why.
+      # base image — see .github/scripts/mirror-image.sh for the seeding chain
+      # and why Docker Hub cannot be relied on directly.
       BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+      # Optional. Set both as repository secrets to authenticate the seeding
+      # fallback to Docker Hub: an authenticated pull gets 200 requests per 6
+      # hours instead of the anonymous 100, through a token path that is not the
+      # one being shed. Nothing requires them — seeding prefers Google's Docker
+      # Hub cache, and a mirror that already exists is never re-seeded.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
@@ -121,10 +129,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub (optional)
+        if: env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
       - name: Ensure mirrored images exist
         id: mirrors
         run: |
           set -euo pipefail
+          # Seeds anything missing in GHCR, preferring Google's Docker Hub cache
+          # over Docker Hub itself — see .github/scripts/mirror-image.sh. Once
+          # seeded, this is only two manifest lookups against GHCR.
+          #
           # GHCR names must be lowercase; a GitHub owner is not guaranteed to be.
           owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
 
