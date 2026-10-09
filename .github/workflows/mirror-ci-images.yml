@@ -1,0 +1,102 @@
+name: Mirror CI Images
+
+# Every image CI pulls is mirrored into GHCR, so builds and tests do not depend
+# on anonymous Docker Hub pulls. Docker Hub caps those at 100 per 6 hours per
+# source IP — a budget GitHub-hosted runners share with every other workflow on
+# their egress pool — and its token endpoint intermittently stalls or returns
+# 504. All three failure modes have hit this repository's pipeline.
+#
+# Mirrored images:
+#   - the Bun base image, pinned by the Dockerfile's FROM tag;
+#   - the BuildKit builder image the docker-container driver boots.
+#
+# The "Build & Push Container Image" job seeds a missing image on its way to the
+# build, so this workflow is for pre-seeding, repairing, and forcing a refresh
+# of the moving BuildKit tag. See .github/scripts/mirror-image.sh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bun_version:
+        description: "Bun version to mirror. Must match the FROM tag in the Dockerfile."
+        required: true
+        default: "1.4.2"
+      force_buildkit_refresh:
+        description: "Re-copy the BuildKit builder image. Its tag never changes name, but its content does."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    name: Mirror images to GHCR
+    runs-on: ubuntu-24.04
+    env:
+      BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check the Dockerfile pins the requested version
+        run: |
+          set -euo pipefail
+          # The Dockerfile decides which tag the build needs, so mirroring a
+          # different version would silently leave the build on a stale image.
+          pinned="$(grep -m1 -oE '^FROM [^ ]+' Dockerfile | awk '{print $2}' | sed -E 's/.*://')"
+          if [ "$pinned" != "${{ inputs.bun_version }}" ]; then
+            echo "The Dockerfile uses Bun ${pinned} but this run mirrors ${{ inputs.bun_version }}." >&2
+            echo "Mirror ${pinned}, or bump the Dockerfile, deploy.yml's bun-version and this default together." >&2
+            exit 1
+          fi
+          echo "Dockerfile pins Bun ${pinned}."
+
+      - name: Resolve image names
+        id: names
+        run: |
+          set -euo pipefail
+          # GHCR repository names must be lowercase; a GitHub owner is not
+          # guaranteed to be.
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "bun_source=oven/bun:${{ inputs.bun_version }}"
+            echo "bun_target=ghcr.io/${owner}/bun-base:${{ inputs.bun_version }}"
+            echo "buildkit_target=ghcr.io/${owner}/buildkit:${BUILDKIT_IMAGE##*:}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror the Bun base image
+        run: |
+          set -euo pipefail
+          bash .github/scripts/mirror-image.sh \
+            "${{ steps.names.outputs.bun_source }}" \
+            "${{ steps.names.outputs.bun_target }}"
+
+      - name: Mirror the BuildKit builder image
+        run: |
+          set -euo pipefail
+          force=""
+          if [ "${{ inputs.force_buildkit_refresh }}" = "true" ]; then
+            force="--force"
+          fi
+          bash .github/scripts/mirror-image.sh \
+            "${BUILDKIT_IMAGE}" \
+            "${{ steps.names.outputs.buildkit_target }}" \
+            "${force}"
+
+      - name: Verify both mirrors are pullable
+        run: |
+          set -euo pipefail
+          docker manifest inspect "${{ steps.names.outputs.bun_target }}" > /dev/null
+          docker manifest inspect "${{ steps.names.outputs.buildkit_target }}" > /dev/null
+          echo "Verified ${{ steps.names.outputs.bun_target }} and ${{ steps.names.outputs.buildkit_target }}."

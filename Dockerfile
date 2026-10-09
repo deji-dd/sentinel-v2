@@ -8,7 +8,7 @@
 # rate-limits anonymous pulls from GitHub's shared runner IPs (100 per 6h), and
 # its auth service has returned 504s mid-build; both failed this pipeline. The
 # "Build & Push Container Image" job mirrors a missing tag on its way to the
-# build, and .github/workflows/mirror-bun-base.yml does it by hand.
+# build, and .github/workflows/mirror-ci-images.yml does it by hand.
 FROM ghcr.io/deji-dd/bun-base:1.4.2 AS base
 WORKDIR /app
 

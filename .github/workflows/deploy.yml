@@ -101,14 +101,19 @@ jobs:
     name: Build & Push Container Image
     needs: validate-and-test
     runs-on: ubuntu-latest
+    env:
+      # The builder image the docker-container driver boots. Every CI run pulls
+      # it fresh on a cold runner, so it is mirrored into GHCR alongside the Bun
+      # base image — see .github/scripts/mirror-image.sh for why.
+      BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      # The registry login has to come before both the buildx setup (whose
+      # builder image is pulled on boot) and the mirroring below, so the GHCR
+      # pulls are authenticated rather than anonymous.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -116,35 +121,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure the mirrored base image exists
+      - name: Ensure mirrored images exist
+        id: mirrors
         run: |
           set -euo pipefail
-          # The Dockerfile is the source of truth for which base image the build
-          # needs, so a Bun bump self-seeds here instead of failing on a tag GHCR
-          # has never seen. Day to day this is one manifest lookup against GHCR
-          # and no Docker Hub request at all.
-          base="$(grep -m1 -oE '^FROM [^ ]+' Dockerfile | awk '{print $2}')"
-          if docker manifest inspect "${base}" >/dev/null 2>&1; then
-            echo "${base} is already mirrored."
-            exit 0
-          fi
+          # GHCR names must be lowercase; a GitHub owner is not guaranteed to be.
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
 
-          # First use of a new tag (or a rebuilt mirror) has to read Docker Hub.
-          # Its auth service returns transient 504s, so retry rather than letting
-          # one bad gateway response fail an otherwise healthy build.
-          upstream="oven/bun:${base##*:}"
-          for attempt in 1 2 3; do
-            if docker pull "${upstream}"; then
-              docker tag "${upstream}" "${base}"
-              docker push "${base}"
-              echo "Mirrored ${upstream} -> ${base}."
-              exit 0
-            fi
-            echo "Docker Hub pull failed (attempt ${attempt} of 3)." >&2
-            sleep $((attempt * 5))
-          done
-          echo "Could not fetch ${upstream} from Docker Hub; the mirror cannot be seeded." >&2
-          exit 1
+          # The Dockerfile is the source of truth for the base image tag, so a Bun
+          # bump self-seeds here instead of failing on a tag GHCR has never seen.
+          base="$(grep -m1 -oE '^FROM [^ ]+' Dockerfile | awk '{print $2}')"
+          bash .github/scripts/mirror-image.sh "oven/bun:${base##*:}" "${base}"
+
+          buildkit_mirror="ghcr.io/${owner}/buildkit:${BUILDKIT_IMAGE##*:}"
+          bash .github/scripts/mirror-image.sh "${BUILDKIT_IMAGE}" "${buildkit_mirror}"
+
+          # Hand the builder image to the next step so the driver boots from the
+          # mirror rather than pulling moby/buildkit from Docker Hub again.
+          echo "buildkit=${buildkit_mirror}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Same image, same tag, relocated to GHCR.
+          driver-opts: image=${{ steps.mirrors.outputs.buildkit }}
 
       - name: Extract Docker Metadata
         id: meta
