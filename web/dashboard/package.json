@@ -5,7 +5,7 @@
 	"private": true,
 	"scripts": {
 		"dev": "vite",
-		"build": "tsc --noEmit && vite build"
+		"build": "bun check && vite build"
 	},
 	"dependencies": {
 		"@elysiajs/eden": "latest",

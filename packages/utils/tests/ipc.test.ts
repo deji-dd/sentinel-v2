@@ -42,10 +42,7 @@ describe("ipc utility", () => {
 			},
 		);
 
-		server.start();
-
-		// Wait briefly for server socket creation
-		await new Promise((r) => setTimeout(r, 50));
+		await server.start();
 
 		const client = new IpcClient<{ type: string; payload: string }>(
 			testSocketPath,

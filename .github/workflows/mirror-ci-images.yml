@@ -25,7 +25,7 @@ on:
       bun_version:
         description: "Bun version to mirror. Must match the FROM tag in the Dockerfile."
         required: true
-        default: "1.4.2"
+        default: "1.4.3"
       force_buildkit_refresh:
         description: "Re-copy the BuildKit builder image. Its tag never changes name, but its content does."
         type: boolean
