@@ -573,20 +573,29 @@ async function refreshFactionWar(
  * decisions, so it is refreshed on every cycle. Torn quota is handled by the
  * script key pool, which round-robins requests across keys so no single key
  * approaches its own limit.
+ *
+ * Returns `null` when the roster could not be read at all. That is deliberately
+ * distinct from `[]`, which means "Torn positively reports this war has no
+ * opponents" (war not engaged): subscribers treat an empty roster as "nobody is
+ * hospitalised", so publishing a failed poll as `[]` reads as every opponent
+ * having left hospital — which silently drops live hospital dibs and blanks the
+ * war board. Callers must carry the previous roster forward on `null`.
  */
 async function refreshFactionOpponents(
 	client: TornApiClient,
 	warInfo: CurrentWarInfo,
-): Promise<RankedWarOpponent[]> {
-	const oppFactionId = warInfo.opponent?.id ?? null;
-	if (!oppFactionId) return [];
-
+): Promise<RankedWarOpponent[] | null> {
 	if (warInfo.state !== "active" && warInfo.state !== "scheduled") {
 		return [];
 	}
 
+	const oppFactionId = warInfo.opponent?.id ?? null;
+	// An engaged war whose opponent faction is unknown: the roster is unknowable
+	// rather than empty.
+	if (!oppFactionId) return null;
+
 	const oppKey = await getNextSubversiveUserKey();
-	if (!oppKey) return [];
+	if (!oppKey) return null;
 
 	try {
 		const membersRes = (await client.get("/faction/{id}/members", {
@@ -598,7 +607,10 @@ async function refreshFactionOpponents(
 		recordSubversiveKeySuccess(oppKey.apiKey);
 
 		const rawMembers = membersRes.members ?? [];
-		if (rawMembers.length === 0) return [];
+		// A faction engaged in a ranked war always has members: an empty payload is
+		// a malformed read, not a roster of zero opponents, so it must not be
+		// published as one.
+		if (rawMembers.length === 0) return null;
 
 		await batchResolveOpponentStats(rawMembers, oppFactionId);
 
@@ -637,7 +649,7 @@ async function refreshFactionOpponents(
 		return opponents;
 	} catch (err) {
 		handleKeyError(err, oppKey.apiKey);
-		return [];
+		return null;
 	}
 }
 
@@ -772,13 +784,28 @@ export async function runRankedWarTrackingCycle(): Promise<number> {
 		let warInfo: CurrentWarInfo;
 		if (shouldCheckWars) {
 			warInfo = await refreshFactionWar(client, factionId, entry, nowSec);
+
+			// `lastWarsCheck` is only ever stamped by a poll Torn actually answered,
+			// so a zero means this faction has never been read successfully. On a
+			// cold cache that leaves `entry.war` as the `no_war` placeholder, and
+			// publishing it would tell every subscriber the war just ended — which
+			// clears live dibs. Publish nothing for this faction until Torn answers.
+			if (entry.lastWarsCheck === 0) {
+				logger.debug(
+					`Skipping ranked war snapshot for faction ${factionId}: no Torn data yet.`,
+				);
+				continue;
+			}
 		} else {
 			warInfo = { ...entry.war, lastUpdated: Date.now() };
 			entry.war = warInfo;
 		}
 
-		// 2. Refresh opponent roster when engaged (live, every cycle)
-		const opponents = await refreshFactionOpponents(client, warInfo);
+		// 2. Refresh opponent roster when engaged (live, every cycle). A failed poll
+		// (`null`) carries the last known roster forward instead of broadcasting an
+		// empty one, which subscribers read as "nobody is hospitalised".
+		const fetchedOpponents = await refreshFactionOpponents(client, warInfo);
+		const opponents = fetchedOpponents ?? entry.opponents;
 		entry.opponents = opponents;
 
 		// 2b. Refresh the faction's own roster for the friendly revive board.
@@ -949,14 +976,15 @@ async function broadcastRwPrimaryDisplays(
 }
 
 /**
- * Buckets each engaged faction's airborne roster by flight destination and
- * pushes it to the Discord bot.
+ * Buckets each engaged faction's away roster by destination and pushes it to
+ * the Discord bot.
  *
- * Reads the same already-polled member roster the primary displays use, so it
- * costs no additional Torn request. Runs alongside the primary broadcast rather
- * than inside it, with independent suppression state: travelers populate none
- * of the four primary buckets, so folding this into that payload would let a
- * departure be suppressed as "unchanged".
+ * "Away" is every opponent outside Torn: flying to a country, landed in one, or
+ * downed in a hospital abroad. Reads the same already-polled member roster the
+ * primary displays use, so it costs no additional Torn request. Runs alongside
+ * the primary broadcast rather than inside it, with independent suppression
+ * state: away players populate none of the four primary buckets, so folding
+ * this into that payload would let a departure be suppressed as "unchanged".
  *
  * Mirrors the primary lifecycle exactly, including the `no_war` teardown that
  * only goes to a faction that previously rendered.

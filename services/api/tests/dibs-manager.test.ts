@@ -1,8 +1,19 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	setSystemTime,
+	spyOn,
+} from "bun:test";
+import * as botIpc from "../src/lib/bot-ipc";
 import { subversiveDibsManager } from "../src/lib/dibs-manager";
 import { dibsMessageStore } from "../src/lib/dibs-message-store";
+import { dibsRecordStore } from "../src/lib/dibs-record-store";
 import {
 	type CurrentWarInfo,
+	createEmptyWarInfo,
 	type RankedWarOpponent,
 	subversiveTargetCache,
 } from "../src/lib/subversive-target-cache";
@@ -1051,6 +1062,382 @@ describe("SubversiveDibsManager", () => {
 			expect(successionTracked.map((ref) => ref.messageId)).not.toContain(
 				"msg-8301",
 			);
+		});
+	});
+
+	/**
+	 * A roster the scheduler could not read is published as an empty opponent
+	 * list. The hospital queue is derived from that roster, so an empty roster
+	 * means "no data", not "nobody is hospitalised" — acting on it unclaimed live
+	 * dibs on its own: the claim was deleted the moment the roster came back (the
+	 * target looked like it had been downed) or, on a longer outage, released as
+	 * an expired lock.
+	 */
+	describe("roster data gaps", () => {
+		const gapWar = (
+			overrides: Partial<CurrentWarInfo> = {},
+		): CurrentWarInfo => ({
+			...mockWar,
+			warId: 61001,
+			subversive: {
+				id: 2013,
+				name: "Subversive Alliance",
+				score: 60,
+				chain: 15,
+			},
+			...overrides,
+		});
+
+		const hospitalOpponent = (id: number, name: string, untilSec: number) => ({
+			id,
+			name,
+			level: 80,
+			daysInFaction: 40,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Online", timestamp: 0, relative: "" },
+			status: {
+				description: "In hospital",
+				details: null,
+				state: "hospital",
+				color: "red",
+				until: untilSec,
+			},
+			estimatedBs: 500_000_000,
+			estimatedScore: 45_000,
+		});
+
+		/** Each test claims as its own member: the per-person limit is 1. */
+		const claimAs = (targetId: number, tornId: number) =>
+			subversiveDibsManager.claimDibs(
+				targetId,
+				{ tornId, tornName: `Holder${tornId}`, platform: "script" },
+				2013,
+			);
+
+		it("keeps a claimed dibs when the opponent roster empties out", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveTargetCache.setWarState(gapWar(), 2013);
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8401, "RosterGapTarget", nowSec + 200)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+			expect((await claimAs(8401, 91001)).success).toBe(true);
+
+			// The scheduler's roster poll failed and it broadcast an empty roster.
+			subversiveTargetCache.setWarOpponents([], 2013);
+			await subversiveDibsManager.evaluateHospitalQueue();
+
+			// Next cycle reads the roster again; the target never left hospital.
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8401, "RosterGapTarget", nowSec + 199)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+
+			const record = subversiveDibsManager.getDibsByTargetId(8401);
+			expect(record).toBeDefined();
+			expect(record?.status).toBe("claimed");
+			expect(record?.claimedBy?.tornId).toBe(91001);
+			expect(record?.exitHospAt).toBeUndefined();
+		});
+
+		it("does not release a claim during a roster outage longer than the lock timeout", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveTargetCache.setWarState(gapWar(), 2013);
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8402, "LongOutageTarget", nowSec + 300)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+			expect((await claimAs(8402, 91002)).success).toBe(true);
+
+			subversiveTargetCache.setWarOpponents([], 2013);
+			await subversiveDibsManager.evaluateHospitalQueue();
+
+			// 20s lock timeout plus the 60s ranked war hit cooldown, with no roster
+			// for the whole window.
+			setSystemTime(new Date(Date.now() + 90_000));
+			try {
+				await subversiveDibsManager.evaluateHospitalQueue();
+			} finally {
+				setSystemTime();
+			}
+
+			const record = subversiveDibsManager.getDibsByTargetId(8402);
+			expect(record?.status).toBe("claimed");
+			expect(record?.claimedBy?.tornId).toBe(91002);
+		});
+
+		it("clears on a real war end but not on an unpopulated war snapshot", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveTargetCache.setWarState(gapWar(), 2013);
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8403, "TermedTarget", nowSec + 200)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+			expect((await claimAs(8403, 91003)).success).toBe(true);
+
+			// A war snapshot Torn positively answered is authoritative: a real
+			// no_war still clears the board.
+			await subversiveDibsManager.processWarHospitalQueue(
+				[],
+				gapWar({ state: "no_war", opponent: null }),
+				2013,
+			);
+			expect(subversiveDibsManager.getDibsByTargetId(8403)).toBeUndefined();
+
+			// A placeholder (never populated by a poll) is not.
+			await subversiveTargetCache.setWarState(gapWar(), 2013);
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8404, "PlaceholderTarget", nowSec + 200)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+			expect((await claimAs(8404, 91004)).success).toBe(true);
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[],
+				gapWar({ state: "no_war", opponent: null, lastUpdated: 0 }),
+				2013,
+			);
+			expect(subversiveDibsManager.getDibsByTargetId(8404)?.status).toBe(
+				"claimed",
+			);
+		});
+
+		it("still tracks the hospital exit when the roster is populated", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			subversiveTargetCache.setWarState(gapWar(), 2013);
+			subversiveTargetCache.setWarOpponents(
+				[hospitalOpponent(8405, "ExitsHospital", nowSec + 200)],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+			expect((await claimAs(8405, 91005)).success).toBe(true);
+
+			// Roster is read fine, the member is simply out of hospital now.
+			subversiveTargetCache.setWarOpponents(
+				[
+					{
+						...hospitalOpponent(8405, "ExitsHospital", nowSec + 200),
+						status: {
+							description: "Okay",
+							details: null,
+							state: "Okay",
+							color: "green",
+							until: null,
+						},
+					},
+				],
+				2013,
+			);
+			await subversiveDibsManager.evaluateHospitalQueue();
+
+			expect(
+				subversiveDibsManager.getDibsByTargetId(8405)?.exitHospAt,
+			).toBeDefined();
+		});
+	});
+
+	/**
+	 * The board is held in RAM for the 1-second evaluation loop. Before it was
+	 * persisted, an API container restart (a deploy) released every held dibs and
+	 * left the rebuilt records open; the channel sweep, whose live set is built
+	 * from this board, then deleted those members' callouts as orphans.
+	 */
+	describe("restart persistence", () => {
+		// These are synthetic targets: leave the shared row empty so a local API
+		// run against this database does not restore them as real claims.
+		afterAll(async () => {
+			subversiveDibsManager.resetBoardForTesting();
+			await dibsRecordStore.save([]);
+			await dibsRecordStore.flush();
+		});
+
+		const restartWar = (
+			overrides: Partial<CurrentWarInfo> = {},
+		): CurrentWarInfo => ({
+			...mockWar,
+			warId: 62001,
+			subversive: {
+				id: 2013,
+				name: "Subversive Alliance",
+				score: 60,
+				chain: 15,
+			},
+			...overrides,
+		});
+
+		const hospitalEntry = (id: number, name: string, untilSec: number) => ({
+			id,
+			name,
+			level: 80,
+			daysInFaction: 40,
+			position: "Member",
+			isOnWall: false,
+			isInOc: false,
+			hasEarlyDischarge: false,
+			lastAction: { status: "Online", timestamp: 0, relative: "" },
+			status: {
+				description: "In hospital for 3 mins",
+				details: null,
+				state: "hospital",
+				color: "red",
+				until: untilSec,
+			},
+			estimatedBs: 500_000_000,
+			estimatedScore: 45_000,
+			// Filled by evaluate/process when the queue is built from the cache; the
+			// direct processWarHospitalQueue call takes them as given.
+			secondsRemaining: Math.max(0, untilSec - Math.floor(Date.now() / 1000)),
+			fairFight: 2.5,
+		});
+
+		/** Simulates a fresh process: empty RAM, empty store cache. */
+		const simulateRestart = async (): Promise<number> => {
+			subversiveDibsManager.resetBoardForTesting();
+			dibsRecordStore.invalidate();
+			return subversiveDibsManager.hydrateFromStore();
+		};
+
+		it("restores claims and their callouts after an API restart", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+			subversiveDibsManager.setFactionConfigForTesting(2013, {
+				enabled: true,
+				claimLeadTime: 5,
+				channelId: "channel-restart",
+			});
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[hospitalEntry(8501, "SurvivesDeploy", nowSec + 240)],
+				restartWar(),
+				2013,
+			);
+			const claim = await subversiveDibsManager.claimDibs(
+				8501,
+				{ tornId: 92001, tornName: "DeployedClaimant", platform: "script" },
+				2013,
+			);
+			expect(claim.success).toBe(true);
+			await subversiveDibsManager.recordDiscordMessage(
+				8501,
+				"channel-restart",
+				"msg-restart-1",
+			);
+			await subversiveDibsManager.flushPersist();
+
+			// The container comes back with an empty board.
+			expect(await simulateRestart()).toBeGreaterThan(0);
+
+			const record = subversiveDibsManager.getDibsByTargetId(8501);
+			expect(record?.status).toBe("claimed");
+			expect(record?.claimedBy?.tornId).toBe(92001);
+			expect(record?.discordMessageId).toBe("msg-restart-1");
+
+			// The restored callout is inside the sweep's live set, so channel
+			// maintenance leaves it alone instead of treating it as an orphan.
+			const ipcSpy = spyOn(botIpc, "notifyBotAction").mockImplementation(
+				async (action: string) => action === "sweep_dibs_channel",
+			);
+			let sweepResult: string[] | null = null;
+			try {
+				sweepResult = await subversiveDibsManager.sweepDibsChannel(2013);
+
+				// Read the recorded calls before restoring: mockRestore clears them.
+				const sweepCall = ipcSpy.mock.calls.find(
+					([action]) => action === "sweep_dibs_channel",
+				);
+				const sweepPayload = sweepCall?.[1] as
+					| { liveMessageIds?: string[] }
+					| undefined;
+				expect(sweepPayload?.liveMessageIds).toContain("msg-restart-1");
+			} finally {
+				ipcSpy.mockRestore();
+			}
+
+			expect(sweepResult).toContain("msg-restart-1");
+		});
+
+		/**
+		 * Restored records are mutated in place by the evaluation loop (lock
+		 * timers, hospital-until syncs, claims). If the store compared the board
+		 * against held references instead of a serialized snapshot, the next write
+		 * would compare an object with itself and skip — losing exactly the claims
+		 * this persistence exists to protect.
+		 */
+		it("persists a claim taken on a restored board", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[hospitalEntry(8503, "ClaimAfterRestart", nowSec + 240)],
+				restartWar(),
+				2013,
+			);
+			await subversiveDibsManager.flushPersist();
+
+			// Restart, then claim the record the previous process left behind.
+			expect(await simulateRestart()).toBeGreaterThan(0);
+			const claim = await subversiveDibsManager.claimDibs(
+				8503,
+				{ tornId: 92003, tornName: "LateClaimant", platform: "script" },
+				2013,
+			);
+			expect(claim.success).toBe(true);
+			await subversiveDibsManager.flushPersist();
+
+			// Restart again: the claim has to survive.
+			expect(await simulateRestart()).toBeGreaterThan(0);
+			const record = subversiveDibsManager.getDibsByTargetId(8503);
+			expect(record?.status).toBe("claimed");
+			expect(record?.claimedBy?.tornId).toBe(92003);
+		});
+
+		it("keeps restored claims while the war state is unknown, and clears a real war end", async () => {
+			const nowSec = Math.floor(Date.now() / 1000);
+
+			await subversiveDibsManager.processWarHospitalQueue(
+				[hospitalEntry(8502, "SurvivesColdStart", nowSec + 240)],
+				restartWar(),
+				2013,
+			);
+			await subversiveDibsManager.claimDibs(
+				8502,
+				{ tornId: 92002, tornName: "ColdStartClaimant", platform: "script" },
+				2013,
+			);
+			await subversiveDibsManager.flushPersist();
+			expect(await simulateRestart()).toBeGreaterThan(0);
+			expect(subversiveDibsManager.getDibsByTargetId(8502)?.status).toBe(
+				"claimed",
+			);
+
+			// Fresh process, scheduler has not pushed a snapshot yet: the war state
+			// is a placeholder, which is no evidence that the war ended.
+			const placeholder = { ...createEmptyWarInfo() };
+			subversiveTargetCache.setWarState(placeholder, 2013);
+			subversiveTargetCache.setWarState(placeholder, 27312);
+			await subversiveDibsManager.runEvaluationTick();
+
+			expect(subversiveDibsManager.getDibsByTargetId(8502)?.status).toBe(
+				"claimed",
+			);
+
+			// A war end Torn actually reported still clears the board.
+			const ended = { ...createEmptyWarInfo(), lastUpdated: Date.now() };
+			subversiveTargetCache.setWarState(ended, 2013);
+			subversiveTargetCache.setWarState(ended, 27312);
+			await subversiveDibsManager.runEvaluationTick();
+
+			expect(subversiveDibsManager.getDibsByTargetId(8502)).toBeUndefined();
 		});
 	});
 });

@@ -20,7 +20,8 @@ export interface SubversiveRwChannelConfig {
 	primaryDisplaysChannelId: string | null;
 	/**
 	 * Channel hosting the faction's secondary ranked-war display, which
-	 * summarises where the opposing roster is currently flying.
+	 * summarises where the opposing roster currently is outside Torn — flying
+	 * to a country, landed in one, or downed in a hospital abroad.
 	 *
 	 * Must differ from `primaryDisplaysChannelId`: that channel's stale-message
 	 * sweep deletes any bot-authored message it does not recognise, so a shared

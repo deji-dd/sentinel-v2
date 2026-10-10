@@ -56,7 +56,7 @@ const CHANNEL_FIELDS: ReadonlyArray<{
 	{
 		field: "secondaryDisplaysChannelId",
 		label: "Secondary Displays",
-		hint: "Where the opposing roster is currently flying, with a per-destination breakdown.",
+		hint: "Where the opposing roster currently is outside Torn — flying to a country or already there — with a per-destination breakdown.",
 		accent: "text-info",
 	},
 	{

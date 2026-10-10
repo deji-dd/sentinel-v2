@@ -14,6 +14,7 @@ import {
 } from "@sentinel/utils";
 import { notifyBotAction } from "./bot-ipc";
 import { dibsMessageStore } from "./dibs-message-store";
+import { dibsRecordStore } from "./dibs-record-store";
 import {
 	type CurrentWarInfo,
 	type RankedWarOpponent,
@@ -32,6 +33,7 @@ class SubversiveDibsManager {
 	private configs = new Map<number, SubversiveDibsConfig>();
 	private activeDibs = new Map<number, DibsRecord>();
 	private broadcastCallback: ((dibs: DibsRecord[]) => void) | null = null;
+	private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/**
 	 * Sets the callback invoked whenever dibs records change so WebSockets can broadcast live.
@@ -39,6 +41,99 @@ class SubversiveDibsManager {
 	setBroadcastCallback(fn: (dibs: DibsRecord[]) => void): void {
 		this.broadcastCallback = fn;
 	}
+
+	/**
+	 * Restores the board persisted by a previous process, claims included.
+	 *
+	 * Called once at API startup, before the first war snapshot arrives. Without
+	 * it a redeploy silently released every held dibs, and the channel sweep —
+	 * whose live set is built from this board — deleted those members' callouts
+	 * as orphans. Records that are no longer valid (war ended, target downed or
+	 * out of hospital) are cleaned up by the normal lifecycle as soon as the
+	 * scheduler's first snapshot lands.
+	 *
+	 * Deliberately does not broadcast or schedule a write: the row it just read is
+	 * already the persisted state, and no subscriber exists yet at boot. The first
+	 * evaluation cycle pushes the restored board onward.
+	 *
+	 * @returns how many records were restored
+	 */
+	async hydrateFromStore(): Promise<number> {
+		const restored = await dibsRecordStore.load();
+		let count = 0;
+
+		for (const record of restored) {
+			if (typeof record?.targetId !== "number") continue;
+			// Never clobber a record the evaluation loop already produced.
+			if (this.activeDibs.has(record.targetId)) continue;
+			this.activeDibs.set(record.targetId, record);
+			count++;
+		}
+
+		if (count > 0) {
+			logger.info(
+				`Restored ${count} dibs record(s) from the database after restart (${this.claimedCount()} still claimed).`,
+			);
+		}
+
+		return count;
+	}
+
+	private claimedCount(): number {
+		let claimed = 0;
+		for (const dibs of this.activeDibs.values()) {
+			if (dibs.status === "claimed") claimed++;
+		}
+		return claimed;
+	}
+
+	/**
+	 * Queues a persist of the current board, coalescing bursts.
+	 *
+	 * The board is written as a whole, so serialising it on every accepted claim
+	 * or lock expiry would be wasted work; the debounce also keeps the
+	 * per-second hospital-until bookkeeping from reaching the database. The
+	 * store skips the write entirely when the payload is unchanged.
+	 */
+	private schedulePersist(): void {
+		if (this.persistTimer) return;
+
+		this.persistTimer = setTimeout(() => {
+			this.persistTimer = null;
+			void dibsRecordStore.save(this.getActiveDibs());
+		}, SubversiveDibsManager.PERSIST_DEBOUNCE_MS);
+
+		// Never hold the process open just to flush the board.
+		(this.persistTimer as unknown as { unref?: () => void }).unref?.();
+	}
+
+	/**
+	 * Awaits any queued board write. Used by tests and by a caller that needs the
+	 * board durable before it continues.
+	 */
+	async flushPersist(): Promise<void> {
+		if (this.persistTimer) {
+			clearTimeout(this.persistTimer);
+			this.persistTimer = null;
+			await dibsRecordStore.save(this.getActiveDibs());
+		}
+		await dibsRecordStore.flush();
+	}
+
+	/**
+	 * Drops the in-memory board and any pending write, leaving the persisted row
+	 * untouched. Lets tests simulate a process restart.
+	 */
+	resetBoardForTesting(): void {
+		if (this.persistTimer) {
+			clearTimeout(this.persistTimer);
+			this.persistTimer = null;
+		}
+		this.activeDibs.clear();
+	}
+
+	/** How long board mutations are coalesced before being written. */
+	private static readonly PERSIST_DEBOUNCE_MS = 3_000;
 
 	/**
 	 * Explicitly sets the in-memory configuration (useful for tests or mocking).
@@ -109,26 +204,41 @@ class SubversiveDibsManager {
 	startEvaluationLoop(intervalMs = 1000): void {
 		if (this.loopTimer) return;
 		this.loopTimer = setInterval(() => {
-			if (this.hasAnyEngagedWar()) {
-				void this.evaluateHospitalQueue();
-			} else if (this.activeDibs.size > 0) {
-				// War ended without ever posting delete_dibs_alert, leaving orphaned
-				// messages behind. Delete them before dropping the records.
-				this.deleteAllTrackedMessages();
-				this.activeDibs.clear();
-				this.notifyBroadcast();
-			}
+			void this.runEvaluationTick();
 		}, intervalMs);
 	}
 
 	/**
-	 * Deletes every tracked Discord message and forgets it from the ledger.
-	 * Used when a war terminates and no further lifecycle handling will run.
+	 * One evaluation cycle, extracted from the loop so it can be driven directly
+	 * (tests) and so the two branches stay readable.
 	 */
-	private deleteAllTrackedMessages(): void {
-		for (const dibs of this.activeDibs.values()) {
-			this.deleteDibsMessage(dibs);
+	async runEvaluationTick(): Promise<void> {
+		if (this.hasAnyEngagedWar()) {
+			await this.evaluateHospitalQueue();
+			return;
 		}
+
+		this.clearDibsForKnownEndedWars();
+	}
+
+	/**
+	 * Clears dibs whose war has ended without the normal teardown running, which
+	 * would otherwise leave orphaned callouts in the channel.
+	 *
+	 * Only factions whose war state Torn actually answered for are touched. A
+	 * faction with no war snapshot yet (a fresh API process, before the
+	 * scheduler's first push) is unknown, and restoring persisted claims must not
+	 * be undone by an interval tick that knows nothing about the war.
+	 */
+	private clearDibsForKnownEndedWars(): void {
+		let changed = false;
+		for (const factionId of SUBVERSIVE_FAMILY_FACTION_IDS) {
+			const war = subversiveTargetCache.getWarState(factionId);
+			if (war.lastUpdated <= 0) continue;
+			if (war.state === "active" || war.state === "scheduled") continue;
+			if (this.clearDibsForFaction(factionId)) changed = true;
+		}
+		if (changed) this.notifyBroadcast();
 	}
 
 	/**
@@ -423,6 +533,9 @@ class SubversiveDibsManager {
 		if (dibs) {
 			dibs.discordChannelId = channelId;
 			dibs.discordMessageId = messageId;
+			// Persist the message id: after a restart it is what keeps this callout
+			// inside the sweep's live set instead of being deleted as an orphan.
+			this.schedulePersist();
 
 			// If dibs was already claimed while the message was being posted, update Discord embed immediately
 			if (dibs.status === "claimed") {
@@ -470,10 +583,20 @@ class SubversiveDibsManager {
 	): Promise<void> {
 		const scopedFactionId = resolveSubversiveFactionId(factionId);
 		const config = await this.getConfig(scopedFactionId);
-		if (
-			!config.enabled ||
-			(war.state !== "active" && war.state !== "scheduled")
-		) {
+
+		if (!config.enabled) {
+			if (this.clearDibsForFaction(scopedFactionId)) {
+				this.notifyBroadcast();
+			}
+			return;
+		}
+
+		// `lastUpdated` is only ever stamped by a war snapshot Torn actually
+		// answered, so a placeholder (never populated) is not evidence that the
+		// war ended. Clearing on it would wipe live dibs for the whole faction.
+		if (war.lastUpdated <= 0) return;
+
+		if (war.state !== "active" && war.state !== "scheduled") {
 			if (this.clearDibsForFaction(scopedFactionId)) {
 				this.notifyBroadcast();
 			}
@@ -530,6 +653,16 @@ class SubversiveDibsManager {
 		}
 
 		// 2. Lifecycle management for existing active dibs
+		//
+		// The hospital queue is derived from the faction's opponent roster, so a
+		// target missing from it normally means "left hospital". It also means
+		// "we have no roster at all": a failed or not-yet-arrived roster poll
+		// leaves the cache empty, which is a data gap rather than a fact. Acting
+		// on it deletes live claims as if every target had been downed (and, once
+		// the roster returns, releases genuinely held locks). Only a populated
+		// roster may justify a lifecycle transition.
+		const rosterKnown =
+			subversiveTargetCache.getWarOpponents(scopedFactionId).length > 0;
 		const timeoutMs = config.postHospTimeoutSeconds * 1000;
 		const nowMs = Date.now();
 
@@ -541,6 +674,11 @@ class SubversiveDibsManager {
 				// Target is still in hospital
 				if (dibs.exitHospAt !== undefined) {
 					// Target was previously out of hospital and is now BACK in hospital -> DOWNED!
+					logger.info(
+						`Dibs for ${dibs.targetName} [${targetId}] (faction ${scopedFactionId}) dropped: target re-entered hospital${
+							dibs.status === "claimed" ? " while claimed" : ""
+						}.`,
+					);
 					if (
 						config.autoDeleteOnDowned &&
 						dibs.discordChannelId &&
@@ -583,7 +721,7 @@ class SubversiveDibsManager {
 				if (currentOpp.status.until !== null) {
 					dibs.hospitalUntil = currentOpp.status.until;
 				}
-			} else {
+			} else if (rosterKnown) {
 				// Target is no longer in the hospital queue (exited hospital or medded out)
 				if (dibs.exitHospAt === undefined) {
 					dibs.exitHospAt = nowMs;
@@ -601,6 +739,13 @@ class SubversiveDibsManager {
 				if (elapsed >= timeoutMs) {
 					if (dibs.status === "claimed") {
 						// 20s lock expired! Release claim and repost message
+						logger.info(
+							`Dibs lock expired for ${dibs.targetName} [${targetId}] (faction ${scopedFactionId}): released from ${
+								dibs.claimedBy?.tornName ??
+								dibs.claimedBy?.discordTag ??
+								"claimant"
+							} and reposted as open.`,
+						);
 						const oldMessageId = dibs.discordMessageId;
 						const channelId = dibs.discordChannelId;
 						dibs.status = "open";
@@ -639,6 +784,11 @@ class SubversiveDibsManager {
 
 		if (stateChanged) {
 			this.notifyBroadcast();
+		} else {
+			// No transition this cycle, but the hospital-until / exit bookkeeping
+			// above may have moved. The store drops the write when nothing changed,
+			// so this stays free while the board is quiet.
+			this.schedulePersist();
 		}
 	}
 
@@ -703,6 +853,9 @@ class SubversiveDibsManager {
 						};
 						dibs = createdDibs;
 						this.activeDibs.set(opp.id, createdDibs);
+						// The claim below may still be rejected (already claimed, limit
+						// reached), so persist the new record on its own merits.
+						this.schedulePersist();
 
 						// Send alert to Discord Bot if a dibs channel is configured
 						if (config.channelId) {
@@ -840,7 +993,15 @@ class SubversiveDibsManager {
 		return { success: true };
 	}
 
+	/**
+	 * Pushes the board to WebSocket subscribers and queues it for persistence.
+	 *
+	 * Every accepted change to the board goes through here, so a claim can never
+	 * reach a member without also becoming durable.
+	 */
 	private notifyBroadcast(): void {
+		this.schedulePersist();
+
 		if (this.broadcastCallback) {
 			try {
 				this.broadcastCallback(this.getActiveDibs());

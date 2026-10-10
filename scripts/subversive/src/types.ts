@@ -62,12 +62,41 @@ export interface BountyTarget {
 	status?: TargetStatus;
 }
 
+export interface DibsClaimant {
+	tornId?: number;
+	tornName?: string;
+	discordId?: string;
+	discordTag?: string;
+	platform: "script" | "discord";
+}
+
+/**
+ * One active dibs, mirroring the API's `DibsRecord`.
+ *
+ * The server owns this state: a claim is released by the lock timer, dropped
+ * when the target is downed, and cleared when the war ends. The panel only ever
+ * renders what the API last sent.
+ */
 export interface DibsItem {
 	targetId: number;
-	userId: number;
-	userName: string;
-	claimedAt: number;
-	expiresAt: number;
+	/** Family faction whose ranked war this dibs belongs to (2013 / 27312). */
+	factionId?: number;
+	targetName: string;
+	targetLevel: number;
+	estimatedBs: number;
+	fairFight: number;
+	/** Epoch seconds. */
+	hospitalUntil: number;
+	status: "open" | "claimed";
+	claimedBy?: DibsClaimant;
+	/** Epoch ms. */
+	claimedAt?: number;
+	discordMessageId?: string;
+	discordChannelId?: string;
+	/** Epoch ms when the target was first seen out of hospital. */
+	exitHospAt?: number;
+	/** Epoch ms. */
+	createdAt: number;
 }
 
 export interface WarFactionInfo {

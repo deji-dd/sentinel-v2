@@ -6,10 +6,11 @@ import {
 	subversiveRwDisplayMessages,
 } from "@sentinel/database";
 import {
+	hasLanded,
 	RW_TRAVELING_CATEGORY,
-	type RwOpponentLine,
 	type RwTravelingBuckets,
 	type RwTravelingUpdate,
+	type RwTravelLine,
 	TRAVEL_DESTINATION_LABELS,
 	type TravelDestination,
 } from "@sentinel/schemas";
@@ -28,10 +29,10 @@ import { logger } from "./logger";
 
 /**
  * Renders the secondary ranked-war display: where the opposing roster is
- * currently flying.
+ * outside Torn — flying to a country, or already sitting in one.
  *
  * Like the primary displays, the bot is a pure renderer — the scheduler groups
- * the airborne roster and pushes it over IPC. Nothing here reads Torn.
+ * the away roster and pushes it over IPC. Nothing here reads Torn.
  *
  * A single persistent embed is maintained per faction, carrying one bold field
  * per active destination plus a select menu that expands a destination into an
@@ -57,18 +58,46 @@ function customId(factionId: number): string {
 	return `rw_traveling_select:${factionId}`;
 }
 
-const playerRow = (line: RwOpponentLine) =>
-	`[${line.name} [${line.id}]](${PROFILE_URL(line.id)}) • ${formatNumber(
+const playerRow = (line: RwTravelLine) => {
+	const name = `[${line.name} [${line.id}]](${PROFILE_URL(line.id)}) • ${formatNumber(
 		line.estimatedBs,
 	)}`;
+
+	// Only a player downed abroad carries a timer, and it is the actionable
+	// half of their line: the hospital releases them, the country does not.
+	return line.hospitalUntil === null
+		? name
+		: `${name} • In hospital • Out <t:${line.hospitalUntil}:R>`;
+};
+
+const people = (count: number) =>
+	`${count} ${count === 1 ? "person" : "people"}`;
+
+/**
+ * One-line breakdown of a destination: how many opponents are still inbound and
+ * how many have already landed.
+ *
+ * Shared by the embed field and the select option so the two can never disagree
+ * about the same destination, and it keeps the original flying-only wording
+ * ("2 people flying here") when nobody has landed yet.
+ */
+function summarizeDestination(players: RwTravelLine[]): string {
+	const flying = players.filter((line) => !hasLanded(line.kind)).length;
+	const landed = players.length - flying;
+
+	const parts: string[] = [];
+	if (flying > 0) parts.push(`${people(flying)} flying here`);
+	if (landed > 0) parts.push(`${people(landed)} already there`);
+	return parts.join(" • ");
+}
 
 /**
  * Builds the persistent travel embed.
  *
  * One field per active destination, bolded name with a plain count as the
- * value. When nobody is airborne the embed keeps the same title and says so in
- * the description instead — a titled empty state reads better than an embed
- * that silently loses its fields.
+ * value. When nobody is away the embed keeps the same title and says so in the
+ * description instead — a titled empty state reads better than an embed that
+ * silently loses its fields.
  *
  * Field count is bounded by Torn's 12 destinations, well under Discord's
  * 25-field limit.
@@ -78,15 +107,17 @@ export function buildTravelingEmbed(
 	destinations: RwTravelingBuckets,
 ): ReturnType<typeof createBaseEmbed> {
 	const embed = createBaseEmbed(
-		`${opponentFactionName} • Players traveling`,
-		destinations.length === 0 ? "Nobody is currently flying" : undefined,
+		`${opponentFactionName} • Players traveling or abroad`,
+		destinations.length === 0
+			? "Nobody is currently flying or abroad"
+			: undefined,
 		EMBED_COLORS.PRIMARY,
 	);
 
 	for (const { destination, players } of destinations) {
 		embed.addFields({
 			name: `**${TRAVEL_DESTINATION_LABELS[destination]}**`,
-			value: `${players.length} ${players.length === 1 ? "person" : "people"} flying here`,
+			value: summarizeDestination(players),
 			inline: true,
 		});
 	}
@@ -97,9 +128,9 @@ export function buildTravelingEmbed(
 /**
  * Builds the destination select menu.
  *
- * Only destinations with at least one airborne player are offered: a dropdown
- * full of empty destinations would answer every selection with an empty list.
- * Returns null when nobody is flying, since an empty select is not a legal
+ * Only destinations with at least one away player are offered: a dropdown full
+ * of empty destinations would answer every selection with an empty list.
+ * Returns null when nobody is away, since an empty select is not a legal
  * component.
  */
 export function buildTravelingSelectRow(
@@ -118,7 +149,7 @@ export function buildTravelingSelectRow(
 				// The label is already a fixed short name, so reuse it as the
 				// value and let the handler map back through the roster cache.
 				value: destination,
-				description: `${players.length} flying`,
+				description: summarizeDestination(players),
 			})),
 		);
 
@@ -126,12 +157,57 @@ export function buildTravelingSelectRow(
 }
 
 /**
- * Builds the ephemeral detail embed shown when a destination is selected.
+ * Titles the detail embed after what the bucket actually holds.
  *
- * Uses the raw destination rather than the display label here: the label exists
- * to disambiguate "Torn" from a country inside the embed field list and the
- * dropdown, but interpolated into a sentence it produces "Traveling to
- * Returning to Torn". On its own "Traveling to Torn" already reads correctly.
+ * A bucket of nothing but inbound players keeps the original "Traveling to
+ * Japan"; one that has landed players says so, because "traveling to" would
+ * describe a player who is already standing in the country.
+ */
+function destinationTitle(
+	opponentFactionName: string,
+	destination: TravelDestination,
+	players: RwTravelLine[],
+): string {
+	const flying = players.some((line) => !hasLanded(line.kind));
+	const landed = players.some((line) => hasLanded(line.kind));
+
+	if (flying && landed) {
+		return `${opponentFactionName} • In or traveling to ${destination}`;
+	}
+	if (landed) return `${opponentFactionName} • In ${destination}`;
+	return `${opponentFactionName} • Traveling to ${destination}`;
+}
+
+/**
+ * The player list for one destination, split into headings only when both kinds
+ * are present.
+ *
+ * The raw destination is used in the title rather than the display label: the
+ * label exists to disambiguate "Torn" from a country inside the embed field
+ * list and the dropdown, but interpolated into a sentence it produces
+ * "Traveling to Returning to Torn".
+ */
+function destinationDescription(players: RwTravelLine[]): string {
+	const flying = players.filter((line) => !hasLanded(line.kind));
+	const landed = players.filter((line) => hasLanded(line.kind));
+
+	// A single-kind bucket needs no headings — the title already says which it
+	// is, and two headings with an empty side would only add noise.
+	if (flying.length === 0 || landed.length === 0) {
+		return players.map(playerRow).join("\n");
+	}
+
+	return [
+		"**Flying here**",
+		...flying.map(playerRow),
+		"",
+		"**Already there**",
+		...landed.map(playerRow),
+	].join("\n");
+}
+
+/**
+ * Builds the ephemeral detail embed shown when a destination is selected.
  *
  * Returns null when the destination is unknown or empty so the caller can
  * answer with a plain message instead of a contentless embed.
@@ -139,13 +215,13 @@ export function buildTravelingSelectRow(
 export function buildTravelingDestinationEmbed(
 	opponentFactionName: string,
 	destination: TravelDestination,
-	players: RwOpponentLine[],
+	players: RwTravelLine[],
 ): ReturnType<typeof createBaseEmbed> | null {
 	if (players.length === 0) return null;
 
 	return createBaseEmbed(
-		`${opponentFactionName} • Traveling to ${destination}`,
-		players.map(playerRow).join("\n"),
+		destinationTitle(opponentFactionName, destination, players),
+		destinationDescription(players),
 		EMBED_COLORS.PRIMARY,
 	);
 }
@@ -444,8 +520,10 @@ function isTravelDestination(value: string): value is TravelDestination {
  * Handles a destination selection on the travel embed.
  *
  * Serves from the in-memory roster cache. Torn reports no arrival time for a
- * traveling player (`status.until` is null), so the list cannot show an ETA —
- * it is a snapshot of who is currently inbound.
+ * traveling player (`status.until` is null), so the list cannot show an ETA for
+ * them — it is a snapshot of who is inbound and who has already landed. The one
+ * timer it can show belongs to an opponent downed abroad, whose hospital stay
+ * Torn does clock.
  */
 export async function handleRwTravelingSelect(
 	interaction: StringSelectMenuInteraction,
@@ -491,7 +569,8 @@ export async function handleRwTravelingSelect(
 			...(embed
 				? { embeds: [embed] }
 				: {
-						content: "Nobody is currently flying to that destination.",
+						content:
+							"Nobody is currently flying to or sitting in that destination.",
 					}),
 			flags: MessageFlags.Ephemeral,
 		});

@@ -25,6 +25,7 @@ function buckets(...entries: BucketSpec[]): RwTravelingBuckets {
 			estimatedBs: 1_000,
 			lastSeenAt: 1_800_000_000,
 			hospitalUntil: null,
+			kind: "traveling" as const,
 		})),
 	}));
 }

@@ -132,15 +132,55 @@ export const TORN_TRAVEL_DESTINATIONS = [
 
 export type TravelDestination = (typeof TORN_TRAVEL_DESTINATIONS)[number];
 
-/** Players currently inbound to one destination. */
-export interface RwTravelingDestination {
-	destination: TravelDestination;
-	players: RwOpponentLine[];
+/**
+ * How an opponent is outside Torn, as far as the travel board cares.
+ *
+ * Torn reports all three with a *different* state, and each one is a different
+ * thing to an operator:
+ *
+ * - `traveling` — airborne, inbound to `destination`, and unattackable until
+ *   they land;
+ * - `abroad` — landed in `destination` and free to act there, so reachable only
+ *   by flying to them;
+ * - `hospitalAbroad` — downed in a hospital in `destination`. Torn reports this
+ *   as `Hospital`, which is also the state a member downed *inside* Torn
+ *   carries, so only the description's nationality says which side of the
+ *   border the hospital is on.
+ *
+ * `abroad` and `hospitalAbroad` have already landed; only `traveling` is still
+ * in the air. `hasLanded` is the one place that split is decided, so an embed
+ * heading and a player line rendered side by side can never disagree about
+ * which half of the board a player belongs to.
+ */
+export type RwTravelKind = "traveling" | "abroad" | "hospitalAbroad";
+
+/** Whether the opponent has already landed at their destination. */
+export function hasLanded(kind: RwTravelKind): boolean {
+	return kind !== "traveling";
 }
 
 /**
- * Destinations with at least one airborne player, ordered by player count
- * descending then destination name.
+ * A travel-board row: an opponent outside Torn, plus how far along their trip
+ * they are.
+ *
+ * Extends the projection the primary embeds render so the two boards share one
+ * name, battle-stat and last-seen vocabulary. `hospitalUntil` is meaningful
+ * only for `hospitalAbroad`, where Torn does report a timer — the same timer the
+ * primary `hospital` bucket renders.
+ */
+export interface RwTravelLine extends RwOpponentLine {
+	kind: RwTravelKind;
+}
+
+/** Every opponent outside Torn and currently at (or inbound to) one destination. */
+export interface RwTravelingDestination {
+	destination: TravelDestination;
+	players: RwTravelLine[];
+}
+
+/**
+ * Destinations with at least one opponent, ordered by player count descending
+ * then destination name.
  *
  * An array rather than a record so the ordering is explicit and survives the
  * IPC round-trip, and so only populated destinations appear — the Discord
@@ -171,11 +211,13 @@ export const TRAVEL_DESTINATION_LABELS: Record<TravelDestination, string> = {
 /**
  * Payload for the secondary travel display.
  *
- * Separate from `RwDisplaysUpdate` on purpose: traveling players match neither
- * `state === "Okay"` nor `state === "Hospital"`, so they appear in none of the
- * four primary buckets. Sharing one payload would mean a traveling-only change
- * produced an identical bucket signature and got suppressed as "unchanged",
- * leaving the travel embed stale while the primary embeds looked healthy.
+ * Separate from `RwDisplaysUpdate` on purpose: the opponents on this board match
+ * none of the four primary buckets. Traveling and abroad players are not
+ * `state === "Okay"`, and an opponent downed abroad is dropped from the primary
+ * `hospital` bucket because that hospital cannot be reached without flying.
+ * Sharing one payload would mean an away-only change produced an identical
+ * bucket signature and got suppressed as "unchanged", leaving the travel embed
+ * stale while the primary embeds looked healthy.
  *
  * `warState` and `channelId` behave exactly as in `RwDisplaysUpdate`, including
  * `no_war` as the teardown signal.

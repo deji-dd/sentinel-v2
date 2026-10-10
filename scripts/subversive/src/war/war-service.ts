@@ -5,8 +5,9 @@ import {
 	registerHudActivityListener,
 } from "../hud/attack-hud";
 import { isWarEngaged, state } from "../state";
-import type { CurrentWarInfo, WarTarget } from "../types";
+import type { CurrentWarInfo, DibsItem, WarTarget } from "../types";
 import { formatStats } from "../utils/formatters";
+import { syncDibsFromServer } from "./dibs-sync";
 import { fetchHospitalQueue, renderHospitalQueue } from "./hospital";
 import {
 	fetchAvailableTargets,
@@ -426,7 +427,7 @@ export async function runLongPollLoop(): Promise<void> {
 				war?: CurrentWarInfo;
 				targets?: WarTarget[];
 				hospitalQueue?: WarTarget[];
-				dibs?: Array<{ targetId: number; [key: string]: unknown }>;
+				dibs?: DibsItem[];
 				dibsLeadTimeSeconds?: number;
 			}>(`/v2/target-finder/war/events?${params.toString()}`);
 
@@ -460,11 +461,7 @@ export async function runLongPollLoop(): Promise<void> {
 					renderHospitalQueue(res.hospitalQueue);
 				}
 				if (Array.isArray(res.dibs)) {
-					for (const d of res.dibs) {
-						if (typeof d.targetId === "number") {
-							state.dibs.set(d.targetId, d as never);
-						}
-					}
+					syncDibsFromServer(state.dibs, res.dibs);
 				}
 			}
 		} catch {

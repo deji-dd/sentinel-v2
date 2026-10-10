@@ -106,9 +106,7 @@ export function updateHospCountdowns(): void {
 			const currentTornId = state.user?.tornId;
 			const dibsRecord = state.dibs.get(id);
 			const isYou =
-				currentTornId &&
-				(dibsRecord as unknown as { claimedBy?: { tornId?: number } })
-					?.claimedBy?.tornId === currentTornId;
+				currentTornId && dibsRecord?.claimedBy?.tornId === currentTornId;
 			if (isYou && !attackBtn) {
 				const releaseBtn =
 					rightContainer.querySelector<HTMLElement>(".satf-dibs-release");
@@ -199,16 +197,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 		.map((item) => {
 			const until = item.status?.until ?? nowSec;
 			const remaining = Math.max(0, until - nowSec);
-			const dibsRecord = state.dibs.get(item.id) as unknown as
-				| {
-						status?: string;
-						claimedBy?: {
-							tornId?: number;
-							tornName?: string;
-							discordTag?: string;
-						};
-				  }
-				| undefined;
+			const dibsRecord = state.dibs.get(item.id);
 
 			let dibsHtml = "";
 			if (dibsRecord && dibsRecord.status === "claimed") {

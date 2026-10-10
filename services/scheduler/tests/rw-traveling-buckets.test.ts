@@ -3,6 +3,8 @@ import { TORN_TRAVEL_DESTINATIONS } from "@sentinel/schemas";
 import {
 	buildTravelingSignature,
 	classifyTravelingOpponents,
+	parseAbroadDestination,
+	parseOverseasHospitalDestination,
 	parseTravelDestination,
 } from "../src/lib/rw-traveling-buckets";
 import type { RankedWarOpponent } from "../src/workers/subversive/ranked-war-worker";
@@ -50,6 +52,40 @@ const flyingTo = (
 			color: "blue",
 			until: null,
 			planeImageType: "light_aircraft",
+		},
+	});
+
+const abroadIn = (id: number, name: string, country: string, bs = 1_000_000) =>
+	opponent({
+		id,
+		name,
+		estimatedBs: bs,
+		status: {
+			description: `In ${country}`,
+			details: null,
+			state: "Abroad",
+			color: "blue",
+			until: null,
+		},
+	});
+
+const downedIn = (
+	id: number,
+	name: string,
+	nationality: string,
+	until: number | null = 1_800_003_600,
+	bs = 1_000_000,
+) =>
+	opponent({
+		id,
+		name,
+		estimatedBs: bs,
+		status: {
+			description: `In a ${nationality} hospital for 24 mins`,
+			details: null,
+			state: "Hospital",
+			color: "red",
+			until,
 		},
 	});
 
@@ -124,6 +160,83 @@ describe("parseTravelDestination", () => {
 	});
 });
 
+describe("parseAbroadDestination", () => {
+	it("reads the country Torn names for a landed player", () => {
+		expect(parseAbroadDestination("In Japan")).toBe("Japan");
+		expect(parseAbroadDestination("In Cayman Islands")).toBe("Cayman Islands");
+	});
+
+	it("tolerates a missing 'In ' prefix without accepting stray text", () => {
+		// Torn writes "In Japan"; the country still has to match the list exactly,
+		// so a reworded sentence can never be rendered as a country.
+		expect(parseAbroadDestination("Japan")).toBe("Japan");
+		expect(parseAbroadDestination("Currently in Japan")).toBeNull();
+	});
+
+	it("rejects a domestic hospital stay, which shares the 'In ' prefix", () => {
+		expect(parseAbroadDestination("In hospital for 25 mins")).toBeNull();
+		expect(
+			parseAbroadDestination("In a Japanese hospital for 24 mins"),
+		).toBeNull();
+	});
+
+	it("rejects unknown countries and other states", () => {
+		expect(parseAbroadDestination("In Atlantis")).toBeNull();
+		expect(parseAbroadDestination("Traveling from Torn to Japan")).toBeNull();
+		expect(parseAbroadDestination("")).toBeNull();
+		expect(parseAbroadDestination(null)).toBeNull();
+		expect(parseAbroadDestination(undefined)).toBeNull();
+	});
+
+	it("accepts every country Torn can report", () => {
+		for (const destination of TORN_TRAVEL_DESTINATIONS) {
+			// "Torn" is the city, not a country a player can be landed in.
+			const expected = destination === "Torn" ? null : destination;
+			expect(parseAbroadDestination(`In ${destination}`)).toBe(expected);
+		}
+	});
+});
+
+describe("parseOverseasHospitalDestination", () => {
+	it("maps the nationality Torn puts in the description", () => {
+		// The first three are the wordings observed live (see torn-status.ts).
+		expect(
+			parseOverseasHospitalDestination("In a Japanese hospital for 24 mins"),
+		).toBe("Japan");
+		expect(
+			parseOverseasHospitalDestination("In an Emirati hospital for 34 mins"),
+		).toBe("UAE");
+		expect(
+			parseOverseasHospitalDestination("In a Swiss hospital for 41 mins"),
+		).toBe("Switzerland");
+		expect(
+			parseOverseasHospitalDestination("In a Canadian hospital for 5 mins"),
+		).toBe("Canada");
+	});
+
+	it("handles an adjective that carries the country name as a prefix", () => {
+		expect(
+			parseOverseasHospitalDestination(
+				"In a South African hospital for 5 mins",
+			),
+		).toBe("South Africa");
+	});
+
+	it("rejects a hospital inside Torn, which names no nation", () => {
+		expect(
+			parseOverseasHospitalDestination("In hospital for 3 hrs 12 mins"),
+		).toBeNull();
+	});
+
+	it("rejects an adjective it cannot place rather than guessing", () => {
+		expect(
+			parseOverseasHospitalDestination("In a Martian hospital for 5 mins"),
+		).toBeNull();
+		expect(parseOverseasHospitalDestination("")).toBeNull();
+		expect(parseOverseasHospitalDestination(null)).toBeNull();
+	});
+});
+
 describe("classifyTravelingOpponents", () => {
 	it("groups players by destination", () => {
 		const buckets = classifyTravelingOpponents([
@@ -163,6 +276,73 @@ describe("classifyTravelingOpponents", () => {
 			flyingTo(1, "Known", "Japan"),
 			// Deliberately not a valid TravelDestination.
 			flyingTo(2, "Unknown", "Atlantis"),
+		]);
+
+		expect(buckets).toHaveLength(1);
+		expect(buckets[0]?.players.map((p) => p.id)).toEqual([1]);
+	});
+
+	it("boards an opponent who has already landed, tagged as abroad", () => {
+		const buckets = classifyTravelingOpponents([
+			abroadIn(1, "Landed", "Japan", 5_000_000),
+		]);
+
+		expect(buckets).toHaveLength(1);
+		expect(buckets[0]?.destination).toBe("Japan");
+		expect(buckets[0]?.players[0]?.kind).toBe("abroad");
+		// Only a hospital stay carries a timer; a landed player has none.
+		expect(buckets[0]?.players[0]?.hospitalUntil).toBeNull();
+	});
+
+	it("merges inbound and landed opponents under one destination", () => {
+		const buckets = classifyTravelingOpponents([
+			flyingTo(1, "Inbound", "Japan", 1_000),
+			abroadIn(2, "Landed", "Japan", 9_000_000),
+		]);
+
+		expect(buckets).toHaveLength(1);
+		// One board per country, largest target first regardless of kind.
+		expect(buckets[0]?.players.map((p) => [p.id, p.kind])).toEqual([
+			[2, "abroad"],
+			[1, "traveling"],
+		]);
+	});
+
+	it("boards an opponent downed in a hospital abroad, with the timer", () => {
+		const buckets = classifyTravelingOpponents([
+			downedIn(1, "DownedAbroad", "Japanese", 1_800_007_200),
+		]);
+
+		expect(buckets[0]?.destination).toBe("Japan");
+		expect(buckets[0]?.players[0]?.kind).toBe("hospitalAbroad");
+		// Torn does clock an overseas stay, and the timer is the actionable half.
+		expect(buckets[0]?.players[0]?.hospitalUntil).toBe(1_800_007_200);
+	});
+
+	it("keeps an opponent downed inside Torn off the board", () => {
+		const buckets = classifyTravelingOpponents([
+			opponent({
+				id: 1,
+				name: "DomesticHospital",
+				status: {
+					description: "In hospital for 5 mins",
+					details: null,
+					state: "Hospital",
+					color: "red",
+					until: 1_800_003_600,
+				},
+			}),
+		]);
+
+		// The primary "leaving hospital" bucket owns that player, not this board.
+		expect(buckets).toEqual([]);
+	});
+
+	it("omits an away player whose country cannot be resolved", () => {
+		const buckets = classifyTravelingOpponents([
+			abroadIn(1, "Known", "Japan"),
+			abroadIn(2, "Unknown", "Atlantis"),
+			downedIn(3, "Unplaceable", "Martian"),
 		]);
 
 		expect(buckets).toHaveLength(1);
@@ -212,7 +392,7 @@ describe("classifyTravelingOpponents", () => {
 		expect(buckets[0]?.players[0]?.hospitalUntil).toBeNull();
 	});
 
-	it("returns an empty list when nobody is airborne", () => {
+	it("returns an empty list when nobody is away", () => {
 		expect(classifyTravelingOpponents([])).toEqual([]);
 		expect(
 			classifyTravelingOpponents([opponent({ id: 1, name: "Okay" })]),
@@ -264,6 +444,27 @@ describe("buildTravelingSignature", () => {
 	it("distinguishes destinations holding the same number of players", () => {
 		const a = classifyTravelingOpponents([flyingTo(1, "A", "Japan")]);
 		const b = classifyTravelingOpponents([flyingTo(2, "B", "Japan")]);
+		expect(buildTravelingSignature(a)).not.toBe(buildTravelingSignature(b));
+	});
+
+	it("changes when a player lands, which no other field would show", () => {
+		const airborne = classifyTravelingOpponents([flyingTo(1, "A", "Japan")]);
+		const landed = classifyTravelingOpponents([abroadIn(1, "A", "Japan")]);
+
+		// Same player, same country, same stats — only the kind differs, so a
+		// signature without it would suppress the repaint that shows the landing.
+		expect(buildTravelingSignature(airborne)).not.toBe(
+			buildTravelingSignature(landed),
+		);
+	});
+
+	it("changes when an overseas hospital stay is extended", () => {
+		const a = classifyTravelingOpponents([
+			downedIn(1, "A", "Japanese", 1_800_003_600),
+		]);
+		const b = classifyTravelingOpponents([
+			downedIn(1, "A", "Japanese", 1_800_007_200),
+		]);
 		expect(buildTravelingSignature(a)).not.toBe(buildTravelingSignature(b));
 	});
 });

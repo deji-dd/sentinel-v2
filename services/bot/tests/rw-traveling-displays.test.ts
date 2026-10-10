@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type {
-	RwOpponentLine,
 	RwTravelingBuckets,
+	RwTravelLine,
 	TravelDestination,
 } from "@sentinel/schemas";
 import {
@@ -13,26 +13,35 @@ import {
 const OPPONENT = "39th Street Killers X";
 const FACTION_ID = 2013;
 
-function line(
-	overrides: Partial<RwOpponentLine> & { id: number },
-): RwOpponentLine {
+function line(overrides: Partial<RwTravelLine> & { id: number }): RwTravelLine {
 	return {
 		name: `Player${overrides.id}`,
 		estimatedBs: 1_000_000,
 		lastSeenAt: 1_800_000_000,
 		hospitalUntil: null,
+		kind: "traveling",
 		...overrides,
 	};
 }
 
+/** Ids are inbound unless a fixture says otherwise, so they default to flying. */
 function bucket(
 	destination: TravelDestination,
 	ids: number[],
+	kind: RwTravelLine["kind"] = "traveling",
 ): RwTravelingBuckets[number] {
 	return {
 		destination,
-		players: ids.map((id) => line({ id })),
+		players: ids.map((id) => line({ id, kind })),
 	};
+}
+
+/** A destination holding landed and downed players, keyed by kind. */
+function mixedBucket(
+	destination: TravelDestination,
+	players: Array<Partial<RwTravelLine> & { id: number }>,
+): RwTravelingBuckets[number] {
+	return { destination, players: players.map((p) => line(p)) };
 }
 
 describe("buildTravelingEmbed", () => {
@@ -43,7 +52,7 @@ describe("buildTravelingEmbed", () => {
 		]);
 		const json = embed.toJSON();
 
-		expect(json.title).toBe(`${OPPONENT} • Players traveling`);
+		expect(json.title).toBe(`${OPPONENT} • Players traveling or abroad`);
 		expect(json.fields).toEqual([
 			{
 				name: "**Japan**",
@@ -58,6 +67,28 @@ describe("buildTravelingEmbed", () => {
 		]);
 	});
 
+	it("counts landed players separately from inbound ones", () => {
+		const json = buildTravelingEmbed(OPPONENT, [
+			mixedBucket("Japan", [{ id: 1 }, { id: 2 }, { id: 3, kind: "abroad" }]),
+		]).toJSON();
+
+		expect(json.fields?.[0]).toEqual({
+			name: "**Japan**",
+			// The two halves are one board: who is on the way, who is already
+			// standing there and can be hit by flying out.
+			value: "2 people flying here • 1 person already there",
+			inline: true,
+		});
+	});
+
+	it("says only 'already there' for a country nobody is flying to", () => {
+		const json = buildTravelingEmbed(OPPONENT, [
+			bucket("Mexico", [1, 2], "abroad"),
+		]).toJSON();
+
+		expect(json.fields?.[0]?.value).toBe("2 people already there");
+	});
+
 	it("spells out a flight home rather than listing it as a country", () => {
 		const json = buildTravelingEmbed(OPPONENT, [bucket("Torn", [1])]).toJSON();
 
@@ -66,19 +97,19 @@ describe("buildTravelingEmbed", () => {
 		expect(json.fields?.[0]?.name).not.toBe("**Torn**");
 	});
 
-	it("says so plainly when nobody is airborne", () => {
+	it("says so plainly when nobody is away", () => {
 		const json = buildTravelingEmbed(OPPONENT, []).toJSON();
 
-		expect(json.title).toBe(`${OPPONENT} • Players traveling`);
-		expect(json.description).toBe("Nobody is currently flying");
+		expect(json.title).toBe(`${OPPONENT} • Players traveling or abroad`);
+		expect(json.description).toBe("Nobody is currently flying or abroad");
 		expect(json.fields ?? []).toHaveLength(0);
 	});
 
-	it("keeps the title when nobody is airborne", () => {
+	it("keeps the title when nobody is away", () => {
 		// A titled empty state reads better than an embed that silently loses
 		// its fields in a channel dedicated to this.
 		expect(buildTravelingEmbed(OPPONENT, []).toJSON().title).toContain(
-			"Players traveling",
+			"Players traveling or abroad",
 		);
 	});
 
@@ -137,14 +168,28 @@ describe("buildTravelingSelectRow", () => {
 			{
 				label: "Japan",
 				value: "Japan",
-				description: "2 flying",
+				description: "2 people flying here",
 			},
 			{
 				label: "Returning to Torn",
 				value: "Torn",
-				description: "1 flying",
+				description: "1 person flying here",
 			},
 		]);
+	});
+
+	it("describes a mixed destination the same way the embed does", () => {
+		const row = buildTravelingSelectRow(FACTION_ID, [
+			mixedBucket("Japan", [{ id: 1 }, { id: 2, kind: "abroad" }]),
+		]);
+		const json = row?.toJSON() as {
+			components: Array<{ options: Array<{ description: string }> }>;
+		};
+
+		// One summary helper for both surfaces, so they cannot disagree.
+		expect(json.components[0]?.options[0]?.description).toBe(
+			"1 person flying here • 1 person already there",
+		);
 	});
 
 	it("labels the Torn option consistently with the embed field", () => {
@@ -219,6 +264,54 @@ describe("buildTravelingDestinationEmbed", () => {
 		).toBe(`${OPPONENT} • Traveling to Torn`);
 	});
 
+	it("titles a landed-only destination as being in the country", () => {
+		const json = buildTravelingDestinationEmbed(OPPONENT, "Japan", [
+			line({ id: 1, kind: "abroad" }),
+		])?.toJSON();
+
+		// "Traveling to Japan" would describe a player already standing there.
+		expect(json?.title).toBe(`${OPPONENT} • In Japan`);
+	});
+
+	it("titles a mixed destination after both halves", () => {
+		const json = buildTravelingDestinationEmbed(OPPONENT, "Japan", [
+			line({ id: 1 }),
+			line({ id: 2, kind: "abroad" }),
+		])?.toJSON();
+
+		expect(json?.title).toBe(`${OPPONENT} • In or traveling to Japan`);
+	});
+
+	it("splits a mixed destination into flying and landed lists", () => {
+		const json = buildTravelingDestinationEmbed(OPPONENT, "Japan", [
+			line({ id: 42, name: "Inbound", estimatedBs: 2_400_000_000 }),
+			line({ id: 7, name: "Landed", estimatedBs: 15_200, kind: "abroad" }),
+		])?.toJSON();
+
+		expect(json?.description).toBe(
+			"**Flying here**\n" +
+				"[Inbound [42]](https://www.torn.com/profiles.php?XID=42) • 2.40B\n" +
+				"\n" +
+				"**Already there**\n" +
+				"[Landed [7]](https://www.torn.com/profiles.php?XID=7) • 15.2k",
+		);
+	});
+
+	it("shows the hospital timer of an opponent downed abroad", () => {
+		const json = buildTravelingDestinationEmbed(OPPONENT, "Japan", [
+			line({
+				id: 5,
+				name: "Downed",
+				kind: "hospitalAbroad",
+				hospitalUntil: 1_800_003_600,
+			}),
+		])?.toJSON();
+
+		// The country does not release them; the hospital does, so the timer is
+		// the actionable half of the line.
+		expect(json?.description).toContain("• In hospital • Out <t:1800003600:R>");
+	});
+
 	it("returns null for an empty roster rather than a contentless embed", () => {
 		expect(buildTravelingDestinationEmbed(OPPONENT, "Japan", [])).toBeNull();
 	});
@@ -226,6 +319,8 @@ describe("buildTravelingDestinationEmbed", () => {
 	it("enforces the zero-emoji rule", () => {
 		const json = buildTravelingDestinationEmbed(OPPONENT, "UAE", [
 			line({ id: 1 }),
+			line({ id: 2, kind: "abroad" }),
+			line({ id: 3, kind: "hospitalAbroad", hospitalUntil: 1_800_003_600 }),
 		])?.toJSON();
 		expect(`${json?.title} ${json?.description}`).not.toMatch(
 			/[\u{1F300}-\u{1F9FF}]/u,
