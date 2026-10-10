@@ -7,6 +7,7 @@ import { Logger } from "@sentinel/utils";
 import { setupSchedulerIpc } from "./src/lib/ipc";
 import { getAllRunnerStatuses, stopAllRunners } from "./src/lib/scheduler";
 import { getSubscriberHealth } from "./src/lib/subscriber-health";
+import { mercTargetManager } from "./src/workers/merc/merc-contract-worker";
 import { registerPersonalLogSubscribers } from "./src/workers/personal/subscribers";
 import { startRegisteredWorkers } from "./src/workers/registry";
 
@@ -83,6 +84,16 @@ async function main() {
 		logger.warn(`Received ${signal}. Shutting down Scheduler...`);
 		healthServer.stop();
 		await stopAllRunners();
+
+		// Flush mercenary target state (claims, posted messages, immunity locks)
+		// before the database handle closes: a redeploy sends SIGTERM, and writes
+		// are coalesced, so the last few seconds of changes would otherwise be lost.
+		try {
+			await mercTargetManager.flushPersist();
+		} catch (err) {
+			logger.warn("Failed to persist merc target state during shutdown:", err);
+		}
+
 		await ipcServer.close();
 		closeDatabase();
 		logger.info("Scheduler shutdown complete.");

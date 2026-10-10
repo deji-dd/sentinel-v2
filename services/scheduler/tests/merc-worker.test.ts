@@ -1,7 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	spyOn,
+} from "bun:test";
 import type { MercContract } from "@sentinel/database";
 import type { FactionMember } from "@sentinel/schemas";
 import * as tornApiModule from "@sentinel/torn-api";
+import * as ipcModule from "@sentinel/utils/ipc";
+import { mercStateStore } from "../src/lib/merc-state-store";
 import {
 	MercTargetManager,
 	OFFLINE_JITTER_SECONDS,
@@ -528,6 +538,142 @@ describe("MercTargetManager - Qualifications and Alert Lifecycle", () => {
 
 		const alert2 = manager.getAlert(mockContract.id, 1007);
 		expect(alert2?.rwCooldownUntil).toBe(nowSec + 60);
+	});
+});
+
+/**
+ * The 60-second RW immunity is derived from the target's most recent hospital
+ * exit, and the lock is recomputed from scratch on every tick. Both halves of
+ * that design used to lose the lock while Torn still had the target immune:
+ * a new stay inherited the previous stay's exit time, and any tick that could
+ * not evaluate the cooldown wrote `null` over a live one.
+ */
+describe("MercTargetManager - RW immunity lock", () => {
+	const T0 = 1_700_000_000;
+	const warContract: MercContract = {
+		...mockContract,
+		id: "contract-rw-lock",
+		warStatusAtCreation: "active",
+	};
+
+	const statusOf = (state: string, until: number | null) => ({
+		description: state,
+		details: null,
+		state,
+		color: state === "Hospital" ? "red" : "green",
+		until,
+	});
+
+	const tick = (
+		manager: MercTargetManager,
+		id: number,
+		state: string,
+		until: number | null,
+		sec: number,
+	) =>
+		manager.processMember(
+			warContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({ id, status: statusOf(state, until) }),
+			sec,
+			sec * 1000,
+		);
+
+	it("counts the immunity from the latest hospital exit, not the first", async () => {
+		const manager = new MercTargetManager();
+
+		// First stay: hospital lead, then out at T0+30 (immune until T0+90).
+		await tick(manager, 6001, "Hospital", T0 + 30, T0);
+		await tick(manager, 6001, "Okay", null, T0 + 30);
+		expect(manager.getAlert(warContract.id, 6001)?.rwCooldownUntil).toBe(
+			T0 + 90,
+		);
+
+		// Hit again inside that window: a long stay, so the alert is torn down.
+		await tick(manager, 6001, "Hospital", T0 + 930, T0 + 40);
+		expect(manager.getAlert(warContract.id, 6001)).toBeUndefined();
+
+		// Leaving that second stay starts a fresh immunity, not the first one's.
+		await tick(manager, 6001, "Okay", null, T0 + 930);
+
+		const afterSecondExit = manager.getAlert(warContract.id, 6001);
+		expect(afterSecondExit).toBeDefined();
+		expect(afterSecondExit?.rwCooldownUntil).toBe(T0 + 990);
+
+		// ... and it survives the ticks that follow.
+		await tick(manager, 6001, "Okay", null, T0 + 931);
+		expect(manager.getAlert(warContract.id, 6001)?.rwCooldownUntil).toBe(
+			T0 + 990,
+		);
+	});
+
+	it("restarts the lock when a second short stay ends inside the first window", async () => {
+		const manager = new MercTargetManager();
+
+		await tick(manager, 6002, "Hospital", T0 + 30, T0);
+		await tick(manager, 6002, "Okay", null, T0 + 30);
+		expect(manager.getAlert(warContract.id, 6002)?.rwCooldownUntil).toBe(
+			T0 + 90,
+		);
+
+		// Back in hospital briefly (still a hospital lead), then out at T0+70.
+		await tick(manager, 6002, "Hospital", T0 + 70, T0 + 40);
+		await tick(manager, 6002, "Okay", null, T0 + 70);
+
+		expect(manager.getAlert(warContract.id, 6002)?.rwCooldownUntil).toBe(
+			T0 + 130,
+		);
+	});
+
+	it("keeps a running lock and the claim on a tick that cannot evaluate it", async () => {
+		const manager = new MercTargetManager();
+
+		await tick(manager, 6003, "Hospital", T0 + 30, T0);
+		await tick(manager, 6003, "Okay", null, T0 + 30);
+
+		const claim = await manager.claimTarget(warContract.id, 6003, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+			tornId: 61001,
+			tornName: "LockedMerc",
+		});
+		expect(claim.success).toBe(true);
+
+		// A tick where the member reads as hospitalised again: the cooldown cannot
+		// be evaluated, which must not shorten the lock that is still running.
+		await tick(manager, 6003, "Hospital", T0 + 55, T0 + 45);
+
+		const alert = manager.getAlert(warContract.id, 6003);
+		expect(alert?.rwCooldownUntil).toBe(T0 + 90);
+		expect(alert?.status).toBe("claimed");
+		expect(alert?.claimedBy?.tornId).toBe(61001);
+		expect(alert?.lockStartedAt).toBeUndefined();
+	});
+
+	it("keeps the alert and the claim when the roster snapshot shows an elapsed hospital timer", async () => {
+		const manager = new MercTargetManager();
+
+		await tick(manager, 6004, "Hospital", T0 + 30, T0);
+		const claim = await manager.claimTarget(warContract.id, 6004, {
+			discordId: "user-1",
+			discordTag: "Merc#0001",
+			tornId: 61002,
+			tornName: "WaitingMerc",
+		});
+		expect(claim.success).toBe(true);
+
+		// The roster was fetched before the target left hospital, so the status still
+		// says Hospital while its timer has already elapsed. That is an exit, not an
+		// invalid target: the claim must survive it.
+		await tick(manager, 6004, "Hospital", T0 + 30, T0 + 31);
+
+		const alert = manager.getAlert(warContract.id, 6004);
+		expect(alert).toBeDefined();
+		expect(alert?.status).toBe("claimed");
+		expect(alert?.claimedBy?.tornId).toBe(61002);
+		expect(alert?.rwCooldownUntil).toBe(T0 + 90);
 	});
 });
 
@@ -1636,5 +1782,143 @@ describe("MercTargetManager - Batched BS estimate pre-warm", () => {
 		expect(result.resolved).toBe(0);
 		// Preserved original fallback: max(10_000, level * 50_000)
 		expect(await manager.resolveEstimatedBs(7301, 50)).toBe(2_500_000);
+	});
+});
+
+/**
+ * The manager keeps alerts, claims and the hospital-exit baselines the RW
+ * immunity is counted from entirely in RAM, and the scheduler is restarted by
+ * every deploy. Without persistence a redeploy released every claim, lost the
+ * immunity lock of any target already out of hospital, and posted a duplicate
+ * alert beside the orphaned original.
+ */
+describe("MercTargetManager - restart persistence", () => {
+	const T0 = 1_700_100_000;
+	const usableContracts = new Set([mockContract.id]);
+
+	// Synthetic targets: leave the shared row empty so a local scheduler run does
+	// not restore them as real alerts.
+	afterAll(async () => {
+		await mercStateStore.save({
+			alerts: [],
+			hospitalTracker: [],
+			offlineTracker: [],
+		});
+		await mercStateStore.flush();
+	});
+
+	const statusOf = (state: string, until: number | null) => ({
+		description: state,
+		details: null,
+		state,
+		color: state === "Hospital" ? "red" : "green",
+		until,
+	});
+
+	const tick = (
+		manager: MercTargetManager,
+		id: number,
+		state: string,
+		until: number | null,
+		sec: number,
+	) =>
+		manager.processMember(
+			mockContract,
+			"guild-1",
+			"targets",
+			"role-merc-123",
+			createMockMember({ id, status: statusOf(state, until) }),
+			sec,
+			sec * 1000,
+		);
+
+	it("restores the claim, the posted message and the immunity lock", async () => {
+		const before = new MercTargetManager();
+		await tick(before, 8001, "Hospital", T0 + 30, T0);
+		await tick(before, 8001, "Okay", null, T0 + 30);
+
+		const claim = await before.claimTarget(mockContract.id, 8001, {
+			discordId: "user-restart",
+			discordTag: "Merc#9",
+			tornId: 81001,
+			tornName: "RestartMerc",
+		});
+		expect(claim.success).toBe(true);
+		before.recordMessageId(mockContract.id, 8001, "msg-restart-1", "targets");
+		await before.flushPersist();
+
+		// A redeploy: new process, empty RAM, fresh store cache.
+		const after = new MercTargetManager();
+		mercStateStore.invalidate();
+		expect(await after.hydrateFromStore(usableContracts)).toBeGreaterThan(0);
+
+		const restored = after.getAlert(mockContract.id, 8001);
+		expect(restored?.status).toBe("claimed");
+		expect(restored?.claimedBy?.tornId).toBe(81001);
+		expect(restored?.messageId).toBe("msg-restart-1");
+		// The target exited hospital at T0+30, so its immunity runs to T0+90.
+		expect(restored?.rwCooldownUntil).toBe(T0 + 90);
+
+		// The next tick must neither re-post the alert nor start the 20s claim
+		// timer while the target is still immune.
+		const ipcSpy = spyOn(ipcModule, "notifyBotAction").mockImplementation(
+			async () => true,
+		);
+		try {
+			await tick(after, 8001, "Okay", null, T0 + 40);
+
+			const posted = ipcSpy.mock.calls.filter(
+				([action]) => action === "post_merc_target_alert",
+			);
+			expect(posted).toHaveLength(0);
+		} finally {
+			ipcSpy.mockRestore();
+		}
+
+		const afterTick = after.getAlert(mockContract.id, 8001);
+		expect(afterTick?.status).toBe("claimed");
+		expect(afterTick?.rwCooldownUntil).toBe(T0 + 90);
+		expect(afterTick?.lockStartedAt).toBeUndefined();
+	});
+
+	it("drops alerts for contracts that are no longer running", async () => {
+		const before = new MercTargetManager();
+		await tick(before, 8002, "Okay", null, T0);
+		const claim = await before.claimTarget(mockContract.id, 8002, {
+			discordId: "user-restart",
+			discordTag: "Merc#9",
+			tornId: 81002,
+		});
+		expect(claim.success).toBe(true);
+		before.recordMessageId(mockContract.id, 8002, "msg-restart-2", "targets");
+		await before.flushPersist();
+
+		const after = new MercTargetManager();
+		mercStateStore.invalidate();
+		const ipcSpy = spyOn(ipcModule, "notifyBotAction").mockImplementation(
+			async () => true,
+		);
+		try {
+			// The contract finished while the scheduler was down.
+			expect(await after.hydrateFromStore(new Set())).toBe(0);
+
+			const deletions = ipcSpy.mock.calls.filter(
+				([action]) => action === "delete_merc_target_alert",
+			);
+			expect(deletions).toHaveLength(1);
+			expect(
+				(deletions[0]?.[1] as { messageId?: string } | undefined)?.messageId,
+			).toBe("msg-restart-2");
+		} finally {
+			ipcSpy.mockRestore();
+		}
+
+		expect(after.getAlert(mockContract.id, 8002)).toBeUndefined();
+
+		// The pruned board is written back, so the alert cannot return.
+		await after.flushPersist();
+		mercStateStore.invalidate();
+		const reloaded = await mercStateStore.load();
+		expect(reloaded?.alerts.map((a) => a.targetId) ?? []).not.toContain(8002);
 	});
 });

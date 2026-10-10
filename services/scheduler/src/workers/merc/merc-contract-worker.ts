@@ -20,6 +20,8 @@ import {
 } from "@sentinel/torn-api";
 import { isInTornHospital, Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
+import type { MercHospitalRecord } from "../../lib/merc-state-store";
+import { mercStateStore } from "../../lib/merc-state-store";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {
@@ -75,16 +77,14 @@ export class MercTargetManager {
 	private statsCache = new Map<number, number>();
 	private bsCacheMisses = 0;
 	private bsFetchMs = 0;
-	private hospitalTracker = new Map<
-		string,
-		{
-			wasInHospital: boolean;
-			hospitalUntil: number | null;
-			hospitalExitTime?: number;
-			lastSeenHospSec: number;
-		}
-	>();
+	private hospitalTracker = new Map<string, MercHospitalRecord>();
 	private offlineTracker = new Map<string, number>();
+	private persistTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Whether the persisted state has been restored into this process yet. */
+	private hydrated = false;
+
+	/** How long state mutations are coalesced before being written. */
+	private static readonly PERSIST_DEBOUNCE_MS = 3_000;
 
 	private getAlertKey(contractId: string, targetId: number): string {
 		return `${contractId}:${targetId}`;
@@ -101,6 +101,110 @@ export class MercTargetManager {
 		return this.alerts.get(this.getAlertKey(contractId, targetId));
 	}
 
+	/**
+	 * Restores the state persisted by a previous process, once per process.
+	 *
+	 * Alerts, claims and the hospital-exit baselines the RW immunity is counted
+	 * from all live in RAM, so a redeploy used to release every claim, lose the
+	 * immunity lock of any target already out of hospital, and post duplicate
+	 * alerts beside the orphaned originals.
+	 *
+	 * @param usableContractIds contracts that are still worth restoring. Alerts
+	 * for anything else (completed, paused, deleted while we were down) are
+	 * dropped and their Discord messages deleted, which is also the only cleanup
+	 * those messages would otherwise never get.
+	 * @returns how many alerts were restored
+	 */
+	async hydrateFromStore(usableContractIds: Set<string>): Promise<number> {
+		if (this.hydrated) return this.alerts.size;
+		this.hydrated = true;
+
+		const snapshot = await mercStateStore.load();
+		if (!snapshot) return 0;
+
+		let restored = 0;
+		let dropped = 0;
+
+		for (const alert of snapshot.alerts) {
+			if (!alert?.contractId || typeof alert.targetId !== "number") continue;
+
+			if (!usableContractIds.has(alert.contractId)) {
+				dropped++;
+				if (alert.messageId) {
+					void notifyBotAction("delete_merc_target_alert", {
+						guildId: alert.guildId,
+						channelName: alert.channelName,
+						messageId: alert.messageId,
+					});
+				}
+				continue;
+			}
+
+			this.alerts.set(
+				this.getAlertKey(alert.contractId, alert.targetId),
+				alert,
+			);
+			restored++;
+		}
+
+		for (const [key, record] of snapshot.hospitalTracker) {
+			if (!usableContractIds.has(key.split(":")[0] ?? "")) continue;
+			this.hospitalTracker.set(key, record);
+		}
+
+		for (const [key, seenAt] of snapshot.offlineTracker) {
+			if (!usableContractIds.has(key.split(":")[0] ?? "")) continue;
+			this.offlineTracker.set(key, seenAt);
+		}
+
+		if (restored > 0 || dropped > 0) {
+			logger.info(
+				`Restored ${restored} merc target alert(s) after restart (${dropped} dropped for contracts no longer running).`,
+			);
+		}
+		// Write the pruned board back so dropped alerts cannot come back. Nothing
+		// else changed: restoring is not itself a mutation to persist.
+		if (dropped > 0) this.schedulePersist();
+
+		return restored;
+	}
+
+	/**
+	 * Queues a write of the live state, coalescing bursts.
+	 *
+	 * The state is written whole, so serialising it per tick would be wasted work;
+	 * the store skips the write entirely when the payload is unchanged.
+	 */
+	schedulePersist(): void {
+		if (this.persistTimer) return;
+
+		this.persistTimer = setTimeout(() => {
+			this.persistTimer = null;
+			void mercStateStore.save({
+				alerts: this.getActiveAlerts(),
+				hospitalTracker: [...this.hospitalTracker.entries()],
+				offlineTracker: [...this.offlineTracker.entries()],
+			});
+		}, MercTargetManager.PERSIST_DEBOUNCE_MS);
+
+		// Never hold the process open just to flush state.
+		(this.persistTimer as unknown as { unref?: () => void }).unref?.();
+	}
+
+	/** Awaits any queued write. Used by tests and by graceful shutdown. */
+	async flushPersist(): Promise<void> {
+		if (this.persistTimer) {
+			clearTimeout(this.persistTimer);
+			this.persistTimer = null;
+			await mercStateStore.save({
+				alerts: this.getActiveAlerts(),
+				hospitalTracker: [...this.hospitalTracker.entries()],
+				offlineTracker: [...this.offlineTracker.entries()],
+			});
+		}
+		await mercStateStore.flush();
+	}
+
 	recordMessageId(
 		contractId: string,
 		targetId: number,
@@ -112,6 +216,9 @@ export class MercTargetManager {
 		if (alert) {
 			alert.messageId = messageId;
 			alert.channelName = channelName;
+			// The message id is what lets the alert be edited or deleted instead of
+			// being orphaned when this process goes away.
+			this.schedulePersist();
 		}
 	}
 
@@ -203,6 +310,7 @@ export class MercTargetManager {
 			});
 		}
 
+		this.schedulePersist();
 		return { success: true, alert };
 	}
 
@@ -252,6 +360,7 @@ export class MercTargetManager {
 			});
 		}
 
+		this.schedulePersist();
 		return { success: true };
 	}
 
@@ -270,6 +379,7 @@ export class MercTargetManager {
 
 		this.alerts.delete(key);
 		this.offlineTracker.delete(key);
+		this.schedulePersist();
 	}
 
 	cleanContractTargets(contractId: string): void {
@@ -307,6 +417,7 @@ export class MercTargetManager {
 		}
 		autoStopCheckedAt.delete(contractId);
 		perfLogAt.delete(contractId);
+		this.schedulePersist();
 	}
 
 	/**
@@ -626,13 +737,36 @@ export class MercTargetManager {
 		 */
 		const inTornHospital = isInTornHospital(m.status);
 
+		/**
+		 * Torn's member list is a snapshot, so a member who left hospital between the
+		 * fetch and this tick still reads `Hospital` with a timer that has already
+		 * elapsed. That is a hospital EXIT, not a hospital stay: treating it as an
+		 * invalid target deleted the alert and silently dropped the mercenary's
+		 * claim, then re-posted the same target as open a second later.
+		 */
+		const hospitalTimerElapsed =
+			targetState === "Hospital" && hospUntil !== null && hospUntil <= nowSec;
+
 		const isHospitalLead =
 			inTornHospital && secondsInHosp <= 60 && secondsInHosp > 0;
-		const isOkay = targetState === "Okay";
+		const isOkay = targetState === "Okay" || hospitalTimerElapsed;
 
 		// Track hospital state persistently across polling ticks even if alert is unposted/deleted
 		const hospRecord = this.hospitalTracker.get(key);
 		if (targetState === "Hospital") {
+			/**
+			 * A recorded exit time means the previous stay has already ended, so a
+			 * member seen in hospital again is on a NEW stay whose exit is what the
+			 * 60-second RW immunity counts from. Keeping the old exit time made every
+			 * stay after the first inherit it, so the cooldown was measured from a
+			 * timestamp minutes in the past and dropped the moment the target left
+			 * hospital again — while Torn still had them immune.
+			 */
+			if (hospRecord?.hospitalExitTime !== undefined) {
+				hospRecord.hospitalExitTime = undefined;
+				if (existingAlert) existingAlert.hospitalExitTime = undefined;
+			}
+
 			if (!hospRecord) {
 				this.hospitalTracker.set(key, {
 					wasInHospital: true,
@@ -774,6 +908,25 @@ export class MercTargetManager {
 			existingAlert.wasInHospital = true;
 		}
 		existingAlert.hospitalUntil = isHospitalLead ? hospUntil : null;
+
+		/**
+		 * Never shorten a lock that is still running.
+		 *
+		 * The cooldown is recomputed from scratch every tick, so any tick that cannot
+		 * evaluate it — the member momentarily non-Okay, war fields mid-update — would
+		 * write `null` over a live lock and tell mercenaries the target is attackable
+		 * while Torn still has them immune. It also cleared the sticky
+		 * `wasInHospital` flag, which no later tick could restore, so the immunity was
+		 * lost for the rest of that stay. A preserved lock is always bounded by its
+		 * own expiry (at most 60s out).
+		 */
+		const previousLock = existingAlert.rwCooldownUntil ?? null;
+		if (previousLock !== null && previousLock > nowSec) {
+			rwCooldownUntil =
+				rwCooldownUntil === null
+					? previousLock
+					: Math.max(rwCooldownUntil, previousLock);
+		}
 		existingAlert.rwCooldownUntil = rwCooldownUntil;
 
 		if (
@@ -1042,6 +1195,17 @@ export async function runMercContractTrackingCycle(
 	const contracts = rows.map(mapRowToMercContract);
 	mercTargetManager.resetBsStats();
 	const cycleStartedAt = nowMs;
+
+	// Restore the previous process's state (claims, posted messages, hospital-exit
+	// baselines) now that the contract list is known, so alerts belonging to
+	// contracts that are no longer running are dropped instead of being re-posted.
+	await mercTargetManager.hydrateFromStore(
+		new Set(
+			contracts
+				.filter((c) => c.status === "active" || c.status === "upcoming")
+				.map((c) => c.id),
+		),
+	);
 
 	const relevantContracts: MercContract[] = [];
 
@@ -1342,6 +1506,10 @@ export async function runMercContractTrackingCycle(
 			`[perf] merc cycle took ${cycleMs}ms (timeout budget is ${MERC_WORKER_TIMEOUT_MS}ms); contracts=${relevantContracts.length}`,
 		);
 	}
+
+	// One call covers every per-member mutation the roster loop just made
+	// (hospital timers, lock state, reposts). The store skips unchanged payloads.
+	mercTargetManager.schedulePersist();
 
 	// 1-second cadence when active or imminent contracts are running
 	return Date.now() + 1_000;
