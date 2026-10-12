@@ -1,4 +1,11 @@
-import { db, eq, personalLogs, sql, systemStates } from "@sentinel/database";
+import {
+	db,
+	getWorkerState,
+	personalLogs,
+	sql,
+	upsertWorkerState,
+	WORKER_STATE_IDS,
+} from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -7,8 +14,8 @@ import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "personal:log_manager";
-const STATE_ID = "personal:log_manager";
-const RESYNC_STATE_ID = "personal:log_manager_resync";
+const STATE_ID = WORKER_STATE_IDS.logManager;
+const RESYNC_STATE_ID = WORKER_STATE_IDS.logManagerResync;
 const CADENCE_SEC = 60;
 const ACTIVE_BACKFILL_CADENCE_MS = 10000;
 const DEFAULT_BURST_PAGES = 5;
@@ -76,38 +83,39 @@ export type ResyncJob = {
 let inMemoryResyncJob: ResyncJob | null = null;
 
 /**
- * Loads the persistent resync job from SQLite system_states.
+ * Loads the persistent resync job from `worker_state`.
  * A job found in "running" state (e.g. after a crash) resumes from its saved cursor.
+ *
+ * The window bounds (`from`/`to`) and batch counters live in `details`, while
+ * the resume watermark is the typed `cursor` column.
  */
 async function loadResyncJobFromDb(): Promise<ResyncJob | null> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, RESYNC_STATE_ID),
-		});
+		const record = await getWorkerState(RESYNC_STATE_ID);
 
-		if (record?.data) {
-			const saved = record.data as Partial<ResyncJob>;
-			if (saved.from !== undefined && saved.to !== undefined) {
-				inMemoryResyncJob = {
-					status: saved.status ?? "pending",
-					from: saved.from,
-					to: saved.to,
-					cursor: saved.cursor ?? saved.to,
-					fetched: saved.fetched ?? 0,
-					pages: saved.pages ?? 0,
-					failures: saved.failures ?? 0,
-					lastError: saved.lastError ?? null,
-					startedAt: saved.startedAt ?? null,
-					finishedAt: saved.finishedAt ?? null,
-					updatedAt: new Date().toISOString(),
-				};
-				if (inMemoryResyncJob.status === "running") {
-					logger.info(
-						`Resuming interrupted resync job ${inMemoryResyncJob.from}-${inMemoryResyncJob.to} from cursor ${inMemoryResyncJob.cursor}`,
-					);
-				}
-			} else {
-				inMemoryResyncJob = null;
+		const details = record?.details as Partial<ResyncJob> | undefined;
+		const from = details?.from;
+		const to = details?.to;
+
+		if (record && from !== undefined && to !== undefined) {
+			const job: ResyncJob = {
+				status: (record.status as ResyncJob["status"] | null) ?? "pending",
+				from,
+				to,
+				cursor: record.cursor ?? to,
+				fetched: details?.fetched ?? 0,
+				pages: details?.pages ?? 0,
+				failures: details?.failures ?? 0,
+				lastError: record.lastError ?? null,
+				startedAt: details?.startedAt ?? null,
+				finishedAt: details?.finishedAt ?? null,
+				updatedAt: new Date().toISOString(),
+			};
+			inMemoryResyncJob = job;
+			if (job.status === "running") {
+				logger.info(
+					`Resuming interrupted resync job ${job.from}-${job.to} from cursor ${job.cursor}`,
+				);
 			}
 		} else {
 			inMemoryResyncJob = null;
@@ -120,28 +128,28 @@ async function loadResyncJobFromDb(): Promise<ResyncJob | null> {
 }
 
 /**
- * Persists the current resync job to SQLite system_states atomically.
+ * Persists the current resync job to `worker_state`.
  */
 async function persistResyncJobToDb(): Promise<void> {
 	if (!inMemoryResyncJob) return;
 	inMemoryResyncJob.updatedAt = new Date().toISOString();
 	try {
-		await db
-			.insert(systemStates)
-			.values({
-				id: RESYNC_STATE_ID,
-				init: false,
-				data: inMemoryResyncJob,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					data: inMemoryResyncJob,
-					updatedAt: new Date(),
-				},
-			});
+		const job = inMemoryResyncJob;
+		await upsertWorkerState({
+			workerId: RESYNC_STATE_ID,
+			status: job.status,
+			lastError: job.lastError,
+			cursor: job.cursor,
+			details: {
+				from: job.from,
+				to: job.to,
+				fetched: job.fetched,
+				pages: job.pages,
+				failures: job.failures,
+				startedAt: job.startedAt,
+				finishedAt: job.finishedAt,
+			},
+		});
 	} catch (error) {
 		logger.error("Failed to persist resync job to database:", error);
 	}
@@ -262,15 +270,20 @@ async function processResyncBurst(
  */
 export async function loadStateFromDb(): Promise<LogManagerState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
-		});
+		const record = await getWorkerState(STATE_ID);
 
-		if (record?.data) {
-			const saved = record.data as Partial<LogManagerState>;
+		if (record) {
+			// The typed columns carry what the reader actually uses; the rest of
+			// the worker's counters ride along in `details`.
+			const details = record.details as Partial<LogManagerState>;
 			inMemoryState = {
 				...DEFAULT_STATE,
-				...saved,
+				...details,
+				status:
+					(record.status as LogManagerState["status"] | null) ??
+					DEFAULT_STATE.status,
+				lastError: record.lastError ?? DEFAULT_STATE.lastError,
+				newestTimestampReached: record.cursor,
 				updatedAt: new Date().toISOString(),
 			};
 		} else {
@@ -310,28 +323,33 @@ export async function loadStateFromDb(): Promise<LogManagerState> {
 }
 
 /**
- * Persists the current in-memory state to SQLite system_states atomically.
+ * Persists the current in-memory state to `worker_state`.
+ *
+ * `init` used to be derived here as `backfillStatus === "completed"`. It is now
+ * the typed first-run gate, kept in step with that same condition so the meaning
+ * is unchanged.
  */
 async function persistStateToDb(): Promise<void> {
 	inMemoryState.updatedAt = new Date().toISOString();
 	try {
-		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: inMemoryState.backfillStatus === "completed",
-				data: inMemoryState,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: inMemoryState.backfillStatus === "completed",
-					data: inMemoryState,
-					updatedAt: new Date(),
-				},
-			});
+		await upsertWorkerState({
+			workerId: STATE_ID,
+			init: inMemoryState.backfillStatus === "completed",
+			status: inMemoryState.status,
+			lastError: inMemoryState.lastError,
+			cursor: inMemoryState.newestTimestampReached,
+			details: {
+				backfillStatus: inMemoryState.backfillStatus,
+				forwardStatus: inMemoryState.forwardStatus,
+				totalLogsRecorded: inMemoryState.totalLogsRecorded,
+				backfillLogsCount: inMemoryState.backfillLogsCount,
+				forwardLogsCount: inMemoryState.forwardLogsCount,
+				oldestTimestampReached: inMemoryState.oldestTimestampReached,
+				lastForwardCheckedAt: inMemoryState.lastForwardCheckedAt,
+				lastBackfillCheckedAt: inMemoryState.lastBackfillCheckedAt,
+				lastSyncDurationMs: inMemoryState.lastSyncDurationMs,
+			},
+		});
 	} catch (error) {
 		logger.error("Failed to persist LogManager state to database:", error);
 	}

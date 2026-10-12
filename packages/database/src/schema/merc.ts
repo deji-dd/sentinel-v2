@@ -5,6 +5,7 @@ import {
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -228,3 +229,199 @@ export const mercContractTokens = pgTable(
 
 export type MercContractTokenRow = typeof mercContractTokens.$inferSelect;
 export type NewMercContractTokenRow = typeof mercContractTokens.$inferInsert;
+
+/**
+ * Faction master API keys registered against a Mercenary guild.
+ *
+ * Replaces the `merc:master_keys:<guildId>` rows in the legacy `system_states`
+ * blob table, which stored this as a single JSON object keyed by faction id and
+ * had to be read, spread and written back in full on every change. This is
+ * plainly relational data — one row per faction — so it belongs in rows: the
+ * "only one master key per faction" rule is now the primary key rather than a
+ * check in application code, and registering or removing a key touches exactly
+ * one row instead of rewriting the map for every faction.
+ *
+ * `keyId` references {@link ./discord.guildApiKeys} — the encrypted key itself
+ * is never held here.
+ */
+export const mercMasterKeys = pgTable(
+	"merc_master_keys",
+	{
+		guildId: text("guild_id").notNull(),
+		/** Torn faction the master key belongs to. */
+		factionId: integer("faction_id").notNull(),
+		/** Row id in `guild_api_keys` holding the encrypted key. */
+		keyId: text("key_id").notNull(),
+		factionName: text("faction_name"),
+		/** Torn user who donated the key. */
+		tornId: integer("torn_id"),
+		tornName: text("torn_name"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// One master key per faction per guild — the rule the old map enforced
+		// in application code, now enforced by the database.
+		primaryKey({
+			name: "merc_master_keys_guild_id_faction_id_pk",
+			columns: [table.guildId, table.factionId],
+		}),
+		index("idx_merc_master_keys_key_id").on(table.keyId),
+	],
+);
+
+export type MercMasterKeyRow = typeof mercMasterKeys.$inferSelect;
+export type NewMercMasterKeyRow = typeof mercMasterKeys.$inferInsert;
+
+/**
+ * Live mercenary target alerts: which targets the contract worker has posted,
+ * and who has claimed them.
+ *
+ * Replaces part of the `merc:active_state` row in the legacy `system_states`
+ * blob, which held this list — plus two tracker maps — as one JSON object
+ * rewritten in full on every change. The worker keeps everything in RAM and
+ * persists so a redeploy does not lose claims: without it, mercenaries lost
+ * claims they were holding and duplicate alerts were posted next to the
+ * orphaned originals.
+ *
+ * The in-memory store is a `Map<"contractId:targetId", alert>`, so the composite
+ * primary key matches the key the worker already looks up by.
+ *
+ * Epoch columns are `bigint` with the unit recorded per column: the worker does
+ * arithmetic on these values against `Date.now()`, and Torn reports some in
+ * seconds and some in milliseconds, so integers keep the semantics exactly as
+ * they were rather than adding a conversion at every read.
+ */
+export const mercActiveAlerts = pgTable(
+	"merc_active_alerts",
+	{
+		contractId: text("contract_id").notNull(),
+		targetId: integer("target_id").notNull(),
+		guildId: text("guild_id").notNull(),
+		/** Discord channel the alert was posted into. */
+		channelName: text("channel_name").notNull(),
+		targetName: text("target_name").notNull(),
+		targetLevel: integer("target_level").notNull(),
+		estimatedBs: bigint("estimated_bs", { mode: "number" })
+			.default(0)
+			.notNull(),
+		/** `open` until a mercenary claims it. */
+		status: text("status").notNull(),
+		claimedByDiscordId: text("claimed_by_discord_id"),
+		claimedByDiscordTag: text("claimed_by_discord_tag"),
+		claimedByTornId: integer("claimed_by_torn_id"),
+		claimedByTornName: text("claimed_by_torn_name"),
+		/** Epoch MILLISECONDS the claim was taken. */
+		claimedAt: bigint("claimed_at", { mode: "number" }),
+		/** Discord snowflake of the posted alert message. */
+		messageId: text("message_id"),
+		/** Epoch MILLISECONDS the alert was last (re)posted. */
+		lastAlertAt: bigint("last_alert_at", { mode: "number" }).notNull(),
+		isStrickenEligible: boolean("is_stricken_eligible")
+			.default(false)
+			.notNull(),
+		/**
+		 * Epoch SECONDS the target is hospitalised until. Nullable on both sides:
+		 * the alert carried `undefined` and `null` distinctly in the blob, and
+		 * every reader treats them the same (`?? 0`), so the distinction is not
+		 * preserved here.
+		 */
+		hospitalUntil: bigint("hospital_until", { mode: "number" }),
+		/** Epoch SECONDS the 60-second ranked-war immunity expires. */
+		rwCooldownUntil: bigint("rw_cooldown_until", { mode: "number" }),
+		wasInHospital: boolean("was_in_hospital"),
+		/** Epoch SECONDS the target was first seen out of hospital. */
+		hospitalExitTime: bigint("hospital_exit_time", { mode: "number" }),
+		/** Epoch MILLISECONDS the RW cooldown lock was taken. */
+		lockStartedAt: bigint("lock_started_at", { mode: "number" }),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			name: "merc_active_alerts_contract_id_target_id_pk",
+			columns: [table.contractId, table.targetId],
+		}),
+		index("idx_merc_active_alerts_contract").on(table.contractId),
+	],
+);
+
+export type MercActiveAlertRow = typeof mercActiveAlerts.$inferSelect;
+export type NewMercActiveAlertRow = typeof mercActiveAlerts.$inferInsert;
+
+/**
+ * Hospital bookkeeping per mercenary target, keyed `contractId:targetId`.
+ *
+ * Split out from the alert because the worker tracks hospital state for targets
+ * it has not (or no longer) posted an alert for, and the two maps are
+ * independently added to and cleared.
+ */
+export const mercHospitalTrackers = pgTable(
+	"merc_hospital_trackers",
+	{
+		contractId: text("contract_id").notNull(),
+		targetId: integer("target_id").notNull(),
+		wasInHospital: boolean("was_in_hospital").notNull(),
+		/** Epoch SECONDS the target is hospitalised until. */
+		hospitalUntil: bigint("hospital_until", { mode: "number" }),
+		/** Epoch SECONDS the target was first seen out of hospital. */
+		hospitalExitTime: bigint("hospital_exit_time", { mode: "number" }),
+		/** Epoch SECONDS this hospital state was last observed. */
+		lastSeenHospSec: bigint("last_seen_hosp_sec", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			name: "merc_hospital_trackers_contract_id_target_id_pk",
+			columns: [table.contractId, table.targetId],
+		}),
+	],
+);
+
+export type MercHospitalTrackerRow = typeof mercHospitalTrackers.$inferSelect;
+export type NewMercHospitalTrackerRow =
+	typeof mercHospitalTrackers.$inferInsert;
+
+/**
+ * When each mercenary target was last seen offline, keyed `contractId:targetId`.
+ *
+ * The value is a single epoch-seconds timestamp, but it is a per-target entry in
+ * a growing map, so it gets rows rather than a JSON object.
+ */
+export const mercOfflineTrackers = pgTable(
+	"merc_offline_trackers",
+	{
+		contractId: text("contract_id").notNull(),
+		targetId: integer("target_id").notNull(),
+		/** Epoch SECONDS the target was last observed offline. */
+		lastSeenAt: bigint("last_seen_at", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			name: "merc_offline_trackers_contract_id_target_id_pk",
+			columns: [table.contractId, table.targetId],
+		}),
+	],
+);
+
+export type MercOfflineTrackerRow = typeof mercOfflineTrackers.$inferSelect;
+export type NewMercOfflineTrackerRow = typeof mercOfflineTrackers.$inferInsert;

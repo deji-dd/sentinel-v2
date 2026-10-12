@@ -21,12 +21,12 @@ import {
 	inArray,
 	like,
 	markMercContractPaid,
+	mercMasterKeys,
 	or,
 	reactionRoleMappings,
 	reactionRoleMessages,
 	reconcileTargetGuildsAndModules,
 	type ServerType,
-	systemStates,
 	territoryBlueprints,
 	updateMercChannelConfig,
 	updateMercContract,
@@ -1095,24 +1095,29 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					serverTypes.faction !== params.guildId &&
 					requestedType !== "faction");
 
-			let mercKeysState: Record<
+			// Faction master keys are one row per faction now, so the keyId lookup
+			// the enrichment below needs is a simple map rather than a JSON object
+			// that had to be loaded and shape-guarded.
+			const mercMasterKeysByKeyId = new Map<
 				string,
-				{
-					keyId?: string;
-					factionId?: number;
-					factionName?: string;
-					tornId?: number;
-					tornName?: string;
-				}
-			> = {};
+				{ factionId: number; factionName: string | null }
+			>();
 
 			if (isMerc) {
-				const [stateRow] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, `merc:master_keys:${params.guildId}`));
-				if (stateRow?.data && typeof stateRow.data === "object") {
-					mercKeysState = stateRow.data as typeof mercKeysState;
+				const masterKeys = await db
+					.select({
+						keyId: mercMasterKeys.keyId,
+						factionId: mercMasterKeys.factionId,
+						factionName: mercMasterKeys.factionName,
+					})
+					.from(mercMasterKeys)
+					.where(eq(mercMasterKeys.guildId, params.guildId));
+
+				for (const masterKey of masterKeys) {
+					mercMasterKeysByKeyId.set(masterKey.keyId, {
+						factionId: masterKey.factionId,
+						factionName: masterKey.factionName,
+					});
 				}
 			}
 
@@ -1122,12 +1127,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				let factionId: number | null = null;
 				let factionName: string | null = null;
 
-				for (const info of Object.values(mercKeysState)) {
-					if (info?.keyId === k.id) {
-						factionId = info.factionId ?? null;
-						factionName = info.factionName ?? null;
-						break;
-					}
+				const masterKey = mercMasterKeysByKeyId.get(k.id);
+				if (masterKey) {
+					factionId = masterKey.factionId;
+					factionName = masterKey.factionName;
 				}
 
 				if (!factionId && k.donatedByDiscordTag) {
@@ -1270,14 +1273,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 			}
 
 			if (isMerc && playerFactionId) {
-				const stateKey = `merc:master_keys:${params.guildId}`;
-				const [stateRow] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, stateKey));
-				const existingMap =
-					(stateRow?.data as Record<string, { keyId?: string }>) ?? {};
-				if (existingMap[String(playerFactionId)]) {
+				const [existingMasterKey] = await db
+					.select({ keyId: mercMasterKeys.keyId })
+					.from(mercMasterKeys)
+					.where(
+						and(
+							eq(mercMasterKeys.guildId, params.guildId),
+							eq(mercMasterKeys.factionId, playerFactionId),
+						),
+					);
+
+				if (existingMasterKey) {
 					set.status = 400;
 					return {
 						error: `A master API key for faction ${playerFactionId} (${playerFactionName}) is already registered. Only 1 master key per faction is permitted. Remove the existing key first to replace it.`,
@@ -1317,32 +1323,31 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				});
 
 			if (isMerc && playerFactionId && inserted) {
-				const stateKey = `merc:master_keys:${params.guildId}`;
-				const [stateRow] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, stateKey));
-				const currentMap = (stateRow?.data as Record<string, unknown>) ?? {};
-				const updatedMap = {
-					...currentMap,
-					[String(playerFactionId)]: {
-						keyId: inserted.id,
+				// One row for this faction. Registering a master key used to read
+				// the whole per-guild map, add this faction and write every other
+				// faction back unchanged.
+				const now = new Date();
+				await db
+					.insert(mercMasterKeys)
+					.values({
+						guildId: params.guildId,
 						factionId: playerFactionId,
+						keyId: inserted.id,
 						factionName: playerFactionName,
 						tornId: tornUserId,
 						tornName: playerName,
-					},
-				};
-				await db
-					.insert(systemStates)
-					.values({
-						id: stateKey,
-						init: true,
-						data: updatedMap,
+						createdAt: now,
+						updatedAt: now,
 					})
 					.onConflictDoUpdate({
-						target: systemStates.id,
-						set: { data: updatedMap, updatedAt: new Date() },
+						target: [mercMasterKeys.guildId, mercMasterKeys.factionId],
+						set: {
+							keyId: inserted.id,
+							factionName: playerFactionName,
+							tornId: tornUserId,
+							tornName: playerName,
+							updatedAt: now,
+						},
 					});
 			}
 
@@ -1398,25 +1403,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 
 			const serverTypes = await getServerTypeMappings();
 			if (serverTypes.merc && params.guildId === serverTypes.merc) {
-				const stateKey = `merc:master_keys:${params.guildId}`;
-				const [stateRow] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, stateKey));
-				if (stateRow?.data && typeof stateRow.data === "object") {
-					const map = {
-						...(stateRow.data as Record<string, { keyId?: string }>),
-					};
-					for (const [fId, val] of Object.entries(map)) {
-						if (val?.keyId === params.keyId) {
-							delete map[fId];
-						}
-					}
-					await db
-						.update(systemStates)
-						.set({ data: map, updatedAt: new Date() })
-						.where(eq(systemStates.id, stateKey));
-				}
+				// Drop any faction master-key rows pointing at the key being
+				// deleted, so a later registration for that faction is not
+				// rejected by the one-key-per-faction rule on a dangling pointer.
+				await db
+					.delete(mercMasterKeys)
+					.where(
+						and(
+							eq(mercMasterKeys.guildId, params.guildId),
+							eq(mercMasterKeys.keyId, params.keyId),
+						),
+					);
 			}
 
 			return { success: true, id: deleted.id };

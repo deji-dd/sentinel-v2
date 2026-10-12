@@ -15,7 +15,10 @@ import {
 	getPlayerStats,
 	hashApiKey,
 	isValidApiKey,
+	TEMPORARY_DISABLE_ERROR_CODES,
+	TORN_ERROR_CODES,
 	TornApiClient,
+	TornError,
 	tornApi,
 } from "@sentinel/torn-api";
 import {
@@ -29,7 +32,11 @@ import {
 	tornStateSlug,
 } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
-import { getAvailableSubversiveKeyPool } from "../../lib/subversive-key-pool";
+import {
+	markSubversiveKeyDisabled,
+	recordSubversiveKeySuccess,
+	subversiveKeyHealthManager,
+} from "../../lib/subversive-key-pool";
 import {
 	type CachedUserSession,
 	type CurrentWarInfo,
@@ -83,6 +90,124 @@ function extractBearerToken(authHeader?: string | null): string | null {
 		return parts[1] ?? null;
 	}
 	return null;
+}
+
+/**
+ * Torn error codes that mean the *key* cannot serve the request, as opposed to
+ * the target being unavailable (code 6 "Incorrect ID" and friends). A check
+ * failing on one of these is the member's key problem, not a missing target,
+ * and must be reported as such.
+ */
+const KEY_UNUSABLE_ERROR_CODES = new Set([1, 2, 5, 9, 10, 13, 14, 16, 18]);
+
+/**
+ * Wall-clock budget for a single chain-target scout.
+ *
+ * The 20-check cap only bounds a press when Torn answers promptly: it says
+ * nothing about how long 20 sequential round trips actually take, and the Torn
+ * client's own request timeout is 30s, so one slow call can hold the press open
+ * far past the point where the connection is still alive. Bun closes a
+ * connection that has been idle for `idleTimeout` — 10s by default, and this
+ * service does not raise it — so a handler that runs longer than that is
+ * answered with a dropped request instead of a result, and the member cannot
+ * tell a hung scout from a broken tool.
+ *
+ * 8s leaves room for candidate selection (including the FFScouter fallback),
+ * the per-candidate DB writes and the response itself, so the press always ends
+ * in a real answer. Tunable per environment without touching the logic.
+ */
+const DEFAULT_VERIFICATION_BUDGET_MS = 8_000;
+
+function verificationBudgetMs(): number {
+	const configured = Number(process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS);
+	return Number.isFinite(configured) && configured > 0
+		? configured
+		: DEFAULT_VERIFICATION_BUDGET_MS;
+}
+
+/** Returned by `awaitWithinDeadline` when the scout runs out of wall clock. */
+const BUDGET_SPENT = Symbol("verification-budget-spent");
+
+/**
+ * Awaits `promise` only until `deadline`, giving up with `BUDGET_SPENT` if the
+ * budget runs out first. Abandoning the call is deliberate: the underlying
+ * request keeps running under the client's own 30s timeout, which is longer
+ * than the whole press is allowed to take.
+ */
+function awaitWithinDeadline<T>(
+	promise: Promise<T>,
+	deadline: number,
+): Promise<T | typeof BUDGET_SPENT> {
+	// The abandoned request can still settle (or fail) later; keep that rejection
+	// observed so it never surfaces as an unhandled rejection.
+	void promise.catch(() => {});
+
+	const remainingMs = deadline - Date.now();
+	if (remainingMs <= 0) return Promise.resolve(BUDGET_SPENT);
+
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const expiry = new Promise<typeof BUDGET_SPENT>((resolve) => {
+		timer = setTimeout(() => resolve(BUDGET_SPENT), remainingMs);
+	});
+
+	return Promise.race([promise, expiry]).finally(() => {
+		if (timer !== undefined) clearTimeout(timer);
+	});
+}
+
+function describeTornError(error: TornError): string {
+	const known = TORN_ERROR_CODES[error.code];
+	return `${known ?? error.message} (Torn error ${error.code})`;
+}
+
+/**
+ * Decrypts the requesting member's own Torn API key.
+ *
+ * Sessions cached by `/auth` are seeded in RAM without the encrypted key, so a
+ * miss falls back to the persisted row and hydrates the cache for later
+ * requests instead of paying for a query every time.
+ */
+export async function resolveMemberApiKey(
+	session: CachedUserSession,
+): Promise<string | null> {
+	const masterKey = process.env.ENCRYPTION_KEY ?? "";
+
+	const decrypt = (encrypted?: string | null): string | null => {
+		if (!encrypted || !masterKey) return null;
+		try {
+			const plain = decryptApiKey(encrypted, masterKey);
+			return isValidApiKey(plain) ? plain : null;
+		} catch {
+			return null;
+		}
+	};
+
+	const cachedKey = decrypt(session.apiKeyEncrypted);
+	if (cachedKey) return cachedKey;
+
+	const [userRow] = await db
+		.select({ apiKeyEncrypted: subversiveTargetFinderUsers.apiKeyEncrypted })
+		.from(subversiveTargetFinderUsers)
+		.where(eq(subversiveTargetFinderUsers.tornId, session.tornId));
+
+	const memberKey = decrypt(userRow?.apiKeyEncrypted);
+	if (!memberKey || !userRow) return null;
+
+	session.apiKeyEncrypted = userRow.apiKeyEncrypted;
+	subversiveTargetCache.setUserSession(session);
+	return memberKey;
+}
+
+/**
+ * True while the member's key is inside a Torn-imposed cooldown. Both trackers
+ * are consulted: this service's Subversive pool and the Torn client that marks
+ * keys on the errors it observes directly.
+ */
+function isMemberKeyCoolingDown(apiKey: string): boolean {
+	return (
+		subversiveKeyHealthManager.isKeyTemporarilyDisabled(apiKey) ||
+		tornApi.keyHealthManager.isKeyTemporarilyDisabled(apiKey)
+	);
 }
 
 function generateUserToken(tornId: number, apiKeyHash: string): string {
@@ -334,7 +459,9 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				})
 				.catch(() => {});
 
-			// Cache session in RAM for ultra-fast queries
+			// Cache session in RAM for ultra-fast queries. The encrypted key
+			// travels with it so on-demand chain-target checks can run the
+			// member's own key from the very first request.
 			subversiveTargetCache.setUserSession({
 				tornId,
 				tornName: playerName,
@@ -345,6 +472,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				isActive: true,
 				expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
 				statsCachedAt: now.getTime(),
+				apiKeyEncrypted,
 			});
 
 			return {
@@ -383,6 +511,11 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				error: "Session expired or membership revoked. Please re-authenticate.",
 			};
 		}
+
+		// The budget covers everything from here on — candidate selection and the
+		// optional FFScouter fallback included — because what has to stay inside
+		// the connection ceiling is the whole press, not just the checks.
+		const verificationDeadline = Date.now() + verificationBudgetMs();
 
 		const minFF = Number.parseFloat((query.minFF as string) || "1.2");
 		const maxFF = Number.parseFloat((query.maxFF as string) || "3.0");
@@ -495,164 +628,225 @@ export const subversiveTargetFinderRoutes = new Elysia({
 			};
 		}
 
-		// 2. Obtain key pool for parallel batch execution
-		const keyPool = await getAvailableSubversiveKeyPool();
-		if (keyPool.length === 0) {
+		// 2. Verification runs on the requesting member's OWN key. Chain-target
+		// scouting is charged to whoever asked for it, so a pooled key belonging
+		// to another member is never spent on this request — and when the
+		// member's key cannot be used, the request fails rather than silently
+		// borrowing someone else's.
+		const memberApiKey = await resolveMemberApiKey(session);
+		if (!memberApiKey) {
 			set.status = 503;
 			return {
 				success: false,
-				error: "No active API keys available to verify targets.",
+				error:
+					"Your Torn API key is unavailable for target verification. Please re-connect your API key in Settings.",
 			};
 		}
 
-		// 3. Up to 4 continuous bursts of 5 profile checks (reduced to minimize parallel key load)
-		const BURST_SIZE = 5;
-		const MAX_BURSTS = 4;
+		if (isMemberKeyCoolingDown(memberApiKey)) {
+			set.status = 429;
+			return {
+				success: false,
+				error:
+					"Your Torn API key is temporarily on cooldown with Torn. Please wait a few minutes and try again.",
+			};
+		}
+
+		// 3. Verify candidates one at a time on the member's own key, stopping at
+		// the first target that comes back attackable. A lucky press costs a
+		// single Torn call; an unlucky one walks the pool until either the check
+		// cap or the wall-clock budget runs out. The cap bounds how much of the
+		// member's Torn budget a press can spend (comfortably inside the
+		// in-process 50 requests/minute limiter); the deadline bounds how long the
+		// press can take.
+		const MAX_CHECKS_PER_REQUEST = 20;
 		const THREE_DAYS_SEC = 3 * 24 * 60 * 60; // 3 days in seconds
 		let verifiedTarget: MatchedTargetResult | null = null;
-		let currentIdx = 0;
+		let memberKeyError: TornError | null = null;
+		let checksRun = 0;
+		let budgetSpent = false;
 
-		for (
-			let burst = 0;
-			burst < MAX_BURSTS && currentIdx < candidates.length && !verifiedTarget;
-			burst++
-		) {
-			const burstCandidates = candidates.slice(
-				currentIdx,
-				currentIdx + BURST_SIZE,
-			);
-			currentIdx += BURST_SIZE;
-			if (burstCandidates.length === 0) break;
+		for (const candidate of candidates) {
+			if (checksRun >= MAX_CHECKS_PER_REQUEST) break;
+			if (Date.now() >= verificationDeadline) {
+				budgetSpent = true;
+				break;
+			}
 
-			const results = await tornApi.executeBatchSettled(
-				"/user/{id}/profile",
-				burstCandidates,
-				(c) => ({ pathParams: { id: c.targetId } }),
-				keyPool,
-			);
+			let profileData: UserProfileResponse;
+			try {
+				checksRun++;
+				const outcome = await awaitWithinDeadline(
+					tornApi.get("/user/{id}/profile", {
+						apiKey: memberApiKey,
+						userId: session.tornId,
+						pathParams: { id: candidate.targetId },
+						// These are opportunistic checks inside a sequential loop: a
+						// retry would sleep 5s on a rate limit (5000 * attempt) and can
+						// outlast the userscript's request budget. Skipping and letting
+						// the member press again is cheaper, so no retries here.
+						maxAttempts: 1,
+					}),
+					verificationDeadline,
+				);
+
+				if (outcome === BUDGET_SPENT) {
+					budgetSpent = true;
+					break;
+				}
+
+				profileData = outcome as unknown as UserProfileResponse;
+			} catch (error) {
+				if (
+					error instanceof TornError &&
+					KEY_UNUSABLE_ERROR_CODES.has(error.code)
+				) {
+					if (TEMPORARY_DISABLE_ERROR_CODES.has(error.code)) {
+						markSubversiveKeyDisabled(memberApiKey, error.code);
+					}
+					memberKeyError = error;
+					break;
+				}
+				// Target-level failures (deleted player, Torn hiccup) are not a key
+				// problem: leave that key's health alone and take the next candidate.
+				continue;
+			}
+
+			recordSubversiveKeySuccess(memberApiKey);
 
 			const now = new Date();
 			const nowSec = Math.floor(now.getTime() / 1000);
 
-			for (let i = 0; i < results.length; i++) {
-				const res = results[i];
-				const candidate = burstCandidates[i];
-				if (!res || !candidate || res.status !== "fulfilled") continue;
+			const lastActionTimestamp =
+				profileData.profile?.last_action?.timestamp ?? 0;
+			const statusObj = profileData.profile?.status;
+			// Torn only reports `until` for a live status (hospital, jail); a traveler or
+			// an Abroad member has none, and that absence must stay an absence.
+			const untilSec = statusObj?.until ?? null;
 
-				const profileData = res.value as UserProfileResponse;
-				const lastActionTimestamp =
-					profileData.profile?.last_action?.timestamp ?? 0;
-				const statusObj = profileData.profile?.status;
-				// Torn only reports `until` for a live status (hospital, jail); a traveler or
-				// an Abroad member has none, and that absence must stay an absence.
-				const untilSec = statusObj?.until ?? null;
+			// Inactivity check: Permanently active (logged in < 3 days ago)?
+			// If player has been active within 3 days, remove from DB & cache permanently
+			if (
+				lastActionTimestamp > 0 &&
+				nowSec - lastActionTimestamp < THREE_DAYS_SEC
+			) {
+				await db
+					.delete(subversiveTargetFinderTargets)
+					.where(eq(subversiveTargetFinderTargets.targetId, candidate.targetId))
+					.catch(() => {});
+				subversiveTargetCache.evict(candidate.targetId);
+				continue;
+			}
 
-				// Inactivity check: Permanently active (logged in < 3 days ago)?
-				// If player has been active within 3 days, remove from DB & cache permanently
-				if (
-					lastActionTimestamp > 0 &&
-					nowSec - lastActionTimestamp < THREE_DAYS_SEC
-				) {
-					await db
-						.delete(subversiveTargetFinderTargets)
-						.where(
-							eq(subversiveTargetFinderTargets.targetId, candidate.targetId),
-						)
-						.catch(() => {});
-					subversiveTargetCache.evict(candidate.targetId);
-					continue;
-				}
-
-				// Unattackable states. Only a hospital stay carries a Torn timer, so it is
-				// the only one that may write `hospitalUntil`: every other state
-				// (Traveling, Abroad, Jail, Federal, Fallen) has none, and inventing a
-				// 15-minute "hospital exit" for them made the maintenance sweep declare
-				// them attackable again without ever re-checking Torn. They record their
-				// real state instead, stay out of the ready pool, and are re-verified
-				// before they can be offered again.
-				if (!isAttackableInTorn(statusObj)) {
-					const isHospitalStay = isHospitalStatus(statusObj);
-					const hospitalUntil =
-						isHospitalStay && untilSec !== null
-							? new Date(untilSec * 1000)
-							: null;
-
-					await db
-						.update(subversiveTargetFinderTargets)
-						.set({
-							inHospital: true,
-							hospitalUntil,
-							status: tornStateSlug(statusObj),
-							lastAction:
-								lastActionTimestamp > 0
-									? new Date(lastActionTimestamp * 1000)
-									: null,
-							updatedAt: now,
-						})
-						.where(
-							eq(subversiveTargetFinderTargets.targetId, candidate.targetId),
-						)
-						.catch(() => {});
-
-					if (hospitalUntil) {
-						subversiveTargetCache.markHospital(
-							candidate.targetId,
-							hospitalUntil.getTime(),
-						);
-					} else {
-						// No timer to expire: the target is simply out until a verification
-						// finds them free again.
-						subversiveTargetCache.evict(candidate.targetId);
-					}
-					continue;
-				}
-
-				// Target is Okay and permanently inactive (>= 3 days offline)
-				const rawFF =
-					1 + (8 / 3) * (candidate.estimatedScore / session.bsScore);
-				const calculatedFF = Math.max(
-					1.0,
-					Math.min(clampedMaxFF, Number(rawFF.toFixed(2))),
-				);
+			// Unattackable states. Only a hospital stay carries a Torn timer, so it is
+			// the only one that may write `hospitalUntil`: every other state
+			// (Traveling, Abroad, Jail, Federal, Fallen) has none, and inventing a
+			// 15-minute "hospital exit" for them made the maintenance sweep declare
+			// them attackable again without ever re-checking Torn. They record their
+			// real state instead, stay out of the ready pool, and are re-verified
+			// before they can be offered again.
+			if (!isAttackableInTorn(statusObj)) {
+				const isHospitalStay = isHospitalStatus(statusObj);
+				const hospitalUntil =
+					isHospitalStay && untilSec !== null
+						? new Date(untilSec * 1000)
+						: null;
 
 				await db
 					.update(subversiveTargetFinderTargets)
 					.set({
-						inHospital: false,
-						hospitalUntil: null,
-						status: "okay",
+						inHospital: true,
+						hospitalUntil,
+						status: tornStateSlug(statusObj),
 						lastAction:
 							lastActionTimestamp > 0
 								? new Date(lastActionTimestamp * 1000)
 								: null,
-						isInactive: true,
 						updatedAt: now,
 					})
 					.where(eq(subversiveTargetFinderTargets.targetId, candidate.targetId))
 					.catch(() => {});
 
-				if (
-					!verifiedTarget &&
-					calculatedFF >= clampedMinFF &&
-					calculatedFF <= clampedMaxFF
-				) {
-					// Soft-reserve target for 60s so concurrent and staggered requests skip them
-					subversiveTargetCache.reserveTarget(candidate.targetId, 60_000);
-
-					verifiedTarget = {
-						id: candidate.targetId,
-						name: candidate.name,
-						level: candidate.level,
-						factionId: candidate.factionId,
-						factionName: candidate.factionName,
-						isFactionless: candidate.isFactionless,
-						isInactive: true,
-						estimatedBs: candidate.estimatedBs,
-						fairFight: calculatedFF,
-						attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${candidate.targetId}`,
-					};
+				if (hospitalUntil) {
+					subversiveTargetCache.markHospital(
+						candidate.targetId,
+						hospitalUntil.getTime(),
+					);
+				} else {
+					// No timer to expire: the target is simply out until a verification
+					// finds them free again.
+					subversiveTargetCache.evict(candidate.targetId);
 				}
+				continue;
 			}
+
+			// Target is Okay and permanently inactive (>= 3 days offline)
+			const rawFF = 1 + (8 / 3) * (candidate.estimatedScore / session.bsScore);
+			const calculatedFF = Math.max(
+				1.0,
+				Math.min(clampedMaxFF, Number(rawFF.toFixed(2))),
+			);
+
+			await db
+				.update(subversiveTargetFinderTargets)
+				.set({
+					inHospital: false,
+					hospitalUntil: null,
+					status: "okay",
+					lastAction:
+						lastActionTimestamp > 0
+							? new Date(lastActionTimestamp * 1000)
+							: null,
+					isInactive: true,
+					updatedAt: now,
+				})
+				.where(eq(subversiveTargetFinderTargets.targetId, candidate.targetId))
+				.catch(() => {});
+
+			if (calculatedFF >= clampedMinFF && calculatedFF <= clampedMaxFF) {
+				// Soft-reserve target for 60s so concurrent and staggered requests skip them
+				subversiveTargetCache.reserveTarget(candidate.targetId, 60_000);
+
+				verifiedTarget = {
+					id: candidate.targetId,
+					name: candidate.name,
+					level: candidate.level,
+					factionId: candidate.factionId,
+					factionName: candidate.factionName,
+					isFactionless: candidate.isFactionless,
+					isInactive: true,
+					estimatedBs: candidate.estimatedBs,
+					fairFight: calculatedFF,
+					attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${candidate.targetId}`,
+				};
+				break;
+			}
+		}
+
+		// Worth knowing about in the logs: it means the pool is being walked to the
+		// end of its budget without turning up an attackable target, which is a
+		// pool-quality problem rather than a member's key problem.
+		if (budgetSpent && !verifiedTarget) {
+			logger.warn(
+				`Chain target scout for user ${session.tornId} used its ${verificationBudgetMs()}ms budget after ${checksRun} check(s) of ${candidates.length} candidate(s) without an attackable target.`,
+			);
+		}
+
+		// The member's own key broke mid-scout: report it instead of quietly
+		// retrying on someone else's key.
+		if (!verifiedTarget && memberKeyError) {
+			// Torn's per-key request limit is transient and is not a key fault, so
+			// it must not cool the key down nor tell the member to check Settings.
+			const rateLimited = memberKeyError.code === 5;
+			set.status = rateLimited ? 429 : 503;
+			return {
+				success: false,
+				error: rateLimited
+					? "Your Torn API key hit Torn's request limit during verification. Please wait a moment and try again."
+					: `Target verification with your Torn API key failed: ${describeTornError(
+							memberKeyError,
+						)}. Please check your key in Settings and try again.`,
+			};
 		}
 
 		if (!verifiedTarget) {

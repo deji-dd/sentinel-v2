@@ -7,9 +7,9 @@ import {
 	eq,
 	inArray,
 	isNull,
+	personalLedgerSyncStates,
 	personalLogs,
 	sql,
-	systemStates,
 	tornCrimes,
 	tornItems,
 } from "@sentinel/database";
@@ -27,7 +27,8 @@ import { getActiveIpcServer } from "../../lib/ipc/server";
 import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
-const STATE_ID = "personal:crimes_ledger";
+/** Discriminator row in `personal_ledger_sync_states` for this ledger. */
+const LEDGER_SYNC_ID = "crimes";
 
 const logger = new Logger("Scheduler", "CrimesLedger");
 
@@ -60,18 +61,20 @@ const DEFAULT_STATE: CrimesLedgerState = {
 };
 
 /**
- * Loads the crimes ledger state from SQLite system_states.
+ * Loads the crimes ledger state from `personal_ledger_sync_states`.
  */
 export async function loadCrimesLedgerState(): Promise<CrimesLedgerState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
+		const record = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, LEDGER_SYNC_ID),
 		});
 
-		if (record?.data) {
+		if (record) {
 			return {
-				...DEFAULT_STATE,
-				...(record.data as Partial<CrimesLedgerState>),
+				status: record.status as CrimesLedgerState["status"],
+				totalIndexedCrimes: record.totalIndexed,
+				lastProcessedTimestamp: record.lastProcessedTimestamp,
+				lastError: record.lastError,
 				updatedAt: new Date().toISOString(),
 			};
 		}
@@ -82,30 +85,32 @@ export async function loadCrimesLedgerState(): Promise<CrimesLedgerState> {
 }
 
 /**
- * Persists the crimes ledger state to SQLite system_states atomically and broadcasts via IPC.
+ * Persists the crimes ledger state to `personal_ledger_sync_states`.
+ *
+ * Column-scoped: the legacy row also stored an `init` flag that was just
+ * `status === "completed"`, which nothing read.
  */
 export async function persistCrimesLedgerState(
 	state: CrimesLedgerState,
 ): Promise<void> {
 	state.updatedAt = new Date().toISOString();
 	try {
-		const isCompleted = state.status === "completed";
+		const now = new Date();
+		const values = {
+			ledger: LEDGER_SYNC_ID,
+			status: state.status,
+			lastError: state.lastError,
+			totalIndexed: state.totalIndexedCrimes,
+			lastProcessedTimestamp: state.lastProcessedTimestamp,
+			updatedAt: now,
+		};
+
 		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: isCompleted,
-				data: state,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
+			.insert(personalLedgerSyncStates)
+			.values({ ...values, createdAt: now })
 			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: isCompleted,
-					data: state,
-					updatedAt: new Date(),
-				},
+				target: personalLedgerSyncStates.ledger,
+				set: values,
 			});
 
 		const ipcServer = getActiveIpcServer();
@@ -289,11 +294,9 @@ export async function processCrimeLogsBatch(
 
 	// 3. Batch upsert rows inside an atomic transaction (without modifying non-conflicting data)
 	//
-	// This worker owns `crime_logs` and nothing else. `ledger_events` has a single
-	// writer — the wealth engine — which classifies the same crime logs alongside
-	// every other money-moving type. Two writers on one ledger was how a crime
-	// reward ended up counted twice with no way to tell afterwards which row came
-	// from where.
+	// This worker owns `crime_logs` and nothing else. `crime_logs` is the single
+	// record of a crime action, so a reward cannot be booked twice under two
+	// different ids with no way to tell afterwards which row came from where.
 	await db.transaction(
 		async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
 			for (const row of rowsToUpsert) {

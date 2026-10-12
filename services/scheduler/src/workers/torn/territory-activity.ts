@@ -1,9 +1,10 @@
 import {
 	db,
-	eq,
+	getWorkerState,
 	isNull,
-	systemStates,
+	setWorkerInitFlag,
 	territoryStates,
+	WORKER_STATE_IDS,
 	warLedgers,
 } from "@sentinel/database";
 import type {
@@ -20,6 +21,16 @@ import type { WorkerStartOptions } from "../registry.js";
 
 const WORKER_NAME = "torn:territory_activity";
 const logger = new Logger("Scheduler", "TerritoryActivity");
+
+/**
+ * `worker_state` ids for the two first-run flags.
+ *
+ * These replace the `war_ledger_init_state` and `tt_init_state` rows in the
+ * legacy `system_states` blob — two whole rows whose only purpose was to hold
+ * one boolean each.
+ */
+const WAR_LEDGER_INIT_STATE_ID = WORKER_STATE_IDS.warLedgerInit;
+const TT_INIT_STATE_ID = WORKER_STATE_IDS.territoryInit;
 
 let dbStatesCache: Map<string, CompactTerritoryState> | null = null;
 let dbActiveWarsCache: Map<string, IpcWarPayload> | null = null;
@@ -89,20 +100,16 @@ export async function executeActivityEngine(): Promise<number> {
 	const finishLog = logger.time();
 
 	try {
-		// Check system initialization state flags from SQLite. Skipped entirely
-		// once both flags have been observed true, so the steady-state loop costs
-		// zero queries for this.
+		// Check worker initialization state flags. Skipped entirely once both
+		// flags have been observed true, so the steady-state loop costs zero
+		// queries for this.
 		if (!warsInitialized || !territoriesInitialized) {
 			if (!warsInitialized) {
-				const warInitState = await db.query.systemStates.findFirst({
-					where: eq(systemStates.id, "war_ledger_init_state"),
-				});
+				const warInitState = await getWorkerState(WAR_LEDGER_INIT_STATE_ID);
 				warsInitialized = Boolean(warInitState?.init);
 			}
 			if (!territoriesInitialized) {
-				const stateInitState = await db.query.systemStates.findFirst({
-					where: eq(systemStates.id, "tt_init_state"),
-				});
+				const stateInitState = await getWorkerState(TT_INIT_STATE_ID);
 				territoriesInitialized = Boolean(stateInitState?.init);
 			}
 		}
@@ -574,37 +581,15 @@ export async function executeActivityEngine(): Promise<number> {
 			}
 		}
 
-		// Update system initialization flags
+		// Record that the initial passes have completed. These are pure boolean
+		// flags, so they touch only the `init` column and leave the rest of the
+		// row (should one ever be added) alone.
 		if (!isWarsInit) {
-			const nowDb = new Date();
-			await db
-				.insert(systemStates)
-				.values({
-					id: "war_ledger_init_state",
-					init: true,
-					createdAt: nowDb,
-					updatedAt: nowDb,
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: { init: true, updatedAt: nowDb },
-				});
+			await setWorkerInitFlag(WAR_LEDGER_INIT_STATE_ID, true);
 		}
 
 		if (!isStatesInit) {
-			const nowDb = new Date();
-			await db
-				.insert(systemStates)
-				.values({
-					id: "tt_init_state",
-					init: true,
-					createdAt: nowDb,
-					updatedAt: nowDb,
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: { init: true, updatedAt: nowDb },
-				});
+			await setWorkerInitFlag(TT_INIT_STATE_ID, true);
 		}
 
 		finishLog();

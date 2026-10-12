@@ -1,0 +1,1 @@
+ALTER TABLE "elims_api_keys" ADD COLUMN "is_excluded" boolean DEFAULT false NOT NULL;

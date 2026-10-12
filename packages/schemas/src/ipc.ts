@@ -10,7 +10,6 @@ import type {
 } from "./rw-displays";
 import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
-import type { WealthBalances, WealthLedgerState } from "./wealth";
 
 export type IpcWarAction =
 	| "assault_start"
@@ -452,18 +451,6 @@ export type IpcCompanySyncStateUpdatedMessage = {
 	};
 };
 
-export type IpcReinitializeWealthMessage = {
-	action: "reinitialize_wealth";
-	data?: {
-		timestamp?: number;
-	};
-};
-
-export type IpcWealthStateUpdatedMessage = {
-	action: "wealth_state_updated";
-	data: WealthLedgerState & { balances: WealthBalances };
-};
-
 export type IpcElimsStopWorkersRequestMessage = {
 	action: "elims_stop_workers";
 	requestId: string;
@@ -618,8 +605,6 @@ export type IpcMessage =
 	| IpcReinitializeStocksLedgerMessage
 	| IpcStocksLedgerStateUpdatedMessage
 	| IpcCompanySyncStateUpdatedMessage
-	| IpcReinitializeWealthMessage
-	| IpcWealthStateUpdatedMessage
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcSubversiveStockAlertsMessage
 	| IpcUserStockAlertsMessage

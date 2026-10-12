@@ -12,9 +12,6 @@ import type {
 	StatType,
 	StockPortfolioResponse,
 	StocksLedgerState,
-	WealthAnalyticsResponse,
-	WealthStateResponse,
-	WealthTransactionsResponse,
 } from "./types";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
@@ -394,94 +391,6 @@ export class BlastedApiClient {
 		if (!raw) return null;
 		try {
 			return JSON.parse(raw) as CompanyStateResponse;
-		} catch {
-			return null;
-		}
-	}
-	// ─── Wealth ledger ─────────────────────────────────────────────────────────
-
-	public async getWealthState(): Promise<WealthStateResponse> {
-		const data = await this.request<WealthStateResponse>(
-			"/v2/system/wealth-ledger/state",
-		);
-		GM_setValue(STORAGE_KEYS.cachedWealthState, JSON.stringify(data));
-		return data;
-	}
-
-	public async getWealthAnalytics(
-		timeframe = "30d",
-	): Promise<WealthAnalyticsResponse> {
-		const daysParam = timeframe === "all" ? "all" : timeframe.replace("d", "");
-		const data = await this.request<WealthAnalyticsResponse>(
-			`/v2/system/wealth-ledger/analytics?days=${daysParam}`,
-		);
-		GM_setValue(STORAGE_KEYS.cachedWealthAnalytics, JSON.stringify(data));
-		return data;
-	}
-
-	/**
-	 * A page of the ledger.
-	 *
-	 * `movements` defaults to on at the API, so the day-to-day list is rows that
-	 * actually changed something; `unpriced` switches to the debugging view, where
-	 * each row carries the reason it could not be valued and the raw payload it
-	 * was built from.
-	 */
-	public async getWealthTransactions(options?: {
-		limit?: number;
-		offset?: number;
-		category?: string;
-		logType?: number;
-		priced?: "1" | "0";
-		movements?: "1" | "0";
-		payloads?: "1";
-		from?: string;
-		to?: string;
-	}): Promise<WealthTransactionsResponse> {
-		const params = new URLSearchParams();
-		params.set("limit", String(options?.limit ?? 50));
-		params.set("offset", String(options?.offset ?? 0));
-		if (options?.category) params.set("category", options.category);
-		if (options?.logType !== undefined) {
-			params.set("logType", String(options.logType));
-		}
-		if (options?.priced) params.set("priced", options.priced);
-		if (options?.movements) params.set("movements", options.movements);
-		if (options?.payloads) params.set("payloads", options.payloads);
-		if (options?.from) params.set("from", options.from);
-		if (options?.to) params.set("to", options.to);
-		return this.request<WealthTransactionsResponse>(
-			`/v2/system/wealth-ledger/transactions?${params.toString()}`,
-		);
-	}
-
-	/** Asks the scheduler to reconcile, then returns the refreshed state. */
-	public async refreshWealth(): Promise<WealthStateResponse> {
-		const data = await this.request<WealthStateResponse>(
-			"/v2/system/wealth-ledger/refresh",
-			{ method: "POST" },
-		);
-		if (data.success) {
-			GM_setValue(STORAGE_KEYS.cachedWealthState, JSON.stringify(data));
-		}
-		return data;
-	}
-
-	public getCachedWealthState(): WealthStateResponse | null {
-		const raw = GM_getValue<string>(STORAGE_KEYS.cachedWealthState, "");
-		if (!raw) return null;
-		try {
-			return JSON.parse(raw) as WealthStateResponse;
-		} catch {
-			return null;
-		}
-	}
-
-	public getCachedWealthAnalytics(): WealthAnalyticsResponse | null {
-		const raw = GM_getValue<string>(STORAGE_KEYS.cachedWealthAnalytics, "");
-		if (!raw) return null;
-		try {
-			return JSON.parse(raw) as WealthAnalyticsResponse;
 		} catch {
 			return null;
 		}

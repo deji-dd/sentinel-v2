@@ -5,10 +5,11 @@ import {
 	eq,
 	type FactionAttackLogRow,
 	factionAttackLogs,
+	getWorkerState,
 	gte,
 	type NewFactionAttackLogRow,
 	sql,
-	systemStates,
+	upsertWorkerState,
 } from "@sentinel/database";
 import { TornApiClient, TornError, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -144,17 +145,17 @@ export async function getAttackWatermark(
 	if (cached) return cached;
 
 	try {
-		const [row] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, stateId));
+		// Watermarks live in `worker_state`: the id is per-faction (so it is not in
+		// the static registry), `cursor` carries the time watermark, and the id and
+		// backfill fields ride along in `details`.
+		const row = await getWorkerState(stateId);
 
-		if (row?.data && typeof row.data === "object") {
-			const data = row.data as Partial<AttackWatermark>;
+		if (row) {
+			const data = row.details as Partial<AttackWatermark>;
 			if (typeof data.lastAttackId === "number") {
 				const watermark: AttackWatermark = {
 					lastAttackId: data.lastAttackId,
-					lastAttackTimestamp: data.lastAttackTimestamp ?? 0,
+					lastAttackTimestamp: row.cursor ?? 0,
 					backfillCursor:
 						typeof data.backfillCursor === "number"
 							? data.backfillCursor
@@ -163,7 +164,7 @@ export async function getAttackWatermark(
 						typeof data.backfilledWarStart === "number"
 							? data.backfilledWarStart
 							: null,
-					updatedAt: data.updatedAt ?? new Date().toISOString(),
+					updatedAt: row.updatedAt.toISOString(),
 				};
 				inMemoryWatermarks.set(stateId, watermark);
 				return watermark;
@@ -216,18 +217,17 @@ export async function saveAttackWatermark(
 	inMemoryWatermarks.set(stateId, watermark);
 
 	try {
-		await db
-			.insert(systemStates)
-			.values({
-				id: stateId,
-				init: true,
-				data: watermark,
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: { data: watermark, updatedAt: new Date() },
-			});
+		await upsertWorkerState({
+			workerId: stateId,
+			init: true,
+			cursor: watermark.lastAttackTimestamp,
+			lastRunAt: new Date(),
+			details: {
+				lastAttackId: watermark.lastAttackId,
+				backfillCursor: watermark.backfillCursor,
+				backfilledWarStart: watermark.backfilledWarStart,
+			},
+		});
 	} catch (err) {
 		logger.warn(
 			`Failed saving attack watermark for ${stateId}: ${err instanceof Error ? err.message : String(err)}`,

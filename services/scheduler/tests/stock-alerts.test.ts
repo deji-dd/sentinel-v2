@@ -20,6 +20,7 @@ import {
 import type { IpcMessage } from "@sentinel/schemas";
 import {
 	buildUserStockAlertConditionKey,
+	createEmptyUserStockAlertState,
 	DEFAULT_GUILD_STOCK_ALERT_CONFIG,
 	type GuildStockAlertConfig,
 	type StockAlertEvent,
@@ -69,6 +70,10 @@ function snapshot(patch: Partial<StockAlertSnapshot> = {}): StockAlertSnapshot {
 		},
 		history: [],
 		...patch,
+		// After the spread, so the field stays non-optional: `Partial` would
+		// otherwise make it `number | null | undefined`. An explicit null is
+		// preserved, so a missing Torn figure stays testable.
+		shares: patch.shares === undefined ? 26_000_000_000 : patch.shares,
 	};
 }
 
@@ -979,12 +984,7 @@ describe("Stock alert worker", () => {
 				threshold: 1200,
 			}),
 			enabled: true,
-			state: {
-				seeded: false,
-				wasTrue: null,
-				lastExtreme: null,
-				lastAlertAt: null,
-			},
+			state: createEmptyUserStockAlertState(),
 		});
 
 		// The guild tables are empty, so this proves the short-circuit no longer
@@ -1065,10 +1065,9 @@ describe("Stock alert worker", () => {
 			}),
 			enabled: true,
 			state: {
+				...createEmptyUserStockAlertState(),
 				seeded: true,
-				wasTrue: null,
 				lastExtreme: 1000,
-				lastAlertAt: null,
 			},
 		});
 

@@ -1,4 +1,10 @@
-import { companyDailyProfits, db, eq, systemStates } from "@sentinel/database";
+import {
+	companyDailyProfits,
+	db,
+	getWorkerState,
+	upsertWorkerState,
+	WORKER_STATE_IDS,
+} from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -11,8 +17,6 @@ export const COMPANY_LOG_IDS = [6222, 6221];
 const COMPANY_LOG_ID_SET = new Set<number>(COMPANY_LOG_IDS);
 
 type UserLog = TornSchema<"UserLog">;
-
-const STATE_ID = "personal:company_sync";
 
 const logger = new Logger("Scheduler", "CompanySync");
 
@@ -69,14 +73,16 @@ export type CompanyApiResponse = {
  */
 export async function loadCompanySyncState(): Promise<CompanySyncState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
-		});
+		const record = await getWorkerState(WORKER_STATE_IDS.companySync);
+		const details = (record?.details ?? {}) as Partial<CompanySyncState>;
 
-		if (record?.data && typeof record.data === "object") {
+		if (record) {
 			inMemoryState = {
 				...DEFAULT_STATE,
-				...(record.data as Partial<CompanySyncState>),
+				...details,
+				status: (record.status as CompanySyncState["status"] | null) ?? "idle",
+				lastError: record.lastError ?? null,
+				lastSyncTimestamp: record.cursor,
 				updatedAt: new Date().toISOString(),
 			};
 		} else {
@@ -113,24 +119,22 @@ export async function persistCompanySyncState(
 ): Promise<void> {
 	state.updatedAt = new Date().toISOString();
 	try {
-		const isCompleted = state.status === "completed";
-		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: isCompleted,
-				data: state,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: isCompleted,
-					data: state,
-					updatedAt: new Date(),
-				},
-			});
+		// This state is pure worker plumbing — status, last error, a sync
+		// watermark and three counters — so it belongs in `worker_state`, and
+		// `init` keeps the same meaning the blob gave it: the sync completed.
+		await upsertWorkerState({
+			workerId: WORKER_STATE_IDS.companySync,
+			init: state.status === "completed",
+			status: state.status,
+			lastError: state.lastError,
+			cursor: state.lastSyncTimestamp,
+			lastRunAt: new Date(),
+			details: {
+				lastInflow: state.lastInflow,
+				lastOutflow: state.lastOutflow,
+				lastProfit: state.lastProfit,
+			},
+		});
 
 		inMemoryState = { ...state };
 
@@ -235,11 +239,9 @@ export async function syncCompanyDailyProfit(): Promise<{
 				},
 			});
 
-		// `ledger_events` is owned solely by the wealth engine, which reads this
-		// very table back and re-emits each day's profit as a company-account gain.
-		// A company balance earns between two API snapshots and no log records it,
-		// so it is the one contribution the log cannot express — but it still gets
-		// exactly one writer.
+		// `company_daily_profits` is this worker's table and nothing else writes it.
+		// A company balance earns between two API snapshots and no personal log
+		// records it, so this row is the only record that the profit happened.
 
 		state.status = "completed";
 		state.lastInflow = inflow;

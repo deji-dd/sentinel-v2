@@ -1,7 +1,9 @@
 import {
 	and,
 	asc,
+	BATTLESTATS_PREFERENCES_ID,
 	battlestatsLedgers,
+	battlestatsPreferences,
 	count,
 	db,
 	desc,
@@ -11,10 +13,16 @@ import {
 	like,
 	lte,
 	or,
+	PERSONAL_LIVE_STATE_ID,
+	PERSONAL_REFERENCE_SUMMARY_ID,
+	personalLedgerSyncStates,
+	personalLiveBars,
+	personalLiveStates,
 	personalLogs,
+	personalPerks,
+	personalReferenceSummaries,
 	type SQL,
 	sql,
-	systemStates,
 	tornGyms,
 } from "@sentinel/database";
 import { STAT_GAIN_LOG_IDS } from "@sentinel/utils";
@@ -25,8 +33,8 @@ import { requestBattlestatsLedgerReinitialize } from "../../lib/scheduler-ipc";
 export async function getBattlestatsLedgerStateObject() {
 	const [record] = await db
 		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, "personal:battlestats_ledger"));
+		.from(personalLedgerSyncStates)
+		.where(eq(personalLedgerSyncStates.ledger, "battlestats"));
 
 	const [totals] = await db
 		.select({
@@ -66,7 +74,17 @@ export async function getBattlestatsLedgerStateObject() {
 		.from(battlestatsLedgers)
 		.groupBy(battlestatsLedgers.source);
 
-	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
+	// Shaped from the typed row into the same field names the response has always
+	// used, so the mapping below is unchanged.
+	const rawData = record
+		? {
+				status: record.status,
+				totalIndexedLogs: record.totalIndexed,
+				lastProcessedTimestamp: record.lastProcessedTimestamp,
+				lastError: record.lastError,
+				updatedAt: record.updatedAt.toISOString(),
+			}
+		: {};
 	const allTimeTotalGained = Number(totals?.totalStatGained ?? 0);
 
 	const allTimeStats = statTypeRows.map((st) => {
@@ -681,33 +699,33 @@ export const battlestatsLedgerRoutes = new Elysia({
 	.get(
 		"/efficiency-data",
 		async () => {
+			// Live state is a typed singleton plus one row per bar.
 			const [userStateRecord] = await db
 				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "personal:live_state"));
+				.from(personalLiveStates)
+				.where(eq(personalLiveStates.id, PERSONAL_LIVE_STATE_ID));
+			const barRows = await db.select().from(personalLiveBars);
 
-			const [perksRecord] = await db
+			// The best-gym rollup is a typed singleton; the perk list is rows.
+			const [referenceSummary] = await db
 				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "personal:user_perks"));
+				.from(personalReferenceSummaries)
+				.where(
+					eq(personalReferenceSummaries.id, PERSONAL_REFERENCE_SUMMARY_ID),
+				);
 
-			const [gymUnlocksRecord] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "personal:gym_unlocks"));
+			const perkRows = await db
+				.select({ perk: personalPerks.perk })
+				.from(personalPerks);
 
-			const userState =
-				(userStateRecord?.data as Record<string, unknown>) ?? {};
-			const perksData = (perksRecord?.data as Record<string, unknown>) ?? {};
-			const gymUnlocks =
-				(gymUnlocksRecord?.data as Record<string, unknown>) ?? {};
+			const barsByBar = new Map(barRows.map((bar) => [bar.bar, bar]));
 
 			const activeGymIds = [
-				gymUnlocks.strengthGym,
-				gymUnlocks.defenseGym,
-				gymUnlocks.speedGym,
-				gymUnlocks.dexterityGym,
-			].filter(Boolean) as number[];
+				referenceSummary?.strengthGym,
+				referenceSummary?.defenseGym,
+				referenceSummary?.speedGym,
+				referenceSummary?.dexterityGym,
+			].filter((id): id is number => typeof id === "number" && id > 0);
 
 			let activeGyms: (typeof tornGyms.$inferSelect)[] = [];
 			if (activeGymIds.length > 0) {
@@ -728,34 +746,27 @@ export const battlestatsLedgerRoutes = new Elysia({
 			let dexterityBonus = 0;
 			let generalBonus = 0;
 
-			const categorizedPerks = perksData.categorizedPerks as
-				| Record<string, string[]>
-				| undefined;
-			if (categorizedPerks) {
-				const allPerks = Object.values(categorizedPerks).flat();
-				for (const perkStr of allPerks) {
-					const match =
-						typeof perkStr === "string"
-							? perkStr.match(
-									/\+\s*(\d+(?:\.\d+)?)%\s*(?:([a-zA-Z]+)\s+)?gym gains/i,
-								)
-							: null;
-					if (match) {
-						const val = Number(match[1]);
-						const stat = match[2]?.toLowerCase();
+			// The blob stored a flat list and a categorized copy of the same strings;
+			// only the flat list is needed here, and it is derived from the rows.
+			for (const { perk } of perkRows) {
+				const match = perk.match(
+					/\+\s*(\d+(?:\.\d+)?)%\s*(?:([a-zA-Z]+)\s+)?gym gains/i,
+				);
+				if (!match) continue;
 
-						if (stat === "strength") {
-							strengthBonus += val;
-						} else if (stat === "speed") {
-							speedBonus += val;
-						} else if (stat === "defense") {
-							defenseBonus += val;
-						} else if (stat === "dexterity") {
-							dexterityBonus += val;
-						} else {
-							generalBonus += val;
-						}
-					}
+				const val = Number(match[1]);
+				const stat = match[2]?.toLowerCase();
+
+				if (stat === "strength") {
+					strengthBonus += val;
+				} else if (stat === "speed") {
+					speedBonus += val;
+				} else if (stat === "defense") {
+					defenseBonus += val;
+				} else if (stat === "dexterity") {
+					dexterityBonus += val;
+				} else {
+					generalBonus += val;
 				}
 			}
 
@@ -764,19 +775,14 @@ export const battlestatsLedgerRoutes = new Elysia({
 			defensePerk = 1 + (defenseBonus + generalBonus) / 100;
 			dexterityPerk = 1 + (dexterityBonus + generalBonus) / 100;
 
-			const battlestats =
-				(userState.battlestats as Record<string, unknown>) ?? {};
-			const bars = (userState.bars as Record<string, unknown>) ?? {};
-			const happy = (bars.happy as Record<string, unknown>) ?? {};
-
 			return {
 				stats: {
-					strength: (battlestats.strength as number) ?? 0,
-					defense: (battlestats.defense as number) ?? 0,
-					speed: (battlestats.speed as number) ?? 0,
-					dexterity: (battlestats.dexterity as number) ?? 0,
+					strength: userStateRecord?.strength ?? 0,
+					defense: userStateRecord?.defense ?? 0,
+					speed: userStateRecord?.speed ?? 0,
+					dexterity: userStateRecord?.dexterity ?? 0,
 				},
-				maxHappy: (happy.maximum as number) ?? 0,
+				maxHappy: barsByBar.get("happy")?.maximum ?? 0,
 				perks: {
 					strength: strengthPerk,
 					speed: speedPerk,
@@ -785,10 +791,18 @@ export const battlestatsLedgerRoutes = new Elysia({
 				},
 				activeGyms: activeGyms.reduce(
 					(acc, gym) => {
-						if (gym.id === String(gymUnlocks.strengthGym)) acc.strength = gym;
-						if (gym.id === String(gymUnlocks.defenseGym)) acc.defense = gym;
-						if (gym.id === String(gymUnlocks.speedGym)) acc.speed = gym;
-						if (gym.id === String(gymUnlocks.dexterityGym)) acc.dexterity = gym;
+						if (gym.id === String(referenceSummary?.strengthGym)) {
+							acc.strength = gym;
+						}
+						if (gym.id === String(referenceSummary?.defenseGym)) {
+							acc.defense = gym;
+						}
+						if (gym.id === String(referenceSummary?.speedGym)) {
+							acc.speed = gym;
+						}
+						if (gym.id === String(referenceSummary?.dexterityGym)) {
+							acc.dexterity = gym;
+						}
 						return acc;
 					},
 					{} as Record<string, unknown>,
@@ -809,17 +823,18 @@ export const battlestatsLedgerRoutes = new Elysia({
 		async () => {
 			const [record] = await db
 				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "personal:battlestats_preferences"));
+				.from(battlestatsPreferences)
+				.where(eq(battlestatsPreferences.id, BATTLESTATS_PREFERENCES_ID));
 
-			const data = (record?.data as Record<string, unknown>) ?? {};
-			const ratioType = data.ratioType === "hank" ? "hank" : "baldr";
+			// Columns are typed, so no shape guarding is needed here: the values
+			// are constrained on write rather than cast on read.
+			const ratioType = record?.ratioType === "hank" ? "hank" : "baldr";
 			const mainStat =
-				data.mainStat === "strength" ||
-				data.mainStat === "defense" ||
-				data.mainStat === "speed" ||
-				data.mainStat === "dexterity"
-					? data.mainStat
+				record?.mainStat === "strength" ||
+				record?.mainStat === "defense" ||
+				record?.mainStat === "speed" ||
+				record?.mainStat === "dexterity"
+					? record.mainStat
 					: "dexterity";
 
 			return {
@@ -844,22 +859,17 @@ export const battlestatsLedgerRoutes = new Elysia({
 		async ({ body }) => {
 			const now = new Date();
 			await db
-				.insert(systemStates)
+				.insert(battlestatsPreferences)
 				.values({
-					id: "personal:battlestats_preferences",
-					data: {
-						ratioType: body.ratioType,
-						mainStat: body.mainStat,
-					},
-					updatedAt: now,
+					id: BATTLESTATS_PREFERENCES_ID,
+					ratioType: body.ratioType,
+					mainStat: body.mainStat,
 				})
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: battlestatsPreferences.id,
 					set: {
-						data: {
-							ratioType: body.ratioType,
-							mainStat: body.mainStat,
-						},
+						ratioType: body.ratioType,
+						mainStat: body.mainStat,
 						updatedAt: now,
 					},
 				});

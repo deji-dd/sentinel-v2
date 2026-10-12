@@ -1,99 +1,95 @@
-import { db, eq, systemStates } from "@sentinel/database";
+import {
+	and,
+	db,
+	eq,
+	isNull,
+	lte,
+	or,
+	subversiveDibsMessages,
+} from "@sentinel/database";
 import type { DibsMessageRef } from "@sentinel/schemas";
 import { Logger, resolveSubversiveFactionId } from "@sentinel/utils";
 
 const logger = new Logger("API", "DibsMessageStore");
 
 /**
- * Single systemStates row holding every dibs Discord message we have posted.
+ * Ledger of every dibs Discord message the API has posted, one row per message
+ * in `subversive_dibs_messages`.
  *
- * Kept in systemStates rather than a dedicated table so no schema migration is
- * required. This ledger is the source of truth for channel maintenance: it lets
- * the sweeper delete messages the API still tracks after a restart, and lets the
- * manager delete tracked messages for targets whose in-memory record is gone.
+ * This is the source of truth for channel maintenance: it lets the sweeper
+ * delete messages the API still tracks after a restart, and lets the manager
+ * delete tracked messages for targets whose in-memory record is gone.
+ *
+ * It previously lived as a single `system_states` row holding a JSON object
+ * keyed by message id, rewritten in full on every post and every delete. Rows
+ * make a post or delete a single-row write, and the by-channel and by-age
+ * queries the sweeper runs are index-backed instead of pulling the whole ledger
+ * into memory first.
  */
-const DIBS_MESSAGE_LEDGER_ID = "subversive:dibs_message_ledger";
-
-interface DibsMessageLedger {
-	/** Keyed by Discord message id. */
-	messages: Record<string, DibsMessageRef>;
-	updatedAt?: string;
-}
-
-const EMPTY_LEDGER: DibsMessageLedger = { messages: {} };
-
 class DibsMessageStore {
-	private cache: DibsMessageLedger | null = null;
+	/**
+	 * Serializes mutations so that a `flush()` really does mean "every write has
+	 * landed".
+	 *
+	 * Callers fire deletes without awaiting — `deleteDibsMessage` in the manager
+	 * does exactly that — and then call `flush()` before reading the ledger.
+	 * Tracking the in-flight promise is what keeps that contract: without it a
+	 * delete could still be running while a sweep reads the ledger and concludes
+	 * a message is still tracked, leaving it undeleted.
+	 */
 	private writeQueue: Promise<void> = Promise.resolve();
 
-	private async readLedger(): Promise<DibsMessageLedger> {
-		if (this.cache) return this.cache;
-
-		try {
-			const [entry] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, DIBS_MESSAGE_LEDGER_ID));
-
-			const data = entry?.data as DibsMessageLedger | undefined;
-			this.cache = {
-				messages: data?.messages ?? {},
-				updatedAt: data?.updatedAt,
-			};
-		} catch (err) {
-			logger.warn("Failed to read dibs message ledger:", err);
-			this.cache = { ...EMPTY_LEDGER };
-		}
-
-		return this.cache;
-	}
-
-	private async persistLedger(ledger: DibsMessageLedger): Promise<void> {
-		const data: DibsMessageLedger = {
-			messages: ledger.messages,
-			updatedAt: new Date().toISOString(),
-		};
-
-		// Update the cache first so reads stay correct even if the database write
-		// fails (transient DB outage, or a test environment without a database).
-		this.cache = data;
-
-		try {
-			await db
-				.insert(systemStates)
-				.values({
-					id: DIBS_MESSAGE_LEDGER_ID,
-					init: true,
-					data: data as unknown as Record<string, unknown>,
-					createdAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						data: data as unknown as Record<string, unknown>,
-						updatedAt: new Date(),
-					},
-				});
-		} catch (err) {
-			logger.warn("Failed to persist dibs message ledger:", err);
-		}
-	}
-
-	/**
-	 * Serializes mutations so concurrent posts cannot clobber each other.
-	 */
-	private enqueue(mutate: (ledger: DibsMessageLedger) => void): Promise<void> {
-		this.writeQueue = this.writeQueue.then(async () => {
-			const ledger = await this.readLedger();
-			mutate(ledger);
-			await this.persistLedger(ledger);
-		});
+	/** Chains a mutation onto the write queue and returns the settled chain. */
+	private enqueue(mutation: () => Promise<void>): Promise<void> {
+		this.writeQueue = this.writeQueue.then(mutation, mutation);
 		return this.writeQueue;
 	}
 
 	/**
+	 * Reads tracked messages, optionally scoped to one faction.
+	 *
+	 * Records that never had a faction recorded are treated as belonging to the
+	 * scoped faction, matching how the previous in-memory ledger defaulted them.
+	 * Returns an empty list when the read fails, so channel maintenance degrades
+	 * to "nothing tracked" rather than throwing into the sweep loop.
+	 */
+	async list(factionId?: number | null): Promise<DibsMessageRef[]> {
+		try {
+			const scoped =
+				factionId === undefined || factionId === null
+					? null
+					: resolveSubversiveFactionId(factionId);
+
+			const rows = await db
+				.select()
+				.from(subversiveDibsMessages)
+				.where(
+					scoped === null
+						? undefined
+						: or(
+								eq(subversiveDibsMessages.factionId, scoped),
+								isNull(subversiveDibsMessages.factionId),
+							),
+				);
+
+			return rows.map((row) => ({
+				targetId: row.targetId,
+				factionId: row.factionId ?? undefined,
+				channelId: row.channelId,
+				messageId: row.messageId,
+				createdAt: row.postedAtMs,
+			}));
+		} catch (err) {
+			logger.warn("Failed to read dibs message ledger:", err);
+			return [];
+		}
+	}
+
+	/**
 	 * Records a posted dibs message so it can be cleaned up later.
+	 *
+	 * Re-tracking the same message id overwrites it, matching the previous
+	 * behaviour where the ledger entry was replaced wholesale.
 	 */
 	async track(params: {
 		targetId: number;
@@ -101,25 +97,56 @@ class DibsMessageStore {
 		channelId: string;
 		messageId: string;
 	}): Promise<void> {
-		await this.enqueue((ledger) => {
-			ledger.messages[params.messageId] = {
-				targetId: params.targetId,
-				factionId: params.factionId
-					? resolveSubversiveFactionId(params.factionId)
-					: undefined,
-				channelId: params.channelId,
-				messageId: params.messageId,
-				createdAt: Date.now(),
-			};
+		return this.enqueue(async () => {
+			const now = new Date();
+			const postedAtMs = now.getTime();
+			const factionId = params.factionId
+				? resolveSubversiveFactionId(params.factionId)
+				: null;
+
+			try {
+				await db
+					.insert(subversiveDibsMessages)
+					.values({
+						messageId: params.messageId,
+						targetId: params.targetId,
+						factionId,
+						channelId: params.channelId,
+						postedAtMs,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.onConflictDoUpdate({
+						target: subversiveDibsMessages.messageId,
+						set: {
+							targetId: params.targetId,
+							factionId,
+							channelId: params.channelId,
+							postedAtMs,
+							updatedAt: now,
+						},
+					});
+			} catch (err) {
+				logger.warn("Failed to persist dibs message ledger entry:", err);
+			}
 		});
 	}
 
 	/**
 	 * Forgets a message once it has been deleted from Discord.
+	 *
+	 * No-ops when the row is already gone, which is the common case for a sweep
+	 * that ran twice.
 	 */
 	async forget(messageId: string): Promise<void> {
-		await this.enqueue((ledger) => {
-			delete ledger.messages[messageId];
+		return this.enqueue(async () => {
+			try {
+				await db
+					.delete(subversiveDibsMessages)
+					.where(eq(subversiveDibsMessages.messageId, messageId));
+			} catch (err) {
+				logger.warn("Failed to forget dibs message:", err);
+			}
 		});
 	}
 
@@ -127,54 +154,72 @@ class DibsMessageStore {
 	 * Forgets every message belonging to a target (e.g. after a repost).
 	 */
 	async forgetTarget(targetId: number): Promise<void> {
-		await this.enqueue((ledger) => {
-			for (const [messageId, ref] of Object.entries(ledger.messages)) {
-				if (ref.targetId === targetId) delete ledger.messages[messageId];
+		return this.enqueue(async () => {
+			try {
+				await db
+					.delete(subversiveDibsMessages)
+					.where(eq(subversiveDibsMessages.targetId, targetId));
+			} catch (err) {
+				logger.warn("Failed to forget dibs messages for target:", err);
 			}
 		});
 	}
 
 	/**
-	 * Returns all tracked messages, optionally scoped to one faction.
-	 */
-	async list(factionId?: number | null): Promise<DibsMessageRef[]> {
-		const ledger = await this.readLedger();
-		const all = Object.values(ledger.messages);
-		if (factionId === undefined || factionId === null) return all;
-		const scoped = resolveSubversiveFactionId(factionId);
-		return all.filter((ref) => (ref.factionId ?? scoped) === scoped);
-	}
-
-	/**
-	 * Returns tracked messages for a channel, optionally filtered by age.
+	 * Returns tracked messages for a channel that are at least `maxAgeMs` old.
+	 *
+	 * Age filtering happens in SQL, so the sweeper no longer has to load the
+	 * whole ledger to find the handful of stale callouts in one channel.
 	 */
 	async listForChannel(
 		channelId: string,
 		maxAgeMs?: number,
 	): Promise<DibsMessageRef[]> {
-		const all = await this.list();
-		const cutoff =
-			typeof maxAgeMs === "number"
-				? Date.now() - maxAgeMs
-				: Number.NEGATIVE_INFINITY;
-		return all.filter(
-			(ref) => ref.channelId === channelId && ref.createdAt <= cutoff,
-		);
+		try {
+			const cutoff =
+				typeof maxAgeMs === "number"
+					? Date.now() - maxAgeMs
+					: Number.NEGATIVE_INFINITY;
+
+			const rows = await db
+				.select()
+				.from(subversiveDibsMessages)
+				.where(
+					typeof maxAgeMs === "number"
+						? and(
+								eq(subversiveDibsMessages.channelId, channelId),
+								lte(subversiveDibsMessages.postedAtMs, cutoff),
+							)
+						: eq(subversiveDibsMessages.channelId, channelId),
+				);
+
+			return rows.map((row) => ({
+				targetId: row.targetId,
+				factionId: row.factionId ?? undefined,
+				channelId: row.channelId,
+				messageId: row.messageId,
+				createdAt: row.postedAtMs,
+			}));
+		} catch (err) {
+			logger.warn("Failed to read dibs message ledger for channel:", err);
+			return [];
+		}
 	}
 
 	/**
-	 * Awaits all queued mutations. Used by tests and callers that need the
-	 * ledger to be settled before reading it.
+	 * Awaits every queued mutation, so a caller that fires a delete with `void`
+	 * can still know the ledger has settled before reading it.
 	 */
 	async flush(): Promise<void> {
 		await this.writeQueue;
 	}
 
 	/**
-	 * Clears the in-memory cache (tests / forced reload).
+	 * Retained for tests that forced a cache reload. There is no cache now — each
+	 * read goes to the database — so this is a no-op.
 	 */
 	invalidate(): void {
-		this.cache = null;
+		// Intentionally empty: the ledger is no longer cached in memory.
 	}
 }
 

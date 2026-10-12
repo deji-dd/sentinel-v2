@@ -5,7 +5,7 @@ import {
 	getMercGuildId,
 	guildApiKeys,
 	inArray,
-	systemStates,
+	mercMasterKeys,
 } from "@sentinel/database";
 import { decryptApiKey } from "@sentinel/torn-api";
 import {
@@ -75,30 +75,21 @@ async function loadFamilyMasterApiKeys(): Promise<FamilyMasterApiKey[]> {
 	const keys: FamilyMasterApiKey[] = [];
 
 	try {
-		const [stateRow] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, `merc:master_keys:${guildId}`));
+		// One row per family master key. This used to read a single JSON object
+		// keyed by faction id from `system_states` and had to tolerate missing
+		// `factionId` fields by falling back to the map key; with rows, the
+		// faction id is a column and the only filtering left is the family check.
+		const masterKeyRows = await db
+			.select({
+				factionId: mercMasterKeys.factionId,
+				keyId: mercMasterKeys.keyId,
+			})
+			.from(mercMasterKeys)
+			.where(eq(mercMasterKeys.guildId, guildId));
 
-		const map =
-			stateRow?.data && typeof stateRow.data === "object"
-				? (stateRow.data as Record<
-						string,
-						{ keyId?: string; factionId?: number }
-					>)
-				: {};
-
-		const entries = Object.entries(map)
-			.map(([factionKey, value]) => ({
-				factionId: value?.factionId ?? Number(factionKey),
-				keyId: value?.keyId,
-			}))
-			.filter(
-				(entry): entry is { factionId: number; keyId: string } =>
-					Number.isFinite(entry.factionId) &&
-					isSubversiveFamilyFaction(entry.factionId) &&
-					Boolean(entry.keyId),
-			);
+		const entries = masterKeyRows.filter((entry) =>
+			isSubversiveFamilyFaction(entry.factionId),
+		);
 
 		if (entries.length === 0) {
 			logger.warn(

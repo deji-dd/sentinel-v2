@@ -40,7 +40,7 @@ function getMetadataBanner(version: string): string {
 // @name         Blasted's Script
 // @namespace    blasted.torn
 // @version      ${version}
-// @description  Personal Torn analytics and intelligence hub: Crimes ROI, Battlestats, Wealth, and more
+// @description  Personal Torn analytics and intelligence hub: Crimes ROI, Battlestats, Stocks, and more
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest

@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
+	bigint,
 	boolean,
+	check,
 	doublePrecision,
 	index,
 	integer,
@@ -34,6 +37,70 @@ export const systemStates = pgTable("system_states", {
 		.defaultNow()
 		.notNull(),
 });
+
+/**
+ * Persisted state for background workers: progress cursors, run status, and
+ * first-run flags.
+ *
+ * This is the sanctioned home for ephemeral worker state (see the persisted-state
+ * rules in `.agents/AGENTS.md`). It replaces the remaining `system_states` cursor
+ * keys — `personal:log_manager`, `personal:log_manager_resync`,
+ * `subversive:recruitment_state`, `tt_init_state` and
+ * `war_ledger_init_state` — so that the legacy blob table can eventually be
+ * dropped entirely.
+ *
+ * The columns are the fields workers actually *read*: `init` gates first-run
+ * behaviour, `status` and `last_error` are surfaced to the dashboard, and
+ * `cursor` is the progress watermark. Everything else a given worker records
+ * (batch counters, page counts, per-phase sub-status) goes in `details`.
+ *
+ * `details` is deliberately the only JSON here, and it is constrained to a JSON
+ * *object*. The legacy blob had no such constraint, which is how rows ended up
+ * double-encoded — JSON stored as a JSON string — and every reader then silently
+ * fell back to a default. **Configuration must never be stored in `details`**;
+ * it belongs in a typed table.
+ */
+export const workerState = pgTable(
+	"worker_state",
+	{
+		/** Stable worker or flag id, e.g. `personal:log_manager`. */
+		workerId: text("worker_id").primaryKey(),
+		/**
+		 * First-run gate. Several workers treat a false value as "never
+		 * completed an initial pass" and replay history when it flips, so it is
+		 * a typed column rather than something buried in `details`.
+		 */
+		init: boolean("init").default(false).notNull(),
+		/** Worker-specific status string (`idle`, `running`, `completed`, `error`…). */
+		status: text("status"),
+		lastError: text("last_error"),
+		/** Progress watermark: epoch seconds for log workers, a row cursor elsewhere. */
+		cursor: bigint("cursor", { mode: "number" }),
+		/** When the worker last completed a pass. */
+		lastRunAt: timestamp("last_run_at", { withTimezone: true, mode: "date" }),
+		/** Worker-specific counters and sub-status. Never configuration. */
+		details: jsonb("details")
+			.$type<Record<string, unknown>>()
+			.default({})
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// Rejects the double-encoded payloads the legacy blob accepted silently.
+		check(
+			"worker_state_details_is_object",
+			sql`jsonb_typeof(${table.details}) = 'object'`,
+		),
+	],
+);
+
+export type WorkerStateRow = typeof workerState.$inferSelect;
+export type NewWorkerStateRow = typeof workerState.$inferInsert;
 
 export const systemAlerts = pgTable("system_alerts", {
 	id: text("id")

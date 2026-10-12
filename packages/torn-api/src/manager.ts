@@ -165,7 +165,11 @@ export async function getGuildKeyPool(
 			.select()
 			.from(elimsApiKeys)
 			.where(
-				and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true)),
+				and(
+					eq(elimsApiKeys.guildId, guildId),
+					eq(elimsApiKeys.isValid, true),
+					eq(elimsApiKeys.isExcluded, false),
+				),
 			)
 			.orderBy(elimsApiKeys.lastUsedAt),
 		db
@@ -334,8 +338,12 @@ export async function getElimsKeyPool(
 	const pool: ManagedApiKey[] = [];
 
 	const whereCondition = guildId
-		? and(eq(elimsApiKeys.guildId, guildId), eq(elimsApiKeys.isValid, true))
-		: eq(elimsApiKeys.isValid, true);
+		? and(
+				eq(elimsApiKeys.guildId, guildId),
+				eq(elimsApiKeys.isValid, true),
+				eq(elimsApiKeys.isExcluded, false),
+			)
+		: and(eq(elimsApiKeys.isValid, true), eq(elimsApiKeys.isExcluded, false));
 
 	const guildKeys = await db
 		.select()

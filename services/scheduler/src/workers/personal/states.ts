@@ -1,11 +1,13 @@
-import { db, eq, systemStates } from "@sentinel/database";
+import {
+	loadPersonalLiveState,
+	savePersonalLiveState,
+} from "@sentinel/database";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "personal:state_sync";
-const STATE_ID = "personal:live_state";
 const CADENCE_SEC = 300;
 
 const logger = new Logger("Scheduler", "PersonalStateSync");
@@ -146,14 +148,14 @@ let isStateLoaded = false;
  */
 export async function loadPersonalLiveStateFromDb(): Promise<PersonalLiveState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
-		});
+		const saved = await loadPersonalLiveState();
 
-		if (record?.data && typeof record.data === "object") {
+		if (saved) {
+			// Bars are rows and the rest are typed columns, so there is no partial
+			// payload to merge defaults into the way the JSON blob required.
 			inMemoryState = {
 				...DEFAULT_STATE,
-				...(record.data as Partial<PersonalLiveState>),
+				...saved,
 				updatedAt: new Date().toISOString(),
 			};
 		} else {
@@ -291,24 +293,14 @@ export async function runPersonalStateSync(): Promise<void> {
 		};
 		isStateLoaded = true;
 
-		// Persist state atomically to SQLite system_states
-		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: true,
-				data: inMemoryState,
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: true,
-					data: inMemoryState,
-					updatedAt: now,
-				},
-			});
+		// Bars become rows; the scalars become typed columns.
+		await savePersonalLiveState({
+			bars: inMemoryState.bars,
+			cooldowns: inMemoryState.cooldowns,
+			money: inMemoryState.money,
+			battlestats: inMemoryState.battlestats,
+			lastSyncDurationMs: inMemoryState.lastSyncDurationMs,
+		});
 		finishSync();
 	} catch (error) {
 		logger.error("Failed to execute personal state sync:", error);

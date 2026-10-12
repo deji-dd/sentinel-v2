@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	db,
 	eq,
-	systemStates,
+	POINTS_MARKET_PRICE_KEY,
+	tornMarketPrices,
 	tornStocks,
 	userStocks,
 } from "@sentinel/database";
@@ -33,56 +34,47 @@ const BUY_PRICE = 200;
 const MARKET_PRICE = 250;
 const DAY = 86_400;
 
-/** State row the route prices payouts paid in points from. */
-const POINTS_PRICE_STATE_ID = "points_market_price";
+/** Reference key the route prices payouts paid in points from. */
+const POINTS_PRICE_REF_KEY = POINTS_MARKET_PRICE_KEY;
 /** Stand-in points price, used only when the database holds no synced one. */
 const TEST_POINTS_PRICE = 31_359;
 
 /**
  * Supplies the points-market price when the database has none.
  *
- * `points_market_price` is written by the scheduler's daily Torn reference sync
- * and by nothing else, so a freshly migrated database — CI, or a new deployment
- * before the sync has run — has no row at all. The route then reports every
- * payout paid in points as unpriced, and the assertions below, which cover the
- * wiring between that row and the payload, would be measuring the presence of
- * the sync rather than the route.
+ * `torn_market_prices.points` is written by the scheduler's daily Torn reference
+ * sync and by nothing else, so a freshly migrated database — CI, or a new
+ * deployment before the sync has run — has no row at all. The route then reports
+ * every payout paid in points as unpriced, and the assertions below, which cover
+ * the wiring between that row and the payload, would be measuring the presence
+ * of the sync rather than the route.
  *
  * A row that is already there is left exactly as it is: on a database holding a
  * live account it is the real synced price, and a test must not overwrite it.
  * Only a fixture this file wrote is undone again.
  */
 let seededPointsPrice = false;
-let originalPointsPrice: typeof systemStates.$inferSelect | undefined;
-
-/** The price a state row carries, mirroring how the route reads it. */
-function readPointsPrice(data: unknown): number {
-	if (!data || typeof data !== "object") return 0;
-	const price = (data as Record<string, unknown>).price;
-	return typeof price === "number" && Number.isFinite(price) && price > 0
-		? price
-		: 0;
-}
+let originalPointsPrice: typeof tornMarketPrices.$inferSelect | undefined;
 
 async function seedPointsPrice(): Promise<void> {
-	const existing = await db.query.systemStates.findFirst({
-		where: eq(systemStates.id, POINTS_PRICE_STATE_ID),
+	const existing = await db.query.tornMarketPrices.findFirst({
+		where: eq(tornMarketPrices.refKey, POINTS_PRICE_REF_KEY),
 	});
-	if (readPointsPrice(existing?.data) > 0) return;
+	if (existing && existing.price > 0) return;
 
 	originalPointsPrice = existing;
 	const now = new Date();
 	await db
-		.insert(systemStates)
+		.insert(tornMarketPrices)
 		.values({
-			id: POINTS_PRICE_STATE_ID,
-			data: { price: TEST_POINTS_PRICE },
+			refKey: POINTS_PRICE_REF_KEY,
+			price: TEST_POINTS_PRICE,
 			createdAt: now,
 			updatedAt: now,
 		})
 		.onConflictDoUpdate({
-			target: systemStates.id,
-			set: { data: { price: TEST_POINTS_PRICE }, updatedAt: now },
+			target: tornMarketPrices.refKey,
+			set: { price: TEST_POINTS_PRICE, updatedAt: now },
 		});
 	seededPointsPrice = true;
 }
@@ -96,19 +88,18 @@ async function restorePointsPrice(): Promise<void> {
 	originalPointsPrice = undefined;
 	if (!original) {
 		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, POINTS_PRICE_STATE_ID));
+			.delete(tornMarketPrices)
+			.where(eq(tornMarketPrices.refKey, POINTS_PRICE_REF_KEY));
 		return;
 	}
 
 	await db
-		.insert(systemStates)
+		.insert(tornMarketPrices)
 		.values(original)
 		.onConflictDoUpdate({
-			target: systemStates.id,
+			target: tornMarketPrices.refKey,
 			set: {
-				init: original.init,
-				data: original.data,
+				price: original.price,
 				updatedAt: original.updatedAt,
 			},
 		});

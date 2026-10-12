@@ -1,10 +1,12 @@
 import {
 	db,
-	eq,
+	getWorkerState,
 	personalLogs,
+	savePersonalGymUnlocks,
+	savePersonalPerks,
 	sql,
-	systemStates,
 	tornGyms,
+	WORKER_STATE_IDS,
 } from "@sentinel/database";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
@@ -13,9 +15,7 @@ import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "personal:reference_sync";
-const PERKS_STATE_ID = "personal:user_perks";
-const GYM_UNLOCKS_STATE_ID = "personal:gym_unlocks";
-const LOG_MANAGER_STATE_ID = "personal:log_manager";
+const LOG_MANAGER_STATE_ID = WORKER_STATE_IDS.logManager;
 
 const logger = new Logger("Scheduler", "PersonalReferenceSync");
 
@@ -292,15 +292,15 @@ export async function syncGymUnlocks(): Promise<void> {
 	// Guard: skip if log_manager backfill is still in progress.
 	// Gym unlock logs (5320) come from PersonalLog which won't be fully populated
 	// until the backfill completes, leading to falsely low gym results.
-	const backfillRecord = await db.query.systemStates.findFirst({
-		where: eq(systemStates.id, LOG_MANAGER_STATE_ID),
-	});
+	//
+	// Absence of a state row means the log manager has never run, so there is
+	// nothing to wait for and the sync proceeds.
+	const backfillRecord = await getWorkerState(LOG_MANAGER_STATE_ID);
+	const backfillStatus = (
+		backfillRecord?.details as { backfillStatus?: string } | undefined
+	)?.backfillStatus;
 
-	const backfillData = backfillRecord?.data as
-		| { backfillStatus?: string }
-		| undefined;
-
-	if (backfillData && backfillData.backfillStatus !== "completed") {
+	if (backfillRecord && backfillStatus !== "completed") {
 		logger.warn(
 			"Log backfill is still in progress. Skipping gym unlock sync to avoid incomplete results.",
 		);
@@ -387,7 +387,6 @@ export async function syncGymUnlocks(): Promise<void> {
 		}
 	}
 
-	const now = new Date();
 	const gymUnlockData: GymUnlocksData = {
 		strengthGym: bestStrengthGym,
 		defenseGym: bestDefenseGym,
@@ -397,23 +396,10 @@ export async function syncGymUnlocks(): Promise<void> {
 		timestamp: Math.floor(Date.now() / 1000),
 	};
 
-	await db
-		.insert(systemStates)
-		.values({
-			id: GYM_UNLOCKS_STATE_ID,
-			init: true,
-			data: gymUnlockData,
-			createdAt: now,
-			updatedAt: now,
-		})
-		.onConflictDoUpdate({
-			target: systemStates.id,
-			set: {
-				init: true,
-				data: gymUnlockData,
-				updatedAt: now,
-			},
-		});
+	// Unlocked gyms are rows; the best-gym rollup is a typed singleton column set.
+	// Only gyms that changed are written, and rows for gyms Torn no longer
+	// reports are removed.
+	await savePersonalGymUnlocks(gymUnlockData);
 
 	logger.info(
 		`Synced gym unlocks. Best gyms: Str:${bestStrengthGym}, Def:${bestDefenseGym}, Spd:${bestSpeedGym}, Dex:${bestDexterityGym}`,
@@ -476,7 +462,6 @@ export async function runPersonalReferenceSync(): Promise<void> {
 		const allPerks: string[] = Object.values(categorizedPerks).flat();
 		const travelPerks = parseTravelPerkModifiers(allPerks);
 
-		const now = new Date();
 		const perksData: UserPerksData = {
 			allPerks,
 			categorizedPerks,
@@ -484,28 +469,11 @@ export async function runPersonalReferenceSync(): Promise<void> {
 			timestamp: Math.floor(Date.now() / 1000),
 		};
 
-		// 2. Store raw perk list, categories & parsed travel perks in SQLite system_states
-		await db
-			.insert(systemStates)
-			.values({
-				id: PERKS_STATE_ID,
-				init: true,
-				data: perksData,
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: true,
-					data: perksData,
-					updatedAt: now,
-				},
-			});
+		// 2. Store the perk list as rows plus the travel rollup. The blob stored
+		// every perk twice (flat and categorized); the flat list is now derived.
+		await savePersonalPerks(perksData);
 
-		logger.info(
-			`Stored ${allPerks.length} raw user perks in SQLite system_states.`,
-		);
+		logger.info(`Stored ${allPerks.length} raw user perks.`);
 
 		// 3. Sync gym unlocks
 		await syncGymUnlocks();

@@ -13,8 +13,8 @@ import {
 	db,
 	eq,
 	inArray,
+	personalLedgerSyncStates,
 	personalLogs,
-	systemStates,
 	tornItems,
 } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
@@ -31,7 +31,7 @@ type UserLog = TornSchema<"UserLog">;
 type CrimeLog = typeof crimeLogs.$inferSelect;
 
 describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
-	const TEST_STATE_ID = "personal:crimes_ledger";
+	const TEST_STATE_ID = "crimes";
 	const LOG_ID_1 = "test_crime_log_1";
 	const LOG_ID_2 = "test_crime_log_2";
 	const LOG_ID_3 = "test_crime_log_3";
@@ -50,25 +50,30 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 		"test_item_3",
 	] as const;
 
-	let originalState: typeof systemStates.$inferSelect | undefined;
+	let originalState: typeof personalLedgerSyncStates.$inferSelect | undefined;
 
 	beforeAll(async () => {
-		originalState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
+		originalState = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, TEST_STATE_ID),
 		});
 	});
 
 	afterAll(async () => {
 		schedulerEvents.removeAllListeners();
 		if (originalState) {
+			await db;
+			// Restore the whole typed row: the columns carry what the old blob held
+			// as `data`, and there is no longer an `init` flag to put back.
 			await db
-				.insert(systemStates)
+				.insert(personalLedgerSyncStates)
 				.values(originalState)
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: personalLedgerSyncStates.ledger,
 					set: {
-						init: originalState.init,
-						data: originalState.data,
+						status: originalState.status,
+						lastError: originalState.lastError,
+						totalIndexed: originalState.totalIndexed,
+						lastProcessedTimestamp: originalState.lastProcessedTimestamp,
 						updatedAt: originalState.updatedAt,
 					},
 				});
@@ -81,7 +86,9 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 		// it just seeded rather than the previous test's snapshot.
 		clearCrimeReferenceCache();
 		// Clean up only our specific test fixtures
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db.delete(crimeLogs).where(inArray(crimeLogs.id, ALL_TEST_LOG_IDS));
 		await db
 			.delete(personalLogs)
@@ -94,7 +101,9 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 
 	afterEach(async () => {
 		schedulerEvents.removeAllListeners();
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db.delete(crimeLogs).where(inArray(crimeLogs.id, ALL_TEST_LOG_IDS));
 		await db
 			.delete(personalLogs)
@@ -308,11 +317,11 @@ describe("Crimes Ledger Worker & Ingestion Pipeline", () => {
 		const log1 = indexed.find((r) => r.id === LOG_ID_1);
 		expect(log1?.value).toBe(75100); // 100 + 75000
 
-		const stateRecord = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
+		const stateRecord = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, TEST_STATE_ID),
 		});
 		expect(stateRecord).toBeDefined();
-		expect(stateRecord?.init).toBe(true);
+		expect(stateRecord?.status).toBe("completed");
 	}, 120000);
 
 	test("reconcileHistoricalCrimeLogs reconciles missing logs from stutter windows using anti-join", async () => {

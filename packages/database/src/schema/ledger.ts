@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
+	bigint,
 	boolean,
+	check,
 	doublePrecision,
 	index,
 	integer,
@@ -8,6 +11,15 @@ import {
 	text,
 	timestamp,
 } from "drizzle-orm/pg-core";
+
+/**
+ * Sentinel primary key for the single {@link battlestatsPreferences} row.
+ *
+ * The ledger's build-ratio target is deployment-wide, so the table holds one
+ * row. The value matches the legacy `system_states` key it replaces, so anyone
+ * tracing the old key can follow it here.
+ */
+export const BATTLESTATS_PREFERENCES_ID = "personal:battlestats_preferences";
 
 export const personalLogs = pgTable(
 	"personal_logs",
@@ -30,9 +42,9 @@ export const personalLogs = pgTable(
 	},
 	(table) => [
 		// The ledger reconciliation sweeps filter on `log IN (...)` and order by
-		// `timestamp` (crimes/battlestats/stocks anti-joins, gym-unlock scan, and
-		// the wealth range query). Without this the whole table is seq-scanned and
-		// sorted on every sweep, with cost growing as log history accumulates.
+		// `timestamp` (crimes/battlestats/stocks anti-joins and the gym-unlock
+		// scan). Without this the whole table is seq-scanned and sorted on every
+		// sweep, with cost growing as log history accumulates.
 		index("idx_personal_logs_log_timestamp").on(table.log, table.timestamp),
 	],
 );
@@ -60,6 +72,360 @@ export const battlestatsLedgers = pgTable("gym_ledgers", {
 
 export const gymLedgers = battlestatsLedgers;
 
+/**
+ * Build-ratio target used by the Battlestats ledger views.
+ *
+ * Replaces the `personal:battlestats_preferences` row in the legacy
+ * `system_states` blob table. Exactly one row exists (the legacy key carried no
+ * user id, so it was never per-user despite the `personal:` prefix) and it is
+ * addressed by {@link BATTLESTATS_PREFERENCES_ID}.
+ *
+ * Two scalar values do not need a schemaless JSON column: as columns they are
+ * validated on write instead of being accepted as arbitrary JSON and cast with
+ * `as unknown as` on read.
+ */
+export const battlestatsPreferences = pgTable("battlestats_preferences", {
+	/** Always {@link BATTLESTATS_PREFERENCES_ID}; enforces a single row. */
+	id: text("id").primaryKey().default(BATTLESTATS_PREFERENCES_ID),
+	/** Which stat the target ratio is balanced against. */
+	mainStat: text("main_stat").default("dexterity").notNull(),
+	/** Ratio preset the ledger compares build progress against. */
+	ratioType: text("ratio_type").default("baldr").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type BattlestatsPreferenceRow =
+	typeof battlestatsPreferences.$inferSelect;
+export type NewBattlestatsPreferenceRow =
+	typeof battlestatsPreferences.$inferInsert;
+
+/**
+ * Which personal ledgers persist sync progress in
+ * {@link personalLedgerSyncStates}.
+ */
+export const PERSONAL_LEDGER_SYNC_IDS = [
+	"battlestats",
+	"crimes",
+	"stocks",
+] as const;
+
+export type PersonalLedgerSyncId = (typeof PERSONAL_LEDGER_SYNC_IDS)[number];
+
+/**
+ * Backfill progress for the personal log-backed ledgers, one row per ledger.
+ *
+ * Replaces three separate `system_states` keys — `personal:battlestats_ledger`,
+ * `personal:crimes_ledger` and `personal:stocks_ledger` — which all carried the
+ * same JSON shape, so one keyed table replaces all three and the discriminator
+ * makes it obvious that they are the same kind of state rather than three
+ * unrelated blobs.
+ *
+ * The legacy rows also carried an `init` boolean that was simply
+ * `status === "completed"`; it is not reproduced here because it was written by
+ * the workers but never read by anything, and `status` already says it.
+ *
+ * `lastProcessedTimestamp` is a Torn log timestamp (epoch seconds), kept as an
+ * integer so cursor comparisons stay exact.
+ */
+export const personalLedgerSyncStates = pgTable("personal_ledger_sync_states", {
+	/** One of {@link PERSONAL_LEDGER_SYNC_IDS}. */
+	ledger: text("ledger").primaryKey(),
+	/** `idle` | `running` | `completed` | `error`. */
+	status: text("status").default("idle").notNull(),
+	lastError: text("last_error"),
+	/** Total log rows indexed by the last completed backfill. */
+	totalIndexed: bigint("total_indexed", { mode: "number" })
+		.default(0)
+		.notNull(),
+	/** Epoch SECONDS of the newest log the backfill consumed. */
+	lastProcessedTimestamp: bigint("last_processed_timestamp", {
+		mode: "number",
+	}),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type PersonalLedgerSyncStateRow =
+	typeof personalLedgerSyncStates.$inferSelect;
+export type NewPersonalLedgerSyncStateRow =
+	typeof personalLedgerSyncStates.$inferInsert;
+
+/**
+ * One row per bounty target the finder is currently tracking.
+ *
+ * Replaces the `personal:bounties` row in the legacy `system_states` blob, which
+ * held two arrays — `readyTargets` and `hospitalQueue` — inside a single JSON
+ * object. Both lists grow with the candidate pool, so every change rewrote the
+ * whole thing: re-checking one target's hospital status cost a write of every
+ * target. Worse, the row had two writers in different processes (the scheduler's
+ * bounty finder and the API's "profile target" endpoint), each doing a
+ * read-modify-write of the entire object, so one could silently revert the
+ * other's update.
+ *
+ * The two lists are distinguished by `queue` rather than by two tables: they
+ * hold the same target shape and the API moves a target between them, which is
+ * now a single column update. `secondsRemaining` is the only field exclusive to
+ * the hospital queue.
+ *
+ * Deployment-level counters (last sync, target and pending counts) are not here
+ * — they belong to the worker and live in `worker_state` under
+ * `WORKER_STATE_IDS.bounties`.
+ */
+export const personalBountyTargets = pgTable(
+	"personal_bounty_targets",
+	{
+		targetId: integer("target_id").primaryKey(),
+		/** `ready` (attackable now) or `hospital` (waiting on a hospital exit). */
+		queue: text("queue").notNull(),
+		name: text("name").notNull(),
+		level: integer("level").notNull(),
+		/** Highest single qualifying bounty reward, in dollars. */
+		reward: bigint("reward", { mode: "number" }).default(0).notNull(),
+		/** Null when the target has not been scouted yet. */
+		fairFight: doublePrecision("fair_fight"),
+		estimatedBs: bigint("estimated_bs", { mode: "number" }),
+		/** Target age in days; the finder only keeps targets at 14+ days. */
+		age: integer("age").notNull(),
+		/** Torn status string, e.g. `Okay`, `Hospital`, `Abroad`. */
+		statusState: text("status_state").notNull(),
+		statusDescription: text("status_description"),
+		/** Epoch SECONDS the current status ends, when Torn reports one. */
+		statusUntil: bigint("status_until", { mode: "number" }),
+		attackUrl: text("attack_url").notNull(),
+		/** Epoch SECONDS this target was last profiled. */
+		lastCheckedAt: bigint("last_checked_at", { mode: "number" }).notNull(),
+		/** Seconds left in hospital. Only meaningful for the `hospital` queue. */
+		secondsRemaining: integer("seconds_remaining"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_personal_bounty_targets_queue").on(table.queue, table.reward),
+	],
+);
+
+export type PersonalBountyTargetRow = typeof personalBountyTargets.$inferSelect;
+export type NewPersonalBountyTargetRow =
+	typeof personalBountyTargets.$inferInsert;
+
+/**
+ * One row per unlocked user perk, with the category Torn reported it under.
+ *
+ * Replaces `personal:user_perks` in the legacy `system_states` blob, which held
+ * the same data twice — a flat `allPerks` array of ~128 strings *and* a
+ * `categorizedPerks` object repeating every one of them under eight category
+ * keys — inside a single ~4 KB JSON value rewritten in full on every daily sync.
+ *
+ * `allPerks` is not reproduced: it was exactly the concatenation of the
+ * categorized values, so it is derived by querying the rows. `perk` is the
+ * primary key because Torn reports each perk string once.
+ */
+export const personalPerks = pgTable(
+	"personal_perks",
+	{
+		perk: text("perk").primaryKey(),
+		/** Torn's category: `faction_perks`, `job_perks`, `merit_perks`, … */
+		category: text("category").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [index("idx_personal_perks_category").on(table.category)],
+);
+
+export type PersonalPerkRow = typeof personalPerks.$inferSelect;
+export type NewPersonalPerkRow = typeof personalPerks.$inferInsert;
+
+/**
+ * One row per gym the account has unlocked.
+ *
+ * Replaces the `unlockedGymIds` array in the `personal:gym_unlocks`
+ * `system_states` blob. That blob's other contents are scalars and live in
+ * {@link personalReferenceSummaries}.
+ */
+export const personalGymUnlocks = pgTable("personal_gym_unlocks", {
+	gymId: integer("gym_id").primaryKey(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type PersonalGymUnlockRow = typeof personalGymUnlocks.$inferSelect;
+export type NewPersonalGymUnlockRow = typeof personalGymUnlocks.$inferInsert;
+
+/** Sentinel primary key: the reference sync is deployment-wide. */
+export const PERSONAL_REFERENCE_SUMMARY_ID = "personal:reference_summary";
+
+/**
+ * Scalar rollups of the personal reference sync: the perk-derived travel
+ * modifiers and the best unlocked gym per stat.
+ *
+ * Replaces the scalar parts of the `personal:user_perks` and
+ * `personal:gym_unlocks` blobs. These are derived summaries rather than raw
+ * lists — the lists themselves are rows in {@link personalPerks} and
+ * {@link personalGymUnlocks} — and they come from a single worker, so one
+ * singleton row keeps everything typed without a table per field group.
+ */
+export const personalReferenceSummaries = pgTable(
+	"personal_reference_summaries",
+	{
+		/** Always {@link PERSONAL_REFERENCE_SUMMARY_ID}; enforces one row. */
+		id: text("id").primaryKey().default(PERSONAL_REFERENCE_SUMMARY_ID),
+		/** Epoch SECONDS the perk list was fetched. */
+		perksFetchedAt: bigint("perks_fetched_at", { mode: "number" }),
+		/** Whether the account holds the property airstrip perk. */
+		hasAirstrip: boolean("has_airstrip").default(false).notNull(),
+		hasBookPerk: boolean("has_book_perk").default(false).notNull(),
+		hasWltBenefit: boolean("has_wlt_benefit").default(false).notNull(),
+		/** Percentage travel-time reduction from faction perks. */
+		factionTravelReduction: doublePrecision("faction_travel_reduction")
+			.default(0)
+			.notNull(),
+		/** Total percentage travel-time reduction across all sources. */
+		totalTravelReduction: doublePrecision("total_travel_reduction")
+			.default(0)
+			.notNull(),
+		/** Epoch SECONDS the gym unlocks were fetched. */
+		gymsFetchedAt: bigint("gyms_fetched_at", { mode: "number" }),
+		/** Best unlocked gym id per stat, or null when never synced. */
+		strengthGym: integer("strength_gym"),
+		defenseGym: integer("defense_gym"),
+		speedGym: integer("speed_gym"),
+		dexterityGym: integer("dexterity_gym"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+);
+
+export type PersonalReferenceSummaryRow =
+	typeof personalReferenceSummaries.$inferSelect;
+export type NewPersonalReferenceSummaryRow =
+	typeof personalReferenceSummaries.$inferInsert;
+
+/** The four Torn bars, which all share one shape. */
+export const PERSONAL_LIVE_BAR_IDS = [
+	"energy",
+	"nerve",
+	"happy",
+	"life",
+] as const;
+
+export type PersonalLiveBarId = (typeof PERSONAL_LIVE_BAR_IDS)[number];
+
+/** Sentinel primary key: this is a single-account snapshot. */
+export const PERSONAL_LIVE_STATE_ID = "personal:live_state";
+
+/**
+ * One row per Torn bar (energy, nerve, happy, life).
+ *
+ * Replaces the `bars` half of the `personal:live_state` blob. The four bars are
+ * structurally identical, so a row per bar keeps them typed without repeating
+ * twenty columns in a single-row table.
+ */
+export const personalLiveBars = pgTable("personal_live_bars", {
+	/** One of {@link PERSONAL_LIVE_BAR_IDS}. */
+	bar: text("bar").primaryKey(),
+	current: integer("current").notNull(),
+	maximum: integer("maximum").notNull(),
+	increment: integer("increment").notNull(),
+	/** Seconds between increments. */
+	interval: integer("interval").notNull(),
+	/** Epoch SECONDS the bar next fills by one increment. */
+	fullTime: bigint("full_time", { mode: "number" }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type PersonalLiveBarRow = typeof personalLiveBars.$inferSelect;
+export type NewPersonalLiveBarRow = typeof personalLiveBars.$inferInsert;
+
+/**
+ * Cooldowns, battle stats and the raw money payload for the synced account.
+ *
+ * Replaces the scalar half of the `personal:live_state` blob; the bars are rows
+ * in {@link personalLiveBars}.
+ *
+ * `money` is the one `jsonb` here, and deliberately so: Torn's money selection
+ * is a free-form payload with no typed consumer yet — the worker stores it
+ * wholesale and only `battlestats` and `bars` are read back. Rather than drop
+ * data nobody asked to lose, it is kept verbatim behind the same
+ * object-only CHECK the worker state uses, so the double-encoded shape the
+ * legacy blob accepted cannot be stored.
+ */
+export const personalLiveStates = pgTable(
+	"personal_live_states",
+	{
+		/** Always {@link PERSONAL_LIVE_STATE_ID}; enforces one row. */
+		id: text("id").primaryKey().default(PERSONAL_LIVE_STATE_ID),
+		/** Epoch SECONDS each cooldown expires. */
+		drugCooldown: bigint("drug_cooldown", { mode: "number" })
+			.default(0)
+			.notNull(),
+		medicalCooldown: bigint("medical_cooldown", { mode: "number" })
+			.default(0)
+			.notNull(),
+		boosterCooldown: bigint("booster_cooldown", { mode: "number" })
+			.default(0)
+			.notNull(),
+		/** Battle stats. `bigint` because totals exceed the 32-bit integer range. */
+		strength: bigint("strength", { mode: "number" }).default(0).notNull(),
+		defense: bigint("defense", { mode: "number" }).default(0).notNull(),
+		speed: bigint("speed", { mode: "number" }).default(0).notNull(),
+		dexterity: bigint("dexterity", { mode: "number" }).default(0).notNull(),
+		/** Torn's own total, when it reports one; null otherwise. */
+		totalStats: bigint("total_stats", { mode: "number" }),
+		lastSyncDurationMs: integer("last_sync_duration_ms"),
+		/** Raw Torn money selection, kept verbatim. Never configuration. */
+		money: jsonb("money")
+			.$type<Record<string, unknown>>()
+			.default({})
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		// Rejects the double-encoded payloads the legacy blob accepted silently.
+		check(
+			"personal_live_states_money_is_object",
+			sql`jsonb_typeof(${table.money}) = 'object'`,
+		),
+	],
+);
+
+export type PersonalLiveStateRow = typeof personalLiveStates.$inferSelect;
+export type NewPersonalLiveStateRow = typeof personalLiveStates.$inferInsert;
+
 export const crimeLogs = pgTable("crime_logs", {
 	id: text("id").primaryKey(),
 	crimeId: integer("crime_id").notNull(),
@@ -84,181 +450,6 @@ export const crimeActionMappings = pgTable("crime_action_mappings", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-		.defaultNow()
-		.notNull(),
-});
-
-export const assets = pgTable(
-	"assets",
-	{
-		id: text("id").primaryKey(),
-		type: text("type").notNull(),
-		assetId: text("asset_id").notNull(),
-		quantity: doublePrecision("quantity").default(0).notNull(),
-		movingAverageCost: doublePrecision("moving_average_cost")
-			.default(0)
-			.notNull(),
-		totalCostBasis: doublePrecision("total_cost_basis").default(0).notNull(),
-		/** Current item-market value per unit, refreshed by the wealth worker. */
-		marketValue: doublePrecision("market_value").default(0).notNull(),
-		/** Torn's item category (Alcohol, Weapon, …), for grouping holdings. */
-		itemType: text("item_type"),
-		location: text("location").notNull(),
-		owner: text("owner").default("personal").notNull(),
-		origin: text("origin"),
-		realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
-		lastUpdated: timestamp("last_updated", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		index("idx_assets_asset_location").on(table.assetId, table.location),
-	],
-);
-
-export const ledgerEvents = pgTable(
-	"ledger_events",
-	{
-		id: text("id").primaryKey(),
-		logId: text("log_id"),
-		timestamp: timestamp("timestamp", {
-			withTimezone: true,
-			mode: "date",
-		}).notNull(),
-		type: text("type").notNull(),
-		categoryId: integer("category_id").notNull(),
-		transactionName: text("transaction_name").notNull(),
-		assetsAffected: jsonb("assets_affected").notNull(),
-		cashFlow: doublePrecision("cash_flow").default(0).notNull(),
-		realizedPnl: doublePrecision("realized_pnl").default(0).notNull(),
-		rawLog: jsonb("raw_log"),
-		/**
-		 * The Torn log type this event was built from.
-		 *
-		 * Kept as a column rather than read back out of `raw_log` because the
-		 * audit sweeps group by it, and a jsonb extraction over the whole table
-		 * does not use an index.
-		 */
-		logType: integer("log_type"),
-		/** Which of the thirty wealth categories the engine filed this under. */
-		wealthCategory: text("wealth_category"),
-		/**
-		 * Cash in or out of the pocket.
-		 *
-		 * Distinct from `realizedPnl` because a vault deposit moves the first and
-		 * not the second: the money left the wallet but the player still owns it.
-		 */
-		walletDelta: doublePrecision("wallet_delta").default(0).notNull(),
-		/** Which non-wallet balance moved, when one did. */
-		account: text("account"),
-		accountDelta: doublePrecision("account_delta").default(0).notNull(),
-		/**
-		 * Net change in NET WORTH: wallet + account + items in − items out.
-		 *
-		 * This is the column the wealth totals sum, and the one the observed
-		 * balances are reconciled against.
-		 */
-		assetDelta: doublePrecision("asset_delta").default(0).notNull(),
-		/**
-		 * False when any part of the effect could not be established.
-		 *
-		 * Unpriced events still get a row: the coverage report needs to count
-		 * them, and a dropped row would read as "nothing happened" rather than
-		 * "we could not tell".
-		 */
-		priced: boolean("priced").default(true).notNull(),
-		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		// The tab's timeline and top-transaction queries scan by time, and the
-		// audit groups by log type. Without these the ledger is seq-scanned on
-		// every panel refresh, with cost growing as history accumulates.
-		index("idx_ledger_events_timestamp").on(table.timestamp),
-		index("idx_ledger_events_log_type").on(table.logType),
-	],
-);
-
-/**
- * A periodic reading of the balances the ledger is anchored to.
- *
- * Two jobs, and the second is the important one:
- *
- *  1. The day-zero row is the anchor. Its values are OPENING balances — what
- *     Torn reports now, minus the net effect of every event since 00:00 UTC —
- *     because init runs mid-day and the account has already been active.
- *
- *  2. `daily_networth` is Torn's own net worth figure. Comparing it against what
- *     the ledger thinks the account is worth is the only mechanical check that
- *     no rule is quietly wrong, so every sync writes a row and the API surfaces
- *     the difference as drift.
- */
-export const wealthAccountSnapshots = pgTable(
-	"wealth_account_snapshots",
-	{
-		id: text("id").primaryKey(),
-		timestamp: timestamp("timestamp", {
-			withTimezone: true,
-			mode: "date",
-		}).notNull(),
-		/** `anchor` for the day-zero row, `api` for a periodic reading. */
-		source: text("source").notNull(),
-		wallet: doublePrecision("wallet").default(0).notNull(),
-		points: doublePrecision("points").default(0).notNull(),
-		vault: doublePrecision("vault").default(0).notNull(),
-		company: doublePrecision("company").default(0).notNull(),
-		cityBank: doublePrecision("city_bank").default(0).notNull(),
-		caymanBank: doublePrecision("cayman_bank").default(0).notNull(),
-		piggyBank: doublePrecision("piggy_bank").default(0).notNull(),
-		/** Derived purely from the log: bets out, winnings in, withdrawals back. */
-		bookie: doublePrecision("bookie").default(0).notNull(),
-		/** Item market value of the inventory, bazaar and display case. */
-		itemsValue: doublePrecision("items_value").default(0).notNull(),
-		/** The tracked net worth this snapshot implies. */
-		trackedNetWorth: doublePrecision("tracked_net_worth").default(0).notNull(),
-		/** Torn's own figure, when it could be read. */
-		tornNetWorth: doublePrecision("torn_net_worth"),
-		/** `trackedNetWorth − tornNetWorth`, for the drift panel. */
-		netWorthDrift: doublePrecision("net_worth_drift"),
-		raw: jsonb("raw"),
-		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		index("idx_wealth_account_snapshots_timestamp").on(table.timestamp),
-	],
-);
-
-/**
- * Every log type Torn publishes, whether or not this account has ever generated
- * one.
- *
- * Torn has 1170 of them and this account has seen 785. The difference matters for
- * coverage: a rule set that only knows the types someone has already triggered
- * looks complete until it meets a new one. `wealthCategory` records what the
- * engine decided, so the audit can list what was recognised without a rule.
- */
-export const tornLogTypes = pgTable("torn_log_types", {
-	id: integer("id").primaryKey(),
-	title: text("title"),
-	/** Torn's own display category, as seen in `personal_logs.details.category`. */
-	category: text("category"),
-	/** The wealth engine's category for this type. */
-	wealthCategory: text("wealth_category"),
-	/** True once the account has actually generated one of these. */
-	observed: boolean("observed").default(false).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
 		.defaultNow()
 		.notNull(),

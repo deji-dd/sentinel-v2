@@ -12,8 +12,8 @@ import {
 	db,
 	eq,
 	inArray,
+	personalLedgerSyncStates,
 	personalLogs,
-	systemStates,
 } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import { parseStatGainFromLog } from "@sentinel/utils";
@@ -29,7 +29,7 @@ type UserLog = TornSchema<"UserLog">;
 type BattlestatsLedgerEntry = typeof battlestatsLedgers.$inferSelect;
 
 describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
-	const TEST_STATE_ID = "personal:battlestats_ledger";
+	const TEST_STATE_ID = "battlestats";
 	const LOG_ID_1 = "test_gym_log_1";
 	const LOG_ID_2 = "test_gym_log_2";
 	const LOG_ID_3 = "test_gym_log_3";
@@ -43,25 +43,30 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		LOG_ID_NON_GYM,
 	] as const;
 
-	let originalState: typeof systemStates.$inferSelect | undefined;
+	let originalState: typeof personalLedgerSyncStates.$inferSelect | undefined;
 
 	beforeAll(async () => {
-		originalState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
+		originalState = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, TEST_STATE_ID),
 		});
 	});
 
 	afterAll(async () => {
 		schedulerEvents.removeAllListeners();
 		if (originalState) {
+			await db;
+			// Restore the whole typed row: the columns carry what the old blob held
+			// as `data`, and there is no longer an `init` flag to put back.
 			await db
-				.insert(systemStates)
+				.insert(personalLedgerSyncStates)
 				.values(originalState)
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: personalLedgerSyncStates.ledger,
 					set: {
-						init: originalState.init,
-						data: originalState.data,
+						status: originalState.status,
+						lastError: originalState.lastError,
+						totalIndexed: originalState.totalIndexed,
+						lastProcessedTimestamp: originalState.lastProcessedTimestamp,
 						updatedAt: originalState.updatedAt,
 					},
 				});
@@ -69,7 +74,9 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 	});
 
 	beforeEach(async () => {
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db
 			.delete(battlestatsLedgers)
 			.where(inArray(battlestatsLedgers.id, ALL_TEST_LOG_IDS));
@@ -80,7 +87,9 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 
 	afterEach(async () => {
 		schedulerEvents.removeAllListeners();
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db
 			.delete(battlestatsLedgers)
 			.where(inArray(battlestatsLedgers.id, ALL_TEST_LOG_IDS));
@@ -290,11 +299,11 @@ describe("Battlestats Ledger Worker & Ingestion Pipeline", () => {
 		expect(dexLog?.statType).toBe("dexterity");
 		expect(dexLog?.source).toBe("company");
 
-		const stateRecord = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
+		const stateRecord = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, TEST_STATE_ID),
 		});
 		expect(stateRecord).toBeDefined();
-		expect(stateRecord?.init).toBe(true);
+		expect(stateRecord?.status).toBe("completed");
 
 		// Running reconciliation again when already up to date should result in 0 replayed
 		const secondRun = await reconcileHistoricalBattlestatsLogs();

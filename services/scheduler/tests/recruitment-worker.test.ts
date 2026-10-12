@@ -119,14 +119,20 @@ describe("Subversive Recruitment Worker", () => {
 					where: (condition: unknown) =>
 						createMockQuery(() => {
 							const targetVal = extractConditionValue(condition);
+							// Recruitment settings now live in a typed table, one row
+							// addressed by the sentinel id. The row carries every
+							// column the config exposes, because the schema makes them
+							// NOT NULL — there is no partial blob to merge defaults into.
+							if (table === databaseModule.subversiveRecruitmentConfigs) {
+								return [
+									{ id: SUBVERSIVE_RECRUITMENT_CONFIG_ID, ...mockConfig },
+								];
+							}
 							if (table === databaseModule.systemStates) {
-								if (targetVal === SUBVERSIVE_RECRUITMENT_CONFIG_ID) {
-									return [{ init: true, data: mockConfig }];
-								}
 								if (targetVal === SUBVERSIVE_RECRUITMENT_STATE_ID) {
 									return mockState ? [mockState] : [];
 								}
-								return [{ init: true, data: mockConfig }];
+								return [];
 							}
 							if (table === databaseModule.subversiveRankedWars) {
 								const warId = targetVal;

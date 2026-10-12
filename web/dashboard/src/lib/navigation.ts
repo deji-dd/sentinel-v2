@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
 	BarChart2,
+	Calendar,
 	Gift,
 	Hash,
 	MapPin,
@@ -160,6 +161,12 @@ export function getNavSections({
 				// member-facing `/stock-alerts` command is registered.
 				...(isFaction
 					? [
+							{
+								label: "Calendar",
+								subPath: "/calendar",
+								icon: Calendar,
+								accent: "text-amber-400",
+							},
 							{
 								label: "Stocks",
 								subPath: "/stocks",

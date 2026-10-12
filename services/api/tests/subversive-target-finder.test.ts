@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	db,
+	eq,
 	inArray,
 	sql,
 	subversiveTargetFinderTargets,
+	subversiveTargetFinderUsers,
 } from "@sentinel/database";
+import { encryptApiKey, hashApiKey } from "@sentinel/torn-api";
 import { app } from "../src/app";
+import { subversiveKeyHealthManager } from "../src/lib/subversive-key-pool";
 import {
 	type CurrentWarInfo,
 	type RankedWarOpponent,
@@ -1164,5 +1168,456 @@ describe("Subversive Alliance - Target Finder API & RAM Engine", () => {
 					inArray(subversiveTargetFinderTargets.targetId, [readyId, awayId]),
 				);
 		}
+	});
+});
+
+describe("Chain target checks run on the requesting member's own key", () => {
+	const MASTER_KEY =
+		process.env.ENCRYPTION_KEY ?? "subversive-chain-target-test-master-key";
+	const ATTACKER_BS = 1000;
+	/** Well past the 3-day inactivity rule so a profile counts as farmable. */
+	const INACTIVE_LAST_ACTION = Math.floor(
+		(Date.now() - 10 * 24 * 60 * 60 * 1000) / 1000,
+	);
+
+	let fetchSpy: ReturnType<typeof spyOn> | undefined;
+	let originalEncryptionKey: string | undefined;
+	let originalBudget: string | undefined;
+
+	beforeEach(() => {
+		originalEncryptionKey = process.env.ENCRYPTION_KEY;
+		process.env.ENCRYPTION_KEY = MASTER_KEY;
+		originalBudget = process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS;
+	});
+
+	afterEach(() => {
+		fetchSpy?.mockRestore();
+		fetchSpy = undefined;
+		if (originalEncryptionKey === undefined) {
+			delete process.env.ENCRYPTION_KEY;
+		} else {
+			process.env.ENCRYPTION_KEY = originalEncryptionKey;
+		}
+		if (originalBudget === undefined) {
+			delete process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS;
+		} else {
+			process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS = originalBudget;
+		}
+	});
+
+	function seedSession(
+		tornId: number,
+		token: string,
+		apiKeyEncrypted?: string,
+	) {
+		subversiveTargetCache.setUserSession({
+			tornId,
+			tornName: `Member ${tornId}`,
+			factionId: 2013,
+			factionName: "Subversive Alliance",
+			bsScore: ATTACKER_BS,
+			token,
+			isActive: true,
+			expiresAt: Date.now() + 3_600_000,
+			statsCachedAt: Date.now(),
+			apiKeyEncrypted,
+		});
+	}
+
+	/** Seeds enough in-range candidates that the FFScouter fallback never runs. */
+	function seedCandidates(idBase: number, count = 10) {
+		subversiveTargetCache.loadTargets(
+			Array.from({ length: count }, (_, i) => ({
+				targetId: idBase + i,
+				name: `ChainCandidate${idBase + i}`,
+				level: 30,
+				factionId: null,
+				factionName: null,
+				daysOld: 100,
+				lastAction: Date.now() - 10 * 24 * 60 * 60 * 1000,
+				isInactive: true,
+				isFactionless: true,
+				inHospital: false,
+				hospitalUntil: null,
+				estimatedBs: 40_000,
+				// FF = 1 + (8/3) * (400 / 1000) = 2.07x, inside the 1.8–2.2 request.
+				estimatedScore: 400,
+			})),
+		);
+	}
+
+	function profilePayload(targetId: number) {
+		return {
+			profile: {
+				id: targetId,
+				name: `ChainCandidate${targetId}`,
+				last_action: { timestamp: INACTIVE_LAST_ACTION },
+				status: { state: "Okay", until: 0 },
+			},
+		};
+	}
+
+	/**
+	 * Replaces the Torn API transport, recording the `key` parameter of every
+	 * profile request so the test can assert exactly whose key performed the
+	 * checks.
+	 */
+	function mockTornFetch(
+		response: (targetId: number) => unknown = profilePayload,
+		delayMs = 0,
+	) {
+		const keysUsed: string[] = [];
+
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			input: string | URL | Request,
+		) => {
+			const rawUrl =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.href
+						: input.url;
+			const url = new URL(rawUrl);
+			const segments = url.pathname.split("/");
+			const targetId = Number.parseInt(
+				segments[segments.indexOf("user") + 1] ?? "0",
+				10,
+			);
+
+			if (!url.pathname.includes("/user/")) {
+				// FFScouter and anything else the route may reach out to.
+				return new Response(JSON.stringify([]), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+
+			keysUsed.push(url.searchParams.get("key") ?? "");
+			if (delayMs > 0) {
+				await new Promise((resolve) => {
+					// A non-finite delay models a Torn call that never answers.
+					if (Number.isFinite(delayMs)) setTimeout(resolve, delayMs);
+				});
+			}
+			return new Response(JSON.stringify(response(targetId)), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch);
+
+		return keysUsed;
+	}
+
+	async function requestChainTarget(token: string) {
+		return app.handle(
+			new Request(
+				"http://localhost/api/v1/target-finder/targets/next?minFF=1.8&maxFF=2.2",
+				{ headers: { Authorization: `Bearer ${token}` } },
+			),
+		);
+	}
+
+	it("verifies candidates with the caller's key and never with another member's pooled key", async () => {
+		const memberId = 7_710_010;
+		const memberKey = "memberkey0000001";
+		const otherMemberId = 7_710_011;
+		const otherMemberKey = "otherkey00000002";
+		const token = "satf_7710010_membertoken";
+		const idBase = 880_100;
+
+		// Another enrolled member sits in the shared pool. Under the old
+		// round-robin pool this request would have spent their key too.
+		await db
+			.insert(subversiveTargetFinderUsers)
+			.values({
+				tornId: otherMemberId,
+				tornName: "Other Member",
+				apiKeyEncrypted: encryptApiKey(otherMemberKey, MASTER_KEY),
+				apiKeyHash: hashApiKey(
+					otherMemberKey,
+					process.env.API_KEY_HASH_PEPPER ?? "",
+				),
+				bsScore: ATTACKER_BS,
+				isActive: true,
+			})
+			.onConflictDoNothing();
+
+		seedCandidates(idBase);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch();
+
+		try {
+			const response = await requestChainTarget(token);
+			const data = (await response.json()) as {
+				success: boolean;
+				target?: { id: number };
+			};
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			expect(data.target?.id).toBeGreaterThanOrEqual(idBase);
+
+			// The first candidate was already attackable, so the press cost exactly
+			// one Torn call — never a parallel burst of five.
+			expect(keysUsed).toEqual([memberKey]);
+		} finally {
+			await db
+				.delete(subversiveTargetFinderUsers)
+				.where(eq(subversiveTargetFinderUsers.tornId, otherMemberId));
+		}
+	});
+
+	it("walks candidates one call at a time and stops at the first attackable target", async () => {
+		const memberId = 7_710_060;
+		const memberKey = "memberkey0000006";
+		const token = "satf_7710060_membertoken";
+		const idBase = 880_600;
+
+		// Every profile is a hospital stay, so no candidate can be dispatched and
+		// the walk has to consume its whole cap.
+		seedCandidates(idBase, 25);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch(() => ({
+			profile: {
+				last_action: { timestamp: INACTIVE_LAST_ACTION },
+				status: {
+					state: "Hospital",
+					until: Math.floor(Date.now() / 1000) + 900,
+				},
+			},
+		}));
+
+		const response = await requestChainTarget(token);
+		const data = (await response.json()) as {
+			success: boolean;
+			retryAfter?: number;
+		};
+
+		// Sequential, capped at 20 — and every one of those calls ran on the
+		// caller's key.
+		expect(keysUsed).toHaveLength(20);
+		expect(new Set(keysUsed)).toEqual(new Set([memberKey]));
+		expect(data.success).toBe(false);
+		expect(data.retryAfter).toBe(5);
+	});
+
+	it("hydrates the caller's key from the database when the cached session has none", async () => {
+		const memberId = 7_710_020;
+		const memberKey = "memberkey0000002";
+		const token = "satf_7710020_membertoken";
+		const idBase = 880_200;
+
+		await db
+			.insert(subversiveTargetFinderUsers)
+			.values({
+				tornId: memberId,
+				tornName: "Cached Without Key",
+				apiKeyEncrypted: encryptApiKey(memberKey, MASTER_KEY),
+				apiKeyHash: hashApiKey(
+					memberKey,
+					process.env.API_KEY_HASH_PEPPER ?? "",
+				),
+				bsScore: ATTACKER_BS,
+				isActive: true,
+			})
+			.onConflictDoUpdate({
+				target: subversiveTargetFinderUsers.tornId,
+				set: {
+					apiKeyEncrypted: encryptApiKey(memberKey, MASTER_KEY),
+					isActive: true,
+				},
+			});
+
+		seedCandidates(idBase);
+		// Sessions cached by /auth used to arrive in RAM without the key.
+		seedSession(memberId, token);
+		const keysUsed = mockTornFetch();
+
+		try {
+			const response = await requestChainTarget(token);
+			const data = (await response.json()) as { success: boolean };
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			expect(new Set(keysUsed)).toEqual(new Set([memberKey]));
+		} finally {
+			await db
+				.delete(subversiveTargetFinderUsers)
+				.where(eq(subversiveTargetFinderUsers.tornId, memberId));
+		}
+	});
+
+	it("fails the request instead of borrowing a pooled key when the caller has no usable key", async () => {
+		const memberId = 7_710_030;
+		const token = "satf_7710030_membertoken";
+		const idBase = 880_300;
+
+		seedCandidates(idBase);
+		seedSession(memberId, token);
+		const keysUsed = mockTornFetch();
+
+		const response = await requestChainTarget(token);
+		const data = (await response.json()) as {
+			success: boolean;
+			error?: string;
+		};
+
+		expect(response.status).toBe(503);
+		expect(data.success).toBe(false);
+		expect(data.error).toContain("re-connect your API key");
+		// Not a single profile check may run on anyone's key.
+		expect(keysUsed).toEqual([]);
+	});
+
+	it("refuses to scout while the caller's key is on Torn cooldown", async () => {
+		const memberId = 7_710_040;
+		const memberKey = "memberkey0000004";
+		const token = "satf_7710040_membertoken";
+		const idBase = 880_400;
+
+		seedCandidates(idBase);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch();
+		subversiveKeyHealthManager.markTemporarilyDisabled(memberKey);
+
+		try {
+			const response = await requestChainTarget(token);
+			const data = (await response.json()) as {
+				success: boolean;
+				error?: string;
+			};
+
+			expect(response.status).toBe(429);
+			expect(data.success).toBe(false);
+			expect(data.error).toContain("cooldown");
+			expect(keysUsed).toEqual([]);
+		} finally {
+			subversiveKeyHealthManager.recordSuccessfulUse(memberKey);
+		}
+	});
+
+	it("reports a key-level Torn failure and cools that key down", async () => {
+		const memberId = 7_710_050;
+		const memberKey = "memberkey0000005";
+		const token = "satf_7710050_membertoken";
+		const idBase = 880_500;
+
+		seedCandidates(idBase);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch(() => ({
+			error: { code: 13, error: "Key temporarily disabled" },
+		}));
+
+		try {
+			const response = await requestChainTarget(token);
+			const data = (await response.json()) as {
+				success: boolean;
+				error?: string;
+			};
+
+			expect(response.status).toBe(503);
+			expect(data.success).toBe(false);
+			expect(data.error).toContain("Key temporarily disabled");
+			expect(new Set(keysUsed)).toEqual(new Set([memberKey]));
+			expect(
+				subversiveKeyHealthManager.isKeyTemporarilyDisabled(memberKey),
+			).toBe(true);
+		} finally {
+			subversiveKeyHealthManager.recordSuccessfulUse(memberKey);
+		}
+	});
+
+	it("reports Torn's per-key request limit without cooling the key down", async () => {
+		const memberId = 7_710_070;
+		const memberKey = "memberkey0000007";
+		const token = "satf_7710070_membertoken";
+		const idBase = 880_700;
+
+		seedCandidates(idBase);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		// Code 5 is transient load, not a broken key, so it must not be answered
+		// with a key cooldown or a "check your key" message.
+		const keysUsed = mockTornFetch(() => ({
+			error: { code: 5, error: "Too many requests" },
+		}));
+
+		const response = await requestChainTarget(token);
+		const data = (await response.json()) as {
+			success: boolean;
+			error?: string;
+		};
+
+		expect(response.status).toBe(429);
+		expect(data.success).toBe(false);
+		expect(data.error).toContain("request limit");
+		expect(keysUsed).toEqual([memberKey]);
+		expect(subversiveKeyHealthManager.isKeyTemporarilyDisabled(memberKey)).toBe(
+			false,
+		);
+	});
+
+	it("stops the sequential walk when the wall-clock budget runs out", async () => {
+		const memberId = 7_710_080;
+		const memberKey = "memberkey0000008";
+		const token = "satf_7710080_membertoken";
+		const idBase = 880_800;
+
+		// 350ms of budget at 100ms per check: the walk must stop well short of the
+		// 20-check cap, so a slow Torn cannot stretch a press indefinitely.
+		process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS = "350";
+		seedCandidates(idBase, 25);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch(
+			() => ({
+				profile: {
+					last_action: { timestamp: INACTIVE_LAST_ACTION },
+					status: {
+						state: "Hospital",
+						until: Math.floor(Date.now() / 1000) + 900,
+					},
+				},
+			}),
+			100,
+		);
+
+		const response = await requestChainTarget(token);
+		const data = (await response.json()) as {
+			success: boolean;
+			retryAfter?: number;
+		};
+
+		expect(keysUsed.length).toBeGreaterThanOrEqual(2);
+		expect(keysUsed.length).toBeLessThan(20);
+		expect(new Set(keysUsed)).toEqual(new Set([memberKey]));
+		expect(data.success).toBe(false);
+		expect(data.retryAfter).toBe(5);
+	});
+
+	it("abandons a single slow Torn call instead of holding the press open", async () => {
+		const memberId = 7_710_090;
+		const memberKey = "memberkey0000009";
+		const token = "satf_7710090_membertoken";
+		const idBase = 880_900;
+
+		// The call never answers, but the press only has 200ms: the response must
+		// come back on the budget, not on Torn. Without the deadline this request
+		// would sit past the connection ceiling and be dropped unanswered.
+		process.env.SUBVERSIVE_VERIFICATION_BUDGET_MS = "200";
+		seedCandidates(idBase, 25);
+		seedSession(memberId, token, encryptApiKey(memberKey, MASTER_KEY));
+		const keysUsed = mockTornFetch(profilePayload, Number.POSITIVE_INFINITY);
+
+		const startedAt = Date.now();
+		const response = await requestChainTarget(token);
+		const elapsedMs = Date.now() - startedAt;
+		const data = (await response.json()) as {
+			success: boolean;
+			retryAfter?: number;
+		};
+
+		expect(elapsedMs).toBeLessThan(1_500);
+		expect(keysUsed).toEqual([memberKey]);
+		expect(data.success).toBe(false);
+		expect(data.retryAfter).toBe(5);
 	});
 });

@@ -12,10 +12,9 @@ import {
 	db,
 	eq,
 	inArray,
-	ledgerEvents,
+	personalLedgerSyncStates,
 	personalLogs,
 	stockLedgers,
-	systemStates,
 	tornItems,
 	tornStocks,
 	userStocks,
@@ -33,28 +32,48 @@ import {
 type UserLog = TornSchema<"UserLog">;
 
 describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
-	const TEST_STATE_ID = "personal:stocks_ledger";
+	const TEST_STATE_ID = "stocks";
 	const LOG_ID_1 = "test_stock_log_1";
 	const LOG_ID_2 = "test_stock_log_2";
 	const LOG_ID_3 = "test_stock_log_3";
+	const LOG_ID_4 = "test_stock_log_4";
 	const LOG_ID_NON_STOCK = "test_stock_non_stock";
 	const ALL_TEST_LOG_IDS = [
 		LOG_ID_1,
 		LOG_ID_2,
 		LOG_ID_3,
+		LOG_ID_4,
 		LOG_ID_NON_STOCK,
 	] as const;
 
-	const TEST_STOCK_ID_1 = 12;
-	const TEST_STOCK_ID_2 = 34;
-	const TEST_ITEM_ID_1 = 500;
+	// Synthetic ids on purpose. `torn_stocks` and `torn_items` are reference data
+	// cloned from the service database, so Torn's real stocks 12/34 and item 500
+	// already exist here. Seeding fixtures under those ids was silently ignored
+	// (`onConflictDoNothing`), which left `parseStockGainLog` reading the live
+	// rows: the real stock 12 demands 6,000,000 shares and the real stock 34 has a
+	// passive bonus, so the below-requirement and passive-bonus guards skipped
+	// every dividend these tests expect to be booked. Synthetic ids also keep this
+	// suite's cleanup from deleting reference rows other suites read.
+	const TEST_STOCK_ID_1 = 900012;
+	const TEST_STOCK_ID_2 = 900034;
+	/** Passive bonus: never pays a dividend, however many shares are held. */
+	const TEST_STOCK_ID_PASSIVE = 900035;
+	/** Holds fewer shares than this stock's bonus requirement. */
+	const TEST_STOCK_ID_UNDER_REQUIREMENT = 900036;
+	const TEST_ITEM_ID_1 = 900500;
+	const TEST_STOCK_ID_STRINGS = [
+		TEST_STOCK_ID_1,
+		TEST_STOCK_ID_2,
+		TEST_STOCK_ID_PASSIVE,
+		TEST_STOCK_ID_UNDER_REQUIREMENT,
+	].map(String);
 
-	let originalState: typeof systemStates.$inferSelect | undefined;
+	let originalState: typeof personalLedgerSyncStates.$inferSelect | undefined;
 	let fetchSpy: ReturnType<typeof spyOn>;
 
 	beforeAll(async () => {
-		originalState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
+		originalState = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, TEST_STATE_ID),
 		});
 
 		// Seed tornStocks & tornItems for dividend checks
@@ -74,6 +93,22 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 					name: "Test Stock 2",
 					acronym: "TS2",
 					bonus: { requirement: 50, passive: false },
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				},
+				{
+					id: String(TEST_STOCK_ID_PASSIVE),
+					name: "Test Passive Stock",
+					acronym: "TPS",
+					bonus: { requirement: 100, passive: true },
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				},
+				{
+					id: String(TEST_STOCK_ID_UNDER_REQUIREMENT),
+					name: "Test High Requirement Stock",
+					acronym: "THR",
+					bonus: { requirement: 1000, passive: false },
 					createdAt: new Date(),
 					updatedAt: new Date(),
 				},
@@ -97,14 +132,19 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 	afterAll(async () => {
 		schedulerEvents.removeAllListeners();
 		if (originalState) {
+			await db;
+			// Restore the whole typed row: the columns carry what the old blob held
+			// as `data`, and there is no longer an `init` flag to put back.
 			await db
-				.insert(systemStates)
+				.insert(personalLedgerSyncStates)
 				.values(originalState)
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: personalLedgerSyncStates.ledger,
 					set: {
-						init: originalState.init,
-						data: originalState.data,
+						status: originalState.status,
+						lastError: originalState.lastError,
+						totalIndexed: originalState.totalIndexed,
+						lastProcessedTimestamp: originalState.lastProcessedTimestamp,
 						updatedAt: originalState.updatedAt,
 					},
 				});
@@ -112,12 +152,7 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 
 		await db
 			.delete(tornStocks)
-			.where(
-				inArray(tornStocks.id, [
-					String(TEST_STOCK_ID_1),
-					String(TEST_STOCK_ID_2),
-				]),
-			);
+			.where(inArray(tornStocks.id, TEST_STOCK_ID_STRINGS));
 		await db.delete(tornItems).where(eq(tornItems.id, String(TEST_ITEM_ID_1)));
 	});
 
@@ -129,53 +164,35 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 			});
 		}) as unknown as typeof fetch);
 
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db
 			.delete(stockLedgers)
 			.where(inArray(stockLedgers.id, ALL_TEST_LOG_IDS));
-		await db.delete(ledgerEvents).where(
-			inArray(
-				ledgerEvents.id,
-				ALL_TEST_LOG_IDS.map((id) => `ledger_ev_${id}`),
-			),
-		);
 		await db
 			.delete(personalLogs)
 			.where(inArray(personalLogs.id, ALL_TEST_LOG_IDS));
 		await db
 			.delete(userStocks)
-			.where(
-				inArray(userStocks.id, [
-					String(TEST_STOCK_ID_1),
-					String(TEST_STOCK_ID_2),
-				]),
-			);
+			.where(inArray(userStocks.id, TEST_STOCK_ID_STRINGS));
 	});
 
 	afterEach(async () => {
 		fetchSpy?.mockRestore();
 		schedulerEvents.removeAllListeners();
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db
+			.delete(personalLedgerSyncStates)
+			.where(eq(personalLedgerSyncStates.ledger, TEST_STATE_ID));
 		await db
 			.delete(stockLedgers)
 			.where(inArray(stockLedgers.id, ALL_TEST_LOG_IDS));
-		await db.delete(ledgerEvents).where(
-			inArray(
-				ledgerEvents.id,
-				ALL_TEST_LOG_IDS.map((id) => `ledger_ev_${id}`),
-			),
-		);
 		await db
 			.delete(personalLogs)
 			.where(inArray(personalLogs.id, ALL_TEST_LOG_IDS));
 		await db
 			.delete(userStocks)
-			.where(
-				inArray(userStocks.id, [
-					String(TEST_STOCK_ID_1),
-					String(TEST_STOCK_ID_2),
-				]),
-			);
+			.where(inArray(userStocks.id, TEST_STOCK_ID_STRINGS));
 	});
 
 	test("parseStockGainLog parses money and item dividends into stock_ledgers", async () => {
@@ -223,14 +240,6 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 		expect(stockEntry1?.value).toBe(5000000);
 		expect(stockEntry1?.logType).toBe(5530);
 
-		// `ledger_events` has exactly one writer — the wealth engine — which
-		// classifies the same dividend logs alongside every other money-moving
-		// type. This worker writing it too is how a dividend was booked twice.
-		const ledgerEv1 = await db.query.ledgerEvents.findFirst({
-			where: eq(ledgerEvents.id, `ledger_ev_${LOG_ID_1}`),
-		});
-		expect(ledgerEv1).toBeUndefined();
-
 		// 2. Item Dividend Log
 		const itemLog: UserLog = {
 			id: LOG_ID_2 as unknown as number,
@@ -254,6 +263,53 @@ describe("Stocks Ledger Worker & Ingestion Pipeline", () => {
 		expect(stockEntry2?.stockId).toBe(TEST_STOCK_ID_2);
 		expect(stockEntry2?.itemId).toBe(TEST_ITEM_ID_1);
 		expect(stockEntry2?.value).toBe(500000); // 2 * 250000
+	});
+
+	test("parseStockGainLog skips passive-bonus stocks and holdings below the share requirement", async () => {
+		// The two guards that made every dividend assertion above vacuous while the
+		// fixtures were colliding with Torn's real rows (a real passive stock and a
+		// real multi-million share requirement). They are worth asserting directly.
+		await db.insert(userStocks).values([
+			{
+				id: String(TEST_STOCK_ID_PASSIVE),
+				shares: 500,
+				transactions: [{ timestamp: 1700000000 }],
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			},
+			{
+				id: String(TEST_STOCK_ID_UNDER_REQUIREMENT),
+				shares: 10, // requirement is 1000
+				transactions: [{ timestamp: 1700000000 }],
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			},
+		]);
+
+		const passiveLog = {
+			id: LOG_ID_3 as unknown as number,
+			timestamp: 1710000000,
+			log: 5530,
+			details: { id: 5530, title: "Stock Dividend Money" },
+			data: { stock: TEST_STOCK_ID_PASSIVE, money: 1000000 },
+		} as unknown as UserLog;
+
+		const underRequirementLog = {
+			id: LOG_ID_4 as unknown as number,
+			timestamp: 1710000100,
+			log: 5530,
+			details: { id: 5530, title: "Stock Dividend Money" },
+			data: { stock: TEST_STOCK_ID_UNDER_REQUIREMENT, money: 1000000 },
+		} as unknown as UserLog;
+
+		expect(await parseStockGainLog(passiveLog)).toBe(false);
+		expect(await parseStockGainLog(underRequirementLog)).toBe(false);
+
+		const booked = await db
+			.select({ id: stockLedgers.id })
+			.from(stockLedgers)
+			.where(inArray(stockLedgers.id, [LOG_ID_3, LOG_ID_4]));
+		expect(booked).toEqual([]);
 	});
 
 	test("processStockLogsBatch processes dividend logs and skips non-stock logs", async () => {

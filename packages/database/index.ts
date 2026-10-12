@@ -84,6 +84,7 @@ export {
 	lt,
 	lte,
 	ne,
+	notInArray,
 	or,
 	type SQL,
 	sql,
@@ -94,7 +95,11 @@ export type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 
 // Export schema for queries and types
 export * from "./src/lib/alerts";
+export * from "./src/lib/bounty-state";
 export * from "./src/lib/elims-stock";
 export * from "./src/lib/ffscouter-cache";
 export * from "./src/lib/guilds";
+export * from "./src/lib/personal-live-state";
+export * from "./src/lib/personal-reference";
+export * from "./src/lib/worker-state";
 export * from "./src/schema";

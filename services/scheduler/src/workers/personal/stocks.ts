@@ -5,10 +5,10 @@ import {
 	eq,
 	inArray,
 	isNull,
+	personalLedgerSyncStates,
 	personalLogs,
 	sql,
 	stockLedgers,
-	systemStates,
 	tornItems,
 	tornStocks,
 	userStocks,
@@ -21,7 +21,8 @@ import { getActiveIpcServer } from "../../lib/ipc/server";
 import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
-const STATE_ID = "personal:stocks_ledger";
+/** Discriminator row in `personal_ledger_sync_states` for this ledger. */
+const LEDGER_SYNC_ID = "stocks";
 
 const logger = new Logger("Scheduler", "StocksLedger");
 
@@ -56,18 +57,20 @@ let isSyncingUserStocks = false;
 let pendingSync = false;
 
 /**
- * Loads the stocks ledger state from SQLite system_states.
+ * Loads the stocks ledger state from `personal_ledger_sync_states`.
  */
 export async function loadStocksLedgerState(): Promise<StocksLedgerState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
+		const record = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, LEDGER_SYNC_ID),
 		});
 
-		if (record?.data && typeof record.data === "object") {
+		if (record) {
 			return {
-				...DEFAULT_STATE,
-				...(record.data as Partial<StocksLedgerState>),
+				status: record.status as StocksLedgerState["status"],
+				totalIndexedLogs: record.totalIndexed,
+				lastProcessedTimestamp: record.lastProcessedTimestamp,
+				lastError: record.lastError,
 				updatedAt: new Date().toISOString(),
 			};
 		}
@@ -78,30 +81,32 @@ export async function loadStocksLedgerState(): Promise<StocksLedgerState> {
 }
 
 /**
- * Persists the stocks ledger state to SQLite system_states atomically and broadcasts via IPC.
+ * Persists the stocks ledger state to `personal_ledger_sync_states`.
+ *
+ * Column-scoped: the legacy row also stored an `init` flag that was just
+ * `status === "completed"`, which nothing read.
  */
 export async function persistStocksLedgerState(
 	state: StocksLedgerState,
 ): Promise<void> {
 	state.updatedAt = new Date().toISOString();
 	try {
-		const isCompleted = state.status === "completed";
+		const now = new Date();
+		const values = {
+			ledger: LEDGER_SYNC_ID,
+			status: state.status,
+			lastError: state.lastError,
+			totalIndexed: state.totalIndexedLogs,
+			lastProcessedTimestamp: state.lastProcessedTimestamp,
+			updatedAt: now,
+		};
+
 		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: isCompleted,
-				data: state,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
+			.insert(personalLedgerSyncStates)
+			.values({ ...values, createdAt: now })
 			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: isCompleted,
-					data: state,
-					updatedAt: new Date(),
-				},
+				target: personalLedgerSyncStates.ledger,
+				set: values,
 			});
 
 		const ipcServer = getActiveIpcServer();
@@ -221,7 +226,7 @@ export async function parseStockActivityLog(): Promise<void> {
 }
 
 /**
- * Parses an individual stock gain log into `stock_ledgers` and `ledger_events`.
+ * Parses an individual stock gain log into `stock_ledgers`.
  */
 export async function parseStockGainLog(log: UserLog): Promise<boolean> {
 	const rawPayload = log.data ?? log;
@@ -353,10 +358,8 @@ export async function parseStockGainLog(log: UserLog): Promise<boolean> {
 			},
 		});
 
-	// This worker owns `stock_ledgers`. `ledger_events` is owned solely by the
-	// wealth engine, which classifies the same dividend logs alongside every other
-	// money-moving type — one writer per ledger, so a dividend cannot be booked
-	// twice under two different event ids.
+	// This worker owns `stock_ledgers`. It is the single record of a dividend, so
+	// one cannot be booked twice under two different event ids.
 
 	return true;
 }
@@ -415,7 +418,7 @@ export async function processStockLogsBatch(
 }
 
 /**
- * Reconciles historical stock logs from `personal_logs` into `stock_ledgers` and `ledger_events`.
+ * Reconciles historical stock logs from `personal_logs` into `stock_ledgers`.
  * Non-destructive: preserves existing records and fills in any unindexed stock gain logs.
  * Uses an anti-join query (LEFT JOIN ... WHERE stock_ledgers.id IS NULL) to reliably find
  * missed records regardless of timestamp ordering or event stutters.
@@ -577,7 +580,7 @@ export async function getStocksTotals(stockId?: number): Promise<
 }
 
 /**
- * Re-initializes the Stocks Ledger by wiping existing stock_ledgers & stock_dividend ledger_events
+ * Re-initializes the Stocks Ledger by wiping existing stock_ledgers
  * and regenerating all records from personal_logs.
  */
 export async function reinitializeStocksLedger(): Promise<{

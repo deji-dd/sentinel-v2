@@ -4,7 +4,6 @@ import { reinitializeBattlestatsLedger } from "../../../workers/personal/battles
 import { reinitializeCrimeLedger } from "../../../workers/personal/crimes";
 import { requestResetLogManager } from "../../../workers/personal/log-manager";
 import { reinitializeStocksLedger } from "../../../workers/personal/stocks";
-import { initWealthTracking } from "../../../workers/personal/wealth";
 import { recordTargetDefeated } from "../../../workers/subversive/bounty-finder";
 import { resetRecruitmentCache } from "../../../workers/subversive/recruitment-worker";
 import { triggerWorkerByName } from "../../scheduler";
@@ -57,25 +56,6 @@ export const handleReinitializeStocksLedger: IpcActionHandler = () => {
 	);
 	reinitializeStocksLedger().catch((err) => {
 		logger.error("Error executing stocks ledger reinitialization:", err);
-	});
-};
-
-export const handleReinitializeWealth: IpcActionHandler = (
-	ctx: IpcHandlerContext,
-) => {
-	const message = ctx.message;
-	const data =
-		"data" in message
-			? (message.data as { timestamp?: number } | undefined)
-			: undefined;
-	const initTs = data?.timestamp;
-	logger.info(
-		`Received reinitialize_wealth IPC command. Anchoring the ledger at ${
-			initTs !== undefined ? `timestamp ${initTs}` : "00:00 UTC today"
-		} and re-snapshotting opening balances...`,
-	);
-	initWealthTracking(initTs).catch((err) => {
-		logger.error("Error executing wealth initialization:", err);
 	});
 };
 

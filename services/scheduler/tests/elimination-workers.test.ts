@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { db, elimsApiKeys, eq } from "@sentinel/database";
 import {
+	clearGuildKeyPoolCache,
 	encryptApiKey,
+	getElimsKeyPool,
 	getGuildKeyPool,
 	getNextGuildKey,
 	hashApiKey,
@@ -25,6 +27,10 @@ describe("Elimination Workers & Guild Key Management via @sentinel/torn-api", ()
 	beforeEach(async () => {
 		process.env.ENCRYPTION_KEY = MASTER_KEY;
 		process.env.API_KEY_HASH_PEPPER = TEST_PEPPER;
+
+		// The guild pool is memoised for 30s, so a pool built by an earlier test
+		// would otherwise leak into this one.
+		clearGuildKeyPoolCache(TEST_GUILD_ID);
 
 		// Clean up any test records
 		await db
@@ -73,6 +79,49 @@ describe("Elimination Workers & Guild Key Management via @sentinel/torn-api", ()
 			expect(pool[0]?.userId).toBe(99001);
 			expect(pool[0]?.keyType).toBe("guild");
 			expect(pool[1]?.apiKey).toBe(TEST_RAW_KEY_2);
+		});
+
+		test("getElimsKeyPool skips an excluded key while leaving it valid", async () => {
+			await db
+				.update(elimsApiKeys)
+				.set({ isExcluded: true })
+				.where(
+					eq(elimsApiKeys.apiKeyHash, hashApiKey(TEST_RAW_KEY_1, TEST_PEPPER)),
+				);
+
+			const pool = await getElimsKeyPool(TEST_GUILD_ID);
+			const pooledKeys = pool.map((k) => k.apiKey);
+			expect(pooledKeys).not.toContain(TEST_RAW_KEY_1);
+			expect(pooledKeys).toContain(TEST_RAW_KEY_2);
+
+			// The guard is an opt-out, not an invalidation: the row keeps its
+			// validity and stays listed, it is simply never handed out.
+			const [row] = await db
+				.select({
+					isValid: elimsApiKeys.isValid,
+					isExcluded: elimsApiKeys.isExcluded,
+				})
+				.from(elimsApiKeys)
+				.where(
+					eq(elimsApiKeys.apiKeyHash, hashApiKey(TEST_RAW_KEY_1, TEST_PEPPER)),
+				);
+			expect(row?.isValid).toBe(true);
+			expect(row?.isExcluded).toBe(true);
+		});
+
+		test("getGuildKeyPool omits an excluded elims key", async () => {
+			await db
+				.update(elimsApiKeys)
+				.set({ isExcluded: true })
+				.where(
+					eq(elimsApiKeys.apiKeyHash, hashApiKey(TEST_RAW_KEY_1, TEST_PEPPER)),
+				);
+			clearGuildKeyPoolCache(TEST_GUILD_ID);
+
+			const pool = await getGuildKeyPool(TEST_GUILD_ID);
+			const pooledKeys = pool.map((k) => k.apiKey);
+			expect(pooledKeys).not.toContain(TEST_RAW_KEY_1);
+			expect(pooledKeys).toContain(TEST_RAW_KEY_2);
 		});
 
 		test("getNextGuildKey rotates between valid guild keys via round-robin", async () => {

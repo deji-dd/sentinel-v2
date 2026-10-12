@@ -12,10 +12,17 @@ import {
 	apiKeys,
 	db,
 	eq,
+	getWorkerState,
 	inArray,
+	loadPersonalGymUnlocks,
+	loadPersonalPerks,
+	personalGymUnlocks,
 	personalLogs,
-	systemStates,
+	personalPerks,
+	personalReferenceSummaries,
 	tornGyms,
+	WORKER_STATE_IDS,
+	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
 import { schedulerEvents } from "../src/lib/events";
@@ -32,65 +39,43 @@ import {
 describe("Personal Reference Sync Worker & Parsers", () => {
 	let getPersonalSpy: ReturnType<typeof spyOn>;
 	const TEST_KEY_ID = "test_personal_reference_sync_key";
-	const PERKS_STATE_ID = "personal:user_perks";
-	const GYM_UNLOCKS_STATE_ID = "personal:gym_unlocks";
-	const LOG_MANAGER_STATE_ID = "personal:log_manager";
+	const LOG_MANAGER_STATE_ID = WORKER_STATE_IDS.logManager;
 	const TEST_LOG_IDS = ["test_ref_log_1", "test_ref_log_2"];
 	const TEST_GYM_IDS = ["1", "2", "3"];
 	const originalEnvKey = process.env.TORN_API_KEY;
 
-	let savedPerksState: typeof systemStates.$inferSelect | undefined;
-	let savedGymState: typeof systemStates.$inferSelect | undefined;
-	let savedLogManagerState: typeof systemStates.$inferSelect | undefined;
+	let savedLogManagerState: typeof workerState.$inferSelect | null = null;
+
+	/**
+	 * Clears the reference caches.
+	 *
+	 * These tests assert on what a sync produces, and the tables are populated by
+	 * the migration on a fresh clone, so each test starts from an empty cache
+	 * rather than inheriting real data.
+	 */
+	async function clearReferenceCaches(): Promise<void> {
+		await db.delete(personalPerks);
+		await db.delete(personalGymUnlocks);
+		await db.delete(personalReferenceSummaries);
+	}
 
 	beforeAll(async () => {
-		savedPerksState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, PERKS_STATE_ID),
-		});
-		savedGymState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
-		});
-		savedLogManagerState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, LOG_MANAGER_STATE_ID),
-		});
+		savedLogManagerState = await getWorkerState(LOG_MANAGER_STATE_ID);
 	});
 
 	afterAll(async () => {
-		if (savedPerksState) {
-			await db
-				.insert(systemStates)
-				.values(savedPerksState)
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						init: savedPerksState.init,
-						data: savedPerksState.data,
-						updatedAt: savedPerksState.updatedAt,
-					},
-				});
-		}
-		if (savedGymState) {
-			await db
-				.insert(systemStates)
-				.values(savedGymState)
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						init: savedGymState.init,
-						data: savedGymState.data,
-						updatedAt: savedGymState.updatedAt,
-					},
-				});
-		}
 		if (savedLogManagerState) {
 			await db
-				.insert(systemStates)
+				.insert(workerState)
 				.values(savedLogManagerState)
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: workerState.workerId,
 					set: {
 						init: savedLogManagerState.init,
-						data: savedLogManagerState.data,
+						status: savedLogManagerState.status,
+						lastError: savedLogManagerState.lastError,
+						cursor: savedLogManagerState.cursor,
+						details: savedLogManagerState.details,
 						updatedAt: savedLogManagerState.updatedAt,
 					},
 				});
@@ -99,13 +84,10 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 
 	beforeEach(async () => {
 		// Clean up only test fixtures
-		await db.delete(systemStates).where(eq(systemStates.id, PERKS_STATE_ID));
+		await clearReferenceCaches();
 		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, GYM_UNLOCKS_STATE_ID));
-		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, LOG_MANAGER_STATE_ID));
+			.delete(workerState)
+			.where(eq(workerState.workerId, LOG_MANAGER_STATE_ID));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 		await db.delete(personalLogs).where(inArray(personalLogs.id, TEST_LOG_IDS));
 		await db.delete(tornGyms).where(inArray(tornGyms.id, TEST_GYM_IDS));
@@ -129,13 +111,10 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 			getPersonalSpy.mockRestore();
 		}
 		schedulerEvents.removeAllListeners();
-		await db.delete(systemStates).where(eq(systemStates.id, PERKS_STATE_ID));
+		await clearReferenceCaches();
 		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, GYM_UNLOCKS_STATE_ID));
-		await db
-			.delete(systemStates)
-			.where(eq(systemStates.id, LOG_MANAGER_STATE_ID));
+			.delete(workerState)
+			.where(eq(workerState.workerId, LOG_MANAGER_STATE_ID));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 		await db.delete(personalLogs).where(inArray(personalLogs.id, TEST_LOG_IDS));
 		await db.delete(tornGyms).where(inArray(tornGyms.id, TEST_GYM_IDS));
@@ -217,28 +196,26 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 
 	describe("syncGymUnlocks", () => {
 		test("skips gym sync if log backfill is still in progress", async () => {
-			await db.insert(systemStates).values({
-				id: LOG_MANAGER_STATE_ID,
+			await db.insert(workerState).values({
+				workerId: LOG_MANAGER_STATE_ID,
 				init: false,
-				data: { backfillStatus: "in_progress" },
+				details: { backfillStatus: "in_progress" },
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
 
 			await syncGymUnlocks();
 
-			const gymState = await db.query.systemStates.findFirst({
-				where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
-			});
-			expect(gymState).toBeUndefined();
+			// Nothing synced, so the loader reports an empty cache.
+			expect(await loadPersonalGymUnlocks()).toBeNull();
 		});
 
 		test("syncs gym unlocks and determines optimal stat gyms from log history", async () => {
 			// Backfill is completed
-			await db.insert(systemStates).values({
-				id: LOG_MANAGER_STATE_ID,
+			await db.insert(workerState).values({
+				workerId: LOG_MANAGER_STATE_ID,
 				init: true,
-				data: { backfillStatus: "completed" },
+				details: { backfillStatus: "completed" },
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
@@ -310,25 +287,16 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 
 			await syncGymUnlocks();
 
-			const gymState = await db.query.systemStates.findFirst({
-				where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
-			});
+			const gymState = await loadPersonalGymUnlocks();
 
-			expect(gymState).toBeDefined();
-			const data = gymState?.data as {
-				strengthGym: number;
-				defenseGym: number;
-				speedGym: number;
-				dexterityGym: number;
-				unlockedGymIds: number[];
-			};
-			expect(data.strengthGym).toBeGreaterThanOrEqual(2);
-			expect(data.speedGym).toBeGreaterThanOrEqual(3);
-			expect(data.defenseGym).toBeGreaterThanOrEqual(3);
-			expect(data.dexterityGym).toBeGreaterThanOrEqual(3);
-			expect(data.unlockedGymIds).toContain(1);
-			expect(data.unlockedGymIds).toContain(2);
-			expect(data.unlockedGymIds).toContain(3);
+			expect(gymState).not.toBeNull();
+			expect(gymState?.strengthGym).toBeGreaterThanOrEqual(2);
+			expect(gymState?.speedGym).toBeGreaterThanOrEqual(3);
+			expect(gymState?.defenseGym).toBeGreaterThanOrEqual(3);
+			expect(gymState?.dexterityGym).toBeGreaterThanOrEqual(3);
+			expect(gymState?.unlockedGymIds).toContain(1);
+			expect(gymState?.unlockedGymIds).toContain(2);
+			expect(gymState?.unlockedGymIds).toContain(3);
 		});
 	});
 
@@ -356,33 +324,25 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 			}) as unknown as typeof tornApi.getPersonal);
 
 			// Mark backfill completed so gym unlock sync succeeds
-			await db.insert(systemStates).values({
-				id: LOG_MANAGER_STATE_ID,
+			await db.insert(workerState).values({
+				workerId: LOG_MANAGER_STATE_ID,
 				init: true,
-				data: { backfillStatus: "completed" },
+				details: { backfillStatus: "completed" },
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
 
 			await runPersonalReferenceSync();
 
-			const perksRecord = await db.query.systemStates.findFirst({
-				where: eq(systemStates.id, PERKS_STATE_ID),
-			});
+			const perks = await loadPersonalPerks();
 
-			expect(perksRecord).toBeDefined();
-			const data = perksRecord?.data as {
-				allPerks: string[];
-				travelPerks: {
-					hasAirstrip: boolean;
-					hasWltBenefit: boolean;
-					hasBookPerk: boolean;
-				};
-			};
-			expect(data.allPerks.length).toBe(7);
-			expect(data.travelPerks.hasAirstrip).toBe(true);
-			expect(data.travelPerks.hasWltBenefit).toBe(true);
-			expect(data.travelPerks.hasBookPerk).toBe(true);
+			expect(perks).not.toBeNull();
+			// `allPerks` is derived from the categorized rows now, so this also
+			// covers the flattening the blob used to store explicitly.
+			expect(perks?.allPerks.length).toBe(7);
+			expect(perks?.travelPerks.hasAirstrip).toBe(true);
+			expect(perks?.travelPerks.hasWltBenefit).toBe(true);
+			expect(perks?.travelPerks.hasBookPerk).toBe(true);
 		});
 
 		test("schedulerEvents log_backfill_completed triggers syncGymUnlocks", async () => {
@@ -390,10 +350,10 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 			startPersonalReferenceSync({ initialDelayMs: 999999 });
 
 			// Set backfill as completed
-			await db.insert(systemStates).values({
-				id: LOG_MANAGER_STATE_ID,
+			await db.insert(workerState).values({
+				workerId: LOG_MANAGER_STATE_ID,
 				init: true,
-				data: { backfillStatus: "completed" },
+				details: { backfillStatus: "completed" },
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
@@ -419,16 +379,14 @@ describe("Personal Reference Sync Worker & Parsers", () => {
 			schedulerEvents.emit("log_backfill_completed");
 
 			// Wait for asynchronous execution
-			let gymState: typeof systemStates.$inferSelect | undefined;
+			let gymState = await loadPersonalGymUnlocks();
 			for (let i = 0; i < 30; i++) {
 				await new Promise((resolve) => setTimeout(resolve, 50));
-				gymState = await db.query.systemStates.findFirst({
-					where: eq(systemStates.id, GYM_UNLOCKS_STATE_ID),
-				});
+				gymState = await loadPersonalGymUnlocks();
 				if (gymState) break;
 			}
 
-			expect(gymState).toBeDefined();
+			expect(gymState).not.toBeNull();
 		});
 	});
 });

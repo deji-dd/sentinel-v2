@@ -1,0 +1,5 @@
+[test]
+# Pins every `bun test` process to the isolated test database before
+# `@sentinel/database` opens its connection pool. See scripts/test-preload.ts
+# for why this is mandatory rather than a convenience.
+preload = ["./scripts/test-preload.ts"]

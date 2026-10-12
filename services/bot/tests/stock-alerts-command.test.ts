@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { USER_STOCK_ALERT_CONDITIONS } from "@sentinel/schemas";
 import { MessageFlags } from "discord.js";
 import {
 	buildAlertModal,
@@ -268,9 +269,43 @@ describe("Stock alert modal payload", () => {
 		const select = component.component;
 		expect(select.type).toBe(3);
 		expect(select.custom_id).toBe("condition");
-		expect("options" in select ? select.options : []).toHaveLength(6);
+		// Six price/change/extreme conditions plus the four flow conditions.
+		expect("options" in select ? select.options : []).toHaveLength(10);
+		expect(
+			"options" in select ? select.options.map((option) => option.value) : [],
+		).toEqual([...USER_STOCK_ALERT_CONDITIONS]);
 		// The handler reads this field with no fallback, so it must be answered.
 		expect("required" in select ? select.required : undefined).not.toBe(false);
+	});
+
+	it("names the unit in every flow trigger, and says what it measures", () => {
+		const component = labels(modalJson())[0];
+		if (!component || !("component" in component)) {
+			throw new Error("Expected a trigger field");
+		}
+
+		const options =
+			"options" in component.component ? component.component.options : [];
+		const byValue = new Map(options.map((option) => [option.value, option]));
+
+		// The Amount field is shared by every trigger, so the label is where a
+		// reader learns whether the figure they type is a percentage or a count.
+		for (const [value, unit] of [
+			["bulk_buy", "% of shares"],
+			["bulk_buy_shares", "share count"],
+			["bulk_sell", "% of shares"],
+			["bulk_sell_shares", "share count"],
+		] as const) {
+			const option = byValue.get(value);
+			expect(option?.label).toContain(unit);
+			// Discord caps an option description at 100 characters.
+			expect(option?.description?.length ?? 0).toBeLessThanOrEqual(100);
+			expect(option?.description).toContain("since the last sweep");
+		}
+
+		// The other six keep the short labels they had.
+		expect(byValue.get("price_above")?.label).toBe("Price rises above");
+		expect(byValue.get("price_above")?.description).toBeUndefined();
 	});
 
 	it("makes the range select genuinely optional", () => {

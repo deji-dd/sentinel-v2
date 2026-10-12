@@ -4,10 +4,11 @@ import {
 	db,
 	desc,
 	eq,
-	systemStates,
+	POINTS_MARKET_PRICE_KEY,
 	territoryBlueprints,
 	territoryStates,
 	tornItems,
+	tornMarketPrices,
 	userMaps,
 	userSessions,
 	users,
@@ -73,8 +74,8 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 			const items = await db.select().from(tornItems);
 			const [pointsState] = await db
 				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "points_market_price"));
+				.from(tornMarketPrices)
+				.where(eq(tornMarketPrices.refKey, POINTS_MARKET_PRICE_KEY));
 
 			if (blueprints.length === 0) {
 				set.status = 503;
@@ -86,13 +87,11 @@ export const ttRoutes = new Elysia({ prefix: "/tt" })
 
 			const statesMap = new Map(states.map((s) => [s.id, s]));
 
-			let pointsPrice = 0;
-			if (pointsState?.data && typeof pointsState.data === "object") {
-				const pointsData = pointsState.data as Record<string, unknown>;
-				if (typeof pointsData.price === "number") {
-					pointsPrice = pointsData.price;
-				}
-			}
+			// A typed numeric column, so there is no shape to guard: the value
+			// cannot be stored as anything but a number. Zero still means
+			// "unknown", matching the previous reader's fallback.
+			const pointsPrice =
+				typeof pointsState?.price === "number" ? pointsState.price : 0;
 
 			const itemNames: Record<string, string> = {};
 			const itemPrices: Record<string, number> = {};

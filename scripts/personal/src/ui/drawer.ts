@@ -9,7 +9,6 @@ import { BattlestatsTab } from "../modules/battlestats-tab";
 import { CompanyTab } from "../modules/company-tab";
 import { CrimesTab } from "../modules/crimes-tab";
 import { StocksTab } from "../modules/stocks-tab";
-import { WealthTab } from "../modules/wealth-tab";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
 declare function GM_setValue<T>(key: string, value: T): void;
@@ -38,7 +37,6 @@ export type DrawerTabName =
 	| "battlestats"
 	| "company"
 	| "stocks"
-	| "wealth"
 	| "settings";
 
 /** The lifecycle every tab body implements, so the drawer has one code path. */
@@ -53,7 +51,6 @@ const TAB_LABELS: Record<DrawerTabName, string> = {
 	battlestats: "Battlestats",
 	company: "Company",
 	stocks: "Stocks",
-	wealth: "Wealth",
 	settings: "Settings",
 };
 
@@ -62,7 +59,6 @@ const TAB_ORDER: DrawerTabName[] = [
 	"battlestats",
 	"company",
 	"stocks",
-	"wealth",
 	"settings",
 ];
 
@@ -311,8 +307,6 @@ export class DrawerPanel {
 			);
 		} else if (name === "company") {
 			tab = new CompanyTab(body, () => this.openSettings());
-		} else if (name === "wealth") {
-			tab = new WealthTab(body, () => this.openSettings());
 		} else {
 			tab = new StocksTab(body, () => this.openSettings());
 		}
@@ -467,7 +461,7 @@ export class DrawerPanel {
 						<tbody>
 							<tr><th>Data storage</th><td>Your key is kept in your userscript manager's storage on this device. The ledger data it produces is stored on the Sentinel server to build the analytics shown here.</td></tr>
 							<tr><th>Data sharing</th><td>Nobody. Nothing is shared with your faction, your friends, or any third party.</td></tr>
-							<tr><th>Purpose of use</th><td>Non-malicious statistical analysis and personal gain: crime, battlestats, company, stock and wealth analytics for your own account.</td></tr>
+							<tr><th>Purpose of use</th><td>Non-malicious statistical analysis and personal gain: crime, battlestats, company and stock analytics for your own account.</td></tr>
 							<tr><th>Key storage</th><td>Stored encrypted server-side and never shared. Requests from this script are authenticated with the key you enter above.</td></tr>
 							<tr><th>Key access level</th><td>Limited or custom: the selections this script needs (personal logs, battlestats, stocks, company, money). Nothing beyond that is requested.</td></tr>
 						</tbody>

@@ -50,6 +50,17 @@ function formatSignedPct(value: number): string {
 	return `${sign}${value.toFixed(2)}%`;
 }
 
+/** Whole shares with thousands separators, e.g. `26,380,932,283`. */
+function formatShares(value: number): string {
+	return Math.round(value).toLocaleString("en-US");
+}
+
+/** e.g. `+345,120,977` for shares issued, `-12,004,551` for shares retired. */
+function formatSignedShares(value: number): string {
+	const sign = value >= 0 ? "+" : "-";
+	return `${sign}${formatShares(Math.abs(value))}`;
+}
+
 /**
  * Colour by direction, matching how the stock market reads at a glance: green for
  * strength (a new high, a gain), red for weakness (a new low, a drop).
@@ -60,6 +71,12 @@ function colorForAlert(alert: StockAlertEvent): number {
 			return EMBED_COLORS.SUCCESS;
 		case "low":
 			return EMBED_COLORS.DANGER;
+		case "flow":
+			// Shares issued means the market is being bought into; shares retired
+			// means it is being sold out of.
+			return (alert.flowShares ?? 0) >= 0
+				? EMBED_COLORS.SUCCESS
+				: EMBED_COLORS.DANGER;
 		case "change":
 			return (alert.changePct ?? 0) >= 0
 				? EMBED_COLORS.SUCCESS
@@ -73,6 +90,8 @@ function titleForAlert(alert: StockAlertEvent, prefix = "Stock Alert"): string {
 			return `${prefix} — New ${alert.windowLabel} High`;
 		case "low":
 			return `${prefix} — New ${alert.windowLabel} Low`;
+		case "flow":
+			return `${prefix} — ${(alert.flowShares ?? 0) >= 0 ? "Bulk Buying" : "Bulk Selling"}`;
 		case "change":
 			return `${prefix} — Notable Move`;
 	}
@@ -100,7 +119,54 @@ export function buildStockAlertEmbed(
 		inline: false,
 	});
 
-	if (alert.type === "change") {
+	if (alert.type === "flow") {
+		// A flow alert is not a price move, so it reports what it actually
+		// measured: net shares, the share of the float that represents, and the
+		// window they moved over. Rendering it through the `change` branch would
+		// label a share count as a percentage price move.
+		embed.addFields(
+			{
+				name: "Net Shares",
+				value: `**${formatSignedShares(alert.flowShares ?? 0)}**`,
+				inline: true,
+			},
+			{
+				name: "Share of Float",
+				value: `**${formatSignedPct(alert.flowPct ?? 0)}**`,
+				inline: true,
+			},
+			{
+				name: "Shares Outstanding",
+				value:
+					alert.outstandingShares !== undefined
+						? formatShares(alert.outstandingShares)
+						: "Unknown",
+				inline: true,
+			},
+			{
+				name: "Window",
+				value: alert.windowLabel,
+				inline: true,
+			},
+			{
+				name: "Price",
+				value: formatPrice(alert.price),
+				inline: true,
+			},
+		);
+
+		// Stated in the unit the subscription was created with, so a reader can see
+		// which figure the alert was actually set against.
+		const threshold =
+			alert.flowThresholdShares !== undefined
+				? `${formatShares(alert.flowThresholdShares)} shares`
+				: alert.flowThresholdPct !== undefined
+					? `${alert.flowThresholdPct}% of float`
+					: null;
+		if (threshold) {
+			embed.addFields({ name: "Threshold", value: threshold, inline: true });
+		}
+	} else if (alert.type === "change") {
 		const reference =
 			alert.referencePrice !== undefined
 				? ` (from ${formatPrice(alert.referencePrice)} ${alert.windowLabel.toLowerCase()} ago)`

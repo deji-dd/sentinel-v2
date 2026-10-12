@@ -4,8 +4,9 @@ import {
 	companyDailyProfits,
 	db,
 	eq,
-	ledgerEvents,
-	systemStates,
+	upsertWorkerState,
+	WORKER_STATE_IDS,
+	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
 import { schedulerEvents } from "../src/lib/events";
@@ -19,19 +20,22 @@ import {
 } from "../src/workers/personal/company";
 
 describe("Personal Company Sync Worker", () => {
+	/** Company sync state now lives in `worker_state`. */
+	async function clearCompanyState(): Promise<void> {
+		await db
+			.delete(workerState)
+			.where(eq(workerState.workerId, WORKER_STATE_IDS.companySync));
+	}
+
 	let getPersonalSpy: ReturnType<typeof spyOn>;
-	const TEST_STATE_ID = "personal:company_sync";
 	const TEST_KEY_ID = "test_personal_company_sync_key";
 	const originalEnvKey = process.env.TORN_API_KEY;
 
 	beforeEach(async () => {
 		// Clean up fixtures
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await clearCompanyState();
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 		await db.delete(companyDailyProfits);
-		await db
-			.delete(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 
 		// Insert personal API key fixture
 		await db.insert(apiKeys).values({
@@ -55,12 +59,9 @@ describe("Personal Company Sync Worker", () => {
 		}
 		schedulerEvents.removeAllListeners("company_pay_received");
 		stopWorkerByName("personal_company_sync");
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await clearCompanyState();
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 		await db.delete(companyDailyProfits);
-		await db
-			.delete(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
 	});
 
 	test("initializes default state and loads state from database", async () => {
@@ -68,20 +69,16 @@ describe("Personal Company Sync Worker", () => {
 		expect(initialState.status).toBe("idle");
 		expect(initialState.lastProfit).toBe(0);
 
-		await db.insert(systemStates).values({
-			id: TEST_STATE_ID,
+		await upsertWorkerState({
+			workerId: WORKER_STATE_IDS.companySync,
 			init: true,
-			data: {
-				status: "completed",
+			status: "completed",
+			cursor: 1700000000,
+			details: {
 				lastInflow: 5000000,
 				lastOutflow: 1200000,
 				lastProfit: 3800000,
-				lastSyncTimestamp: 1700000000,
-				lastError: null,
-				updatedAt: new Date().toISOString(),
 			},
-			createdAt: new Date(),
-			updatedAt: new Date(),
 		});
 
 		const loaded = await loadCompanySyncState();
@@ -91,7 +88,7 @@ describe("Personal Company Sync Worker", () => {
 		expect(loaded.lastProfit).toBe(3800000);
 	});
 
-	test("syncs daily company profit and inserts records into companyDailyProfits & ledgerEvents", async () => {
+	test("syncs daily company profit and inserts records into companyDailyProfits", async () => {
 		const mockResponse = {
 			profile: {
 				id: 1234,
@@ -141,16 +138,6 @@ describe("Personal Company Sync Worker", () => {
 		expect(snapshot?.inflow).toBe(10000000);
 		expect(snapshot?.outflow).toBe(950000);
 		expect(snapshot?.profit).toBe(9050000);
-
-		// `company_daily_profits` is this worker's table; `ledger_events` belongs to
-		// the wealth engine, which reads the row above back and re-emits it as a
-		// company-account gain. Asserting the write here would re-introduce the
-		// second writer that made a company profit countable twice.
-		const events = await db
-			.select()
-			.from(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
-		expect(events.length).toBe(0);
 	});
 
 	test("handles loss scenario correctly (outflow > inflow)", async () => {
@@ -183,19 +170,11 @@ describe("Personal Company Sync Worker", () => {
 		expect(result.outflow).toBe(450000);
 		expect(result.profit).toBe(-250000);
 
-		// The loss is carried by the snapshot; the ledger row comes from the wealth
-		// engine reading it back, not from this worker writing it.
 		const snapshotLosses = await db
 			.select()
 			.from(companyDailyProfits)
 			.where(eq(companyDailyProfits.profit, -250000));
 		expect(snapshotLosses.length).toBeGreaterThanOrEqual(1);
-
-		const events = await db
-			.select()
-			.from(ledgerEvents)
-			.where(eq(ledgerEvents.transactionName, "Daily Company Profit/Loss"));
-		expect(events.length).toBe(0);
 	});
 
 	test("handles missing personal key gracefully without throwing", async () => {

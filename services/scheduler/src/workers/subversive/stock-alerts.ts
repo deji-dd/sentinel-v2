@@ -299,7 +299,21 @@ export function buildStockSnapshot(
 		price,
 		performance,
 		history,
+		shares: readMarketFigure(stock.market?.shares),
 	};
+}
+
+/**
+ * A positive figure out of Torn's `market` block, or null when it is missing.
+ *
+ * The field is documented as an int64 but arrives from JSON, so a share count is
+ * only trusted once it is a finite, positive number: a flow alert computed from a
+ * zero or a string would report a dump the market never had.
+ */
+function readMarketFigure(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? value
+		: null;
 }
 
 /** Whether two persisted states differ enough to be worth writing back. */
@@ -739,6 +753,11 @@ function needsUserStateWrite(
 		previous.seeded !== next.seeded ||
 		previous.wasTrue !== next.wasTrue ||
 		previous.lastExtreme !== next.lastExtreme ||
+		// The flow baseline must be persisted every sweep it moves: a baseline
+		// left behind in memory would make the next cycle measure one window's
+		// flow twice and announce a dump that has already been reported.
+		previous.lastShares !== next.lastShares ||
+		previous.lastSharesAt !== next.lastSharesAt ||
 		previous.lastAlertAt !== next.lastAlertAt
 	);
 }

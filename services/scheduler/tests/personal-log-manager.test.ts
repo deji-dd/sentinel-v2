@@ -12,9 +12,11 @@ import {
 	apiKeys,
 	db,
 	eq,
+	getWorkerState,
 	like,
 	personalLogs,
-	systemStates,
+	WORKER_STATE_IDS,
+	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
 import {
@@ -30,27 +32,28 @@ import {
 
 describe("Personal Log Manager Worker", () => {
 	let getPersonalSpy: ReturnType<typeof spyOn>;
-	const TEST_STATE_ID = "personal:log_manager";
+	const TEST_STATE_ID = WORKER_STATE_IDS.logManager;
 	const TEST_KEY_ID = "test_personal_log_key";
 
-	let savedLogManagerState: typeof systemStates.$inferSelect | undefined;
+	let savedLogManagerState: typeof workerState.$inferSelect | null = null;
 
 	beforeAll(async () => {
-		savedLogManagerState = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, TEST_STATE_ID),
-		});
+		savedLogManagerState = await getWorkerState(TEST_STATE_ID);
 	});
 
 	afterAll(async () => {
 		if (savedLogManagerState) {
 			await db
-				.insert(systemStates)
+				.insert(workerState)
 				.values(savedLogManagerState)
 				.onConflictDoUpdate({
-					target: systemStates.id,
+					target: workerState.workerId,
 					set: {
 						init: savedLogManagerState.init,
-						data: savedLogManagerState.data,
+						status: savedLogManagerState.status,
+						lastError: savedLogManagerState.lastError,
+						cursor: savedLogManagerState.cursor,
+						details: savedLogManagerState.details,
 						updatedAt: savedLogManagerState.updatedAt,
 					},
 				});
@@ -60,7 +63,7 @@ describe("Personal Log Manager Worker", () => {
 
 	beforeEach(async () => {
 		// Clean up database test fixtures
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db.delete(workerState).where(eq(workerState.workerId, TEST_STATE_ID));
 		await db.delete(personalLogs).where(like(personalLogs.id, "log_%"));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 
@@ -85,22 +88,24 @@ describe("Personal Log Manager Worker", () => {
 	 * exercise from-scratch backfill behavior seed a known cursor instead.
 	 */
 	async function seedCursors(oldest: number, newest: number): Promise<void> {
-		const data = {
-			oldestTimestampReached: oldest,
-			newestTimestampReached: newest,
-		};
+		const now = new Date();
 		await db
-			.insert(systemStates)
+			.insert(workerState)
 			.values({
-				id: TEST_STATE_ID,
+				workerId: TEST_STATE_ID,
 				init: false,
-				data,
-				createdAt: new Date(),
-				updatedAt: new Date(),
+				cursor: newest,
+				details: { oldestTimestampReached: oldest },
+				createdAt: now,
+				updatedAt: now,
 			})
 			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: { data, updatedAt: new Date() },
+				target: workerState.workerId,
+				set: {
+					cursor: newest,
+					details: { oldestTimestampReached: oldest },
+					updatedAt: now,
+				},
 			});
 		await loadStateFromDb();
 	}
@@ -109,7 +114,7 @@ describe("Personal Log Manager Worker", () => {
 		if (getPersonalSpy) {
 			getPersonalSpy.mockRestore();
 		}
-		await db.delete(systemStates).where(eq(systemStates.id, TEST_STATE_ID));
+		await db.delete(workerState).where(eq(workerState.workerId, TEST_STATE_ID));
 		await db.delete(personalLogs).where(like(personalLogs.id, "log_%"));
 		await db.delete(apiKeys).where(eq(apiKeys.id, TEST_KEY_ID));
 	});

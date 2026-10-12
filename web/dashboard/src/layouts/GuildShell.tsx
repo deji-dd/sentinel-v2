@@ -28,6 +28,7 @@ import ReactionRolesPage from "../pages/ReactionRolesPage";
 import { RecruitmentPage } from "../pages/RecruitmentPage";
 import { RwChannelsPage } from "../pages/RwChannelsPage";
 import { StocksPage } from "../pages/StocksPage";
+import SubversiveCalendarPage from "../pages/SubversiveCalendarPage";
 import { TeamBreakdownPage } from "../pages/TeamBreakdownPage";
 import TerritoryPage from "../pages/TerritoryPage";
 import { UnauthorizedPage } from "../pages/UnauthorizedPage";
@@ -210,6 +211,12 @@ export default function GuildShell() {
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/recruitment")
 			return <RecruitmentPage guildId={guildId} />;
+		if (subPath === "/calendar") {
+			// The calendar covers the whole Subversive family rather than one guild,
+			// so it belongs to the faction server alone.
+			if (!isFaction) return <NotFound />;
+			return <SubversiveCalendarPage isPublic={false} />;
+		}
 		if (subPath === "/rw-channels") return <RwChannelsPage guildId={guildId} />;
 		if (subPath === "/dibs") return <DibsConfigPage guildId={guildId} />;
 		if (subPath === "/stocks") {

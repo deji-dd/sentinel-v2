@@ -131,6 +131,14 @@ export const elimsApiKeys = pgTable("elims_api_keys", {
 	apiKeyHash: text("api_key_hash").notNull(),
 	isValid: boolean("is_valid").default(true).notNull(),
 	invalidCount: integer("invalid_count").default(0).notNull(),
+	/**
+	 * Opt-out guard. An excluded key stays registered and valid — it is never
+	 * marked invalid and still appears in the donation list — but the elims pool
+	 * builders skip it, so a donated key (such as the owner's personal key) is
+	 * never handed out to the elimination workers. Unlike flipping `is_valid`,
+	 * this is honest about the key being fine and survives re-verification.
+	 */
+	isExcluded: boolean("is_excluded").default(false).notNull(),
 	donatedByDiscordId: text("donated_by_discord_id"),
 	donatedByDiscordTag: text("donated_by_discord_tag"),
 	lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),

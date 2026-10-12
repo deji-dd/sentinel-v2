@@ -12,6 +12,7 @@ import ClientContractCreatePage from "./pages/ClientContractCreatePage";
 import ClientContractReceiptPage from "./pages/ClientContractReceiptPage";
 import LoginPage from "./pages/LoginPage";
 import ServerSelectorPage from "./pages/ServerSelectorPage";
+import SubversiveCalendarPage from "./pages/SubversiveCalendarPage";
 
 // ─── Router Context ───────────────────────────────────────────────────────────
 export interface RouterContextValue {
@@ -154,8 +155,11 @@ export function Router() {
 	const isClientMercRoute =
 		path === "/merc/create" || path.startsWith("/merc/receipt/");
 
+	const isPublicCalendarRoute =
+		path === "/subversive/calendar" || path === "/calendar";
+
 	useEffect(() => {
-		if (!loading && !isClientMercRoute) {
+		if (!loading && !isClientMercRoute && !isPublicCalendarRoute) {
 			if (!authenticated && path !== "/login") {
 				if (path !== "/") {
 					sessionStorage.setItem("sentinel_redirect_to", path);
@@ -165,7 +169,18 @@ export function Router() {
 				navigate("/");
 			}
 		}
-	}, [loading, authenticated, path, navigate, isClientMercRoute]);
+	}, [
+		loading,
+		authenticated,
+		path,
+		navigate,
+		isClientMercRoute,
+		isPublicCalendarRoute,
+	]);
+
+	if (isPublicCalendarRoute) {
+		return <SubversiveCalendarPage isPublic={true} />;
+	}
 
 	if (isClientMercRoute) {
 		if (path === "/merc/create") {

@@ -1,29 +1,16 @@
-import { db, eq, systemStates } from "@sentinel/database";
+import {
+	loadPersonalBountyState,
+	type PersonalBountyState,
+	type PersonalBountyTarget,
+	savePersonalBountyMeta,
+	upsertPersonalBountyTarget,
+} from "@sentinel/database";
 import type { UserProfileResponse } from "@sentinel/schemas";
 import { getPersonalKey, tornApi, UserRateLimiter } from "@sentinel/torn-api";
 import { isInTornHospital } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
 import { notifyBountyDefeated } from "../../lib/scheduler-ipc";
 import { resolveUserSession } from "./subversive-target-finder";
-
-export const BOUNTY_STATE_ID = "personal:bounties";
-
-export interface PersonalBountyTarget {
-	id: number;
-	name: string;
-	level: number;
-	reward: number;
-	fairFight: number | null;
-	estimatedBs: number | null;
-	age: number;
-	status: {
-		state: string;
-		description?: string;
-		until?: number | null;
-	};
-	attackUrl: string;
-	lastCheckedAt: number;
-}
 
 export interface ClientBountyTarget {
 	id: number;
@@ -66,14 +53,6 @@ export function toClientTarget(
 	};
 }
 
-export interface PersonalBountyState {
-	readyTargets: PersonalBountyTarget[];
-	hospitalQueue: Array<PersonalBountyTarget & { secondsRemaining: number }>;
-	lastSyncTimestamp: number;
-	targetCount: number;
-	pendingCount?: number;
-}
-
 const recheckRateLimiter = new UserRateLimiter(50, 60_000);
 
 let inMemoryBountyStateCache: PersonalBountyState | null = null;
@@ -94,23 +73,9 @@ export async function getBountyStateObject(): Promise<PersonalBountyState> {
 	}
 
 	try {
-		const [record] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, BOUNTY_STATE_ID));
-
-		if (record?.data) {
-			const raw = record.data as Partial<PersonalBountyState>;
-			inMemoryBountyStateCache = {
-				readyTargets: Array.isArray(raw.readyTargets) ? raw.readyTargets : [],
-				hospitalQueue: Array.isArray(raw.hospitalQueue)
-					? raw.hospitalQueue
-					: [],
-				lastSyncTimestamp: Number(raw.lastSyncTimestamp ?? 0),
-				targetCount: Number(raw.targetCount ?? 0),
-				pendingCount: Number(raw.pendingCount ?? 0),
-			};
-		}
+		// Targets are rows in `personal_bounty_targets`; the counters live in
+		// `worker_state`. The cache below is only a fallback for a DB outage.
+		inMemoryBountyStateCache = await loadPersonalBountyState();
 	} catch {
 		// Fallback to in-memory cache if DB is offline
 	}
@@ -324,7 +289,7 @@ export const personalBountiesRoutes = new Elysia({
 					lastCheckedAt: nowSec,
 				};
 
-				// Update state in systemStates
+				// Re-place the target into whichever queue its new status implies.
 				const nextReady = state.readyTargets.filter((t) => t.id !== targetId);
 				const nextHosp = state.hospitalQueue.filter((t) => t.id !== targetId);
 
@@ -347,30 +312,25 @@ export const personalBountiesRoutes = new Elysia({
 				nextReady.sort((a, b) => b.reward - a.reward);
 				nextHosp.sort((a, b) => a.secondsRemaining - b.secondsRemaining);
 
-				const nextState: PersonalBountyState = {
-					readyTargets: nextReady,
-					hospitalQueue: nextHosp,
+				// One row moves between the queues; no other target is rewritten,
+				// and a concurrent scheduler cycle cannot be reverted by this write.
+				const reProfiledQueue: "ready" | "hospital" = nextReady.some(
+					(t) => t.id === targetId,
+				)
+					? "ready"
+					: "hospital";
+				const reProfiledSeconds = nextHosp.find(
+					(t) => t.id === targetId,
+				)?.secondsRemaining;
+				await upsertPersonalBountyTarget(
+					updatedTarget,
+					reProfiledQueue,
+					reProfiledSeconds ?? null,
+				);
+				await savePersonalBountyMeta({
 					lastSyncTimestamp: nowSec,
-					targetCount: nextReady.length + nextHosp.length,
 					pendingCount: state.pendingCount ?? 0,
-				};
-
-				await db
-					.insert(systemStates)
-					.values({
-						id: BOUNTY_STATE_ID,
-						init: true,
-						data: nextState,
-						createdAt: new Date(),
-						updatedAt: new Date(),
-					})
-					.onConflictDoUpdate({
-						target: systemStates.id,
-						set: {
-							data: nextState,
-							updatedAt: new Date(),
-						},
-					});
+				});
 
 				return {
 					success: true,
@@ -454,7 +414,7 @@ export const personalBountiesRoutes = new Elysia({
 			nextReady.sort((a, b) => b.reward - a.reward);
 			nextHosp.sort((a, b) => a.secondsRemaining - b.secondsRemaining);
 
-			const nextState: PersonalBountyState = {
+			inMemoryBountyStateCache = {
 				readyTargets: nextReady,
 				hospitalQueue: nextHosp,
 				lastSyncTimestamp: nowSec,
@@ -462,25 +422,21 @@ export const personalBountiesRoutes = new Elysia({
 				pendingCount: state.pendingCount ?? 0,
 			};
 
-			inMemoryBountyStateCache = nextState;
-
 			try {
-				await db
-					.insert(systemStates)
-					.values({
-						id: BOUNTY_STATE_ID,
-						init: true,
-						data: nextState,
-						createdAt: new Date(),
-						updatedAt: new Date(),
-					})
-					.onConflictDoUpdate({
-						target: systemStates.id,
-						set: {
-							data: nextState,
-							updatedAt: new Date(),
-						},
-					});
+				// Only the defeated target's row changes; every other target is
+				// left exactly as the scheduler last wrote it.
+				const defeated = nextHosp.find((t) => t.id === targetId);
+				if (defeated) {
+					await upsertPersonalBountyTarget(
+						defeated,
+						"hospital",
+						defeated.secondsRemaining,
+					);
+				}
+				await savePersonalBountyMeta({
+					lastSyncTimestamp: nowSec,
+					pendingCount: state.pendingCount ?? 0,
+				});
 			} catch {
 				// Non-fatal if DB is unreachable in tests
 			}

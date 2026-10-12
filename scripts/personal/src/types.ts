@@ -75,13 +75,7 @@ export interface ScriptSettings {
 	apiKey: string;
 	panelOpen: boolean;
 	persistOpen: boolean;
-	activeTab:
-		| "crimes"
-		| "stocks"
-		| "battlestats"
-		| "company"
-		| "wealth"
-		| "settings";
+	activeTab: "crimes" | "stocks" | "battlestats" | "company" | "settings";
 	timeframe: "7d" | "30d" | "90d" | "all";
 	chartMetric: "financials" | "activity";
 	position: { x: number; y: number };
@@ -243,22 +237,3 @@ export type {
 	StockTermLot,
 	StockTermSell,
 } from "../../../packages/schemas/src/stocks";
-/**
- * Wealth ledger payloads, re-exported from the shared contract the API is typed
- * against. Type-only, so nothing from the schemas package reaches the bundle.
- */
-export type {
-	WealthAccountKey,
-	WealthAnalyticsResponse,
-	WealthBalances,
-	WealthCategoryKey,
-	WealthCategoryRow,
-	WealthCoverage,
-	WealthEventItem,
-	WealthKPIs,
-	WealthLedgerState,
-	WealthStateResponse,
-	WealthTimelinePoint,
-	WealthTransaction,
-	WealthTransactionsResponse,
-} from "../../../packages/schemas/src/wealth";

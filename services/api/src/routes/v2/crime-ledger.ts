@@ -12,10 +12,10 @@ import {
 	like,
 	lte,
 	or,
+	personalLedgerSyncStates,
 	personalLogs,
 	type SQL,
 	sql,
-	systemStates,
 	tornCrimes,
 } from "@sentinel/database";
 import { getPersonalKey } from "@sentinel/torn-api";
@@ -47,8 +47,8 @@ export const DEFAULT_CRIME_NAMES: Record<number, string> = {
 export async function getCrimeLedgerStateObject() {
 	const [record] = await db
 		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, "personal:crimes_ledger"));
+		.from(personalLedgerSyncStates)
+		.where(eq(personalLedgerSyncStates.ledger, "crimes"));
 
 	const [totals] = await db
 		.select({
@@ -69,7 +69,17 @@ export async function getCrimeLedgerStateObject() {
 		.select({ count: sql<number>`count(distinct ${crimeLogs.crimeId})` })
 		.from(crimeLogs);
 
-	const rawData = (record?.data as Record<string, unknown> | undefined) ?? {};
+	// Shaped from the typed row into the same field names the response has always
+	// used, so the mapping below is unchanged.
+	const rawData = record
+		? {
+				status: record.status,
+				totalIndexedCrimes: record.totalIndexed,
+				lastProcessedTimestamp: record.lastProcessedTimestamp,
+				lastError: record.lastError,
+				updatedAt: record.updatedAt.toISOString(),
+			}
+		: {};
 
 	const tornCrimesList = await db
 		.select({

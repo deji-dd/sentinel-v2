@@ -3,11 +3,17 @@ import {
 	buildUserStockAlertConditionKey,
 	createEmptyUserStockAlertState,
 	isStockAlertRange,
+	isUserStockAlertFlowCondition,
+	MAX_USER_STOCK_ALERT_FLOW_PCT,
+	MAX_USER_STOCK_ALERT_FLOW_SHARES,
 	MAX_USER_STOCK_ALERT_PRICE,
 	MAX_USER_STOCK_ALERT_THRESHOLD_PCT,
 	MAX_USER_STOCK_ALERTS,
+	MIN_USER_STOCK_ALERT_FLOW_PCT,
+	MIN_USER_STOCK_ALERT_FLOW_SHARES,
 	MIN_USER_STOCK_ALERT_PRICE,
 	MIN_USER_STOCK_ALERT_THRESHOLD_PCT,
+	readUserStockAlertFlow,
 	type StockAlertRange,
 	USER_STOCK_ALERT_PRICE_CONDITIONS,
 	type UserStockAlertCondition,
@@ -216,8 +222,8 @@ export function validateUserStockAlert(input: {
 			);
 		}
 	} else {
-		// A price condition has no range; dropping it keeps the uniqueness key
-		// canonical instead of storing a meaningless value.
+		// A price or flow condition has no range; dropping it keeps the uniqueness
+		// key canonical instead of storing a meaningless value.
 		range = null;
 	}
 
@@ -238,6 +244,32 @@ export function validateUserStockAlert(input: {
 			) {
 				throw new UserStockAlertError(
 					`A price alert must be between $${MIN_USER_STOCK_ALERT_PRICE.toLocaleString("en-US")} and $${MAX_USER_STOCK_ALERT_PRICE.toLocaleString("en-US")}.`,
+				);
+			}
+		} else if (isUserStockAlertFlowCondition(condition)) {
+			// Bounded on its own two scales — a share of the float, or a count of
+			// shares; see the constants for where those numbers came from.
+			const flow = readUserStockAlertFlow(condition);
+			if (flow?.unit === "shares") {
+				if (!Number.isInteger(threshold)) {
+					throw new UserStockAlertError(
+						"A share-count alert must be a whole number of shares, for example `250000000`.",
+					);
+				}
+				if (
+					threshold < MIN_USER_STOCK_ALERT_FLOW_SHARES ||
+					threshold > MAX_USER_STOCK_ALERT_FLOW_SHARES
+				) {
+					throw new UserStockAlertError(
+						`A share-count alert must be between ${MIN_USER_STOCK_ALERT_FLOW_SHARES.toLocaleString("en-US")} and ${MAX_USER_STOCK_ALERT_FLOW_SHARES.toLocaleString("en-US")} shares.`,
+					);
+				}
+			} else if (
+				threshold < MIN_USER_STOCK_ALERT_FLOW_PCT ||
+				threshold > MAX_USER_STOCK_ALERT_FLOW_PCT
+			) {
+				throw new UserStockAlertError(
+					`A percentage-of-shares alert must be between ${MIN_USER_STOCK_ALERT_FLOW_PCT}% and ${MAX_USER_STOCK_ALERT_FLOW_PCT}%. Use a small value such as 0.25 for whale-sized moves, or pick a share-count trigger to name an exact number of shares.`,
 				);
 			}
 		} else if (

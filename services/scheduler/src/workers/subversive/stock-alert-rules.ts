@@ -68,6 +68,14 @@ export interface StockAlertSnapshot {
 	performance: Partial<Record<StockAlertRange, StockAlertWindowPerformance>>;
 	/** `chart.history` raw points (order is not trusted). */
 	history: StockAlertHistoryPoint[];
+	/**
+	 * Total shares outstanding (`market.shares`), or null when Torn omitted it.
+	 *
+	 * Buying issues shares into a stock and selling retires them, so the change
+	 * between two sweeps is that stock's net buy/sell flow — the only bulk-trade
+	 * signal the API exposes, and the figure the personal flow alerts read.
+	 */
+	shares: number | null;
 }
 
 export interface StockAlertEvaluation {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db } from "../../index";
 import {
 	guildConfigs,
@@ -13,6 +13,10 @@ import {
 	mercContracts,
 	mercContractTokens,
 } from "../schema/merc";
+import {
+	type SubversiveGuildConfigRow,
+	subversiveGuildConfigs,
+} from "../schema/subversive";
 import { systemStates } from "../schema/system";
 
 export type ServerType = "alliance" | "faction" | "elims" | "owner" | "merc";
@@ -98,53 +102,14 @@ export async function getServerTypeMappings(): Promise<ServerTypeMapping> {
 }
 
 /**
- * Sets or resets (null) a server type mapping.
+ * Note: a `setServerType` helper used to live here, writing a
+ * `system:server_types` row into `system_states`. It was removed because it was
+ * never called and, more importantly, nothing ever read the row it wrote:
+ * `getServerTypeMappings` above resolves every mapping from environment
+ * variables. An admin path that appeared to persist a mapping but had no effect
+ * is worse than no path at all, so the dead writer is gone rather than left as
+ * a trap. Designated server types are environment-configured.
  */
-export async function setServerType(
-	type: ServerType,
-	guildId: string | null,
-): Promise<ServerTypeMapping> {
-	const current = await getServerTypeMappings();
-	const updated: ServerTypeMapping = {
-		...current,
-		[type]: guildId,
-	};
-
-	await db
-		.insert(systemStates)
-		.values({
-			id: "system:server_types",
-			init: true,
-			data: updated,
-		})
-		.onConflictDoUpdate({
-			target: systemStates.id,
-			set: { data: updated, updatedAt: new Date() },
-		});
-
-	if (guildId) {
-		await authorizeGuild(guildId);
-	}
-
-	if (type === "elims") {
-		elimsGuildIdCache = guildId;
-		if (guildId) {
-			await db
-				.insert(systemStates)
-				.values({
-					id: "elims:guild_config",
-					init: true,
-					data: { guildId },
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: { data: { guildId }, updatedAt: new Date() },
-				});
-		}
-	}
-
-	return updated;
-}
 
 /**
  * Retrieves the currently configured Elims tournament Discord guild ID.
@@ -187,18 +152,91 @@ export async function isElimsGuildAsync(
 let subversiveGuildIdCache: string | null = null;
 
 /**
+ * Reads the Subversive Alliance guild binding, or null when unconfigured.
+ *
+ * Backed by the typed `subversive_guild_configs` table. This replaced the
+ * `subversive:guild_config` row in the legacy `system_states` blob, whose whole
+ * JSON object had to be read and rewritten on every change — a pattern that let
+ * one writer's payload silently drop another's fields.
+ *
+ * Row presence *is* "configured": the previous blob needed an `init` flag to
+ * distinguish a half-written row, which typed columns cannot represent.
+ */
+export async function getSubversiveGuildConfig(): Promise<SubversiveGuildConfigRow | null> {
+	try {
+		const [row] = await db
+			.select()
+			.from(subversiveGuildConfigs)
+			.orderBy(asc(subversiveGuildConfigs.configuredAt))
+			.limit(1);
+		return row ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Binds a guild to the Subversive tooling or refreshes its identity fields.
+ *
+ * Only the columns named here are written, so a setup call cannot erase
+ * unrelated settings the way the old whole-blob upsert did.
+ */
+export async function saveSubversiveGuildConfig(input: {
+	guildId: string;
+	guildName: string | null;
+	guildIcon: string | null;
+	adminRoleIds: string[];
+	configuredByDiscordId: string | null;
+	configuredByUsername: string | null;
+}): Promise<void> {
+	const now = new Date();
+	await db
+		.insert(subversiveGuildConfigs)
+		.values({
+			guildId: input.guildId,
+			guildName: input.guildName,
+			guildIcon: input.guildIcon,
+			adminRoleIds: input.adminRoleIds,
+			configuredAt: now,
+			configuredByDiscordId: input.configuredByDiscordId,
+			configuredByUsername: input.configuredByUsername,
+			createdAt: now,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: subversiveGuildConfigs.guildId,
+			set: {
+				guildName: input.guildName,
+				guildIcon: input.guildIcon,
+				adminRoleIds: input.adminRoleIds,
+				configuredByDiscordId: input.configuredByDiscordId,
+				configuredByUsername: input.configuredByUsername,
+				updatedAt: now,
+			},
+		});
+
+	subversiveGuildIdCache = input.guildId;
+}
+
+/** Updates only the administrator role list for a bound guild. */
+export async function updateSubversiveAdminRoleIds(
+	guildId: string,
+	adminRoleIds: string[],
+): Promise<void> {
+	await db
+		.update(subversiveGuildConfigs)
+		.set({ adminRoleIds, updatedAt: new Date() })
+		.where(eq(subversiveGuildConfigs.guildId, guildId));
+}
+
+/**
  * Retrieves the currently configured Subversive Alliance Discord guild ID.
  */
 export async function getSubversiveGuildId(): Promise<string | null> {
 	try {
-		const [row] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, "subversive:guild_config"));
-
-		const data = row?.data as { guildId?: string } | undefined;
-		if (data?.guildId) {
-			subversiveGuildIdCache = data.guildId;
+		const config = await getSubversiveGuildConfig();
+		if (config?.guildId) {
+			subversiveGuildIdCache = config.guildId;
 			return subversiveGuildIdCache;
 		}
 

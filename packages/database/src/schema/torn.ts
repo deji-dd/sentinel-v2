@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	bigint,
 	boolean,
 	doublePrecision,
 	index,
@@ -196,3 +197,95 @@ export const tornUsers = pgTable("torn_users", {
 
 export type TornUser = typeof tornUsers.$inferSelect;
 export type NewTornUser = typeof tornUsers.$inferInsert;
+
+/**
+ * Official annual Torn calendar activities (competitions & events)
+ * fetched from /torn/calendar by the scheduler reference sync worker.
+ */
+export const tornCalendarActivities = pgTable(
+	"torn_calendar_activities",
+	{
+		id: text("id").primaryKey(),
+		title: text("title").notNull(),
+		description: text("description").default("").notNull(),
+		/** 'competition' | 'event' */
+		type: text("type").notNull(),
+		/** Unix start timestamp in seconds */
+		start: integer("start").notNull(),
+		/** Unix end timestamp in seconds */
+		end: integer("end").notNull(),
+		/** Timestamp start */
+		startTime: timestamp("start_time", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		/** Timestamp end */
+		endTime: timestamp("end_time", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		/** This value is false if the event uses personal calendar time. */
+		fixedStartTime: boolean("fixed_start_time").default(false).notNull(),
+		createdAt: timestamp("created_at", {
+			withTimezone: true,
+			mode: "date",
+		})
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", {
+			withTimezone: true,
+			mode: "date",
+		})
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_torn_calendar_activities_type").on(table.type),
+		index("idx_torn_calendar_activities_start").on(table.start),
+		index("idx_torn_calendar_activities_end").on(table.end),
+	],
+);
+
+export type TornCalendarActivityRow =
+	typeof tornCalendarActivities.$inferSelect;
+export type NewTornCalendarActivityRow =
+	typeof tornCalendarActivities.$inferInsert;
+
+/**
+ * Reference key for the points market price in {@link tornMarketPrices}.
+ *
+ * Shared by the sampler and every reader so the key cannot drift between them —
+ * the legacy blob key it replaces (`points_market_price`) is now only a
+ * historical note.
+ */
+export const POINTS_MARKET_PRICE_KEY = "points";
+
+/**
+ * Scalar market references sampled from Torn, addressed by a stable key.
+ *
+ * Replaces the `points_market_price` row in the legacy `system_states` blob,
+ * which stored `{ "price": <number> }` as untyped JSON. That column accepted a
+ * double-encoded value (JSON stored as a JSON *string*) without complaint, and
+ * every reader guarded with `typeof data === "object"` — so a corrupt row
+ * silently degraded to "price unknown" and points payouts were valued at zero
+ * instead of the problem being visible. A typed numeric column makes that state
+ * unrepresentable.
+ *
+ * The only key in use is `points` (dollars per point, volume-weighted across the
+ * top of the market), sampled daily by the Torn reference sync.
+ */
+export const tornMarketPrices = pgTable("torn_market_prices", {
+	/** Stable reference key, e.g. `points`. */
+	refKey: text("ref_key").primaryKey(),
+	/** Dollars per unit. `bigint` for headroom; the sampler rounds to an integer. */
+	price: bigint("price", { mode: "number" }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type TornMarketPriceRow = typeof tornMarketPrices.$inferSelect;
+export type NewTornMarketPriceRow = typeof tornMarketPrices.$inferInsert;

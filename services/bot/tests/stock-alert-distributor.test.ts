@@ -51,6 +51,24 @@ function highEvent(patch: Partial<StockAlertEvent> = {}): StockAlertEvent {
 	};
 }
 
+function flowEvent(patch: Partial<StockAlertEvent> = {}): StockAlertEvent {
+	return {
+		type: "flow",
+		alertKey: "user:bulk_buy:-:0.25",
+		stockId: 1,
+		name: "Torn & Shanghai Banking",
+		acronym: "TSB",
+		price: 1174.06,
+		windowLabel: "5 minutes",
+		flowShares: 130_000_000,
+		flowPct: 0.5,
+		outstandingShares: 26_130_000_000,
+		flowThresholdPct: 0.25,
+		context: { ranges: [] },
+		...patch,
+	};
+}
+
 describe("Stock alert embeds", () => {
 	it("renders a gain with a signed percentage and colour", () => {
 		const embed = buildStockAlertEmbed(changeEvent()).toJSON();
@@ -183,6 +201,83 @@ describe("Stock alert embeds", () => {
 		expect(
 			(embed.fields ?? []).find((f) => f.name === "New all time low")?.value,
 		).toBe("**$395.00**");
+	});
+
+	it("renders a bulk buy as net shares, not as a price move", () => {
+		const embed = buildStockAlertEmbed(flowEvent()).toJSON();
+		const fields = embed.fields ?? [];
+
+		expect(embed.title).toBe("Stock Alert — Bulk Buying");
+		expect(embed.color).toBe(0x10b981);
+		expect(fields.find((f) => f.name === "Net Shares")?.value).toBe(
+			"**+130,000,000**",
+		);
+		expect(fields.find((f) => f.name === "Share of Float")?.value).toBe(
+			"**+0.50%**",
+		);
+		expect(fields.find((f) => f.name === "Shares Outstanding")?.value).toBe(
+			"26,130,000,000",
+		);
+		expect(fields.find((f) => f.name === "Window")?.value).toBe("5 minutes");
+		expect(fields.find((f) => f.name === "Price")?.value).toBe("$1,174.06");
+		// The rule is restated in the unit the subscription chose.
+		expect(fields.find((f) => f.name === "Threshold")?.value).toBe(
+			"0.25% of float",
+		);
+		// The `change` branch's fields would misdescribe a share count as a move.
+		expect(fields.find((f) => f.name === "Move")).toBeUndefined();
+	});
+
+	it("states a share-count threshold in shares, not as a percentage", () => {
+		const embed = buildStockAlertEmbed(
+			flowEvent({
+				alertKey: "user:bulk_buy_shares:-:250000000",
+				flowThresholdPct: undefined,
+				flowThresholdShares: 250_000_000,
+			}),
+		).toJSON();
+
+		expect(
+			(embed.fields ?? []).find((f) => f.name === "Threshold")?.value,
+		).toBe("250,000,000 shares");
+	});
+
+	it("omits the threshold when the event carries neither unit", () => {
+		const embed = buildStockAlertEmbed(
+			flowEvent({ flowThresholdPct: undefined }),
+		).toJSON();
+
+		expect(
+			(embed.fields ?? []).find((f) => f.name === "Threshold"),
+		).toBeUndefined();
+	});
+
+	it("renders a bulk sell in red with the retired shares signed negative", () => {
+		const embed = buildStockAlertEmbed(
+			flowEvent({
+				alertKey: "user:bulk_sell:-:0.25",
+				flowShares: -321_407_138,
+				flowPct: -1.22,
+			}),
+		).toJSON();
+
+		expect(embed.title).toBe("Stock Alert — Bulk Selling");
+		expect(embed.color).toBe(0xef4444);
+		expect(
+			(embed.fields ?? []).find((f) => f.name === "Net Shares")?.value,
+		).toBe("**-321,407,138**");
+		expect(
+			(embed.fields ?? []).find((f) => f.name === "Share of Float")?.value,
+		).toBe("**-1.22%**");
+	});
+
+	it("renders a flow alert prefixed as a personal alert", () => {
+		const embed = buildStockAlertEmbed(
+			flowEvent(),
+			"Your Stock Alert",
+		).toJSON();
+
+		expect(embed.title).toBe("Your Stock Alert — Bulk Buying");
 	});
 });
 

@@ -2,11 +2,15 @@ import {
 	db,
 	desc,
 	eq,
+	getWorkerState,
 	gte,
 	inArray,
+	SUBVERSIVE_RECRUITMENT_CONFIG_ID,
 	subversiveRankedWars,
 	subversiveRecruitmentCandidates,
-	systemStates,
+	subversiveRecruitmentConfigs,
+	upsertWorkerState,
+	WORKER_STATE_IDS,
 	workerSchedules,
 } from "@sentinel/database";
 import type {
@@ -37,8 +41,16 @@ import {
 
 const logger = new Logger("Scheduler", "SubversiveRecruitment");
 
-export const SUBVERSIVE_RECRUITMENT_CONFIG_ID = "subversive:recruitment_config";
-export const SUBVERSIVE_RECRUITMENT_STATE_ID = "subversive:recruitment_state";
+/**
+ * Legacy `system_states` key this config used to live under.
+ *
+ * Re-exported so existing importers keep working; the schema module is now the
+ * single source of truth for the value.
+ */
+export { SUBVERSIVE_RECRUITMENT_CONFIG_ID };
+/** Canonical id from the shared registry; the API clears this same row. */
+export const SUBVERSIVE_RECRUITMENT_STATE_ID =
+	WORKER_STATE_IDS.subversiveRecruitment;
 
 export const MAX_RANKED_WAR_DURATION_SECONDS = 123 * 3600; // 123 hours theoretical max duration
 export const MAX_RECRUITMENT_PAGES = 10;
@@ -143,15 +155,26 @@ export function resetRecruitmentCache(): void {
 
 export async function getRecruitmentConfig(): Promise<SubversiveRecruitmentConfig> {
 	try {
-		const [entry] = await db
+		const [config] = await db
 			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, SUBVERSIVE_RECRUITMENT_CONFIG_ID));
+			.from(subversiveRecruitmentConfigs)
+			.where(
+				eq(subversiveRecruitmentConfigs.id, SUBVERSIVE_RECRUITMENT_CONFIG_ID),
+			);
 
-		if (entry?.init && entry.data) {
+		// Every column is NOT NULL with a schema default, so a row is always a
+		// complete config — the old blob needed defaults merged over it because a
+		// partial JSON object was representable.
+		if (config) {
 			return {
-				...DEFAULT_RECRUITMENT_CONFIG,
-				...(entry.data as Partial<SubversiveRecruitmentConfig>),
+				minStats: config.minStats,
+				minAttacks: config.minAttacks,
+				minAttackPercentage: config.minAttackPercentage,
+				notificationChannelId: config.notificationChannelId,
+				notificationsEnabled: config.notificationsEnabled,
+				termedClusterPercentage: config.termedClusterPercentage,
+				autoScanEnabled: config.autoScanEnabled,
+				excludedFactionIds: config.excludedFactionIds,
 			};
 		}
 	} catch (err) {
@@ -195,11 +218,13 @@ export async function runRecruitmentCycle(options?: {
 		}
 	}
 
-	// Determine if this is initial run
-	const [stateEntry] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, SUBVERSIVE_RECRUITMENT_STATE_ID));
+	// Determine if this is initial run.
+	//
+	// `init` is the load-bearing first-run gate: while it is false the scan looks
+	// back to the start of today UTC rather than to the last watermark, so losing
+	// it replays a wider window. It is a typed column on `worker_state` for that
+	// reason.
+	const stateEntry = await getWorkerState(SUBVERSIVE_RECRUITMENT_STATE_ID);
 
 	const isInitialRun = !stateEntry?.init;
 	const nowSec = Math.floor(Date.now() / 1000);
@@ -209,13 +234,10 @@ export async function runRecruitmentCycle(options?: {
 
 	// On initial run, look back to the start of today UTC.
 	// On subsequent runs, look back to lastScanTimestamp (with a 1-hour grace window) or up to 7 days.
-	const stateData = stateEntry?.data as
-		| { lastScanTimestamp?: number }
-		| undefined;
 	const minCompletedTimestamp = isInitialRun
 		? startOfCurrentDayUtc
-		: stateData?.lastScanTimestamp
-			? Math.max(stateData.lastScanTimestamp - 3600, nowSec - 7 * 86400)
+		: stateEntry?.cursor
+			? Math.max(stateEntry.cursor - 3600, nowSec - 7 * 86400)
 			: startOfCurrentDayUtc;
 
 	const startCutoffTimestamp =
@@ -713,32 +735,19 @@ export async function runRecruitmentCycle(options?: {
 			.onConflictDoNothing();
 	}
 
-	// Update state
-	await db
-		.insert(systemStates)
-		.values({
-			id: SUBVERSIVE_RECRUITMENT_STATE_ID,
-			init: true,
-			data: {
-				lastScanTimestamp: Math.floor(Date.now() / 1000),
-				lastScanDate: new Date().toISOString(),
-				evaluatedWarsCount: evaluatedWarIds.size,
-			},
-			createdAt: new Date(),
-			updatedAt: new Date(),
-		})
-		.onConflictDoUpdate({
-			target: systemStates.id,
-			set: {
-				init: true,
-				data: {
-					lastScanTimestamp: Math.floor(Date.now() / 1000),
-					lastScanDate: new Date().toISOString(),
-					evaluatedWarsCount: evaluatedWarIds.size,
-				},
-				updatedAt: new Date(),
-			},
-		});
+	// Update state. `init: true` is written explicitly, because it is what stops
+	// the next scan from widening its window back to the start of the day.
+	const scanTimestamp = Math.floor(Date.now() / 1000);
+	await upsertWorkerState({
+		workerId: SUBVERSIVE_RECRUITMENT_STATE_ID,
+		init: true,
+		cursor: scanTimestamp,
+		lastRunAt: new Date(),
+		details: {
+			lastScanDate: new Date().toISOString(),
+			evaluatedWarsCount: evaluatedWarIds.size,
+		},
+	});
 
 	logger.info(
 		`Recruitment cycle complete: ${completedWars} evaluated, ${termedWars} termed, ${forfeitedWars} forfeit, ${totalCandidatesFound} new candidate(s).`,

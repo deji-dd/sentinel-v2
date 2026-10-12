@@ -43,6 +43,10 @@ type UserStockAlertStateJson = {
 	seeded: boolean;
 	wasTrue: boolean | null;
 	lastExtreme: number | null;
+	/** Flow conditions: outstanding shares at the previous sweep. */
+	lastShares: number | null;
+	/** Flow conditions: when that sweep ran, for the delivered window label. */
+	lastSharesAt: number | null;
 	lastAlertAt: number | null;
 };
 
@@ -154,11 +158,20 @@ export const userStockAlerts = pgTable(
 		discordUserId: text("discord_user_id").notNull(),
 		/** Torn stock id, as returned by `/torn/stocks`. */
 		stockId: integer("stock_id").notNull(),
-		/** One of `price_above`, `price_below`, `change_up`, `change_down`, `new_high`, `new_low`. */
+		/**
+		 * One of `price_above`, `price_below`, `change_up`, `change_down`,
+		 * `new_high`, `new_low`, `bulk_buy`, `bulk_buy_shares`, `bulk_sell`,
+		 * `bulk_sell_shares`. Held as text, so adding a condition is a code change
+		 * rather than a migration.
+		 */
 		condition: text("condition").notNull(),
-		/** Range the condition is measured over; null for the price conditions. */
+		/** Range the condition is measured over; null for the price and flow conditions. */
 		rangeKey: text("range_key"),
-		/** Price in dollars or percentage move; null for the extreme conditions. */
+		/**
+		 * Price in dollars, percentage move, share of the float, or a count of
+		 * shares; null for the extreme conditions. Which one applies is read from
+		 * `condition`, so the four flow variants stay distinguishable.
+		 */
 		threshold: doublePrecision("threshold"),
 		/** Canonical signature of the condition, unique per user. */
 		conditionKey: text("condition_key").notNull(),

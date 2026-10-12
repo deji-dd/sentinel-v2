@@ -29,7 +29,6 @@ import {
 	handleReinitializeBattlestatsLedger,
 	handleReinitializeCrimeLedger,
 	handleReinitializeStocksLedger,
-	handleReinitializeWealth,
 	handleResetLogManager,
 	handleResetSubversiveRecruitment,
 } from "./handlers/worker-controls";
@@ -66,7 +65,6 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 	reinitialize_battlestats_ledger: handleReinitializeBattlestatsLedger,
 	reinitialize_gym_ledger: handleReinitializeBattlestatsLedger,
 	reinitialize_stocks_ledger: handleReinitializeStocksLedger,
-	reinitialize_wealth: handleReinitializeWealth,
 	force_run_worker: handleForceRunWorker,
 	reset_subversive_recruitment: handleResetSubversiveRecruitment,
 	personal_bounty_defeated: handlePersonalBountyDefeated,

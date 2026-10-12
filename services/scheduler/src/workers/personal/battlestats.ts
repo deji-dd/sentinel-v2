@@ -6,9 +6,9 @@ import {
 	eq,
 	inArray,
 	isNull,
+	personalLedgerSyncStates,
 	personalLogs,
 	sql,
-	systemStates,
 } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
 import {
@@ -23,7 +23,8 @@ import { getActiveIpcServer } from "../../lib/ipc/server";
 import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";
 
-const STATE_ID = "personal:battlestats_ledger";
+/** Discriminator row in `personal_ledger_sync_states` for this ledger. */
+const LEDGER_SYNC_ID = "battlestats";
 
 const logger = new Logger("Scheduler", "BattlestatsLedger");
 
@@ -47,18 +48,20 @@ const DEFAULT_STATE: BattlestatsLedgerState = {
 };
 
 /**
- * Loads the battlestats ledger state from SQLite system_states.
+ * Loads the battlestats ledger state from `personal_ledger_sync_states`.
  */
 export async function loadBattlestatsLedgerState(): Promise<BattlestatsLedgerState> {
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, STATE_ID),
+		const record = await db.query.personalLedgerSyncStates.findFirst({
+			where: eq(personalLedgerSyncStates.ledger, LEDGER_SYNC_ID),
 		});
 
-		if (record?.data) {
+		if (record) {
 			return {
-				...DEFAULT_STATE,
-				...(record.data as Partial<BattlestatsLedgerState>),
+				status: record.status as BattlestatsLedgerState["status"],
+				totalIndexedLogs: record.totalIndexed,
+				lastProcessedTimestamp: record.lastProcessedTimestamp,
+				lastError: record.lastError,
 				updatedAt: new Date().toISOString(),
 			};
 		}
@@ -71,30 +74,32 @@ export async function loadBattlestatsLedgerState(): Promise<BattlestatsLedgerSta
 export const loadGymLedgerState = loadBattlestatsLedgerState;
 
 /**
- * Persists the battlestats ledger state to SQLite system_states atomically and broadcasts via IPC.
+ * Persists the battlestats ledger state to `personal_ledger_sync_states`.
+ *
+ * Column-scoped: the legacy row also stored an `init` flag that was just
+ * `status === "completed"`, which nothing read.
  */
 export async function persistBattlestatsLedgerState(
 	state: BattlestatsLedgerState,
 ): Promise<void> {
 	state.updatedAt = new Date().toISOString();
 	try {
-		const isCompleted = state.status === "completed";
+		const now = new Date();
+		const values = {
+			ledger: LEDGER_SYNC_ID,
+			status: state.status,
+			lastError: state.lastError,
+			totalIndexed: state.totalIndexedLogs,
+			lastProcessedTimestamp: state.lastProcessedTimestamp,
+			updatedAt: now,
+		};
+
 		await db
-			.insert(systemStates)
-			.values({
-				id: STATE_ID,
-				init: isCompleted,
-				data: state,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			})
+			.insert(personalLedgerSyncStates)
+			.values({ ...values, createdAt: now })
 			.onConflictDoUpdate({
-				target: systemStates.id,
-				set: {
-					init: isCompleted,
-					data: state,
-					updatedAt: new Date(),
-				},
+				target: personalLedgerSyncStates.ledger,
+				set: values,
 			});
 
 		const ipcServer = getActiveIpcServer();

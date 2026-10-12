@@ -1,4 +1,9 @@
-import { db, eq, systemStates } from "@sentinel/database";
+import {
+	loadPersonalBountyState,
+	type PersonalBountyState,
+	type PersonalBountyTarget,
+	syncPersonalBountyState,
+} from "@sentinel/database";
 import type {
 	TornBountiesResponse,
 	UserProfileResponse,
@@ -26,7 +31,6 @@ import {
 const logger = new Logger("Scheduler", "SubversiveBountyFinder");
 
 export const WORKER_NAME = "subversive:bounty_finder";
-export const BOUNTY_STATE_ID = "personal:bounties";
 const CADENCE_SEC = 30;
 
 // Hardcoded thresholds
@@ -56,31 +60,6 @@ const PROFILE_LOOP_TIME_BUDGET_MS = 15_000;
 export const DEFAULT_FLOOR_PAGE_COUNT = 5;
 export const MIN_FLOOR_PAGE_COUNT = 1;
 export const MAX_FLOOR_PAGE_COUNT = 20;
-
-export interface PersonalBountyTarget {
-	id: number;
-	name: string;
-	level: number;
-	reward: number; // Highest single qualifying bounty reward
-	fairFight: number | null; // null if unscouted
-	estimatedBs: number | null;
-	age: number; // Age in days (>= 14)
-	status: {
-		state: string; // "Okay", "Hospital", "Abroad", etc.
-		description?: string;
-		until?: number | null;
-	};
-	attackUrl: string;
-	lastCheckedAt: number;
-}
-
-export interface PersonalBountyState {
-	readyTargets: PersonalBountyTarget[];
-	hospitalQueue: Array<PersonalBountyTarget & { secondsRemaining: number }>;
-	lastSyncTimestamp: number;
-	targetCount: number;
-	pendingCount?: number;
-}
 
 export interface TargetCandidate {
 	id: number;
@@ -154,22 +133,21 @@ export async function hydrateBountyStateFromDb(): Promise<void> {
 	isStateHydrated = true;
 
 	try {
-		const record = await db.query.systemStates.findFirst({
-			where: eq(systemStates.id, BOUNTY_STATE_ID),
-		});
+		// Targets are rows now; the counters come from `worker_state`. Nothing to
+		// hydrate when the finder has never produced a board.
+		const saved = await loadPersonalBountyState();
+		if (
+			saved.readyTargets.length === 0 &&
+			saved.hospitalQueue.length === 0 &&
+			saved.lastSyncTimestamp === 0
+		) {
+			return;
+		}
 
-		if (!record?.data) return;
-
-		const saved = record.data as Partial<PersonalBountyState>;
 		const nowSec = Math.floor(Date.now() / 1000);
-		const lastSync = Number(saved.lastSyncTimestamp ?? 0);
-
-		const readyTargets = Array.isArray(saved.readyTargets)
-			? saved.readyTargets
-			: [];
-		const hospitalQueue = Array.isArray(saved.hospitalQueue)
-			? saved.hospitalQueue
-			: [];
+		const lastSync = saved.lastSyncTimestamp;
+		const readyTargets = saved.readyTargets;
+		const hospitalQueue = saved.hospitalQueue;
 
 		// 1. Hydrate permanent verified age cache (account age >= 14d never decreases)
 		for (const target of [...readyTargets, ...hospitalQueue]) {
@@ -857,25 +835,10 @@ export async function runBountyFinderCycle(
 			}
 		}
 
-		// 9. Persist atomically to system_states
+		// 9. Persist. The finder owns the candidate pool, so it syncs the whole
+		// board; only rows that actually changed are written.
 		try {
-			await db
-				.insert(systemStates)
-				.values({
-					id: BOUNTY_STATE_ID,
-					init: true,
-					data: inMemoryBountyState,
-					createdAt: now,
-					updatedAt: now,
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						init: true,
-						data: inMemoryBountyState,
-						updatedAt: now,
-					},
-				});
+			await syncPersonalBountyState(inMemoryBountyState);
 		} catch (dbErr) {
 			logger.warn("Could not persist bounty state to database:", dbErr);
 		}

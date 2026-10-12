@@ -203,6 +203,20 @@ export function buildPickerEmbed(): EmbedBuilder {
  * text input would otherwise put in its own label therefore belongs in the Label's
  * description.
  */
+/**
+ * Extra hint shown under the flow triggers in the select.
+ *
+ * The label already names the unit, but not what the figure is measured from or
+ * over, which is the part a reader has to know to pick a sensible number. Kept
+ * here rather than in the vocabulary because it is wording for one menu.
+ */
+const FLOW_CONDITION_HINTS: Partial<Record<UserStockAlertCondition, string>> = {
+	bulk_buy: "Net shares bought since the last sweep, as a % of the float",
+	bulk_buy_shares: "Net shares bought since the last sweep, as a share count",
+	bulk_sell: "Net shares sold since the last sweep, as a % of the float",
+	bulk_sell_shares: "Net shares sold since the last sweep, as a share count",
+};
+
 export function buildAlertModal(stock: StockOption): ModalBuilder {
 	const conditionSelect = new StringSelectMenuBuilder()
 		.setCustomId(MODAL_CONDITION_FIELD)
@@ -211,6 +225,7 @@ export function buildAlertModal(stock: StockOption): ModalBuilder {
 			USER_STOCK_ALERT_CONDITIONS.map((condition) => ({
 				label: USER_STOCK_ALERT_CONDITION_LABELS[condition],
 				value: condition,
+				description: FLOW_CONDITION_HINTS[condition],
 			})),
 		);
 
@@ -232,7 +247,7 @@ export function buildAlertModal(stock: StockOption): ModalBuilder {
 		.setStyle(TextInputStyle.Short)
 		.setRequired(false)
 		.setMaxLength(16)
-		.setPlaceholder("e.g. 1200 or 5");
+		.setPlaceholder("e.g. 1200, 5, 0.25, 250000000");
 
 	return new ModalBuilder()
 		.setCustomId(`${STOCK_ALERT_MODAL_ID}:${stock.id}`)
@@ -242,18 +257,20 @@ export function buildAlertModal(stock: StockOption): ModalBuilder {
 				label
 					.setLabel("Trigger")
 					.setDescription(
-						"Price above/below need an amount. % change needs an amount and a range. High/low need a range.",
+						"Price: amount. % change: amount and range. High/low: range. Bulk: % of shares or a share count.",
 					)
 					.setStringSelectMenuComponent(conditionSelect),
 			(label) =>
 				label
 					.setLabel("Range")
-					.setDescription("Ignored by the price above/below triggers.")
+					.setDescription("Ignored by the price and bulk triggers.")
 					.setStringSelectMenuComponent(rangeSelect),
 			(label) =>
 				label
 					.setLabel("Amount")
-					.setDescription("Dollars, or % for a percentage alert.")
+					.setDescription(
+						"Dollars for a price, % for a move, or %/shares for a bulk alert.",
+					)
 					.setTextInputComponent(amountInput),
 		);
 }
@@ -626,7 +643,7 @@ export async function handleStockAlertModalSubmit(
 			embeds: [
 				createErrorEmbed(
 					"Invalid Amount",
-					"The Amount field must be a number (for example `1200` or `5`).",
+					"The Amount field must be a plain number, with no separators (for example `1200`, `5` or `250000000`).",
 				),
 			],
 			flags: MessageFlags.Ephemeral,

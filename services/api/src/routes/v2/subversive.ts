@@ -1,3 +1,4 @@
+import type { SubversiveGuildConfigRow } from "@sentinel/database";
 import {
 	and,
 	count,
@@ -5,15 +6,22 @@ import {
 	desc,
 	eq,
 	getServerTypeMappings,
+	getSubversiveGuildConfig,
 	gte,
 	guildApiKeys,
 	ilike,
 	or,
+	SUBVERSIVE_RECRUITMENT_CONFIG_ID,
+	saveSubversiveGuildConfig,
 	subversiveApiKeys,
+	subversiveCalendarEvents,
 	subversiveRankedWars,
 	subversiveRecruitmentCandidates,
+	subversiveRecruitmentConfigs,
 	subversiveTargetFinderUsers,
-	systemStates,
+	updateSubversiveAdminRoleIds,
+	WORKER_STATE_IDS,
+	workerState,
 } from "@sentinel/database";
 import {
 	encryptApiKey,
@@ -23,7 +31,9 @@ import {
 } from "@sentinel/torn-api";
 import {
 	getSubversiveFactionName,
+	isSubversiveFamilyFaction,
 	PRIMARY_SUBVERSIVE_FACTION_ID,
+	resolveSubversiveFactionId,
 	SUBVERSIVE_FAMILY_FACTION_IDS,
 } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
@@ -40,6 +50,15 @@ import {
 	notifySchedulerForceRun,
 	notifySchedulerResetRecruitment,
 } from "../../lib/scheduler-ipc";
+import {
+	categoryTitle,
+	FACTION_CALENDAR_CATEGORIES,
+	getFactionCalendarEvents,
+	getTornCalendarEvents,
+	isFactionCalendarCategory,
+	STEADFAST_STATS,
+	TORN_CALENDAR_ACCENT,
+} from "../../lib/subversive-calendar";
 import { hasActiveSubversiveKeys } from "../../lib/subversive-key-pool";
 import { authPlugin } from "../../middleware/auth";
 import { verifyGuildAdmin } from "./guilds";
@@ -78,23 +97,40 @@ interface DiscordGuildMember {
 	permissions?: string;
 }
 
-interface SubversiveConfigData {
-	guildId: string;
-	guildName: string;
-	guildIcon: string | null;
-	adminRoleIds: string[];
-	configuredAt: string;
-	configuredBy: {
-		discordId: string;
-		username: string;
-	};
-	updatedAt: string;
-}
-
-const SUBVERSIVE_CONFIG_ID = "subversive:guild_config";
-
 const INVALID_DIBS_FACTION_ERROR =
 	"Invalid factionId: dibs settings are only available for the Subversive family factions.";
+
+/**
+ * Reshapes a `subversive_guild_configs` row into the JSON this API has always
+ * returned for the guild config.
+ *
+ * The columns are now separate, but the wire format is unchanged: `configuredAt`
+ * and `updatedAt` stay ISO strings and `configuredBy` stays a nested object, so
+ * existing dashboard consumers need no changes.
+ */
+function toGuildConfigResponse(row: SubversiveGuildConfigRow | null): {
+	guildId: string;
+	guildName: string | null;
+	guildIcon: string | null;
+	adminRoleIds: string[];
+	configuredAt: string | null;
+	configuredBy: { discordId: string | null; username: string | null };
+	updatedAt: string;
+} | null {
+	if (!row) return null;
+	return {
+		guildId: row.guildId,
+		guildName: row.guildName,
+		guildIcon: row.guildIcon,
+		adminRoleIds: row.adminRoleIds,
+		configuredAt: row.configuredAt ? row.configuredAt.toISOString() : null,
+		configuredBy: {
+			discordId: row.configuredByDiscordId,
+			username: row.configuredByUsername,
+		},
+		updatedAt: row.updatedAt.toISOString(),
+	};
+}
 
 const INVALID_RW_CHANNELS_FACTION_ERROR =
 	"Invalid factionId: ranked-war channels are only available for the Subversive family factions.";
@@ -190,12 +226,8 @@ function getBotInviteUrl(guildId?: string): string {
 }
 
 export async function getSubversiveTargetGuildId(): Promise<string> {
-	const [existing] = await db
-		.select()
-		.from(systemStates)
-		.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
-	const configData = existing?.data as SubversiveConfigData | undefined;
-	if (configData?.guildId) return configData.guildId;
+	const config = await getSubversiveGuildConfig();
+	if (config?.guildId) return config.guildId;
 	const serverTypes = await getServerTypeMappings();
 	return serverTypes.faction ?? "";
 }
@@ -210,6 +242,173 @@ export async function verifySubversiveAdmin(
 	return verifyGuildAdmin(user, targetGuildId);
 }
 
+/** Ranked War Enlistment is a Tuesday 12:00 TCT ritual and nothing else. */
+const RW_ENLISTMENT_WEEKDAY_UTC = 2; // Tuesday
+const RW_ENLISTMENT_HOUR_UTC = 12;
+/** Enlistment window: 12:00-13:00 TCT on the chosen Tuesday. */
+const RW_ENLISTMENT_WINDOW_MS = 60 * 60 * 1000;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Midnight UTC of the day `date` falls in. */
+function startOfUtcDay(date: Date): Date {
+	return new Date(
+		Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+	);
+}
+
+/**
+ * A faction event as the dashboard is allowed to create it.
+ *
+ * Categories carry their own title and accent, so the only things the client
+ * gets to decide are when the event happens, which faction it belongs to, and —
+ * for Steadfast Change — which battlestats it asks for.
+ */
+interface FactionEventWrite {
+	title: string;
+	category: string;
+	description: string;
+	startTime: Date;
+	endTime: Date;
+	isAllDay: boolean;
+	primaryStat: string | null;
+	secondaryStat: string | null;
+	factionId: number;
+}
+
+function isSteadfastStat(value: string): boolean {
+	return (STEADFAST_STATS as readonly string[]).includes(value);
+}
+
+/**
+ * Validates a create/update payload and normalises it into column values.
+ *
+ * Returns `{ error }` for anything the caller must reject, so both the POST and
+ * the PUT answer identically instead of drifting apart. `existing` lets an event
+ * sitting in a retired category be edited without forcing a re-categorisation.
+ */
+function resolveFactionEventWrite(
+	body: {
+		category?: string;
+		description?: string;
+		startTime?: string;
+		endTime?: string;
+		isAllDay?: boolean;
+		primaryStat?: string | null;
+		secondaryStat?: string | null;
+		factionId?: number;
+	},
+	existing?: { category: string; title: string },
+): { error: string } | { values: FactionEventWrite } {
+	const category = body.category;
+
+	if (category === undefined) {
+		return { error: "category is required." };
+	}
+	if (!isFactionCalendarCategory(category)) {
+		if (category !== existing?.category) {
+			return {
+				error: `category must be one of ${FACTION_CALENDAR_CATEGORIES.map((c) => c.value).join(", ")}.`,
+			};
+		}
+	}
+
+	const startDate =
+		body.startTime === undefined ? null : new Date(body.startTime);
+	const endDate = body.endTime === undefined ? null : new Date(body.endTime);
+
+	if (startDate && Number.isNaN(startDate.getTime())) {
+		return { error: "Invalid startTime format." };
+	}
+	if (endDate && Number.isNaN(endDate.getTime())) {
+		return { error: "Invalid endTime format." };
+	}
+	if (!startDate || !endDate) {
+		return { error: "startTime and endTime are required." };
+	}
+
+	let primaryStat: string | null = null;
+	let secondaryStat: string | null = null;
+
+	if (category === "steadfast_change") {
+		const primary = body.primaryStat ?? "";
+		const secondary = body.secondaryStat ?? "";
+
+		if (!isSteadfastStat(primary) || !isSteadfastStat(secondary)) {
+			return {
+				error: `primaryStat and secondaryStat must each be one of ${STEADFAST_STATS.join(", ")}.`,
+			};
+		}
+		if (primary === secondary) {
+			return {
+				error: "primaryStat and secondaryStat must be different stats.",
+			};
+		}
+
+		primaryStat = primary;
+		secondaryStat = secondary;
+	}
+
+	let start = startDate;
+	let end = endDate;
+	let isAllDay = body.isAllDay ?? false;
+
+	if (category === "war") {
+		// The enlistment date is all the caller has to get right: Torn opens
+		// enlistment on Tuesday at 12:00 TCT (UTC) and it runs for an hour.
+		if (start.getUTCDay() !== RW_ENLISTMENT_WEEKDAY_UTC) {
+			return { error: "Ranked War Enlistment must be on a Tuesday." };
+		}
+
+		start = new Date(
+			Date.UTC(
+				start.getUTCFullYear(),
+				start.getUTCMonth(),
+				start.getUTCDate(),
+				RW_ENLISTMENT_HOUR_UTC,
+				0,
+				0,
+				0,
+			),
+		);
+		end = new Date(start.getTime() + RW_ENLISTMENT_WINDOW_MS);
+		isAllDay = false;
+	} else if (category === "steadfast_change") {
+		// A Steadfast Change is a whole-day directive: members switch stats for the
+		// days it covers, so the times are the day boundaries, never a slice of one.
+		const startDay = startOfUtcDay(start);
+		const endDay = startOfUtcDay(end);
+
+		if (endDay.getTime() < startDay.getTime()) {
+			return { error: "endTime must be after startTime." };
+		}
+
+		start = startDay;
+		end = new Date(endDay.getTime() + MS_PER_DAY - 1000);
+		isAllDay = true;
+	} else if (end.getTime() < start.getTime()) {
+		return { error: "endTime must be after startTime." };
+	}
+
+	return {
+		values: {
+			// A retired category keeps the title it was stored with; current ones
+			// are titled by their category.
+			title: isFactionCalendarCategory(category)
+				? categoryTitle(category)
+				: (existing?.title ?? categoryTitle(category)),
+			category,
+			description: body.description?.trim() ?? "",
+			startTime: start,
+			endTime: end,
+			isAllDay,
+			primaryStat,
+			secondaryStat,
+			factionId: resolveSubversiveFactionId(body.factionId),
+		},
+	};
+}
+
 export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 	// ─── GET /script & /script.user.js (Public Subversive Userscript Download) ─
 	.get("/script", async ({ query, set }) => {
@@ -219,6 +418,251 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 		return serveUserscript(query, set);
 	})
 	.use(authPlugin)
+
+	// ─── GET /api/v2/subversive/calendar (Public Torn & Faction Calendar) ───────
+	.get(
+		"/calendar",
+		async ({ user, query, set }) => {
+			const yearNum = query.year ?? new Date().getUTCFullYear();
+			if (!Number.isInteger(yearNum) || yearNum < 1970 || yearNum > 2100) {
+				set.status = 400;
+				return {
+					success: false,
+					error: "year must be an integer between 1970 and 2100.",
+				};
+			}
+
+			const factionId = query.factionId;
+			if (factionId !== undefined && !isSubversiveFamilyFaction(factionId)) {
+				set.status = 400;
+				return {
+					success: false,
+					error: `factionId must be one of ${SUBVERSIVE_FAMILY_FACTION_IDS.join(", ")}.`,
+				};
+			}
+
+			const canEdit = await verifySubversiveAdmin(user);
+
+			// The cache-busting read is an admin convenience: it must not let an
+			// anonymous visitor turn every request into a fresh database read.
+			const refresh =
+				canEdit && (query.refresh === "true" || query.refresh === "1");
+
+			const torn = await getTornCalendarEvents({
+				year: yearNum,
+				forceFresh: refresh,
+			});
+
+			// Ranked-war rows carry the war's target score, so they are only
+			// included for signed-in users — this endpoint is public.
+			const factionEvents = await getFactionCalendarEvents({
+				year: yearNum,
+				factionId,
+				includeRankedWars: Boolean(user),
+			});
+
+			return {
+				success: true,
+				year: yearNum,
+				serverTime: new Date().toISOString(),
+				serverTimestamp: Math.floor(Date.now() / 1000),
+				canEdit,
+				tornEvents: torn.events,
+				tornEventsSource: torn.source,
+				factionEvents,
+				/**
+				 * What the calendar's colours mean. Every faction category owns one
+				 * fixed accent and every official Torn activity shares a single,
+				 * deliberately different one, so the UI never has to guess and the
+				 * form never has to ask for a colour.
+				 */
+				accentKey: {
+					torn: { label: "Official Torn", color: TORN_CALENDAR_ACCENT },
+					faction: FACTION_CALENDAR_CATEGORIES.map((category) => ({
+						value: category.value,
+						label: category.label,
+						color: category.color,
+					})),
+				},
+				categories: FACTION_CALENDAR_CATEGORIES.map(
+					(category) => category.value,
+				),
+			};
+		},
+		{
+			query: t.Object({
+				year: t.Optional(t.Numeric()),
+				factionId: t.Optional(t.Numeric()),
+				refresh: t.Optional(t.String()),
+			}),
+			detail: {
+				summary: "Get Subversive & Torn Calendar Events",
+				description:
+					"Publicly accessible calendar aggregating official Torn competitions/events and Subversive faction events. Ranked-war entries (which include target scores) require a session.",
+			},
+		},
+	)
+
+	// ─── POST /api/v2/subversive/calendar/events (Create Faction Event) ──────────
+	.post(
+		"/calendar/events",
+		async ({ user, body, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin || !user) {
+				set.status = 403;
+				return {
+					success: false,
+					error: "Unauthorized: Subversive leadership or admin required.",
+				};
+			}
+
+			const resolved = resolveFactionEventWrite(body);
+			if ("error" in resolved) {
+				set.status = 400;
+				return { success: false, error: resolved.error };
+			}
+
+			const [created] = await db
+				.insert(subversiveCalendarEvents)
+				.values({
+					...resolved.values,
+					createdById: user.discordId ?? String(user.id),
+					createdByName: user.username,
+				})
+				.returning();
+
+			return { success: true, event: created };
+		},
+		{
+			body: t.Object({
+				description: t.Optional(t.String()),
+				category: t.String(),
+				startTime: t.String(),
+				endTime: t.String(),
+				isAllDay: t.Optional(t.Boolean()),
+				primaryStat: t.Optional(t.Nullable(t.String())),
+				secondaryStat: t.Optional(t.Nullable(t.String())),
+				factionId: t.Optional(t.Number()),
+			}),
+			detail: {
+				summary: "Create Subversive Faction Calendar Event",
+				description:
+					"Requires Subversive leadership or admin permissions. The category titles the event and fixes its accent; Ranked War Enlistment is pinned to a Tuesday 12:00 TCT window and Steadfast Change must name two different battlestats.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v2/subversive/calendar/events/:id (Update Faction Event) ───────
+	.put(
+		"/calendar/events/:id",
+		async ({ user, params, body, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin || !user) {
+				set.status = 403;
+				return {
+					success: false,
+					error: "Unauthorized: Subversive leadership or admin required.",
+				};
+			}
+
+			const [existing] = await db
+				.select()
+				.from(subversiveCalendarEvents)
+				.where(eq(subversiveCalendarEvents.id, params.id));
+
+			if (!existing) {
+				set.status = 404;
+				return { success: false, error: "Event not found" };
+			}
+
+			// Omitted fields fall back to what is stored, so a partial update is
+			// validated by the same rules as a create — a partial update can never
+			// push the event into a state a create would have rejected.
+			const resolved = resolveFactionEventWrite(
+				{
+					category: body.category ?? existing.category,
+					description: body.description ?? existing.description,
+					startTime: body.startTime ?? existing.startTime.toISOString(),
+					endTime: body.endTime ?? existing.endTime.toISOString(),
+					isAllDay: body.isAllDay ?? existing.isAllDay,
+					primaryStat: body.primaryStat ?? existing.primaryStat,
+					secondaryStat: body.secondaryStat ?? existing.secondaryStat,
+					factionId: body.factionId ?? existing.factionId,
+				},
+				{ category: existing.category, title: existing.title },
+			);
+
+			if ("error" in resolved) {
+				set.status = 400;
+				return { success: false, error: resolved.error };
+			}
+
+			const [updated] = await db
+				.update(subversiveCalendarEvents)
+				.set({ ...resolved.values, updatedAt: new Date() })
+				.where(eq(subversiveCalendarEvents.id, params.id))
+				.returning();
+
+			return { success: true, event: updated };
+		},
+		{
+			params: t.Object({
+				id: t.String(),
+			}),
+			body: t.Object({
+				description: t.Optional(t.String()),
+				category: t.Optional(t.String()),
+				startTime: t.Optional(t.String()),
+				endTime: t.Optional(t.String()),
+				isAllDay: t.Optional(t.Boolean()),
+				primaryStat: t.Optional(t.Nullable(t.String())),
+				secondaryStat: t.Optional(t.Nullable(t.String())),
+				factionId: t.Optional(t.Number()),
+			}),
+			detail: {
+				summary: "Update Subversive Faction Calendar Event",
+				description:
+					"Requires Subversive leadership or admin permissions. Omitted fields keep their stored value and the result is validated by the create rules.",
+			},
+		},
+	)
+
+	// ─── DELETE /api/v2/subversive/calendar/events/:id (Delete Faction Event) ────
+	.delete(
+		"/calendar/events/:id",
+		async ({ user, params, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin || !user) {
+				set.status = 403;
+				return {
+					success: false,
+					error: "Unauthorized: Subversive leadership or admin required.",
+				};
+			}
+
+			const [deleted] = await db
+				.delete(subversiveCalendarEvents)
+				.where(eq(subversiveCalendarEvents.id, params.id))
+				.returning();
+
+			if (!deleted) {
+				set.status = 404;
+				return { success: false, error: "Event not found" };
+			}
+
+			return { success: true, id: deleted.id };
+		},
+		{
+			params: t.Object({
+				id: t.String(),
+			}),
+			detail: {
+				summary: "Delete Subversive Faction Calendar Event",
+				description:
+					"Requires Subversive leadership or admin permissions. Deletes an existing faction calendar event.",
+			},
+		},
+	)
 
 	// ─── GET /api/v1/subversive/status ─────────────────────────────────────────
 	.get(
@@ -239,14 +683,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			const isOwner = user.role === "owner" || user.role === "admin";
 			const targetGuildId = await getSubversiveTargetGuildId();
 
-			const [existing] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
-
-			const configData = existing?.data as unknown as
-				| SubversiveConfigData
-				| undefined;
+			const configData = await getSubversiveGuildConfig();
 			const hasAdminAccess = await verifySubversiveAdmin(user);
 
 			const botToken = env.DISCORD_TOKEN;
@@ -438,36 +875,17 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				),
 			);
 
-			const configPayload: SubversiveConfigData = {
+			// Field-scoped upsert: only the columns named here are written, so
+			// binding a guild can no longer erase settings another writer owns
+			// (the whole-blob version replaced the entire JSON object).
+			await saveSubversiveGuildConfig({
 				guildId,
 				guildName,
 				guildIcon,
 				adminRoleIds: cleanRoleIds,
-				configuredAt: new Date().toISOString(),
-				configuredBy: {
-					discordId: user.discordId ?? "",
-					username: user.username,
-				},
-				updatedAt: new Date().toISOString(),
-			};
-
-			await db
-				.insert(systemStates)
-				.values({
-					id: SUBVERSIVE_CONFIG_ID,
-					init: true,
-					data: configPayload as unknown as Record<string, unknown>,
-					createdAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						init: true,
-						data: configPayload as unknown as Record<string, unknown>,
-						updatedAt: new Date(),
-					},
-				});
+				configuredByDiscordId: user.discordId ?? null,
+				configuredByUsername: user.username,
+			});
 
 			memberCache.clear();
 
@@ -506,22 +924,11 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				};
 			}
 
-			const [existing] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
+			// A row in the typed table *is* "configured", so the old
+			// `init`-flag-and-data check collapses to a null check.
+			const configData = await getSubversiveGuildConfig();
 
-			if (!existing?.init || !existing.data) {
-				return {
-					success: true,
-					configured: false,
-					hasAdminAccess: user.role === "owner",
-					reason: "not_configured",
-				};
-			}
-
-			const configData = existing.data as unknown as SubversiveConfigData;
-			if (!configData.guildId) {
+			if (!configData?.guildId) {
 				return {
 					success: true,
 					configured: false,
@@ -787,32 +1194,43 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const [entry] = await db
+			const [config] = await db
 				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "subversive:recruitment_config"));
+				.from(subversiveRecruitmentConfigs)
+				.where(
+					eq(subversiveRecruitmentConfigs.id, SUBVERSIVE_RECRUITMENT_CONFIG_ID),
+				);
 
-			const defaultConfig = {
-				minStats: 100_000_000,
-				minAttacks: 25,
-				minAttackPercentage: 8.0,
-				notificationChannelId: null as string | null,
-				notificationsEnabled: false,
-				termedClusterPercentage: 60,
-				autoScanEnabled: false,
-				excludedFactionIds: [] as number[],
-			};
-
-			if (entry?.init && entry.data) {
+			// Typed columns always hold a value (the schema supplies defaults), so
+			// there is no partial row to merge defaults into the way the JSON
+			// blob required.
+			if (config) {
 				return {
 					config: {
-						...defaultConfig,
-						...(entry.data as Record<string, unknown>),
+						minStats: config.minStats,
+						minAttacks: config.minAttacks,
+						minAttackPercentage: config.minAttackPercentage,
+						notificationChannelId: config.notificationChannelId,
+						notificationsEnabled: config.notificationsEnabled,
+						termedClusterPercentage: config.termedClusterPercentage,
+						autoScanEnabled: config.autoScanEnabled,
+						excludedFactionIds: config.excludedFactionIds,
 					},
 				};
 			}
 
-			return { config: defaultConfig };
+			return {
+				config: {
+					minStats: 100_000_000,
+					minAttacks: 25,
+					minAttackPercentage: 8.0,
+					notificationChannelId: null as string | null,
+					notificationsEnabled: false,
+					termedClusterPercentage: 60,
+					autoScanEnabled: false,
+					excludedFactionIds: [] as number[],
+				},
+			};
 		},
 		{
 			detail: {
@@ -850,29 +1268,32 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				excludedFactionIds: Array.isArray(body.excludedFactionIds)
 					? body.excludedFactionIds.map(Number).filter((n) => !Number.isNaN(n))
 					: [],
-				updatedAt: new Date().toISOString(),
-				updatedBy: user?.username ?? "system",
 			};
 
+			const now = new Date();
+			const updatedBy = user?.username ?? "system";
+
 			await db
-				.insert(systemStates)
+				.insert(subversiveRecruitmentConfigs)
 				.values({
-					id: "subversive:recruitment_config",
-					init: true,
-					data: cleanConfig as unknown as Record<string, unknown>,
-					createdAt: new Date(),
-					updatedAt: new Date(),
+					id: SUBVERSIVE_RECRUITMENT_CONFIG_ID,
+					...cleanConfig,
+					updatedBy,
+					updatedAt: now,
 				})
 				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						init: true,
-						data: cleanConfig as unknown as Record<string, unknown>,
-						updatedAt: new Date(),
-					},
+					target: subversiveRecruitmentConfigs.id,
+					set: { ...cleanConfig, updatedBy, updatedAt: now },
 				});
 
-			return { success: true, config: cleanConfig };
+			return {
+				success: true,
+				config: {
+					...cleanConfig,
+					updatedAt: now.toISOString(),
+					updatedBy,
+				},
+			};
 		},
 		{
 			body: t.Object({
@@ -995,10 +1416,14 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				)
 				.returning({ id: subversiveRankedWars.id });
 
-			// Reset the state row in systemStates so next scan is treated as initial run for today
+			// Clear the worker's state row so the next scan is treated as an initial
+			// run for today. A missing row is exactly what the worker reads as "not
+			// initialised", so this is the same signal the legacy row carried.
 			await db
-				.delete(systemStates)
-				.where(eq(systemStates.id, "subversive:recruitment_state"));
+				.delete(workerState)
+				.where(
+					eq(workerState.workerId, WORKER_STATE_IDS.subversiveRecruitment),
+				);
 
 			// Notify scheduler to clear in-memory evaluatedWarIds cache
 			const delivered = await notifySchedulerResetRecruitment();
@@ -1030,30 +1455,24 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const [existing] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
+			const configData = await getSubversiveGuildConfig();
 
-			const configData = (existing?.data ??
-				null) as unknown as SubversiveConfigData | null;
-
-			const [recruitmentEntry] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, "subversive:recruitment_config"));
-
-			const recruitmentData = recruitmentEntry?.data as
-				| Record<string, unknown>
-				| undefined;
+			const [recruitment] = await db
+				.select({
+					notificationChannelId:
+						subversiveRecruitmentConfigs.notificationChannelId,
+					notificationsEnabled:
+						subversiveRecruitmentConfigs.notificationsEnabled,
+				})
+				.from(subversiveRecruitmentConfigs)
+				.where(
+					eq(subversiveRecruitmentConfigs.id, SUBVERSIVE_RECRUITMENT_CONFIG_ID),
+				);
 
 			return {
-				guild: configData,
-				notificationChannelId:
-					(recruitmentData?.notificationChannelId as string | null) ?? null,
-				notificationsEnabled: Boolean(
-					recruitmentData?.notificationsEnabled ?? false,
-				),
+				guild: toGuildConfigResponse(configData),
+				notificationChannelId: recruitment?.notificationChannelId ?? null,
+				notificationsEnabled: recruitment?.notificationsEnabled ?? false,
 			};
 		},
 		{
@@ -1075,12 +1494,9 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { error: "Forbidden: Subversive admin access required" };
 			}
 
-			const [existing] = await db
-				.select()
-				.from(systemStates)
-				.where(eq(systemStates.id, SUBVERSIVE_CONFIG_ID));
+			const currentConfig = await getSubversiveGuildConfig();
 
-			if (!existing?.data) {
+			if (!currentConfig?.guildId) {
 				set.status = 400;
 				return {
 					error:
@@ -1088,69 +1504,56 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				};
 			}
 
-			const currentConfig = existing.data as unknown as SubversiveConfigData;
-			const updatedConfig: SubversiveConfigData = {
-				...currentConfig,
-				adminRoleIds: body.adminRoleIds ?? currentConfig.adminRoleIds,
-				updatedAt: new Date().toISOString(),
-			};
-
-			await db
-				.insert(systemStates)
-				.values({
-					id: SUBVERSIVE_CONFIG_ID,
-					init: true,
-					data: updatedConfig as unknown as Record<string, unknown>,
-					createdAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.onConflictDoUpdate({
-					target: systemStates.id,
-					set: {
-						data: updatedConfig as unknown as Record<string, unknown>,
-						updatedAt: new Date(),
-					},
-				});
+			// Only the role list is written: this endpoint edits admin roles and
+			// nothing else, and the column-scoped update says exactly that. The
+			// previous whole-blob upsert rewrote every field to achieve the same
+			// result, which is how concurrent writers lost each other's changes.
+			if (body.adminRoleIds !== undefined) {
+				await updateSubversiveAdminRoleIds(
+					currentConfig.guildId,
+					body.adminRoleIds,
+				);
+			}
 
 			if (
 				body.notificationChannelId !== undefined ||
 				body.notificationsEnabled !== undefined
 			) {
-				const [recEntry] = await db
-					.select()
-					.from(systemStates)
-					.where(eq(systemStates.id, "subversive:recruitment_config"));
-
-				const existingRec = (recEntry?.data ?? {}) as Record<string, unknown>;
-				const updatedRec = {
-					...existingRec,
-					...(body.notificationChannelId !== undefined
-						? {
-								notificationChannelId:
-									body.notificationChannelId?.trim() || null,
-							}
-						: {}),
-					...(body.notificationsEnabled !== undefined
-						? { notificationsEnabled: Boolean(body.notificationsEnabled) }
-						: {}),
-					updatedAt: new Date().toISOString(),
-					updatedBy: user?.username ?? "admin",
-				};
-
+				// Column-scoped too: the recruitment worker in another process
+				// owns the scan thresholds, so this must not rewrite them.
+				const now = new Date();
 				await db
-					.insert(systemStates)
+					.insert(subversiveRecruitmentConfigs)
 					.values({
-						id: "subversive:recruitment_config",
-						init: true,
-						data: updatedRec,
-						createdAt: new Date(),
-						updatedAt: new Date(),
+						id: SUBVERSIVE_RECRUITMENT_CONFIG_ID,
+						...(body.notificationChannelId !== undefined
+							? {
+									notificationChannelId:
+										body.notificationChannelId?.trim() || null,
+								}
+							: {}),
+						...(body.notificationsEnabled !== undefined
+							? { notificationsEnabled: Boolean(body.notificationsEnabled) }
+							: {}),
+						updatedBy: user?.username ?? "admin",
+						updatedAt: now,
 					})
 					.onConflictDoUpdate({
-						target: systemStates.id,
+						target: subversiveRecruitmentConfigs.id,
 						set: {
-							data: updatedRec,
-							updatedAt: new Date(),
+							...(body.notificationChannelId !== undefined
+								? {
+										notificationChannelId:
+											body.notificationChannelId?.trim() || null,
+									}
+								: {}),
+							...(body.notificationsEnabled !== undefined
+								? {
+										notificationsEnabled: Boolean(body.notificationsEnabled),
+									}
+								: {}),
+							updatedBy: user?.username ?? "admin",
+							updatedAt: now,
 						},
 					});
 			}
@@ -1159,7 +1562,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 
 			return {
 				success: true,
-				guild: updatedConfig,
+				guild: toGuildConfigResponse(await getSubversiveGuildConfig()),
 			};
 		},
 		{

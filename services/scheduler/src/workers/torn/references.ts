@@ -1,9 +1,12 @@
 import {
 	db,
-	systemStates,
+	notInArray,
+	POINTS_MARKET_PRICE_KEY,
+	tornCalendarActivities,
 	tornCrimes,
 	tornGyms,
 	tornItems,
+	tornMarketPrices,
 	tornProperties,
 	tornStocks,
 } from "@sentinel/database";
@@ -57,7 +60,7 @@ export async function runTornReferenceSync(): Promise<void> {
 	const finishSync = logger.time();
 
 	try {
-		const [res, marketRes] = (await Promise.all([
+		const [res, marketRes, calRes] = (await Promise.all([
 			tornApi.getPersonal("/torn", {
 				queryParams: {
 					selections: ["items", "crimes", "stocks", "properties", "gyms"],
@@ -66,7 +69,17 @@ export async function runTornReferenceSync(): Promise<void> {
 			tornApi.getPersonal("/market", {
 				queryParams: { selections: ["pointsmarket"] },
 			}),
-		])) as [TornFullReferenceResponse, PointsMarketResponse];
+			tornApi.getPersonal("/torn/calendar").catch((err) => {
+				logger.warn(
+					`Failed to fetch Torn calendar in reference sync: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return null;
+			}),
+		])) as [
+			TornFullReferenceResponse,
+			PointsMarketResponse,
+			{ calendar?: { competitions?: unknown[]; events?: unknown[] } } | null,
+		];
 
 		const now = new Date();
 
@@ -83,24 +96,150 @@ export async function runTornReferenceSync(): Promise<void> {
 				totalQty > 0 ? Math.round(totalCost / totalQty) : 0;
 
 			if (avgPointsPrice > 0) {
+				// A typed numeric column: the legacy blob accepted a
+				// double-encoded value and every reader then silently fell back
+				// to "price unknown", valuing points payouts at zero.
 				await db
-					.insert(systemStates)
+					.insert(tornMarketPrices)
 					.values({
-						id: "points_market_price",
-						data: { price: avgPointsPrice },
+						refKey: POINTS_MARKET_PRICE_KEY,
+						price: avgPointsPrice,
 						createdAt: now,
 						updatedAt: now,
 					})
 					.onConflictDoUpdate({
-						target: systemStates.id,
+						target: tornMarketPrices.refKey,
 						set: {
-							data: { price: avgPointsPrice },
+							price: avgPointsPrice,
 							updatedAt: now,
 						},
 					});
 
 				logger.info(
 					`Updated average Points Market Price: $${avgPointsPrice.toLocaleString()} (sample: ${totalQty} points).`,
+				);
+			}
+		}
+
+		// Sync Torn Calendar activities to tornCalendarActivities table (24-hour reference lifecycle)
+		if (calRes?.calendar) {
+			// Torn only ever describes the running year, so a complete response is
+			// the full truth for this table. Pruning is gated on both keys being
+			// present so a partial payload can never wipe half the calendar.
+			const completeResponse =
+				Array.isArray(calRes.calendar.competitions) &&
+				Array.isArray(calRes.calendar.events);
+
+			const competitions = (calRes.calendar.competitions ?? []) as Array<{
+				title: string;
+				description: string;
+				start: number;
+				end: number;
+				fixed_start_time?: boolean;
+			}>;
+			const events = (calRes.calendar.events ?? []) as Array<{
+				title: string;
+				description: string;
+				start: number;
+				end: number;
+				fixed_start_time?: boolean;
+			}>;
+
+			const allActivities: Array<{
+				id: string;
+				title: string;
+				description: string;
+				type: "competition" | "event";
+				start: number;
+				end: number;
+				startTime: Date;
+				endTime: Date;
+				fixedStartTime: boolean;
+			}> = [];
+
+			for (const comp of competitions) {
+				allActivities.push({
+					id: `competition:${comp.start}:${comp.title}`,
+					title: comp.title,
+					description: comp.description || "",
+					type: "competition",
+					start: comp.start,
+					end: comp.end,
+					startTime: new Date(comp.start * 1000),
+					endTime: new Date(comp.end * 1000),
+					fixedStartTime: comp.fixed_start_time ?? false,
+				});
+			}
+
+			for (const ev of events) {
+				allActivities.push({
+					id: `event:${ev.start}:${ev.title}`,
+					title: ev.title,
+					description: ev.description || "",
+					type: "event",
+					start: ev.start,
+					end: ev.end,
+					startTime: new Date(ev.start * 1000),
+					endTime: new Date(ev.end * 1000),
+					fixedStartTime: ev.fixed_start_time ?? false,
+				});
+			}
+
+			if (allActivities.length > 0) {
+				const currentIds = allActivities.map((act) => act.id);
+
+				await db.transaction(async (tx) => {
+					for (const act of allActivities) {
+						await tx
+							.insert(tornCalendarActivities)
+							.values({
+								id: act.id,
+								title: act.title,
+								description: act.description,
+								type: act.type,
+								start: act.start,
+								end: act.end,
+								startTime: act.startTime,
+								endTime: act.endTime,
+								fixedStartTime: act.fixedStartTime,
+								createdAt: now,
+								updatedAt: now,
+							})
+							.onConflictDoUpdate({
+								target: tornCalendarActivities.id,
+								set: {
+									title: act.title,
+									description: act.description,
+									type: act.type,
+									start: act.start,
+									end: act.end,
+									startTime: act.startTime,
+									endTime: act.endTime,
+									fixedStartTime: act.fixedStartTime,
+									updatedAt: now,
+								},
+							});
+					}
+
+					// Activity ids embed the start timestamp, so a date Torn moves
+					// arrives as a brand new row. Without this prune the table keeps
+					// every past year forever and a moved event renders twice.
+					if (completeResponse) {
+						const removed = await tx
+							.delete(tornCalendarActivities)
+							.where(notInArray(tornCalendarActivities.id, currentIds))
+							.returning({ id: tornCalendarActivities.id });
+
+						if (removed.length > 0) {
+							logger.info(
+								`Pruned ${removed.length} stale Torn Calendar activities no longer in Torn's running year.`,
+							);
+						}
+					}
+				});
+
+				logger.info(
+					`Synced ${allActivities.length} Torn Calendar activities (${events.length} events, ${competitions.length} competitions) to tornCalendarActivities table.`,
 				);
 			}
 		}

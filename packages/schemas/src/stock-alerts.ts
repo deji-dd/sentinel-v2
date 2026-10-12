@@ -222,7 +222,7 @@ export interface StockAlertMarketContext {
 
 /** A single alertable event, shared by the worker, IPC transport and the bot. */
 export interface StockAlertEvent {
-	type: "change" | "high" | "low";
+	type: "change" | "high" | "low" | "flow";
 	/** Stable identity for the alert kind, e.g. `change:30`, `high:7d`. */
 	alertKey: string;
 	stockId: number;
@@ -249,6 +249,25 @@ export interface StockAlertEvent {
 	/** High/low alerts: the new extreme and the one it replaced. */
 	extreme?: number;
 	previousExtreme?: number;
+	/**
+	 * Flow alerts: signed net shares issued (+) or retired (−) between sweeps.
+	 *
+	 * The scale is large by nature — the market's median hour moves a few million
+	 * shares on the bigger companies — and the *percentage* below is what a reader
+	 * can compare across stocks.
+	 */
+	flowShares?: number;
+	/** Flow alerts: that flow as a signed percentage of the previous share count. */
+	flowPct?: number;
+	/** Flow alerts: the outstanding share count the flow was measured against. */
+	outstandingShares?: number;
+	/**
+	 * Flow alerts: the threshold the subscription was set at, in the unit the
+	 * subscription chose. Exactly one of these two is present on a flow alert, so
+	 * a DM can state the rule it fired under without re-reading the subscription.
+	 */
+	flowThresholdPct?: number;
+	flowThresholdShares?: number;
 	/** Range high/low context for the embed body. */
 	context: StockAlertMarketContext;
 }
@@ -266,8 +285,27 @@ export interface StockAlertBatchPayload {
  *
  * The first four are **comparisons** and fire on the crossing, not while the
  * condition holds, so a price that parks above a threshold is reported once.
- * The last two are **extremes** and fire when Torn's own window high/low beats
+ * The next two are **extremes** and fire when Torn's own window high/low beats
  * the one recorded for that subscription.
+ *
+ * The last four are **flow** conditions and they read the market rather than the
+ * price. Buying issues shares into a stock and selling retires them, so the
+ * change in a stock's outstanding share count between two sweeps *is* the net
+ * buy/sell pressure on it. That is the only bulk-trade signal the API can carry:
+ * stocks trade instantly against the market itself, with no order book, no
+ * volume figure and no player-to-player trade (`/torn/stocks` publishes a price,
+ * a share count and an investor count, and nothing else). A flow alert is
+ * therefore a **net** figure across every player, bounded by the alert worker's
+ * sweep cadence, and blind to a buy and a sell of the same size in one window. A
+ * stock split or merge also moves the share count without anybody trading.
+ *
+ * Each direction has two variants because the threshold has two natural units: a
+ * percentage of the float, which is comparable across stocks, and an absolute
+ * share count, which is what a reader watching one stock actually thinks in. The
+ * unit lives in the condition rather than in a separate modal field because a
+ * Discord modal is static — every field is always shown — so a "unit" select
+ * would appear in front of the price alerts too and would have to be answered
+ * for conditions it means nothing to.
  */
 export const USER_STOCK_ALERT_CONDITIONS = [
 	"price_above",
@@ -276,12 +314,21 @@ export const USER_STOCK_ALERT_CONDITIONS = [
 	"change_down",
 	"new_high",
 	"new_low",
+	"bulk_buy",
+	"bulk_buy_shares",
+	"bulk_sell",
+	"bulk_sell_shares",
 ] as const;
 
 export type UserStockAlertCondition =
 	(typeof USER_STOCK_ALERT_CONDITIONS)[number];
 
-/** Short label used in the Discord select menu and the `/stock-alerts list` view. */
+/**
+ * Label used in the Discord select menu and the `/stock-alerts list` view.
+ *
+ * The four flow labels spell out their unit, because the trigger select is where
+ * a reader decides what the Amount field will mean.
+ */
 export const USER_STOCK_ALERT_CONDITION_LABELS: Record<
 	UserStockAlertCondition,
 	string
@@ -292,6 +339,10 @@ export const USER_STOCK_ALERT_CONDITION_LABELS: Record<
 	change_down: "Falls by %",
 	new_high: "New high",
 	new_low: "New low",
+	bulk_buy: "Bulk buying (% of shares)",
+	bulk_buy_shares: "Bulk buying (share count)",
+	bulk_sell: "Bulk selling (% of shares)",
+	bulk_sell_shares: "Bulk selling (share count)",
 };
 
 /** Conditions whose threshold is a price in dollars rather than a percentage. */
@@ -313,6 +364,59 @@ export const USER_STOCK_ALERT_PERCENT_CONDITIONS = [
 	"change_up",
 	"change_down",
 ] as const satisfies readonly UserStockAlertCondition[];
+
+/**
+ * Conditions measured as net share flow against the stock's outstanding shares.
+ *
+ * These ignore the range select: their window is the gap between two market
+ * sweeps (`USER_STOCK_ALERT_FLOW_WINDOW_MINUTES`), not one of Torn's rolling
+ * ranges, so a subscription stores `rangeKey = null` exactly as the price
+ * conditions do.
+ */
+export const USER_STOCK_ALERT_FLOW_CONDITIONS = [
+	"bulk_buy",
+	"bulk_buy_shares",
+	"bulk_sell",
+	"bulk_sell_shares",
+] as const satisfies readonly UserStockAlertCondition[];
+
+/** How one flow condition reads its threshold. */
+export interface UserStockAlertFlowReading {
+	/** Shares being issued into the stock, or retired out of it. */
+	direction: "buy" | "sell";
+	/** Whether the threshold is a share of the float or a count of shares. */
+	unit: "pct" | "shares";
+}
+
+/**
+ * Reads a flow condition's direction and threshold unit, or null when the
+ * condition is not a flow one.
+ *
+ * Derived from the condition name rather than kept in a lookup table: the two
+ * variants of a direction differ only by their `_shares` suffix, and a table that
+ * can disagree with the vocabulary is a table that eventually will. The four
+ * names are asserted against the reading in the tests.
+ */
+export function readUserStockAlertFlow(
+	condition: UserStockAlertCondition,
+): UserStockAlertFlowReading | null {
+	if (
+		!(USER_STOCK_ALERT_FLOW_CONDITIONS as readonly string[]).includes(condition)
+	) {
+		return null;
+	}
+
+	return {
+		direction: condition.startsWith("bulk_buy") ? "buy" : "sell",
+		unit: condition.endsWith("_shares") ? "shares" : "pct",
+	};
+}
+
+export function isUserStockAlertFlowCondition(
+	condition: UserStockAlertCondition,
+): boolean {
+	return readUserStockAlertFlow(condition) !== null;
+}
 
 export function isUserStockAlertCondition(
 	value: unknown,
@@ -354,6 +458,16 @@ export interface UserStockAlertState {
 	wasTrue: boolean | null;
 	/** The extreme recorded for a `new_high` / `new_low` subscription. */
 	lastExtreme: number | null;
+	/**
+	 * Flow memory: the stock's outstanding share count at the last sweep.
+	 *
+	 * Advanced on *every* sweep that reports a share count, not only on a
+	 * delivery, so an alert describes one window's flow instead of re-reporting a
+	 * dump the user has already been told about.
+	 */
+	lastShares: number | null;
+	/** Epoch-ms of the sweep that recorded `lastShares`, for the window label. */
+	lastSharesAt: number | null;
 	/** Epoch-ms timestamp of the last delivery, used as a cooldown floor. */
 	lastAlertAt: number | null;
 }
@@ -363,6 +477,8 @@ export function createEmptyUserStockAlertState(): UserStockAlertState {
 		seeded: false,
 		wasTrue: null,
 		lastExtreme: null,
+		lastShares: null,
+		lastSharesAt: null,
 		lastAlertAt: null,
 	};
 }
@@ -420,6 +536,41 @@ export const MIN_USER_STOCK_ALERT_PRICE = 1;
 export const MAX_USER_STOCK_ALERT_PRICE = 1_000_000_000;
 
 /**
+ * Bounds for a flow threshold, as a percentage of outstanding shares per sweep.
+ *
+ * Taken from the market's own behaviour rather than invented. Across ~41 days of
+ * hourly candles the median hour moves about 0.01% of a large stock's shares,
+ * while a whale-scale window lands at 1–2.5%. Counted over that same period, a
+ * 0.25% threshold crossed 12–15 times on TSB and FHG and 23–69 times on the
+ * busier stocks, and 1% only 1–12 times — so the floor sits above routine churn
+ * and the ceiling well past anything the market has actually printed.
+ */
+export const MIN_USER_STOCK_ALERT_FLOW_PCT = 0.05;
+export const MAX_USER_STOCK_ALERT_FLOW_PCT = 25;
+
+/**
+ * Bounds for a flow threshold expressed as an absolute share count.
+ *
+ * The floor is deliberately permissive — a hundred thousand shares is well under
+ * the routine hourly churn of the big companies, so it is a choice a reader can
+ * make rather than one this code makes for them — while the ceiling sits just
+ * above the largest float Torn lists (~92B on HRG), because a threshold beyond
+ * every float could only ever produce an alert that never fires. Counts are whole
+ * numbers: a fraction of a share is not something Torn trades.
+ */
+export const MIN_USER_STOCK_ALERT_FLOW_SHARES = 100_000;
+export const MAX_USER_STOCK_ALERT_FLOW_SHARES = 100_000_000_000;
+
+/**
+ * Sweep cadence the flow conditions measure across, in minutes.
+ *
+ * Mirrors the worker's five-minute cron pattern. It is the *nominal* window only
+ * — a skipped cycle makes the real window longer, which is why a delivered alert
+ * carries the window it actually measured.
+ */
+export const USER_STOCK_ALERT_FLOW_WINDOW_MINUTES = 5;
+
+/**
  * Minimum gap between two deliveries of the same subscription.
  *
  * The comparison conditions already fire on the crossing, so this is a backstop
@@ -429,6 +580,7 @@ export const MAX_USER_STOCK_ALERT_PRICE = 1_000_000_000;
 export const USER_STOCK_ALERT_COOLDOWN_MINUTES = 60;
 
 /** Formats a comparison threshold for humans, e.g. "$1,200.00" or "5%". */
+/** Formats a threshold for humans: "$1,200.00", "5%", "0.25% of shares" or "250,000,000 shares". */
 export function formatUserStockAlertThreshold(
 	condition: UserStockAlertCondition,
 	threshold: number,
@@ -441,6 +593,14 @@ export function formatUserStockAlertThreshold(
 			maximumFractionDigits: 2,
 		})}`;
 	}
+
+	const flow = readUserStockAlertFlow(condition);
+	if (flow) {
+		return flow.unit === "shares"
+			? `${Math.round(threshold).toLocaleString("en-US")} shares`
+			: `${threshold}% of shares`;
+	}
+
 	return `${threshold}%`;
 }
 
@@ -481,6 +641,14 @@ export function describeUserStockAlert(subscription: {
 	}
 
 	const amount = formatUserStockAlertThreshold(condition, threshold ?? 0);
+	const flow = readUserStockAlertFlow(condition);
+	if (flow) {
+		// Built from the direction rather than `label`: the select label spells out
+		// the unit for the reader choosing it, which would read redundantly here
+		// ("Bulk buying (share count) 250,000,000 shares per 5-min sweep").
+		const direction = flow.direction === "buy" ? "Bulk buying" : "Bulk selling";
+		return `${direction} ${amount} per ${USER_STOCK_ALERT_FLOW_WINDOW_MINUTES}-min sweep`;
+	}
 	if (
 		(USER_STOCK_ALERT_PRICE_CONDITIONS as readonly string[]).includes(condition)
 	) {

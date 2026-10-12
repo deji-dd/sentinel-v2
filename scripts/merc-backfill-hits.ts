@@ -31,10 +31,10 @@ import {
 	isAttackProcessed,
 	mapRowToMercContract,
 	mercContracts,
+	mercMasterKeys,
 	recordMercContractHit,
 	sql,
 	sqlClient,
-	systemStates,
 } from "../packages/database";
 import { decryptApiKey, TornApiClient } from "../packages/torn-api";
 
@@ -120,37 +120,34 @@ async function getMasterApiKeys(
 	const masterKey = process.env.ENCRYPTION_KEY ?? "";
 
 	try {
-		const stateKey = `merc:master_keys:${guildId}`;
-		const [stateRow] = await db
-			.select()
-			.from(systemStates)
-			.where(eq(systemStates.id, stateKey));
+		// Master keys are rows now. This used to read the
+		// `merc:master_keys:<guildId>` JSON blob, which nothing writes any more, so
+		// it silently found no keys at all and the script fell back to TORN_API_KEY.
+		const masterKeyRows = await db
+			.select({
+				keyId: mercMasterKeys.keyId,
+				factionId: mercMasterKeys.factionId,
+			})
+			.from(mercMasterKeys)
+			.where(eq(mercMasterKeys.guildId, guildId));
 
-		if (stateRow?.data && typeof stateRow.data === "object") {
-			const map = stateRow.data as Record<
-				string,
-				{ keyId?: string; factionId?: number }
-			>;
-			const keyIds = Object.values(map)
-				.map((item) => item.keyId)
-				.filter((k): k is string => Boolean(k));
+		const factionByKeyId = new Map(
+			masterKeyRows.map((row) => [row.keyId, row.factionId]),
+		);
+		const keyIds = masterKeyRows.map((row) => row.keyId);
 
-			if (keyIds.length > 0) {
-				const rows = await db
-					.select()
-					.from(guildApiKeys)
-					.where(inArray(guildApiKeys.id, keyIds));
+		if (keyIds.length > 0) {
+			const rows = await db
+				.select()
+				.from(guildApiKeys)
+				.where(inArray(guildApiKeys.id, keyIds));
 
-				for (const r of rows) {
-					if (r.apiKeyEncrypted) {
-						try {
-							const plain = decryptApiKey(r.apiKeyEncrypted, masterKey);
-							const factionId = Object.values(map).find(
-								(m) => m.keyId === r.id,
-							)?.factionId;
-							keys.push({ factionId, apiKey: plain });
-						} catch {}
-					}
+			for (const r of rows) {
+				if (r.apiKeyEncrypted) {
+					try {
+						const plain = decryptApiKey(r.apiKeyEncrypted, masterKey);
+						keys.push({ factionId: factionByKeyId.get(r.id), apiKey: plain });
+					} catch {}
 				}
 			}
 		}
@@ -511,6 +508,12 @@ async function processSingleContract(
 		}
 	}
 
+	// Currently a no-op: nothing writes
+	// `merc:attack_validator:<guildId>:<contractId>:*` rows any more. The validator
+	// consumes the shared faction attack feed and persists per-faction watermarks
+	// in `worker_state`, so this is kept only so the reset still happens if that
+	// key is ever reintroduced. Left as raw SQL because it targets the legacy
+	// `system_states` table directly.
 	await sqlClient`
 		DELETE FROM system_states WHERE id LIKE ${`merc:attack_validator:${contract.guildId}:${contract.id}:%`}
 	`;

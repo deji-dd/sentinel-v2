@@ -1,4 +1,5 @@
 import {
+	bigint,
 	boolean,
 	doublePrecision,
 	index,
@@ -10,6 +11,16 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+/**
+ * Sentinel primary key for the single {@link subversiveRecruitmentConfigs} row.
+ *
+ * The recruitment settings are deployment-wide rather than per-faction, so the
+ * table holds exactly one row. The legacy `system_states` key this replaces was
+ * the literal string `"subversive:recruitment_config"`; it is kept here so the
+ * row is recognizable to anyone tracing the old key through the codebase.
+ */
+export const SUBVERSIVE_RECRUITMENT_CONFIG_ID = "subversive:recruitment_config";
 
 export const subversiveRankedWars = pgTable(
 	"subversive_ranked_wars",
@@ -466,3 +477,275 @@ export type SubversiveRwDisplayMessageRow =
 	typeof subversiveRwDisplayMessages.$inferSelect;
 export type NewSubversiveRwDisplayMessageRow =
 	typeof subversiveRwDisplayMessages.$inferInsert;
+
+/**
+ * Faction-managed calendar events for Subversive family factions.
+ * Shown alongside official Torn events on the public and faction calendar.
+ */
+export const subversiveCalendarEvents = pgTable(
+	"subversive_calendar_events",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		/**
+		 * Family faction this event belongs to. Defaults to the primary faction,
+		 * 2013 Subversive Alliance — the same value as
+		 * `PRIMARY_SUBVERSIVE_FACTION_ID` in `@sentinel/utils` (kept as a literal
+		 * here so the database package needs no dependency on it).
+		 */
+		factionId: integer("faction_id").notNull().default(2013),
+		title: text("title").notNull(),
+		description: text("description").default("").notNull(),
+		/**
+		 * 'war' (Ranked War Enlistment) | 'chain' | 'competition' |
+		 * 'steadfast_change'. Retired values — 'training', 'meeting', 'giveaway',
+		 * 'oc', 'general' — are no longer offered by the dashboard form but are
+		 * left readable so events created before the change still render.
+		 */
+		category: text("category").notNull().default("general"),
+		startTime: timestamp("start_time", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		endTime: timestamp("end_time", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		color: text("color"),
+		/**
+		 * Battlestats members are asked to hold for a 'steadfast_change' event:
+		 * 'strength' | 'speed' | 'dexterity' | 'defense'. Null for every other
+		 * category.
+		 */
+		primaryStat: text("primary_stat"),
+		secondaryStat: text("secondary_stat"),
+		isAllDay: boolean("is_all_day").default(false).notNull(),
+		createdById: text("created_by_id"),
+		createdByName: text("created_by_name"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_subversive_calendar_events_faction").on(table.factionId),
+		index("idx_subversive_calendar_events_start").on(table.startTime),
+		index("idx_subversive_calendar_events_end").on(table.endTime),
+	],
+);
+
+export type SubversiveCalendarEvent =
+	typeof subversiveCalendarEvents.$inferSelect;
+export type NewSubversiveCalendarEvent =
+	typeof subversiveCalendarEvents.$inferInsert;
+
+/**
+ * Discord guild binding and admin authorization for the Subversive Alliance
+ * tooling.
+ *
+ * Replaces the `subversive:guild_config` row in the legacy `system_states` blob
+ * table. That row held these fields as one JSON object, so every write had to
+ * read the whole blob and write it back. A writer that built its payload from
+ * request input alone (the setup endpoint) silently dropped any field it did not
+ * know about. Typed columns make each field independently writable, so a setup
+ * call can no longer erase an unrelated setting.
+ *
+ * One row per configured guild; `guild_id` is the Discord snowflake.
+ */
+export const subversiveGuildConfigs = pgTable("subversive_guild_configs", {
+	guildId: text("guild_id").primaryKey(),
+	guildName: text("guild_name"),
+	/** CDN URL of the guild icon, or null when the guild has none. */
+	guildIcon: text("guild_icon"),
+	/** Discord role snowflakes treated as Subversive administrators. */
+	adminRoleIds: jsonb("admin_role_ids").$type<string[]>().default([]).notNull(),
+	/** When the guild was first bound to this tooling. */
+	configuredAt: timestamp("configured_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	configuredByDiscordId: text("configured_by_discord_id"),
+	configuredByUsername: text("configured_by_username"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type SubversiveGuildConfigRow =
+	typeof subversiveGuildConfigs.$inferSelect;
+export type NewSubversiveGuildConfigRow =
+	typeof subversiveGuildConfigs.$inferInsert;
+
+/**
+ * Ranked-war recruitment scan settings.
+ *
+ * Replaces the `subversive:recruitment_config` row in `system_states`. Exactly
+ * one row exists and it is addressed by the {@link SUBVERSIVE_RECRUITMENT_CONFIG_ID}
+ * sentinel id: the settings are deployment-wide rather than per-faction, which
+ * matches how the recruitment worker resolved them (a single unqualified row).
+ *
+ * The blob was written from two places — the API route and the recruitment
+ * worker in a different process — and the API's save path rebuilt the object
+ * from request input, so it discarded whatever the other writer had stored.
+ * Distinct columns mean each writer now touches only the fields it owns.
+ */
+export const subversiveRecruitmentConfigs = pgTable(
+	"subversive_recruitment_configs",
+	{
+		/** Always {@link SUBVERSIVE_RECRUITMENT_CONFIG_ID}; enforces one row. */
+		id: text("id").primaryKey().default(SUBVERSIVE_RECRUITMENT_CONFIG_ID),
+		/**
+		 * Minimum estimated battle stats a candidate must exceed. `bigint`: top
+		 * Torn battle-stat totals exceed the 32-bit integer ceiling, and the
+		 * column previously accepted any JSON number silently.
+		 */
+		minStats: bigint("min_stats", { mode: "number" })
+			.default(100_000_000)
+			.notNull(),
+		/** Minimum attacks landed in the evaluated war. */
+		minAttacks: integer("min_attacks").default(25).notNull(),
+		/** Minimum share of the faction's attacks, as a percentage. */
+		minAttackPercentage: doublePrecision("min_attack_percentage")
+			.default(8)
+			.notNull(),
+		/** Share of the war a member must be active for, as a percentage. */
+		termedClusterPercentage: integer("termed_cluster_percentage")
+			.default(60)
+			.notNull(),
+		/** Whether the worker scans ranked wars without an explicit trigger. */
+		autoScanEnabled: boolean("auto_scan_enabled").default(false).notNull(),
+		/** Factions whose members are never surfaced as candidates. */
+		excludedFactionIds: jsonb("excluded_faction_ids")
+			.$type<number[]>()
+			.default([])
+			.notNull(),
+		notificationsEnabled: boolean("notifications_enabled")
+			.default(false)
+			.notNull(),
+		/** Discord snowflake to post candidate alerts into, or null. */
+		notificationChannelId: text("notification_channel_id"),
+		updatedBy: text("updated_by"),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+);
+
+export type SubversiveRecruitmentConfigRow =
+	typeof subversiveRecruitmentConfigs.$inferSelect;
+export type NewSubversiveRecruitmentConfigRow =
+	typeof subversiveRecruitmentConfigs.$inferInsert;
+
+/**
+ * The active dibs board, one row per dibbed target.
+ *
+ * Replaces the `subversive:dibs_records` row in the legacy `system_states` blob,
+ * which held every record as a single JSON array and rewrote the whole array on
+ * every change. That is O(n) write amplification on a value that grows with the
+ * number of live dibs, and it made the row a single-writer bottleneck.
+ *
+ * Identity is `target_id`: the in-memory board is a `Map<number, DibsRecord>`
+ * keyed by target, so the primary key matches how the manager already looks
+ * records up.
+ *
+ * Epoch-number columns are `bigint` rather than timestamps on purpose. The
+ * manager's 1-second evaluation loop does arithmetic on these values
+ * (`hospitalUntil` in particular drives the post-hospital claim window) and the
+ * units differ per field, so storing epoch integers keeps the semantics exactly
+ * as they were instead of adding a conversion at every read.
+ */
+export const subversiveDibsRecords = pgTable(
+	"subversive_dibs_records",
+	{
+		targetId: integer("target_id").primaryKey(),
+		/** Family faction whose ranked war this dibs belongs to (2013 / 27312). */
+		factionId: integer("faction_id"),
+		targetName: text("target_name").notNull(),
+		targetLevel: integer("target_level").notNull(),
+		estimatedBs: doublePrecision("estimated_bs").notNull(),
+		fairFight: doublePrecision("fair_fight").notNull(),
+		/** Epoch SECONDS the target is hospitalized until. */
+		hospitalUntil: bigint("hospital_until", { mode: "number" }).notNull(),
+		/** `open` until claimed. */
+		status: text("status").notNull(),
+		claimedByTornId: integer("claimed_by_torn_id"),
+		claimedByTornName: text("claimed_by_torn_name"),
+		claimedByDiscordId: text("claimed_by_discord_id"),
+		claimedByDiscordTag: text("claimed_by_discord_tag"),
+		/** `script` or `discord` — which client the claim came from. */
+		claimedByPlatform: text("claimed_by_platform"),
+		/** Epoch MILLISECONDS the claim was taken. */
+		claimedAt: bigint("claimed_at", { mode: "number" }),
+		discordMessageId: text("discord_message_id"),
+		discordChannelId: text("discord_channel_id"),
+		/** Epoch MILLISECONDS the target was first seen out of hospital. */
+		exitHospAt: bigint("exit_hosp_at", { mode: "number" }),
+		/** Epoch MILLISECONDS the record was created. */
+		recordCreatedAt: bigint("record_created_at", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_subversive_dibs_records_faction").on(table.factionId),
+		index("idx_subversive_dibs_records_status").on(table.status),
+	],
+);
+
+export type SubversiveDibsRecordRow = typeof subversiveDibsRecords.$inferSelect;
+export type NewSubversiveDibsRecordRow =
+	typeof subversiveDibsRecords.$inferInsert;
+
+/**
+ * Every dibs Discord message the API has posted, one row per message.
+ *
+ * Replaces the `subversive:dibs_message_ledger` row in `system_states`, which
+ * stored a JSON object keyed by message id and rewrote the entire object on
+ * every post or delete. This ledger is the source of truth for channel
+ * maintenance — it is what lets the sweeper delete callouts the API still tracks
+ * after a restart — so it is queried by channel and by age, both of which are
+ * now index-backed instead of requiring every message to be loaded into memory.
+ */
+export const subversiveDibsMessages = pgTable(
+	"subversive_dibs_messages",
+	{
+		messageId: text("message_id").primaryKey(),
+		targetId: integer("target_id").notNull(),
+		/** Resolved family faction (2013 / 27312). */
+		factionId: integer("faction_id"),
+		channelId: text("channel_id").notNull(),
+		/** Epoch MILLISECONDS the message was posted. */
+		postedAtMs: bigint("posted_at_ms", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idx_subversive_dibs_messages_target").on(table.targetId),
+		index("idx_subversive_dibs_messages_channel").on(
+			table.channelId,
+			table.postedAtMs,
+		),
+		index("idx_subversive_dibs_messages_faction").on(table.factionId),
+	],
+);
+
+export type SubversiveDibsMessageRow =
+	typeof subversiveDibsMessages.$inferSelect;
+export type NewSubversiveDibsMessageRow =
+	typeof subversiveDibsMessages.$inferInsert;

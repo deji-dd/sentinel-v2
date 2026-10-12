@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { db } from "@sentinel/database";
+import {
+	db,
+	eq,
+	inArray,
+	personalBountyTargets,
+	savePersonalBountyMeta,
+	upsertPersonalBountyTarget,
+	WORKER_STATE_IDS,
+	workerState,
+} from "@sentinel/database";
 import * as ffscouterModule from "@sentinel/torn-api";
 import * as managerModule from "@sentinel/torn-api";
 import {
@@ -26,8 +35,17 @@ describe("Personal Bounty Target Finder Worker", () => {
 	let hasActiveSubversiveKeysSpy: ReturnType<typeof spyOn>;
 	let getSubversiveUserKeysSpy: ReturnType<typeof spyOn>;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		resetBountyFinderState();
+
+		// The board is real rows now, so each test starts from an empty one.
+		// Without this, a cycle run by an earlier test leaves targets behind and
+		// the hydration assertions below would count them too.
+		await db.delete(personalBountyTargets);
+		await db
+			.delete(workerState)
+			.where(eq(workerState.workerId, WORKER_STATE_IDS.bounties));
+
 		getPersonalKeySpy = spyOn(
 			managerModule,
 			"getPersonalKey",
@@ -726,61 +744,55 @@ describe("Personal Bounty Target Finder Worker", () => {
 
 	it("hydrates state from database on startup restoring verified ages, hospital timers, and recent ready targets", async () => {
 		const nowSec = Math.floor(Date.now() / 1000);
-		const dbFindSpy = spyOn(
-			db.query.systemStates,
-			"findFirst",
-		).mockResolvedValue({
-			id: "personal:bounties",
-			init: true,
-			data: {
-				readyTargets: [
-					{
-						id: 501,
-						name: "CachedReadyTarget",
-						level: 20,
-						reward: 250000,
-						fairFight: 2.0,
-						estimatedBs: 10000,
-						age: 50,
-						status: { state: "Okay" },
-						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=501",
-						lastCheckedAt: nowSec - 30,
-					},
-				],
-				hospitalQueue: [
-					{
-						id: 502,
-						name: "CachedHospTarget",
-						level: 30,
-						reward: 500000,
-						fairFight: 1.5,
-						estimatedBs: 25000,
-						age: 120,
-						status: {
-							state: "Hospital",
-							description: "In hospital",
-							until: nowSec + 900,
-						},
-						secondsRemaining: 900,
-						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=502",
-						lastCheckedAt: nowSec - 30,
-					},
-				],
-				lastSyncTimestamp: nowSec - 30,
-				targetCount: 2,
-				pendingCount: 0,
-			},
-			createdAt: new Date(),
-			updatedAt: new Date(),
-		} as unknown as Awaited<
-			ReturnType<typeof db.query.systemStates.findFirst>
-		>);
+		const seededIds = [501, 502];
 
 		try {
+			// Targets are rows now, so the fixtures are written the same way the
+			// workers write them rather than by mocking a JSON blob.
+			await upsertPersonalBountyTarget(
+				{
+					id: 501,
+					name: "CachedReadyTarget",
+					level: 20,
+					reward: 250000,
+					fairFight: 2.0,
+					estimatedBs: 10000,
+					age: 50,
+					status: { state: "Okay" },
+					attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=501",
+					lastCheckedAt: nowSec - 30,
+				},
+				"ready",
+				null,
+			);
+			await upsertPersonalBountyTarget(
+				{
+					id: 502,
+					name: "CachedHospTarget",
+					level: 30,
+					reward: 500000,
+					fairFight: 1.5,
+					estimatedBs: 25000,
+					age: 120,
+					status: {
+						state: "Hospital",
+						description: "In hospital",
+						until: nowSec + 900,
+					},
+					attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=502",
+					lastCheckedAt: nowSec - 30,
+				},
+				"hospital",
+				900,
+			);
+			await savePersonalBountyMeta({
+				lastSyncTimestamp: nowSec - 30,
+				pendingCount: 0,
+			});
+
 			setBountyStateHydrated(false);
 			await hydrateBountyStateFromDb();
 
-			expect(dbFindSpy).toHaveBeenCalled();
 			expect(getVerifiedAgeCacheSize()).toBe(2);
 			expect(getTargetProfileCacheSize()).toBe(2);
 
@@ -791,63 +803,61 @@ describe("Personal Bounty Target Finder Worker", () => {
 			expect(state.hospitalQueue[0]?.id).toBe(502);
 			expect(state.hospitalQueue[0]?.secondsRemaining).toBeGreaterThan(800);
 		} finally {
-			dbFindSpy.mockRestore();
+			await db
+				.delete(personalBountyTargets)
+				.where(inArray(personalBountyTargets.targetId, seededIds));
+			await db
+				.delete(workerState)
+				.where(eq(workerState.workerId, WORKER_STATE_IDS.bounties));
 		}
 	});
 
 	it("skips expired hospital timers and stale ready targets when hydrating older state", async () => {
 		const nowSec = Math.floor(Date.now() / 1000);
-		const dbFindSpy = spyOn(
-			db.query.systemStates,
-			"findFirst",
-		).mockResolvedValue({
-			id: "personal:bounties",
-			init: true,
-			data: {
-				readyTargets: [
-					{
-						id: 601,
-						name: "StaleReadyTarget",
-						level: 25,
-						reward: 100000,
-						fairFight: null,
-						estimatedBs: null,
-						age: 80,
-						status: { state: "Okay" },
-						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=601",
-						lastCheckedAt: nowSec - 600, // 10 mins ago
-					},
-				],
-				hospitalQueue: [
-					{
-						id: 602,
-						name: "ExpiredHospTarget",
-						level: 40,
-						reward: 200000,
-						fairFight: null,
-						estimatedBs: null,
-						age: 200,
-						status: {
-							state: "Hospital",
-							description: "Already left",
-							until: nowSec - 60, // expired hospital timer
-						},
-						secondsRemaining: 0,
-						attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=602",
-						lastCheckedAt: nowSec - 600,
-					},
-				],
-				lastSyncTimestamp: nowSec - 600,
-				targetCount: 2,
-				pendingCount: 0,
-			},
-			createdAt: new Date(),
-			updatedAt: new Date(),
-		} as unknown as Awaited<
-			ReturnType<typeof db.query.systemStates.findFirst>
-		>);
+		const seededIds = [601, 602];
 
 		try {
+			await upsertPersonalBountyTarget(
+				{
+					id: 601,
+					name: "StaleReadyTarget",
+					level: 25,
+					reward: 100000,
+					fairFight: null,
+					estimatedBs: null,
+					age: 80,
+					status: { state: "Okay" },
+					attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=601",
+					lastCheckedAt: nowSec - 600,
+				},
+				"ready",
+				null,
+			);
+			await upsertPersonalBountyTarget(
+				{
+					id: 602,
+					name: "ExpiredHospTarget",
+					level: 40,
+					reward: 200000,
+					fairFight: null,
+					estimatedBs: null,
+					age: 200,
+					status: {
+						state: "Hospital",
+						description: "Already left",
+						until: nowSec - 60,
+					},
+					attackUrl: "https://www.torn.com/page.php?sid=attack&user2ID=602",
+					lastCheckedAt: nowSec - 600,
+				},
+				"hospital",
+				0,
+			);
+			await savePersonalBountyMeta({
+				lastSyncTimestamp: nowSec - 600,
+				pendingCount: 0,
+			});
+
 			setBountyStateHydrated(false);
 			await hydrateBountyStateFromDb();
 
@@ -861,7 +871,12 @@ describe("Personal Bounty Target Finder Worker", () => {
 			expect(state.readyTargets.length).toBe(0);
 			expect(state.hospitalQueue.length).toBe(0);
 		} finally {
-			dbFindSpy.mockRestore();
+			await db
+				.delete(personalBountyTargets)
+				.where(inArray(personalBountyTargets.targetId, seededIds));
+			await db
+				.delete(workerState)
+				.where(eq(workerState.workerId, WORKER_STATE_IDS.bounties));
 		}
 	});
 

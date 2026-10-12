@@ -2,10 +2,12 @@ import {
 	db,
 	eq,
 	inArray,
+	POINTS_MARKET_PRICE_KEY,
+	personalLedgerSyncStates,
 	personalLogs,
 	stockLedgers,
-	systemStates,
 	tornItems,
+	tornMarketPrices,
 	tornStocks,
 	userStocks,
 } from "@sentinel/database";
@@ -48,9 +50,6 @@ import { authenticateCrimeLedgerRequest } from "./crime-ledger";
 
 const logger = new Logger("API", "StocksLedger");
 
-const STOCKS_LEDGER_STATE_ID = "personal:stocks_ledger";
-/** Average points-market price, synced by the Torn reference worker. */
-const POINTS_PRICE_STATE_ID = "points_market_price";
 /** Prices older than this are refreshed on read, so the tab cannot go stale. */
 const PRICE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -63,20 +62,18 @@ function asList(value: unknown): unknown[] {
 }
 
 async function loadLedgerState(): Promise<StocksLedgerState> {
-	const record = await db.query.systemStates.findFirst({
-		where: eq(systemStates.id, STOCKS_LEDGER_STATE_ID),
+	const record = await db.query.personalLedgerSyncStates.findFirst({
+		where: eq(personalLedgerSyncStates.ledger, "stocks"),
 	});
-	const data =
-		record?.data && typeof record.data === "object"
-			? (record.data as Partial<StocksLedgerState>)
-			: {};
 
 	return {
-		status: data.status ?? "idle",
-		totalIndexedLogs: data.totalIndexedLogs ?? 0,
-		lastProcessedTimestamp: data.lastProcessedTimestamp ?? null,
-		lastError: data.lastError ?? null,
-		updatedAt: data.updatedAt ?? new Date().toISOString(),
+		status: (record?.status as StocksLedgerState["status"]) ?? "idle",
+		totalIndexedLogs: record?.totalIndexed ?? 0,
+		lastProcessedTimestamp: record?.lastProcessedTimestamp ?? null,
+		lastError: record?.lastError ?? null,
+		updatedAt: record?.updatedAt
+			? record.updatedAt.toISOString()
+			: new Date().toISOString(),
 	};
 }
 
@@ -224,14 +221,10 @@ async function loadRecordedDividendValues(): Promise<Map<string, number>> {
  * rather than being counted as nothing.
  */
 async function loadPointsPrice(): Promise<number> {
-	const record = await db.query.systemStates.findFirst({
-		where: eq(systemStates.id, POINTS_PRICE_STATE_ID),
+	const record = await db.query.tornMarketPrices.findFirst({
+		where: eq(tornMarketPrices.refKey, POINTS_MARKET_PRICE_KEY),
 	});
-	const data =
-		record?.data && typeof record.data === "object"
-			? (record.data as Record<string, unknown>)
-			: {};
-	const price = data.price;
+	const price = record?.price;
 	return typeof price === "number" && Number.isFinite(price) && price > 0
 		? price
 		: 0;

@@ -33,11 +33,6 @@ export const STORAGE_KEYS = {
 	crimesTimeframe: "blasted_crimes_timeframe",
 	crimesSort: "blasted_crimes_sort",
 	companySort: "blasted_company_sort",
-	wealthTimeframe: "blasted_wealth_timeframe",
-	cachedWealthState: "blasted_cached_wealth_state",
-	cachedWealthAnalytics: "blasted_cached_wealth_analytics",
-	wealthSort: "blasted_wealth_sort",
-	wealthChartMode: "blasted_wealth_chart_mode",
 };
 
 export const POLLING_CONFIG = {
