@@ -3,6 +3,7 @@ import {
 	type CalendarEvent,
 	formatEventWindow,
 	isWholeDayWindow,
+	wholeDayWindow,
 } from "./calendar-events";
 
 /**
@@ -126,5 +127,42 @@ describe("formatEventWindow", () => {
 				}),
 			),
 		).toBe("00:00 - 06:00 TCT");
+	});
+});
+
+/**
+ * The window a one-day category — Ranked War Enlistment, Steadfast Change — is
+ * written with. It has to be the whole of its date, because that is what the
+ * calendar prints as "All day"; a window that stopped short of midnight would be
+ * drawn as a slice of the afternoon instead.
+ */
+describe("wholeDayWindow", () => {
+	it("covers midnight to the last second of the same day", () => {
+		expect(wholeDayWindow("2026-10-13")).toEqual({
+			startTime: "2026-10-13T00:00:00.000Z",
+			endTime: "2026-10-13T23:59:59.000Z",
+		});
+	});
+
+	it("is the shape the calendar reads back as a whole day", () => {
+		const window = wholeDayWindow("2026-10-13");
+
+		expect(
+			isWholeDayWindow(
+				event({
+					startTime: window.startTime,
+					endTime: window.endTime,
+				}),
+			),
+		).toBe(true);
+
+		expect(
+			formatEventWindow(
+				event({
+					startTime: window.startTime,
+					endTime: window.endTime,
+				}),
+			),
+		).toBe("All day (TCT)");
 	});
 });

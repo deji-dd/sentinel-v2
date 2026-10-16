@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell } from "@/components/PageShell";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -34,7 +35,11 @@ import {
 } from "@/components/ui/tooltip";
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
-import { type CalendarEvent, formatEventWindow } from "../lib/calendar-events";
+import {
+	type CalendarEvent,
+	formatEventWindow,
+	wholeDayWindow,
+} from "../lib/calendar-events";
 import { DEFAULT_EVENT_COLOR, dayWashBackground } from "../lib/calendar-wash";
 import {
 	getSubversiveFactionName,
@@ -227,7 +232,8 @@ function toDateValue(date: Date): string {
 	return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
-function formatTuesday(dateValue: string): string {
+/** `Tue 13 Oct 2026` for a `YYYY-MM-DD` value, read at noon so no zone can shift it. */
+function formatDateLabel(dateValue: string): string {
 	return new Date(`${dateValue}T12:00:00Z`).toLocaleDateString("en-GB", {
 		timeZone: "UTC",
 		weekday: "short",
@@ -465,6 +471,150 @@ function UpcomingEventsPanel({
 	);
 }
 
+/** The day whose events the grid is currently managing. */
+interface OpenDay {
+	year: number;
+	month: number;
+	day: number;
+}
+
+interface DayEventsPanelProps {
+	/** The day being managed, or null when the panel is closed. */
+	day: OpenDay | null;
+	events: CalendarEvent[];
+	/** Whether this day can still take a new event, so the panel can offer one. */
+	canAdd: boolean;
+	onClose: () => void;
+	onAddEvent: () => void;
+	onEditEvent: (ev: CalendarEvent) => void;
+	onDeleteEvent: (ev: CalendarEvent) => void;
+}
+
+/**
+ * What is on one day, and what can be done with it.
+ *
+ * A bare day in the grid is an "add" gesture, but only while the day is empty: a
+ * day that already holds events answers with them instead, because the useful
+ * thing to do with a day that is already spoken for is change it or clear it
+ * rather than pile another event on top. Torn's own activities are listed
+ * read-only — they are not the family's to edit or delete — so a day holding
+ * only those still offers the add that its events took away.
+ */
+function DayEventsPanel({
+	day,
+	events,
+	canAdd,
+	onClose,
+	onAddEvent,
+	onEditEvent,
+	onDeleteEvent,
+}: DayEventsPanelProps) {
+	return (
+		<Dialog
+			open={day !== null}
+			onOpenChange={(open) => {
+				if (!open) onClose();
+			}}
+		>
+			<DialogContent className="max-w-md sm:max-w-lg">
+				<DialogHeader>
+					<DialogTitle>
+						{day
+							? `${day.day} ${MONTH_NAMES[day.month]} ${day.year}`
+							: "Events on this day"}
+					</DialogTitle>
+					<DialogDescription>
+						{events.length === 0
+							? "Nothing is scheduled on this day. Times are in Torn City Time (TCT / UTC)."
+							: `${events.length} event${events.length === 1 ? "" : "s"} on this day. Times are in Torn City Time (TCT / UTC).`}
+					</DialogDescription>
+				</DialogHeader>
+
+				{events.length === 0 ? (
+					<p className="py-4 text-center text-sm text-muted-foreground">
+						Nothing on this day any more.
+					</p>
+				) : (
+					<ul className="flex max-h-80 flex-col divide-y divide-border/50 overflow-y-auto rounded-lg border border-border/70">
+						{events.map((ev) => (
+							<li
+								key={ev.id}
+								/* Phones get the actions under the event rather than beside it,
+								   so a title never has to share the width with two buttons. */
+								className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
+							>
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="flex min-w-0 items-center gap-2">
+										<span
+											className="size-2 shrink-0 rounded-full"
+											style={{
+												backgroundColor: ev.color || DEFAULT_EVENT_COLOR,
+											}}
+										/>
+										<span className="truncate text-sm font-medium">
+											{ev.title}
+										</span>
+									</span>
+
+									<span className="font-mono text-[11px] text-muted-foreground">
+										{formatEventWindow(ev)}
+									</span>
+
+									<span className="text-[11px] text-muted-foreground">
+										{formatUpcomingSource(ev)}
+										{formatStats(ev) ? ` · ${formatStats(ev)}` : ""}
+									</span>
+
+									{ev.description ? (
+										<span className="line-clamp-2 text-xs text-muted-foreground">
+											{ev.description}
+										</span>
+									) : null}
+								</span>
+
+								{/* Torn's activities carry no actions: they are read from Torn's
+								    own table and there is nothing here to change. */}
+								{ev.editable ? (
+									<span className="flex shrink-0 items-center gap-1">
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() => onEditEvent(ev)}
+										>
+											Edit
+										</Button>
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => onDeleteEvent(ev)}
+											className="text-destructive hover:text-destructive"
+										>
+											Delete
+										</Button>
+									</span>
+								) : null}
+							</li>
+						))}
+					</ul>
+				)}
+
+				{/* The shared footer stacks on phones, so the two actions become full
+				    width there rather than a cramped row. */}
+				<DialogFooter className="sm:items-center sm:justify-between">
+					{canAdd ? (
+						<Button variant="outline" onClick={onAddEvent}>
+							Add event on this day
+						</Button>
+					) : (
+						<div className="hidden sm:block" />
+					)}
+					<Button onClick={onClose}>Close</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 export function SubversiveCalendarPage({
 	isPublic = false,
 }: SubversiveCalendarPageProps) {
@@ -513,6 +663,13 @@ export function SubversiveCalendarPage({
 
 	// Add/Edit event modal
 	const [eventModalOpen, setEventModalOpen] = useState(false);
+	// The day whose events are being managed, opened by clicking a day that has
+	// some. Kept as the day rather than a copy of its events, so a delete leaves
+	// the list telling the truth.
+	const [openDay, setOpenDay] = useState<OpenDay | null>(null);
+	// The event a delete has been asked for but not yet confirmed, so both ways
+	// into a delete go through the same prompt.
+	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 	const [editingEventId, setEditingEventId] = useState<string | null>(null);
 	const [formCategory, setFormCategory] = useState("");
 	const [formDescription, setFormDescription] = useState("");
@@ -613,10 +770,31 @@ export function SubversiveCalendarPage({
 	}, [enlistmentDates, formStartDate]);
 
 	const isEnlistment = formCategory === "war";
-	// A Steadfast Change runs in whole days, so it is all-day whether or not the
-	// switch is on screen.
+	// A Steadfast Change is one whole day, so it is all-day without a switch on
+	// screen that could claim otherwise.
 	const isSteadfast = formCategory === "steadfast_change";
+	/**
+	 * Categories that are one whole day on a single date.
+	 *
+	 * Both are dated, never ranged: the form shows one date, the payload sends
+	 * one date, and the API pins the day boundaries itself — so there is no end
+	 * date on screen that could disagree with the start.
+	 */
+	const isSingleDayEvent = isEnlistment || isSteadfast;
 	const isAllDayEvent = isSteadfast || formIsAllDay;
+
+	/**
+	 * A warning for a Steadfast Change that still covers several days.
+	 *
+	 * Events written before a Steadfast Change became one whole day are still on
+	 * the calendar with a range on them, and this form has nowhere to put the days
+	 * past the start: saving would shorten the event without saying so. The form
+	 * says so instead.
+	 */
+	const steadfastCollapseWarning =
+		isSteadfast && formStartDate && formEndDate && formEndDate !== formStartDate
+			? `A Steadfast Change is one whole day. This event still ends ${formatDateLabel(formEndDate)} — saving keeps ${formatDateLabel(formStartDate)} only.`
+			: null;
 
 	/** Moving the start date carries the chosen span along with it. */
 	const handleStartDateChange = (value: string) => {
@@ -745,6 +923,16 @@ export function SubversiveCalendarPage({
 		[filteredEvents],
 	);
 
+	/** What is on the day the panel is open for, read fresh after every write. */
+	const openDayEvents = openDay
+		? getEventsForDay(openDay.year, openDay.month, openDay.day)
+		: [];
+
+	/** Whether that day can still take an event, so the panel may offer one. */
+	const openDaySchedulable = openDay
+		? canEdit && isSchedulable(openDay.year, openDay.month, openDay.day)
+		: false;
+
 	// Open Add Event modal prefilled with day. The year is passed in so a day in
 	// another year — or an event being added to a year the admin picked — prefill
 	// the date it was asked for rather than the running year.
@@ -805,6 +993,43 @@ export function SubversiveCalendarPage({
 		setEventModalOpen(true);
 	};
 
+	/**
+	 * What a click on a day cell does.
+	 *
+	 * An empty day is a way into the form; a day that already has events is a way
+	 * into them, which is where one of them can be removed. A day holding only
+	 * Torn's own activities opens the panel too, because a click there should
+	 * still say what is on it — the panel offers the add it would otherwise have
+	 * been.
+	 */
+	const handleDayClick = (
+		mIndex: number,
+		dayNumber: number,
+		dayEvents: CalendarEvent[],
+	) => {
+		if (dayEvents.length > 0) {
+			setOpenDay({ year, month: mIndex, day: dayNumber });
+			return;
+		}
+
+		handleOpenAddEvent(mIndex, dayNumber, year);
+	};
+
+	/** Carries the panel's day into the form, so the two never disagree. */
+	const handleAddFromOpenDay = () => {
+		if (!openDay) return;
+
+		const { year: atYear, month, day } = openDay;
+		setOpenDay(null);
+		handleOpenAddEvent(month, day, atYear);
+	};
+
+	/** Editing hands the event to the form, and the panel gets out of its way. */
+	const handleEditFromOpenDay = (ev: CalendarEvent) => {
+		setOpenDay(null);
+		handleOpenEditEvent(ev);
+	};
+
 	// Save Event
 	const handleSaveEvent = async () => {
 		if (!formCategory) {
@@ -812,8 +1037,15 @@ export function SubversiveCalendarPage({
 			return;
 		}
 
-		if (!formStartDate || !formEndDate) {
-			toast.error("Please specify start and end dates.");
+		if (!formStartDate) {
+			toast.error("Please specify a start date.");
+			return;
+		}
+
+		// Only a ranged category has an end date to get wrong; the one-day
+		// categories send the start date twice, at the day's two boundaries.
+		if (!isSingleDayEvent && !formEndDate) {
+			toast.error("Please specify an end date.");
 			return;
 		}
 
@@ -825,13 +1057,16 @@ export function SubversiveCalendarPage({
 		const sTime = isAllDayEvent ? "00:00:00" : `${formStartTime}:00`;
 		const eTime = isAllDayEvent ? "23:59:59" : `${formEndTime}:00`;
 
-		// Enlistment covers the whole Tuesday, so the date is all the form collects
-		// and the API pins the day boundaries.
-		const startIso = isEnlistment
-			? new Date(`${formStartDate}T00:00:00Z`).toISOString()
+		// A one-day category covers the whole of its date: midnight to the last
+		// second of that same day, which is the shape every whole-day event on this
+		// calendar has. A ranged one is built from the start and the end it was
+		// given, exactly as the form displays them.
+		const day = wholeDayWindow(formStartDate);
+		const startIso = isSingleDayEvent
+			? day.startTime
 			: new Date(`${formStartDate}T${sTime}Z`).toISOString();
-		const endIso = isEnlistment
-			? new Date(`${formStartDate}T23:59:59Z`).toISOString()
+		const endIso = isSingleDayEvent
+			? day.endTime
 			: new Date(`${formEndDate}T${eTime}Z`).toISOString();
 
 		if (new Date(endIso) < new Date(startIso)) {
@@ -855,7 +1090,7 @@ export function SubversiveCalendarPage({
 			category: formCategory,
 			startTime: startIso,
 			endTime: endIso,
-			isAllDay: isEnlistment ? true : isAllDayEvent,
+			isAllDay: isSingleDayEvent ? true : isAllDayEvent,
 			primaryStat: isSteadfast ? formPrimaryStat : null,
 			secondaryStat: isSteadfast ? formSecondaryStat : null,
 			factionId: formFactionId,
@@ -893,15 +1128,20 @@ export function SubversiveCalendarPage({
 		}
 	};
 
-	// Delete Event. Reached from the form, so the form closes with the event.
-	const handleDeleteEvent = async (id: string) => {
-		if (!confirm("Are you sure you want to delete this faction event?")) return;
+	// Delete Event. Reached from the form or from the day panel, so both close with
+	// the event they were showing. The prompt is the dashboard's own rather than
+	// the browser's, so it reads the same as every other destructive action.
+	const handleConfirmDelete = async () => {
+		const id = pendingDeleteId;
+		setPendingDeleteId(null);
+		if (!id) return;
 
 		try {
 			const res = await api.v2.subversive.calendar.events({ id }).delete();
 			if (res.data && "success" in res.data && res.data.success) {
 				toast.success("Event removed from calendar.");
 				setEventModalOpen(false);
+				setOpenDay(null);
 				await fetchCalendar(true);
 			} else {
 				toast.error("Failed to delete event.");
@@ -952,9 +1192,12 @@ export function SubversiveCalendarPage({
 
 			const dayStartSec = Math.floor(Date.UTC(year, mIndex, d, 0, 0, 0) / 1000);
 			const dayEvents = getEventsForDay(year, mIndex, d);
-			// A day the calendar can still be written to is a way into the form; a
-			// past day, or a viewer's day, is just a cell to read.
-			const openable = canEdit && isSchedulable(year, mIndex, d);
+			// An empty day the calendar can still be written to is a way into the
+			// form. A day that already holds events is a way into them instead —
+			// including a past one, where the useful action is removing something
+			// that never happened. A viewer's day is just a cell to read.
+			const interactive =
+				canEdit && (dayEvents.length > 0 || isSchedulable(year, mIndex, d));
 
 			const wash =
 				dayEvents.length > 0 ? (
@@ -981,15 +1224,19 @@ export function SubversiveCalendarPage({
 				isToday && "font-semibold text-primary ring-1 ring-primary/50",
 			);
 
-			const cell = openable ? (
+			const cell = interactive ? (
 				<Button
 					key={`day-${d}`}
 					type="button"
 					variant="ghost"
 					size="xs"
-					onClick={() => handleOpenAddEvent(mIndex, d, year)}
-					title={`Add an event on ${d} ${MONTH_NAMES[mIndex]} ${year}`}
-					aria-label={`${label}. Add an event`}
+					onClick={() => handleDayClick(mIndex, d, dayEvents)}
+					title={
+						dayEvents.length > 0
+							? `Manage the ${dayEvents.length} event${dayEvents.length === 1 ? "" : "s"} on ${d} ${MONTH_NAMES[mIndex]} ${year}`
+							: `Add an event on ${d} ${MONTH_NAMES[mIndex]} ${year}`
+					}
+					aria-label={`${label}. ${dayEvents.length > 0 ? "Manage events" : "Add an event"}`}
 					className={cellClass}
 				>
 					{wash}
@@ -1272,6 +1519,15 @@ export function SubversiveCalendarPage({
 
 					{accentLegend}
 
+					{/* The two click gestures are worth stating: on a busy month the grid is
+					    mostly days that do something else than an empty one. */}
+					{canEdit ? (
+						<p className="text-xs text-muted-foreground">
+							Click an empty day to add an event; click a day that has one to
+							edit or delete it.
+						</p>
+					) : null}
+
 					{/* Torn publishes only the running year, so any other year genuinely has
 					    no official activities to show. Say so rather than look broken. */}
 					{!loading && year !== today.year ? (
@@ -1427,8 +1683,10 @@ export function SubversiveCalendarPage({
 							</Select>
 						</div>
 
-						{/* Enlistment covers a whole Tuesday, so the date is the only thing
-						    to choose. */}
+						{/* How the event is dated depends on the category, and the two
+						    one-day categories never show a range: an enlistment is a whole
+						    Tuesday and a Steadfast Change a whole day, so both are asked
+						    for one date and the API pins the day's own boundaries. */}
 						{isEnlistment ? (
 							<div className="flex flex-col gap-1.5">
 								<Label htmlFor="enlistment-date">Enlistment Tuesday</Label>
@@ -1445,7 +1703,7 @@ export function SubversiveCalendarPage({
 									<SelectContent>
 										{enlistmentOptions.map((dateValue) => (
 											<SelectItem key={dateValue} value={dateValue}>
-												{formatTuesday(dateValue)}
+												{formatDateLabel(dateValue)}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -1454,145 +1712,155 @@ export function SubversiveCalendarPage({
 									Runs the whole of Tuesday, TCT.
 								</p>
 							</div>
-						) : (
+						) : isSteadfast ? (
 							<>
-								{/* All day toggle — a Steadfast Change is always all day, so the
-								    switch would only be a lie. */}
-								{isSteadfast ? (
-									<p className="text-xs text-muted-foreground">
-										Steadfast Change always runs whole days.
-									</p>
-								) : (
-									<div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 p-3">
-										<div className="flex min-w-0 flex-col">
-											<Label htmlFor="all-day" className="cursor-pointer">
-												All Day Event
-											</Label>
-											<p className="text-xs text-muted-foreground">
-												Runs full 24 hours across specified dates
-											</p>
-										</div>
-										<Switch
-											id="all-day"
-											checked={formIsAllDay}
-											onCheckedChange={setFormIsAllDay}
-										/>
-									</div>
-								)}
-
-								{/* Battlestats a Steadfast Change asks members to hold */}
-								{isSteadfast ? (
-									<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-										<div className="flex flex-col gap-1.5">
-											<Label htmlFor="primary-stat">Primary Battlestat</Label>
-											<Select
-												value={formPrimaryStat}
-												onValueChange={setFormPrimaryStat}
-											>
-												<SelectTrigger id="primary-stat">
-													<SelectValue placeholder="Select stat" />
-												</SelectTrigger>
-												<SelectContent>
-													{STEADFAST_STAT_OPTIONS.map((stat) => (
-														<SelectItem key={stat.value} value={stat.value}>
-															{stat.label}
-														</SelectItem>
-													))}
-												</SelectContent>
-											</Select>
-										</div>
-
-										<div className="flex flex-col gap-1.5">
-											<Label htmlFor="secondary-stat">
-												Secondary Battlestat
-											</Label>
-											<Select
-												value={formSecondaryStat}
-												onValueChange={setFormSecondaryStat}
-											>
-												<SelectTrigger id="secondary-stat">
-													<SelectValue placeholder="Select stat" />
-												</SelectTrigger>
-												<SelectContent>
-													{STEADFAST_STAT_OPTIONS.map((stat) => (
-														<SelectItem key={stat.value} value={stat.value}>
-															{stat.label}
-														</SelectItem>
-													))}
-												</SelectContent>
-											</Select>
-										</div>
-									</div>
-								) : null}
-							</>
-						)}
-
-						{/* Dates & Times — the enlistment picker above owns its own date */}
-						{!isEnlistment ? (
-							<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+								{/* One whole day, so the date is the entire request — there is no
+								    end date on screen to disagree with it, and no time either. */}
 								<div className="flex flex-col gap-1.5">
-									<Label htmlFor="start-date">Start Date (TCT)</Label>
+									<Label htmlFor="steadfast-date">Date (TCT)</Label>
 									<Input
-										id="start-date"
+										id="steadfast-date"
 										type="date"
 										value={formStartDate}
-										onChange={(e) => handleStartDateChange(e.target.value)}
+										onChange={(e) => setFormStartDate(e.target.value)}
 									/>
-									{!isAllDayEvent ? (
-										<Input
-											type="time"
-											aria-label="Start time (TCT)"
-											value={formStartTime}
-											onChange={(e) => setFormStartTime(e.target.value)}
-										/>
+									<p className="text-xs text-muted-foreground">
+										Runs the whole of that day, TCT.
+									</p>
+									{steadfastCollapseWarning ? (
+										<p className="text-xs text-warning">
+											{steadfastCollapseWarning}
+										</p>
 									) : null}
 								</div>
 
-								{/* How long the event runs, counted from the start date. */}
-								<div className="flex flex-col gap-1.5">
-									<Label htmlFor="event-duration">Duration</Label>
-									<Select
-										value={formDuration}
-										onValueChange={(val) =>
-											handleDurationChange(val as DurationValue)
-										}
-									>
-										<SelectTrigger id="event-duration">
-											<SelectValue />
-										</SelectTrigger>
-										<SelectContent>
-											{DURATION_OPTIONS.map((option) => (
-												<SelectItem key={option.value} value={option.value}>
-													{option.label}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
+								{/* Battlestats a Steadfast Change asks members to hold */}
+								<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+									<div className="flex flex-col gap-1.5">
+										<Label htmlFor="primary-stat">Primary Battlestat</Label>
+										<Select
+											value={formPrimaryStat}
+											onValueChange={setFormPrimaryStat}
+										>
+											<SelectTrigger id="primary-stat">
+												<SelectValue placeholder="Select stat" />
+											</SelectTrigger>
+											<SelectContent>
+												{STEADFAST_STAT_OPTIONS.map((stat) => (
+													<SelectItem key={stat.value} value={stat.value}>
+														{stat.label}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</div>
+
+									<div className="flex flex-col gap-1.5">
+										<Label htmlFor="secondary-stat">Secondary Battlestat</Label>
+										<Select
+											value={formSecondaryStat}
+											onValueChange={setFormSecondaryStat}
+										>
+											<SelectTrigger id="secondary-stat">
+												<SelectValue placeholder="Select stat" />
+											</SelectTrigger>
+											<SelectContent>
+												{STEADFAST_STAT_OPTIONS.map((stat) => (
+													<SelectItem key={stat.value} value={stat.value}>
+														{stat.label}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</div>
+								</div>
+							</>
+						) : (
+							<>
+								{/* All day toggle — a day-long window is a range with no clock
+								    on it, which is all the switch decides. */}
+								<div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 p-3">
+									<div className="flex min-w-0 flex-col">
+										<Label htmlFor="all-day" className="cursor-pointer">
+											All Day Event
+										</Label>
+										<p className="text-xs text-muted-foreground">
+											Runs full 24 hours across specified dates
+										</p>
+									</div>
+									<Switch
+										id="all-day"
+										checked={formIsAllDay}
+										onCheckedChange={setFormIsAllDay}
+									/>
 								</div>
 
-								<div className="flex flex-col gap-1.5">
-									<Label htmlFor="end-date">End Date (TCT)</Label>
-									<Input
-										id="end-date"
-										type="date"
-										value={formEndDate}
-										onChange={(e) => {
-											setFormEndDate(e.target.value);
-											// Hand-editing the end date is what "Custom" means.
-											setFormDuration("custom");
-										}}
-									/>
-									{!isAllDayEvent ? (
+								{/* Dates & Times */}
+								<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+									<div className="flex flex-col gap-1.5">
+										<Label htmlFor="start-date">Start Date (TCT)</Label>
 										<Input
-											type="time"
-											aria-label="End time (TCT)"
-											value={formEndTime}
-											onChange={(e) => setFormEndTime(e.target.value)}
+											id="start-date"
+											type="date"
+											value={formStartDate}
+											onChange={(e) => handleStartDateChange(e.target.value)}
 										/>
-									) : null}
+										{!isAllDayEvent ? (
+											<Input
+												type="time"
+												aria-label="Start time (TCT)"
+												value={formStartTime}
+												onChange={(e) => setFormStartTime(e.target.value)}
+											/>
+										) : null}
+									</div>
+
+									{/* How long the event runs, counted from the start date. */}
+									<div className="flex flex-col gap-1.5">
+										<Label htmlFor="event-duration">Duration</Label>
+										<Select
+											value={formDuration}
+											onValueChange={(val) =>
+												handleDurationChange(val as DurationValue)
+											}
+										>
+											<SelectTrigger id="event-duration">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												{DURATION_OPTIONS.map((option) => (
+													<SelectItem key={option.value} value={option.value}>
+														{option.label}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</div>
+
+									<div className="flex flex-col gap-1.5">
+										<Label htmlFor="end-date">End Date (TCT)</Label>
+										<Input
+											id="end-date"
+											type="date"
+											value={formEndDate}
+											onChange={(e) => {
+												setFormEndDate(e.target.value);
+												// Hand-editing the end date is what "Custom" means.
+												setFormDuration("custom");
+											}}
+										/>
+										{!isAllDayEvent ? (
+											<Input
+												type="time"
+												aria-label="End time (TCT)"
+												value={formEndTime}
+												onChange={(e) => setFormEndTime(e.target.value)}
+											/>
+										) : null}
+									</div>
 								</div>
-							</div>
-						) : null}
+							</>
+						)}
 
 						{/* Description */}
 						<div className="flex flex-col gap-1.5">
@@ -1613,7 +1881,7 @@ export function SubversiveCalendarPage({
 						{editingEventId ? (
 							<Button
 								variant="ghost"
-								onClick={() => handleDeleteEvent(editingEventId)}
+								onClick={() => setPendingDeleteId(editingEventId)}
 								disabled={submitting}
 								className="text-destructive hover:text-destructive"
 							>
@@ -1642,6 +1910,30 @@ export function SubversiveCalendarPage({
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			{/* ── Day panel: what is on a day, and how to change it ──────────────── */}
+			<DayEventsPanel
+				day={openDay}
+				events={openDayEvents}
+				canAdd={openDaySchedulable}
+				onClose={() => setOpenDay(null)}
+				onAddEvent={handleAddFromOpenDay}
+				onEditEvent={handleEditFromOpenDay}
+				onDeleteEvent={(ev) => setPendingDeleteId(ev.id)}
+			/>
+
+			{/* One prompt for both ways into a delete: the form's footer button and
+			    a row in the day panel. */}
+			<ConfirmDialog
+				open={pendingDeleteId !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingDeleteId(null);
+				}}
+				title="Delete this faction event?"
+				description="It is taken off the calendar for everyone. This cannot be undone."
+				confirmLabel="Delete event"
+				onConfirm={handleConfirmDelete}
+			/>
 		</div>
 	);
 }

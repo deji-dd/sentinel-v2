@@ -392,17 +392,15 @@ function resolveFactionEventWrite(
 		end = new Date(start.getTime() + MS_PER_DAY - 1000);
 		isAllDay = true;
 	} else if (category === "steadfast_change") {
-		// A Steadfast Change is a whole-day directive: members switch stats for the
-		// days it covers, so the times are the day boundaries, never a slice of one.
+		// A Steadfast Change is one whole day, so its date is the only thing the
+		// caller decides — exactly as an enlistment's Tuesday is its own. The end
+		// it sends is not consulted at all: the directive is "hold these stats for
+		// this day", and a range would let the calendar describe a stat switch that
+		// starts or stops mid-day.
 		const startDay = startOfUtcDay(start);
-		const endDay = startOfUtcDay(end);
-
-		if (endDay.getTime() < startDay.getTime()) {
-			return { error: "endTime must be after startTime." };
-		}
 
 		start = startDay;
-		end = new Date(endDay.getTime() + MS_PER_DAY - 1000);
+		end = new Date(startDay.getTime() + MS_PER_DAY - 1000);
 		isAllDay = true;
 	} else if (end.getTime() < start.getTime()) {
 		return { error: "endTime must be after startTime." };
@@ -588,7 +586,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "Create Subversive Faction Calendar Event",
 				description:
-					"Requires Subversive leadership or admin permissions. The category titles the event and fixes its accent; Ranked War Enlistment is pinned to the whole of a Tuesday and Steadfast Change must name two different battlestats. A window that has already passed is refused.",
+					"Requires Subversive leadership or admin permissions. The category titles the event and fixes its accent; Ranked War Enlistment is pinned to the whole of a Tuesday and Steadfast Change to the whole of one day — neither consults the end it is sent — and a Steadfast Change must name two different battlestats. A window that has already passed is refused.",
 			},
 		},
 	)
@@ -673,7 +671,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "Update Subversive Faction Calendar Event",
 				description:
-					"Requires Subversive leadership or admin permissions. Omitted fields keep their stored value and the result is validated by the create rules. An event that has not ended yet cannot be moved into the past.",
+					"Requires Subversive leadership or admin permissions. Omitted fields keep their stored value and the result is validated by the create rules, so a Steadfast Change written here is pinned to one whole day too. An event that has not ended yet cannot be moved into the past.",
 			},
 		},
 	)

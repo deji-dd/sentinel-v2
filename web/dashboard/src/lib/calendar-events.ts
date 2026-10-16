@@ -88,6 +88,25 @@ export function isWholeDayWindow(ev: CalendarEvent): boolean {
 }
 
 /**
+ * The window a whole-day event covers, as the payload the API is sent.
+ *
+ * Midnight to the last second of the same UTC day — the shape
+ * {@link isWholeDayWindow} recognises, and the shape Torn's own whole-day
+ * activities arrive in. A one-day category (Ranked War Enlistment, Steadfast
+ * Change) is therefore written as the day it is, rather than as a range the form
+ * never asked for.
+ */
+export function wholeDayWindow(dateValue: string): {
+	startTime: string;
+	endTime: string;
+} {
+	return {
+		startTime: new Date(`${dateValue}T00:00:00Z`).toISOString(),
+		endTime: new Date(`${dateValue}T23:59:59Z`).toISOString(),
+	};
+}
+
+/**
  * When an event runs, in one line.
  *
  * A whole-day window prints no clock at all — "00:00 - 23:59" is not information

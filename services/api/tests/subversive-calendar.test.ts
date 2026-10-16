@@ -843,27 +843,45 @@ describe("Faction calendar event writes", () => {
 	});
 
 	/**
-	 * A Steadfast Change is a whole-day directive: whatever slice of a day the
-	 * caller sends, the event covers full days so the calendar never shows a
+	 * A Steadfast Change is one whole day: whatever slice of a day the caller
+	 * sends, the event covers that day and no more, so the calendar never shows a
 	 * stat switch that starts at 09:37.
 	 */
-	it("spans whole days for a Steadfast Change", async () => {
+	it("pins a Steadfast Change to the whole of one day", async () => {
 		const { status, json } = await post({
 			category: "steadfast_change",
 			primaryStat: "strength",
 			secondaryStat: "speed",
 			startTime: "2026-10-13T09:37:00.000Z",
-			endTime: "2026-10-15T16:04:00.000Z",
+			endTime: "2026-10-13T16:04:00.000Z",
 		});
 
 		expect(status).toBe(200);
 		expect(json.event?.startTime).toBe("2026-10-13T00:00:00.000Z");
-		expect(json.event?.endTime).toBe("2026-10-15T23:59:59.000Z");
+		expect(json.event?.endTime).toBe("2026-10-13T23:59:59.000Z");
 		expect(json.event?.isAllDay).toBe(true);
 	});
 
-	it("refuses a Steadfast Change that ends before it starts", async () => {
-		const { status, json } = await post({
+	/**
+	 * Nothing asks for a range any more, so an end date is ignored rather than
+	 * honoured — an older dashboard bundle still sending one gets the single day
+	 * the event starts on. Ignoring beats refusing here: a caller cannot be told
+	 * its range is wrong when a range is no longer part of the request.
+	 */
+	it("ignores the end a Steadfast Change is sent", async () => {
+		const spanning = await post({
+			category: "steadfast_change",
+			primaryStat: "strength",
+			secondaryStat: "speed",
+			startTime: "2026-10-13T00:00:00.000Z",
+			endTime: "2026-10-15T23:59:59.000Z",
+		});
+
+		expect(spanning.status).toBe(200);
+		expect(spanning.json.event?.startTime).toBe("2026-10-13T00:00:00.000Z");
+		expect(spanning.json.event?.endTime).toBe("2026-10-13T23:59:59.000Z");
+
+		const backwards = await post({
 			category: "steadfast_change",
 			primaryStat: "strength",
 			secondaryStat: "speed",
@@ -871,8 +889,9 @@ describe("Faction calendar event writes", () => {
 			endTime: "2026-10-13T00:00:00.000Z",
 		});
 
-		expect(status).toBe(400);
-		expect(json.error).toContain("endTime");
+		expect(backwards.status).toBe(200);
+		expect(backwards.json.event?.startTime).toBe("2026-10-15T00:00:00.000Z");
+		expect(backwards.json.event?.endTime).toBe("2026-10-15T23:59:59.000Z");
 	});
 
 	it("leaves a timed Chain event timed", async () => {
