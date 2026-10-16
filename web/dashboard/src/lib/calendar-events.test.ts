@@ -3,6 +3,7 @@ import {
 	type CalendarEvent,
 	formatEventWindow,
 	isWholeDayWindow,
+	showsEventWindow,
 	wholeDayWindow,
 } from "./calendar-events";
 
@@ -132,8 +133,8 @@ describe("formatEventWindow", () => {
 
 /**
  * The window a one-day category — Ranked War Enlistment, Steadfast Change — is
- * written with. It has to be the whole of its date, because that is what the
- * calendar prints as "All day"; a window that stopped short of midnight would be
+ * written with. It has to be the whole of its date, because that is the day the
+ * calendar draws and prints; a window that stopped short of midnight would be
  * drawn as a slice of the afternoon instead.
  */
 describe("wholeDayWindow", () => {
@@ -164,5 +165,70 @@ describe("wholeDayWindow", () => {
 				}),
 			),
 		).toBe("All day (TCT)");
+	});
+});
+
+/**
+ * Which events get a window line at all.
+ *
+ * Ranked War Enlistment and Steadfast Change are one whole day by definition — a
+ * Tuesday and a single date — so "All day (TCT)" beside their date says nothing.
+ * Everything else keeps its line, including an all-day Chain whose window looks
+ * identical, because for that event "All day" is real information.
+ */
+describe("showsEventWindow", () => {
+	const oneDay = {
+		startTime: "2026-10-13T00:00:00.000Z",
+		endTime: "2026-10-13T23:59:59.000Z",
+	};
+
+	it("hides the window of the two one-day categories", () => {
+		expect(showsEventWindow(event({ category: "war", ...oneDay }))).toBe(false);
+		expect(
+			showsEventWindow(event({ category: "steadfast_change", ...oneDay })),
+		).toBe(false);
+	});
+
+	it("keeps the window of every other one-day event", () => {
+		// An all-day Chain has the same window as an enlistment, but it is not a
+		// chain-wide fact that its day is the whole event.
+		expect(showsEventWindow(event({ category: "chain", ...oneDay }))).toBe(
+			true,
+		);
+		expect(
+			showsEventWindow(event({ category: "competition", ...oneDay })),
+		).toBe(true);
+
+		// Torn's activities have no category of ours, so they keep their line.
+		expect(
+			showsEventWindow(
+				event({ category: "torn_event", source: "torn", ...oneDay }),
+			),
+		).toBe(true);
+	});
+
+	it("keeps a one-day category's window when it is not one whole day", () => {
+		// A Steadfast Change written before the category became a single day still
+		// spans several, and hiding that range would make it read as one day.
+		expect(
+			showsEventWindow(
+				event({
+					category: "steadfast_change",
+					startTime: "2026-10-13T00:00:00.000Z",
+					endTime: "2026-10-15T23:59:59.000Z",
+				}),
+			),
+		).toBe(true);
+
+		// A timed window is never a whole day, whatever the category.
+		expect(
+			showsEventWindow(
+				event({
+					category: "war",
+					startTime: "2026-10-13T12:00:00.000Z",
+					endTime: "2026-10-13T13:00:00.000Z",
+				}),
+			),
+		).toBe(true);
 	});
 });

@@ -38,6 +38,7 @@ import { api } from "../lib/api";
 import {
 	type CalendarEvent,
 	formatEventWindow,
+	showsEventWindow,
 	wholeDayWindow,
 } from "../lib/calendar-events";
 import { DEFAULT_EVENT_COLOR, dayWashBackground } from "../lib/calendar-wash";
@@ -64,21 +65,6 @@ interface CalendarAccentKey {
 
 /** Where the official Torn events came from. */
 type TornEventsSource = "database" | "unavailable";
-
-/**
- * The toolbar's filter.
- *
- * Torn's competitions are the one part of Torn's calendar worth isolating — a
- * competition is something members opt into, an ordinary Torn event is not —
- * and the rest of Torn's activities are one list with the faction's own.
- */
-type CalendarFilter = "all" | "faction" | "competitions";
-
-const FILTER_LABELS: Record<CalendarFilter, string> = {
-	all: "All events",
-	faction: "Faction events",
-	competitions: "Torn competitions",
-};
 
 const MONTH_NAMES = [
 	"January",
@@ -116,21 +102,12 @@ const ENLISTMENT_OPTION_COUNT = 16;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Whether an event survives the toolbar's filter and search.
+ * Whether an event survives the toolbar's search.
  *
  * Shared by the grid and the upcoming list so the two can never disagree about
  * what the page is currently showing.
  */
-function matchesFilters(
-	ev: CalendarEvent,
-	filter: CalendarFilter,
-	query: string,
-): boolean {
-	if (filter === "faction" && ev.source !== "faction") return false;
-	if (filter === "competitions" && ev.category !== "torn_competition") {
-		return false;
-	}
-
+function matchesSearch(ev: CalendarEvent, query: string): boolean {
 	const q = query.trim().toLowerCase();
 	if (!q) return true;
 
@@ -183,10 +160,25 @@ function writeErrorMessage(error: unknown, fallback: string): string {
 	return fallback;
 }
 
-/** Which family faction an event belongs to, or whose Torn activity it is. */
-function formatUpcomingSource(ev: CalendarEvent): string {
-	if (ev.source === "faction") return getSubversiveFactionName(ev.factionId);
-	return ev.categoryLabel ?? "Official Torn";
+/**
+ * Whose event it is, when that is worth saying.
+ *
+ * Only the family's own events name a faction: Torn's activities used to be
+ * labelled here too ("Torn Event", "Torn Competition"), which told a reader
+ * nothing the accent colour and the description did not already.
+ */
+function formatEventSource(ev: CalendarEvent): string | null {
+	return ev.source === "faction"
+		? getSubversiveFactionName(ev.factionId)
+		: null;
+}
+
+/**
+ * The one line under an event's window: whose it is, and — for a Steadfast
+ * Change — which battlestats it asks for. Empty when there is neither.
+ */
+function formatEventMeta(ev: CalendarEvent): string {
+	return [formatEventSource(ev), formatStats(ev)].filter(Boolean).join(" · ");
 }
 
 /**
@@ -322,7 +314,7 @@ interface UpcomingEventsPanelProps {
 	events: CalendarEvent[];
 	/** The window the API answered with, in days. */
 	windowDays: number;
-	/** True when the toolbar's search or filter is hiding some of the window. */
+	/** True when the toolbar's search is hiding some of the window. */
 	narrowed: boolean;
 	/** Whether this viewer can open an event's form at all. */
 	canEdit: boolean;
@@ -341,7 +333,7 @@ interface UpcomingEventsPanelProps {
  * the running month is nearly over — and it cannot answer December's question at
  * all, because the next few weeks are in a year the grid is not drawing. This
  * panel reads the API's own `upcoming` window (from now, across the year
- * boundary) and keeps the toolbar's search and filter, so it never contradicts
+ * boundary) and keeps the toolbar's search, so it never contradicts
  * the grid beside it.
  */
 function UpcomingEventsPanel({
@@ -374,7 +366,7 @@ function UpcomingEventsPanel({
 			{events.length === 0 ? (
 				<p className="px-3 py-6 text-center text-sm text-muted-foreground">
 					{narrowed
-						? "No upcoming events match the current search or filter."
+						? "No upcoming events match the current search."
 						: `Nothing scheduled in the next ${windowDays} days.`}
 				</p>
 			) : (
@@ -382,6 +374,10 @@ function UpcomingEventsPanel({
 					{events.map((ev) => {
 						const start = new Date(ev.startTime);
 						const countdown = upcomingCountdown(ev, nowSec);
+						// A one-day category has no window line to print — its date is the
+						// whole story. `meta` is empty for the same kind of reason.
+						const window = showsEventWindow(ev) ? formatEventWindow(ev) : null;
+						const meta = formatEventMeta(ev);
 						// Only a stored event can be opened in a form, and only by
 						// someone who may write to it — anything else stays a plain row
 						// rather than a button that does nothing.
@@ -421,14 +417,17 @@ function UpcomingEventsPanel({
 										</span>
 									</span>
 
-									<span className="font-mono text-[11px] text-muted-foreground">
-										{formatEventWindow(ev)}
-									</span>
+									{window ? (
+										<span className="font-mono text-[11px] text-muted-foreground">
+											{window}
+										</span>
+									) : null}
 
-									<span className="text-[11px] text-muted-foreground">
-										{formatUpcomingSource(ev)}
-										{formatStats(ev) ? ` · ${formatStats(ev)}` : ""}
-									</span>
+									{meta ? (
+										<span className="text-[11px] text-muted-foreground">
+											{meta}
+										</span>
+									) : null}
 
 									{ev.description ? (
 										<span className="line-clamp-2 text-xs text-muted-foreground">
@@ -441,7 +440,6 @@ function UpcomingEventsPanel({
 									tone={countdown.tone}
 									size="sm"
 									dot={countdown.tone === "success"}
-									pulse={countdown.tone === "success"}
 								>
 									{countdown.label}
 								</StatusBadge>
@@ -536,65 +534,77 @@ function DayEventsPanel({
 					</p>
 				) : (
 					<ul className="flex max-h-80 flex-col divide-y divide-border/50 overflow-y-auto rounded-lg border border-border/70">
-						{events.map((ev) => (
-							<li
-								key={ev.id}
-								/* Phones get the actions under the event rather than beside it,
-								   so a title never has to share the width with two buttons. */
-								className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
-							>
-								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-									<span className="flex min-w-0 items-center gap-2">
-										<span
-											className="size-2 shrink-0 rounded-full"
-											style={{
-												backgroundColor: ev.color || DEFAULT_EVENT_COLOR,
-											}}
-										/>
-										<span className="truncate text-sm font-medium">
-											{ev.title}
+						{events.map((ev) => {
+							// A one-day category prints no window: its date is in the dialog's
+							// own title, so "All day (TCT)" would only repeat it.
+							const window = showsEventWindow(ev)
+								? formatEventWindow(ev)
+								: null;
+							const meta = formatEventMeta(ev);
+
+							return (
+								<li
+									key={ev.id}
+									/* Phones get the actions under the event rather than beside it,
+									   so a title never has to share the width with two buttons. */
+									className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
+								>
+									<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+										<span className="flex min-w-0 items-center gap-2">
+											<span
+												className="size-2 shrink-0 rounded-full"
+												style={{
+													backgroundColor: ev.color || DEFAULT_EVENT_COLOR,
+												}}
+											/>
+											<span className="truncate text-sm font-medium">
+												{ev.title}
+											</span>
 										</span>
+
+										{window ? (
+											<span className="font-mono text-[11px] text-muted-foreground">
+												{window}
+											</span>
+										) : null}
+
+										{meta ? (
+											<span className="text-[11px] text-muted-foreground">
+												{meta}
+											</span>
+										) : null}
+
+										{ev.description ? (
+											<span className="line-clamp-2 text-xs text-muted-foreground">
+												{ev.description}
+											</span>
+										) : null}
 									</span>
 
-									<span className="font-mono text-[11px] text-muted-foreground">
-										{formatEventWindow(ev)}
-									</span>
-
-									<span className="text-[11px] text-muted-foreground">
-										{formatUpcomingSource(ev)}
-										{formatStats(ev) ? ` · ${formatStats(ev)}` : ""}
-									</span>
-
-									{ev.description ? (
-										<span className="line-clamp-2 text-xs text-muted-foreground">
-											{ev.description}
+									{/* Torn's activities carry no actions: they are read from Torn's
+									    own table and there is nothing here to change. */}
+									{ev.editable ? (
+										<span className="flex shrink-0 items-center gap-1">
+											<Button
+												variant="outline"
+												size="sm"
+												onClick={() => onEditEvent(ev)}
+											>
+												Edit
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onClick={() => onDeleteEvent(ev)}
+												className="text-destructive hover:text-destructive"
+											>
+												Delete
+											</Button>
 										</span>
 									) : null}
-								</span>
-
-								{/* Torn's activities carry no actions: they are read from Torn's
-								    own table and there is nothing here to change. */}
-								{ev.editable ? (
-									<span className="flex shrink-0 items-center gap-1">
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={() => onEditEvent(ev)}
-										>
-											Edit
-										</Button>
-										<Button
-											variant="ghost"
-											size="sm"
-											onClick={() => onDeleteEvent(ev)}
-											className="text-destructive hover:text-destructive"
-										>
-											Delete
-										</Button>
-									</span>
-								) : null}
-							</li>
-						))}
+								</li>
+							);
+						})}
 					</ul>
 				)}
 
@@ -643,7 +653,6 @@ export function SubversiveCalendarPage({
 	 */
 	const [year, setYear] = useState(today.year);
 
-	const [activeFilter, setActiveFilter] = useState<CalendarFilter>("all");
 	const [searchQuery, setSearchQuery] = useState("");
 
 	const [loading, setLoading] = useState(true);
@@ -863,33 +872,20 @@ export function SubversiveCalendarPage({
 		fetchCalendar();
 	}, [fetchCalendar]);
 
-	// Combined filtered events
+	// Combined searched events
 	const filteredEvents = useMemo(
 		() =>
 			[...factionEvents, ...tornEvents].filter((ev) =>
-				matchesFilters(ev, activeFilter, searchQuery),
+				matchesSearch(ev, searchQuery),
 			),
-		[factionEvents, tornEvents, activeFilter, searchQuery],
+		[factionEvents, tornEvents, searchQuery],
 	);
 
-	// The same filter and search, over the forward-looking window instead.
+	// The same search, over the forward-looking window instead.
 	const filteredUpcoming = useMemo(
 		() =>
-			(upcoming?.events ?? []).filter((ev) =>
-				matchesFilters(ev, activeFilter, searchQuery),
-			),
-		[upcoming, activeFilter, searchQuery],
-	);
-
-	// Filter counts
-	const counts = useMemo(
-		() => ({
-			all: factionEvents.length + tornEvents.length,
-			faction: factionEvents.length,
-			competitions: tornEvents.filter((e) => e.category === "torn_competition")
-				.length,
-		}),
-		[factionEvents, tornEvents],
+			(upcoming?.events ?? []).filter((ev) => matchesSearch(ev, searchQuery)),
+		[upcoming, searchQuery],
 	);
 
 	// Copy public URL
@@ -1278,9 +1274,11 @@ export function SubversiveCalendarPage({
 										<span className="font-medium break-anywhere">
 											{ev.title}
 										</span>
-										<span className="font-mono text-[11px] opacity-80">
-											{formatEventWindow(ev)}
-										</span>
+										{showsEventWindow(ev) ? (
+											<span className="font-mono text-[11px] opacity-80">
+												{formatEventWindow(ev)}
+											</span>
+										) : null}
 										{formatStats(ev) ? (
 											<span className="text-[11px] opacity-80">
 												{formatStats(ev)}
@@ -1351,25 +1349,6 @@ export function SubversiveCalendarPage({
 				className="h-9 w-full sm:max-w-xs"
 				aria-label="Search events"
 			/>
-
-			<Select
-				value={activeFilter}
-				onValueChange={(val) => setActiveFilter(val as CalendarFilter)}
-			>
-				<SelectTrigger
-					className="h-9 w-full sm:w-52"
-					aria-label="Filter events"
-				>
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					{(Object.keys(FILTER_LABELS) as CalendarFilter[]).map((key) => (
-						<SelectItem key={key} value={key}>
-							{`${FILTER_LABELS[key]} (${counts[key]})`}
-						</SelectItem>
-					))}
-				</SelectContent>
-			</Select>
 
 			{/* Only admins get to leave the running year: they are the only ones who
 			    can put anything in another one, and Torn publishes one year's
@@ -1561,7 +1540,7 @@ export function SubversiveCalendarPage({
 						<UpcomingEventsPanel
 							events={filteredUpcoming}
 							windowDays={upcoming.windowDays}
-							narrowed={activeFilter !== "all" || searchQuery.trim() !== ""}
+							narrowed={searchQuery.trim() !== ""}
 							canEdit={canEdit}
 							onEditEvent={handleOpenEditEvent}
 						/>

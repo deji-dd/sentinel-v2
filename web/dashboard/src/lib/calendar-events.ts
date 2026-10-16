@@ -106,26 +106,60 @@ export function wholeDayWindow(dateValue: string): {
 	};
 }
 
+/** Whether a window opens and closes on the same UTC day. */
+function coversOneUtcDay(ev: CalendarEvent): boolean {
+	return utcDayKey(ev.startTime) === utcDayKey(ev.endTime);
+}
+
+/**
+ * The categories that are one whole day and nothing else.
+ *
+ * A Ranked War Enlistment is a Tuesday and a Steadfast Change a single day, so
+ * the API pins both to the day's own boundaries and neither has a window a reader
+ * needs telling about. Kept as category names because the suppression is a fact
+ * about these events, not about the shape of a window — see
+ * {@link showsEventWindow}.
+ */
+const ONE_DAY_EVENT_CATEGORIES: readonly string[] = ["war", "steadfast_change"];
+
+/**
+ * Whether an event's window is worth a line.
+ *
+ * A one-day category says everything its date can say, so "All day (TCT)" beside
+ * that date is noise — which is what Ranked War Enlistment and Steadfast Change
+ * are. Every other event keeps its line, including an ordinary all-day Chain,
+ * because "All day" is not something its date implies.
+ *
+ * The window has to agree, though: a Steadfast Change written before the category
+ * became one day still spans several days, and hiding *that* range would make a
+ * multi-day event read as a single day. So the line is dropped only when the
+ * category is one of the one-day ones *and* the window really is one whole day.
+ */
+export function showsEventWindow(ev: CalendarEvent): boolean {
+	if (!ONE_DAY_EVENT_CATEGORIES.includes(ev.category)) return true;
+	return !(coversOneUtcDay(ev) && isWholeDayWindow(ev));
+}
+
 /**
  * When an event runs, in one line.
  *
  * A whole-day window prints no clock at all — "00:00 - 23:59" is not information
- * about an event that lasts all day. "All day" is kept for a window that really
- * is a single day, because a week-long event is not "all day" by any reading; a
- * longer whole-day window just states the days it covers. A timed window is
- * written left to right as clock-then-day at both ends, so a range reads the way
- * it is meant to be read:
+ * about an event that lasts all day — and a window that really is a single day is
+ * "All day". A longer whole-day window states the days it covers, because a week
+ * is not "all day" by any reading. A timed window is written left to right as
+ * clock-then-day at both ends, so a range reads the way it is meant to be read:
  *
  *   one day, whole day     All day (TCT)
  *   one day, timed         18:30 - 21:00 TCT
  *   over days, whole days  Mon 19 Jan → Sun 25 Jan TCT
  *   over days, timed       12:00 Sat 31 Jan → 11:59 Mon 2 Feb TCT
+ *
+ * Whether a caller should print this at all is {@link showsEventWindow}'s call.
  */
 export function formatEventWindow(ev: CalendarEvent): string {
 	const wholeDay = isWholeDayWindow(ev);
-	const oneDay = utcDayKey(ev.startTime) === utcDayKey(ev.endTime);
 
-	if (oneDay) {
+	if (coversOneUtcDay(ev)) {
 		if (wholeDay) return "All day (TCT)";
 		return `${formatClockTime(ev.startTime)} - ${formatClockTime(ev.endTime)} TCT`;
 	}
