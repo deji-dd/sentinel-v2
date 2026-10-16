@@ -28,6 +28,7 @@ const mockContract: MercContract = {
 	status: "active",
 	warStatusAtCreation: "active",
 	hitPrice: 3_000_000,
+	mode: "hospitalize",
 	strickenHitPrice: 4_000_000,
 	warStartHitPrice: null,
 	warStartStrickenHitPrice: null,

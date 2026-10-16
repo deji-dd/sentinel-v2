@@ -52,6 +52,17 @@ export const mercContracts = pgTable(
 		minLevel: integer("min_level").default(1).notNull(),
 		maxLevel: integer("max_level").default(100).notNull(),
 
+		// Contract Mode: what a mercenary is paid to do.
+		//   'hospitalize' — the mercenary lands the finishing hit (the original
+		//                   behaviour, and the default so every pre-existing row
+		//                   keeps paying exactly as it did).
+		//   'assist'      — the mercenary chips the target's life down and the
+		//                   client lands the finishing hit, so the mercenary's
+		//                   own attack is logged by Torn as 'Assist'.
+		// Stored as text rather than an enum type so adding a mode later is a
+		// code change plus a default, not an ALTER TYPE on a live table.
+		mode: text("mode").default("hospitalize").notNull(),
+
 		// Pricing & Payouts
 		hitPrice: integer("hit_price").default(0).notNull(),
 		strickenHitPrice: integer("stricken_hit_price"),
@@ -324,6 +335,13 @@ export const mercActiveAlerts = pgTable(
 		isStrickenEligible: boolean("is_stricken_eligible")
 			.default(false)
 			.notNull(),
+		/**
+		 * The contract's mode, carried so the target embed can say whether the
+		 * mercenary should finish the target or only chip it down. Defaults to
+		 * the original hospitalize behaviour for alerts restored from before
+		 * this column existed.
+		 */
+		mode: text("mode").default("hospitalize").notNull(),
 		/**
 		 * Epoch SECONDS the target is hospitalised until. Nullable on both sides:
 		 * the alert carried `undefined` and `null` distinctly in the blob, and

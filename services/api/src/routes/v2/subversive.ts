@@ -55,9 +55,11 @@ import {
 	FACTION_CALENDAR_CATEGORIES,
 	getFactionCalendarEvents,
 	getTornCalendarEvents,
+	getUpcomingCalendarEvents,
 	isFactionCalendarCategory,
 	STEADFAST_STATS,
 	TORN_CALENDAR_ACCENT,
+	UPCOMING_WINDOW_DAYS,
 } from "../../lib/subversive-calendar";
 import { hasActiveSubversiveKeys } from "../../lib/subversive-key-pool";
 import { authPlugin } from "../../middleware/auth";
@@ -242,11 +244,8 @@ export async function verifySubversiveAdmin(
 	return verifyGuildAdmin(user, targetGuildId);
 }
 
-/** Ranked War Enlistment is a Tuesday 12:00 TCT ritual and nothing else. */
+/** Ranked War Enlistment is a whole Tuesday and nothing else. */
 const RW_ENLISTMENT_WEEKDAY_UTC = 2; // Tuesday
-const RW_ENLISTMENT_HOUR_UTC = 12;
-/** Enlistment window: 12:00-13:00 TCT on the chosen Tuesday. */
-const RW_ENLISTMENT_WINDOW_MS = 60 * 60 * 1000;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -278,6 +277,34 @@ interface FactionEventWrite {
 
 function isSteadfastStat(value: string): boolean {
 	return (STEADFAST_STATS as readonly string[]).includes(value);
+}
+
+/**
+ * The error a write that would place an event entirely in the past comes back
+ * with, or `null` when the window is still ahead.
+ *
+ * "Entirely" is the whole rule, and it is deliberately measured at the end: an
+ * event that has already started and is still running is a normal thing to put
+ * on the calendar, so only a window that has closed is refused.
+ *
+ * `storedEnd` is when the event on the row already ends, for an update. An event
+ * that has already ended is history — its notes still need correcting, and it
+ * may even be extended back into the future — so the guard only fires when a
+ * write *moves* a live or future event into the past. Without that exemption,
+ * editing any past event would be impossible and the row would be stuck.
+ */
+export function pastEventError(
+	endTime: Date,
+	options?: { storedEnd?: Date | null; now?: Date },
+): string | null {
+	const now = options?.now ?? new Date();
+
+	if (endTime.getTime() >= now.getTime()) return null;
+	if (options?.storedEnd && options.storedEnd.getTime() < now.getTime()) {
+		return null;
+	}
+
+	return "endTime is in the past: a calendar event cannot be scheduled for a window that has already passed.";
 }
 
 /**
@@ -354,25 +381,16 @@ function resolveFactionEventWrite(
 	let isAllDay = body.isAllDay ?? false;
 
 	if (category === "war") {
-		// The enlistment date is all the caller has to get right: Torn opens
-		// enlistment on Tuesday at 12:00 TCT (UTC) and it runs for an hour.
+		// The enlistment date is all the caller has to get right: enlistment is a
+		// whole Tuesday, so the day boundaries are the event's own and the time
+		// inputs are not consulted at all.
 		if (start.getUTCDay() !== RW_ENLISTMENT_WEEKDAY_UTC) {
 			return { error: "Ranked War Enlistment must be on a Tuesday." };
 		}
 
-		start = new Date(
-			Date.UTC(
-				start.getUTCFullYear(),
-				start.getUTCMonth(),
-				start.getUTCDate(),
-				RW_ENLISTMENT_HOUR_UTC,
-				0,
-				0,
-				0,
-			),
-		);
-		end = new Date(start.getTime() + RW_ENLISTMENT_WINDOW_MS);
-		isAllDay = false;
+		start = startOfUtcDay(start);
+		end = new Date(start.getTime() + MS_PER_DAY - 1000);
+		isAllDay = true;
 	} else if (category === "steadfast_change") {
 		// A Steadfast Change is a whole-day directive: members switch stats for the
 		// days it covers, so the times are the day boundaries, never a slice of one.
@@ -453,12 +471,19 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				forceFresh: refresh,
 			});
 
-			// Ranked-war rows carry the war's target score, so they are only
-			// included for signed-in users — this endpoint is public.
+			// Only what the family scheduled: the war ledger is not mirrored in, so
+			// a finished ranked war never back-fills the calendar.
 			const factionEvents = await getFactionCalendarEvents({
 				year: yearNum,
 				factionId,
-				includeRankedWars: Boolean(user),
+			});
+
+			// Its own query rather than a slice of the year above, because the window
+			// runs from *now* and has to cross the year boundary in December instead
+			// of stopping where the requested year does.
+			const upcomingEvents = await getUpcomingCalendarEvents({
+				factionId,
+				forceFresh: refresh,
 			});
 
 			return {
@@ -470,6 +495,14 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				tornEvents: torn.events,
 				tornEventsSource: torn.source,
 				factionEvents,
+				/**
+				 * What is live now or next, independent of the requested year, so the
+				 * dashboard can show it in one place without reading a whole year.
+				 */
+				upcoming: {
+					windowDays: UPCOMING_WINDOW_DAYS,
+					events: upcomingEvents,
+				},
 				/**
 				 * What the calendar's colours mean. Every faction category owns one
 				 * fixed accent and every official Torn activity shares a single,
@@ -498,7 +531,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "Get Subversive & Torn Calendar Events",
 				description:
-					"Publicly accessible calendar aggregating official Torn competitions/events and Subversive faction events. Ranked-war entries (which include target scores) require a session.",
+					"Publicly accessible calendar aggregating official Torn competitions/events and Subversive faction events, plus an 'upcoming' window of everything live now or starting in the next 30 days.",
 			},
 		},
 	)
@@ -520,6 +553,14 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			if ("error" in resolved) {
 				set.status = 400;
 				return { success: false, error: resolved.error };
+			}
+
+			// The calendar is a plan, so it refuses to be back-filled: a window that
+			// has already closed is not something to schedule.
+			const pastError = pastEventError(resolved.values.endTime);
+			if (pastError) {
+				set.status = 400;
+				return { success: false, error: pastError };
 			}
 
 			const [created] = await db
@@ -547,7 +588,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "Create Subversive Faction Calendar Event",
 				description:
-					"Requires Subversive leadership or admin permissions. The category titles the event and fixes its accent; Ranked War Enlistment is pinned to a Tuesday 12:00 TCT window and Steadfast Change must name two different battlestats.",
+					"Requires Subversive leadership or admin permissions. The category titles the event and fixes its accent; Ranked War Enlistment is pinned to the whole of a Tuesday and Steadfast Change must name two different battlestats. A window that has already passed is refused.",
 			},
 		},
 	)
@@ -597,6 +638,16 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				return { success: false, error: resolved.error };
 			}
 
+			// A live or future event cannot be edited into the past. An event that
+			// already ended stays editable — see {@link pastEventError}.
+			const pastError = pastEventError(resolved.values.endTime, {
+				storedEnd: existing.endTime,
+			});
+			if (pastError) {
+				set.status = 400;
+				return { success: false, error: pastError };
+			}
+
 			const [updated] = await db
 				.update(subversiveCalendarEvents)
 				.set({ ...resolved.values, updatedAt: new Date() })
@@ -622,7 +673,7 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 			detail: {
 				summary: "Update Subversive Faction Calendar Event",
 				description:
-					"Requires Subversive leadership or admin permissions. Omitted fields keep their stored value and the result is validated by the create rules.",
+					"Requires Subversive leadership or admin permissions. Omitted fields keep their stored value and the result is validated by the create rules. An event that has not ended yet cannot be moved into the past.",
 			},
 		},
 	)

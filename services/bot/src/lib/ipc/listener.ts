@@ -530,6 +530,7 @@ export function setupBotIpcListeners(client: Client): void {
 				payoutValue: number;
 				attackId: number;
 				attackCode?: string;
+				mode?: "hospitalize" | "assist";
 				timestamp: string | Date;
 			};
 			if (guildId && channelName && hitData) {

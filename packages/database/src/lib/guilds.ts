@@ -18,6 +18,12 @@ import {
 	subversiveGuildConfigs,
 } from "../schema/subversive";
 import { systemStates } from "../schema/system";
+import {
+	type MercContractMode,
+	normalizeMercContractMode,
+} from "./merc-hit-policy";
+
+export type { MercContractMode };
 
 export type ServerType = "alliance" | "faction" | "elims" | "owner" | "merc";
 
@@ -866,6 +872,12 @@ export interface MercContract {
 	endTime: string | null;
 	endOnWarEnd?: boolean;
 	terms: MercContractHitTerms;
+	/**
+	 * What the mercenary is paid to do. `hospitalize` (the default) pays for
+	 * finishing hits; `assist` pays for the `Assist` result when the client
+	 * lands the finishing blow.
+	 */
+	mode: MercContractMode;
 	hitPrice: number;
 	strickenHitPrice?: number | null;
 	autoStopPrice?: number | null;
@@ -991,6 +1003,7 @@ export function mapRowToMercContract(
 			strickenHits: row.allowStrickenHits,
 			levelRange: [row.minLevel, row.maxLevel],
 		},
+		mode: normalizeMercContractMode(row.mode),
 		hitPrice: row.hitPrice ?? 0,
 		strickenHitPrice: row.strickenHitPrice ?? null,
 		autoStopPrice: row.autoStopPrice ?? null,
@@ -1088,6 +1101,7 @@ export async function createMercContract(
 			maxLevel: contractData.terms.levelRange[1],
 
 			hitPrice: contractData.hitPrice ?? 0,
+			mode: normalizeMercContractMode(contractData.mode),
 			strickenHitPrice: contractData.strickenHitPrice ?? null,
 			autoStopPrice:
 				contractData.autoStopPrice !== null &&
@@ -1162,6 +1176,7 @@ export async function createMercContract(
 			strickenHits: created.allowStrickenHits,
 			levelRange: [created.minLevel, created.maxLevel],
 		},
+		mode: normalizeMercContractMode(created.mode),
 		hitPrice: created.hitPrice ?? 0,
 		strickenHitPrice: created.strickenHitPrice ?? null,
 		changeTermsOnWarStart: created.changeTermsOnWarStart,
@@ -1305,6 +1320,9 @@ export async function updateMercContract(
 					}
 				: {}),
 			...(updates.hitPrice !== undefined ? { hitPrice: updates.hitPrice } : {}),
+			...(updates.mode !== undefined
+				? { mode: normalizeMercContractMode(updates.mode) }
+				: {}),
 			...(updates.strickenHitPrice !== undefined
 				? { strickenHitPrice: updates.strickenHitPrice }
 				: {}),
@@ -1579,6 +1597,17 @@ export interface MercTargetSummary {
 	totalHits: number;
 	standardHitsReceived: number;
 	strickenHitsReceived: number;
+	/**
+	 * Sum of the hit rows' actual `payoutValue` for this target.
+	 *
+	 * The client receipt bills from this rather than from
+	 * `standardHitsReceived * hitPrice`, because those two disagree whenever a
+	 * hit is recorded but not paid — a non-hospitalization under the
+	 * hospitalize mode, and (by design) a mercenary finishing the target
+	 * themselves under the assist mode. Deriving cost from counts billed the
+	 * client for hits that paid nothing.
+	 */
+	totalPayout: number;
 }
 
 export interface MercContractSummaryReport {
@@ -1689,10 +1718,12 @@ export async function getMercContractSummary(
 				totalHits: 0,
 				standardHitsReceived: 0,
 				strickenHitsReceived: 0,
+				totalPayout: 0,
 			};
 			targetMap.set(hit.defenderId, target);
 		}
 		target.totalHits += 1;
+		target.totalPayout += hit.payoutValue;
 		if (hit.isStricken) {
 			target.strickenHitsReceived += 1;
 		} else {

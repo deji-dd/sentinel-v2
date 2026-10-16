@@ -99,6 +99,7 @@ export * from "./src/lib/bounty-state";
 export * from "./src/lib/elims-stock";
 export * from "./src/lib/ffscouter-cache";
 export * from "./src/lib/guilds";
+export * from "./src/lib/merc-hit-policy";
 export * from "./src/lib/personal-live-state";
 export * from "./src/lib/personal-reference";
 export * from "./src/lib/worker-state";

@@ -155,6 +155,7 @@ describe("Merc Alert Distributor Timestamps & Formatting", () => {
 					levelRange: [1, 100],
 				},
 				hitPrice: 3000000,
+				mode: "hospitalize",
 				status: "upcoming",
 				createdAt: new Date().toISOString(),
 			};
@@ -241,6 +242,7 @@ describe("Merc Alert Distributor Timestamps & Formatting", () => {
 					levelRange: [1, 100],
 				},
 				hitPrice: 3000000,
+				mode: "hospitalize",
 				status: "upcoming",
 				createdAt: new Date().toISOString(),
 			};

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import type { MercContract, MercContractHitTerms } from "@sentinel/database";
+import {
+	type MercContract,
+	type MercContractHitTerms,
+	type MercContractMode,
+	resolveMercHitPayout,
+} from "@sentinel/database";
 
 describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 	it("correctly identifies active war vs upcoming war vs no war", () => {
@@ -104,6 +109,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 			endOnWarEnd: true,
 			terms,
 			hitPrice: 1_000_000,
+			mode: "hospitalize",
 			changeTermsOnWarStart: true,
 			warStartTerms,
 			status: "upcoming",
@@ -157,21 +163,37 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 			strickenHitPrice: 1_500_000,
 		};
 
-		const calcPayout = (isStricken: boolean, result = "Hospitalized") => {
-			if (result.toLowerCase() !== "hospitalized") {
-				return 0;
-			}
-			if (isStricken && contract.strickenHitPrice) {
-				return contract.strickenHitPrice;
-			}
-			return contract.hitPrice ?? 0;
-		};
+		const calcPayout = (
+			isStricken: boolean,
+			result = "Hospitalized",
+			mode: MercContractMode = "hospitalize",
+		) =>
+			// Exercises the real payout rule rather than a copy of it: this test
+			// used to re-implement the hospitalize-only gate locally, so it kept
+			// passing while the production rule was free to drift away from it.
+			resolveMercHitPayout({
+				mode,
+				result,
+				isStricken,
+				hitPrice: contract.hitPrice,
+				strickenHitPrice: contract.strickenHitPrice,
+			});
 
 		expect(calcPayout(false, "Hospitalized")).toBe(1_000_000);
 		expect(calcPayout(true, "Hospitalized")).toBe(1_500_000);
 		expect(calcPayout(false, "Attacked")).toBe(0);
 		expect(calcPayout(true, "Mugged")).toBe(0);
 		expect(calcPayout(false, "Arrested")).toBe(0);
+
+		// Assist mode inverts which result pays: the assist earns the standard
+		// rate, while a mercenary who finishes the target themselves earns nothing
+		// (the client chose "record it, do not charge for it").
+		expect(calcPayout(false, "Assist", "assist")).toBe(1_000_000);
+		expect(calcPayout(false, "Hospitalized", "assist")).toBe(0);
+		// An assist is never the finishing hit, so no stricken premium applies.
+		expect(calcPayout(true, "Assist", "assist")).toBe(1_000_000);
+		// Hospitalize mode still refuses to pay an assist.
+		expect(calcPayout(false, "Assist")).toBe(0);
 	});
 
 	it("generates correct CSV format for contract conclusion summary", () => {
@@ -311,6 +333,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 				endTime: null,
 				terms,
 				hitPrice: 3000000,
+				mode: "hospitalize",
 				status: "active",
 				createdAt: new Date().toISOString(),
 			},
@@ -345,6 +368,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 				endTime: new Date(Date.now() - 3600000).toISOString(),
 				terms,
 				hitPrice: 3000000,
+				mode: "hospitalize",
 				status: "completed",
 				createdAt: new Date(Date.now() - 7200000).toISOString(),
 			},
@@ -358,6 +382,7 @@ describe("Mercenary Contracts - Data Models & Contract Calculations", () => {
 				endTime: null,
 				terms,
 				hitPrice: 3000000,
+				mode: "hospitalize",
 				status: "cancelled",
 				createdAt: new Date(Date.now() - 3600000).toISOString(),
 			},

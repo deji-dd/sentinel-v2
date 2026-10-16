@@ -1,17 +1,13 @@
 import {
 	and,
 	db,
-	desc,
 	eq,
 	gte,
-	isNull,
 	lte,
-	or,
 	subversiveCalendarEvents,
-	subversiveRankedWars,
 	tornCalendarActivities,
 } from "@sentinel/database";
-import { Logger, PRIMARY_SUBVERSIVE_FACTION_ID } from "@sentinel/utils";
+import { Logger } from "@sentinel/utils";
 
 const logger = new Logger("SubversiveCalendar");
 
@@ -40,9 +36,9 @@ export interface CalendarEventPayload {
 	createdById?: string | null;
 	createdByName?: string | null;
 	/**
-	 * True only for rows backed by `subversive_calendar_events`. Derived entries
-	 * (ranked wars mirrored from `subversive_ranked_wars`) cannot be edited or
-	 * deleted through the calendar API, so the UI must not offer it.
+	 * True only for rows backed by `subversive_calendar_events`. Official Torn
+	 * activities are read from Torn's own table and have nothing to edit, so the
+	 * UI must not offer it for them.
 	 */
 	editable: boolean;
 }
@@ -268,20 +264,121 @@ function findMatchingMeta(title: string): TornOfficialEventMeta | undefined {
 	return undefined;
 }
 
+/**
+ * The hour Torn's personal-calendar activities start at, in TCT.
+ *
+ * `/torn/calendar` describes those activities as whole days from midnight, but
+ * that midnight is a placeholder: Torn's per-user calendar endpoint reports the
+ * same activities as starting at `12:00 TCT`. Its noon-anchored windows never end
+ * at midnight either — the weekend activities run 12:00 to 11:59:59 — so the
+ * window is moved whole rather than stretched, and an eight-day activity stays
+ * eight days long.
+ */
+const PERSONAL_CALENDAR_START_HOUR_UTC = 12;
+
+/**
+ * Nothing on the calendar starts before 10:00 TCT.
+ *
+ * A floor rather than a rule anything currently trips, since the noon anchor
+ * above is always later. It is here so a derived start can never quietly land in
+ * the small hours.
+ */
+const EARLIEST_START_HOUR_UTC = 10;
+
+/**
+ * How long a personal-calendar activity really runs.
+ *
+ * Torn's `start`/`end` for one of these is a single day — 00:00 to 23:59:59 — but
+ * that is the *calendar* entry, not the activity: Torn City Times announced 420
+ * Day as a "48 hour event" that "begins at noon TCT", and Torn's own fixed
+ * windows are 48 hours long (12:00 to 11:59:59 two days on). So a day entry is
+ * given the 48 hours it actually runs for, and an entry that already describes
+ * more than that — Trick or Treat's eight days, Christmas town's thirteen — keeps
+ * the length Torn gave it.
+ */
+const MINIMUM_WINDOW_SECONDS = 48 * 60 * 60 - 1;
+
+/**
+ * Moves a personal-calendar activity (`fixed_start_time: false`) onto the noon
+ * anchor Torn itself displays, giving it the 48 hours it really runs for.
+ *
+ * A day entry therefore becomes 12:00 to 11:59:59 two days on, which is exactly
+ * the shape of Torn's own 48-hour windows.
+ */
+export function personalCalendarWindow(
+	startSec: number,
+	endSec: number,
+): { start: number; end: number } {
+	const day = new Date(startSec * 1000);
+	const atHour = (hour: number) =>
+		Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), hour) /
+		1000;
+
+	const start = Math.max(
+		atHour(PERSONAL_CALENDAR_START_HOUR_UTC),
+		atHour(EARLIEST_START_HOUR_UTC),
+	);
+	const length = Math.max(endSec - startSec, MINIMUM_WINDOW_SECONDS);
+
+	return { start, end: start + length };
+}
+
+/**
+ * Whether a Torn activity covers whole days.
+ *
+ * Only the activities Torn fixes to midnight are whole-day: they arrive as 00:00
+ * to 23:59 and are left alone, while personal-calendar activities have already
+ * been moved onto the noon anchor by {@link personalCalendarWindow}. The times
+ * decide because the flag alone cannot — `fixed_start_time` is true both for a
+ * midnight activity and for a 12:00 one.
+ */
+export function tornActivityIsAllDay(
+	startSec: number,
+	endSec: number,
+): boolean {
+	const start = new Date(startSec * 1000);
+	const end = new Date(endSec * 1000);
+
+	return (
+		start.getUTCHours() === 0 &&
+		start.getUTCMinutes() === 0 &&
+		start.getUTCSeconds() === 0 &&
+		end.getUTCHours() === 23 &&
+		end.getUTCMinutes() === 59 &&
+		end.getUTCSeconds() === 59
+	);
+}
+
 export function formatTornEventItem(
 	item: {
 		title: string;
 		description: string;
 		start: number;
 		end: number;
+		/**
+		 * Torn's `fixed_start_time`. False means the activity runs on personal
+		 * calendar time, where the given `start` is only a placeholder — see
+		 * {@link personalCalendarWindow}.
+		 */
+		fixedStartTime?: boolean;
 	},
 	isCompetition = false,
 ): CalendarEventPayload {
 	const meta = findMatchingMeta(item.title);
-	const startIso = new Date(item.start * 1000).toISOString();
-	const endIso = new Date(item.end * 1000).toISOString();
+
+	// The occurrence is back in its own year by the time this runs, so a
+	// personal-calendar activity only needs moving onto the noon anchor.
+	const window =
+		item.fixedStartTime === false
+			? personalCalendarWindow(item.start, item.end)
+			: { start: item.start, end: item.end };
+
+	const startIso = new Date(window.start * 1000).toISOString();
+	const endIso = new Date(window.end * 1000).toISOString();
 
 	return {
+		// The id keeps Torn's raw start, so ids stay stable for an activity whose
+		// displayed window is derived from it.
 		id: `torn_${isCompetition ? "comp" : "ev"}_${item.start}_${encodeURIComponent(item.title)}`,
 		title: item.title,
 		description: item.description || meta?.description || "",
@@ -289,9 +386,9 @@ export function formatTornEventItem(
 		source: "torn",
 		startTime: startIso,
 		endTime: endIso,
-		startTimestamp: item.start,
-		endTimestamp: item.end,
-		isAllDay: false,
+		startTimestamp: window.start,
+		endTimestamp: window.end,
+		isAllDay: tornActivityIsAllDay(window.start, window.end),
 		color: TORN_CALENDAR_ACCENT,
 		badge: meta?.badge ?? (isCompetition ? "Competition" : "Torn Event"),
 		categoryLabel: isCompetition ? "Torn Competition" : "Torn Event",
@@ -418,6 +515,7 @@ export async function getTornCalendarEvents(options?: {
 					title: row.title,
 					description: row.description,
 					...repairRolledActivity({ start: row.start, end: row.end }),
+					fixedStartTime: row.fixedStartTime,
 				},
 				row.type === "competition",
 			),
@@ -463,17 +561,46 @@ function filterEventsByYear(
 	);
 }
 
+/** Maps a stored `subversive_calendar_events` row onto the payload the UI renders. */
+function formatFactionEventRow(
+	row: typeof subversiveCalendarEvents.$inferSelect,
+): CalendarEventPayload {
+	return {
+		id: row.id,
+		title: row.title,
+		description: row.description,
+		category: row.category,
+		source: "faction",
+		startTime: row.startTime.toISOString(),
+		endTime: row.endTime.toISOString(),
+		startTimestamp: Math.floor(row.startTime.getTime() / 1000),
+		endTimestamp: Math.floor(row.endTime.getTime() / 1000),
+		isAllDay: row.isAllDay,
+		// Accents are fixed per category, so a stored per-event colour is no
+		// longer consulted — the colour on screen is the category's.
+		color: categoryAccent(row.category),
+		badge: categoryTitle(row.category),
+		categoryLabel: categoryTitle(row.category),
+		primaryStat: row.primaryStat,
+		secondaryStat: row.secondaryStat,
+		factionId: row.factionId,
+		createdById: row.createdById,
+		createdByName: row.createdByName,
+		editable: true,
+	};
+}
+
 /**
  * Retrieves faction calendar events for a given year.
  *
- * `includeRankedWars` mirrors the rows in `subversive_ranked_wars`. Those carry
- * the war's target score, so callers must opt in — the public (unauthenticated)
- * calendar leaves them out.
+ * Only events the family actually scheduled are returned. Ranked wars are
+ * deliberately *not* mirrored in from `subversive_ranked_wars`: the war ledger
+ * is a record of what already happened, and a calendar that back-fills itself
+ * with finished wars says nothing about what is coming.
  */
 export async function getFactionCalendarEvents(options?: {
 	year?: number;
 	factionId?: number;
-	includeRankedWars?: boolean;
 }): Promise<CalendarEventPayload[]> {
 	const year = options?.year ?? new Date().getUTCFullYear();
 	const startOfYear = new Date(Date.UTC(year, 0, 1, 0, 0, 0));
@@ -494,100 +621,72 @@ export async function getFactionCalendarEvents(options?: {
 		.where(and(...conditions))
 		.orderBy(subversiveCalendarEvents.startTime);
 
-	const factionEvents: CalendarEventPayload[] = rows.map((r) => {
-		const startMs = r.startTime.getTime();
-		const endMs = r.endTime.getTime();
-		return {
-			id: r.id,
-			title: r.title,
-			description: r.description,
-			category: r.category,
-			source: "faction",
-			startTime: r.startTime.toISOString(),
-			endTime: r.endTime.toISOString(),
-			startTimestamp: Math.floor(startMs / 1000),
-			endTimestamp: Math.floor(endMs / 1000),
-			isAllDay: r.isAllDay,
-			// Accents are fixed per category, so a stored per-event colour is no
-			// longer consulted — the colour on screen is the category's.
-			color: categoryAccent(r.category),
-			badge: categoryTitle(r.category),
-			categoryLabel: categoryTitle(r.category),
-			primaryStat: r.primaryStat,
-			secondaryStat: r.secondaryStat,
-			factionId: r.factionId,
-			createdById: r.createdById,
-			createdByName: r.createdByName,
-			editable: true,
-		};
+	return rows
+		.map(formatFactionEventRow)
+		.sort((a, b) => a.startTimestamp - b.startTimestamp);
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * How far ahead the calendar's "upcoming" view looks.
+ *
+ * Long enough to cover a month of enlistments, chains, competitions and Torn's
+ * own activities; short enough that the list stays a plan rather than an archive.
+ */
+export const UPCOMING_WINDOW_DAYS = 30;
+
+/**
+ * Everything live now or starting within the window, earliest first.
+ *
+ * Deliberately *not* year-scoped, unlike {@link getFactionCalendarEvents} and
+ * {@link getTornCalendarEvents}: those answer "what is on in year Y", so a view
+ * sliced out of them goes blank every December, when the next 30 days have
+ * crossed into a year the requested window does not describe. This reads the
+ * window itself, from `now` forward, wherever the year boundary falls.
+ *
+ * An event already under way is included as long as its end is still ahead, so a
+ * chain that started yesterday stays on the list until it finishes, and all-day
+ * events that began at midnight count for their whole day.
+ */
+export async function getUpcomingCalendarEvents(options?: {
+	days?: number;
+	factionId?: number;
+	forceFresh?: boolean;
+	/** Injectable clock so the window's edges can be asserted. */
+	now?: Date;
+}): Promise<CalendarEventPayload[]> {
+	const days = options?.days ?? UPCOMING_WINDOW_DAYS;
+	const now = options?.now ?? new Date();
+	const windowEnd = new Date(now.getTime() + days * MS_PER_DAY);
+
+	const conditions = [
+		lte(subversiveCalendarEvents.startTime, windowEnd),
+		gte(subversiveCalendarEvents.endTime, now),
+	];
+
+	if (options?.factionId) {
+		conditions.push(eq(subversiveCalendarEvents.factionId, options.factionId));
+	}
+
+	const rows = await db
+		.select()
+		.from(subversiveCalendarEvents)
+		.where(and(...conditions))
+		.orderBy(subversiveCalendarEvents.startTime);
+
+	const torn = await getTornCalendarEvents({
+		forceFresh: options?.forceFresh,
 	});
+	const nowSec = Math.floor(now.getTime() / 1000);
+	const windowEndSec = Math.floor(windowEnd.getTime() / 1000);
+	const tornUpcoming = torn.events.filter(
+		(e) => e.endTimestamp >= nowSec && e.startTimestamp <= windowEndSec,
+	);
 
-	if (!options?.includeRankedWars) {
-		return factionEvents.sort((a, b) => a.startTimestamp - b.startTimestamp);
-	}
-
-	// Ranked wars mirror `subversive_ranked_wars`. A running war has `end IS NULL`
-	// (the recruitment worker stores 0/null until Torn reports an end), so the
-	// NULL branch is what surfaces the war that is live right now.
-	try {
-		const warRows = await db
-			.select()
-			.from(subversiveRankedWars)
-			.where(
-				and(
-					lte(subversiveRankedWars.start, endOfYear),
-					or(
-						gte(subversiveRankedWars.end, startOfYear),
-						isNull(subversiveRankedWars.end),
-					),
-				),
-			)
-			.orderBy(desc(subversiveRankedWars.start))
-			.limit(20);
-
-		for (const w of warRows) {
-			if (!w.start) continue;
-			const end =
-				w.end ?? new Date(w.start.getTime() + 3 * 24 * 60 * 60 * 1000);
-			const startSec = Math.floor(w.start.getTime() / 1000);
-			const endSec = Math.floor(end.getTime() / 1000);
-
-			// A hand-written war event for the same war means the mirror is redundant.
-			const alreadyExists = factionEvents.some(
-				(fe) =>
-					fe.id === `rw_${w.id}` ||
-					(fe.category === "war" &&
-						Math.abs(fe.startTimestamp - startSec) < 3600),
-			);
-
-			if (!alreadyExists) {
-				factionEvents.push({
-					id: `rw_${w.id}`,
-					title: `Ranked War #${w.id}`,
-					description: `Target: ${w.target.toLocaleString()} score. Status: ${w.status}`,
-					category: "war",
-					source: "faction",
-					startTime: w.start.toISOString(),
-					endTime: end.toISOString(),
-					startTimestamp: startSec,
-					endTimestamp: endSec,
-					isAllDay: false,
-					color: categoryAccent("war"),
-					badge: "Ranked War",
-					categoryLabel: categoryTitle("war"),
-					factionId: PRIMARY_SUBVERSIVE_FACTION_ID,
-					// Mirrored from the war ledger — there is no calendar row to edit.
-					editable: false,
-				});
-			}
-		}
-	} catch (warErr) {
-		logger.debug(
-			`Ranked war calendar inclusion skipped: ${warErr instanceof Error ? warErr.message : String(warErr)}`,
-		);
-	}
-
-	return factionEvents.sort((a, b) => a.startTimestamp - b.startTimestamp);
+	return [...rows.map(formatFactionEventRow), ...tornUpcoming].sort(
+		(a, b) => a.startTimestamp - b.startTimestamp,
+	);
 }
 
 /**

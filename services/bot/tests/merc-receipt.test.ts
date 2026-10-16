@@ -38,6 +38,7 @@ const mockContract: database.MercContract = {
 		levelRange: [1, 100],
 	},
 	hitPrice: 2000000,
+	mode: "hospitalize",
 	strickenHitPrice: null,
 	autoStopPrice: null,
 	changeTermsOnWarStart: false,
@@ -89,6 +90,7 @@ const mockSummary: database.MercContractSummaryReport = {
 			totalHits: 3,
 			standardHitsReceived: 3,
 			strickenHitsReceived: 0,
+			totalPayout: 0,
 		},
 	],
 	factionPayouts: [

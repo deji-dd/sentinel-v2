@@ -1,5 +1,6 @@
 import {
 	createMercContract,
+	DEFAULT_MERC_CONTRACT_MODE,
 	db,
 	eq,
 	getMercChannelConfig,
@@ -563,6 +564,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 						idleDurationMinutes: body.terms.idleDurationMinutes ?? null,
 						offlineDurationMinutes: body.terms.offlineDurationMinutes ?? null,
 					},
+					mode: body.mode ?? DEFAULT_MERC_CONTRACT_MODE,
 					hitPrice: effectiveHitPrice,
 					strickenHitPrice: effectiveStrickenPrice,
 					changeTermsOnWarStart: body.changeTermsOnWarStart ?? false,
@@ -660,6 +662,10 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					strickenHits: t.Boolean(),
 					levelRange: t.Tuple([t.Number(), t.Number()]),
 				}),
+				// Omitted means "hospitalize" — the original behaviour.
+				mode: t.Optional(
+					t.Union([t.Literal("hospitalize"), t.Literal("assist")]),
+				),
 				hitPrice: t.Optional(t.Number()),
 				strickenHitPrice: t.Optional(t.Nullable(t.Number())),
 				changeTermsOnWarStart: t.Optional(t.Boolean()),
@@ -708,18 +714,19 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 			const summary = await getMercContractSummary(params.contractId);
 			const rawHits = await getMercContractHits(params.contractId);
 
-			// Enrich target breakdown with hit prices for client transparent accounting
+			// Enrich target breakdown with the contract's rates for client
+			// transparency. `totalCost` bills the target's actual recorded
+			// payouts, not `hits x rate`: a recorded-but-unpaid hit (a
+			// non-hospitalization, or a mercenary finishing the target themselves
+			// under the assist mode) must never appear as a charge.
 			const targetsWithCost = summary.targetBreakdown.map((target) => {
-				const standardCost =
-					target.standardHitsReceived * (contract.hitPrice ?? 0);
 				const strickenRate =
 					contract.strickenHitPrice ?? contract.hitPrice ?? 0;
-				const strickenCost = target.strickenHitsReceived * strickenRate;
 				return {
 					...target,
 					standardRate: contract.hitPrice,
 					strickenRate,
-					totalCost: standardCost + strickenCost,
+					totalCost: target.totalPayout,
 				};
 			});
 
@@ -746,6 +753,7 @@ export const mercRoutes = new Elysia({ prefix: "/merc" })
 					startTime: contract.startTime,
 					endTime: contract.endTime,
 					status: contract.status,
+					mode: contract.mode,
 					hitPrice: contract.hitPrice,
 					strickenHitPrice: contract.strickenHitPrice,
 					excludedMembers: contract.excludedMembers ?? [],

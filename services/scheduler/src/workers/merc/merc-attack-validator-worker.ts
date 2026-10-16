@@ -1,14 +1,17 @@
 import {
 	db,
+	describeUnpaidMercHit,
 	eq,
 	getMercChannelConfig,
 	getMercContractSummary,
 	inArray,
 	isAttackProcessed,
+	isMercResultCreditable,
 	type MercContract,
 	mapRowToMercContract,
 	mercContracts,
 	recordMercContractHit,
+	resolveMercHitPayout,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
@@ -50,25 +53,13 @@ export function isWithinPausedWindow(
 /**
  * Attack results that represent no damage dealt. Shared with the ranked war hit
  * counter so the two definitions of "a landed hit" cannot drift apart.
+ *
+ * The definitions themselves now live in `@sentinel/database`'s merc hit policy
+ * so the live validator and the hit-backfill script cannot disagree, and are
+ * re-exported here because this module is where merc hit validation is
+ * published from.
  */
-export const DISQUALIFYING_RESULTS: ReadonlySet<string> = new Set([
-	"Lost",
-	"Stalemate",
-	"Escape",
-	"Assist",
-	"Interrupted",
-	"Timeout",
-]);
-
-/**
- * Whether an attack result counts as damage actually dealt. A missing result
- * is not a landed hit: an attack we could not classify must never inflate a
- * member's tally.
- */
-export function isLandedHit(result: string | null | undefined): boolean {
-	if (!result) return false;
-	return !DISQUALIFYING_RESULTS.has(result);
-}
+export { DISQUALIFYING_RESULTS, isLandedHit } from "@sentinel/database";
 
 /**
  * Promotes upcoming contracts to active once their start time has passed, and
@@ -155,18 +146,25 @@ async function enforceAutoStop(
 /**
  * Credits a single attack against every contract whose target faction matches.
  * This is the entire business rule set for merc hit validation: timeframe and
- * pause gating, excluded members, disqualifying results and per-contract dedupe.
+ * pause gating, excluded members, per-mode result eligibility and per-contract
+ * dedupe.
+ *
+ * The result gate is per contract rather than per attack, because a contract's
+ * mode decides which results it pays for: an `Assist` is creditworthy to an
+ * assist-mode contract and to nothing else, so it can no longer be discarded
+ * for the whole batch up front.
  */
 async function creditAttackAgainstContracts(
 	attack: FactionAttackEvent,
 	contracts: MercContract[],
 	logChannels: Map<string, string>,
 ): Promise<void> {
-	if (DISQUALIFYING_RESULTS.has(attack.result ?? "")) return;
 	if (attack.defenderFactionId === null) return;
 
 	for (const contract of contracts) {
 		if (contract.factionId !== attack.defenderFactionId) continue;
+
+		if (!isMercResultCreditable(contract.mode, attack.result)) continue;
 
 		if (
 			contract.excludedMembers &&
@@ -199,13 +197,17 @@ async function creditAttackAgainstContracts(
 
 		if (await isAttackProcessed(attack.attackId, contract.id)) continue;
 
-		const isHospitalized =
-			(attack.result ?? "").toLowerCase() === "hospitalized";
-		const payoutValue = isHospitalized
-			? attack.isStricken && contract.strickenHitPrice
-				? contract.strickenHitPrice
-				: (contract.hitPrice ?? 0)
-			: 0;
+		// The mode decides which result earns, so this is deliberately the only
+		// place a payout amount is decided. See `resolveMercHitPayout`.
+		const payoutValue = resolveMercHitPayout({
+			mode: contract.mode,
+			result: attack.result,
+			isStricken: attack.isStricken,
+			hitPrice: contract.hitPrice,
+			strickenHitPrice: contract.strickenHitPrice,
+		});
+
+		const unpaidReason = describeUnpaidMercHit(contract.mode, attack.result);
 
 		const hitTimestampMs =
 			attackEnded > 0
@@ -232,7 +234,7 @@ async function creditAttackAgainstContracts(
 		});
 
 		logger.info(
-			`Validated merc hit: ${attack.attackerName} [${attack.attackerId}] ${attack.result} ${attack.defenderName} [${attack.defenderId}] ($${payoutValue.toLocaleString()}${attack.isStricken ? " STRICKEN" : ""}${!isHospitalized ? " [NO PAYOUT - NOT HOSP]" : ""})`,
+			`Validated merc hit: ${attack.attackerName} [${attack.attackerId}] ${attack.result} ${attack.defenderName} [${attack.defenderId}] ($${payoutValue.toLocaleString()}${attack.isStricken ? " STRICKEN" : ""}${unpaidReason ? ` [${unpaidReason.toUpperCase()}]` : ""})`,
 		);
 
 		const logChannel = logChannels.get(contract.guildId) ?? "merc-logs";
@@ -249,6 +251,7 @@ async function creditAttackAgainstContracts(
 				payoutValue,
 				attackId: attack.attackId,
 				attackCode: attack.attackCode ?? undefined,
+				mode: contract.mode,
 				timestamp: hitDate,
 			},
 		});

@@ -56,6 +56,8 @@ interface ReceiptData {
 		startTime: string;
 		endTime: string | null;
 		status: "active" | "upcoming" | "paused" | "completed" | "cancelled";
+		/** What the mercenaries were paid to do. */
+		mode?: "hospitalize" | "assist";
 		hitPrice: number;
 		strickenHitPrice?: number | null;
 		excludedMembers?: number[];
@@ -366,6 +368,16 @@ export function ClientContractReceiptPage({
 									<span>WAR OPPONENT: {contract.warOpponent.name}</span>
 								</>
 							)}
+							<span>•</span>
+							<span
+								className={
+									contract.mode === "assist"
+										? "text-violet-400"
+										: "text-muted-foreground"
+								}
+							>
+								MODE: {contract.mode === "assist" ? "ASSIST" : "HOSPITALIZE"}
+							</span>
 						</div>
 					</div>
 
@@ -767,7 +779,7 @@ export function ClientContractReceiptPage({
 														<Badge
 															variant="outline"
 															className={`font-mono text-[10px] uppercase ${
-																hit.result.toLowerCase() === "hospitalized"
+																hit.cost > 0
 																	? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10"
 																	: "border-border text-muted-foreground"
 															}`}

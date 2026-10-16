@@ -463,6 +463,20 @@
 			"when": 1791824752023,
 			"tag": "0065_steady_bucky",
 			"breakpoints": true
+		},
+		{
+			"idx": 66,
+			"version": "7",
+			"when": 1792138267101,
+			"tag": "0066_wise_drax",
+			"breakpoints": true
+		},
+		{
+			"idx": 67,
+			"version": "7",
+			"when": 1792138679542,
+			"tag": "0067_soft_valeria_richards",
+			"breakpoints": true
 		}
 	]
 }

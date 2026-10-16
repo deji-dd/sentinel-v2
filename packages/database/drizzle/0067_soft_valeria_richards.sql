@@ -1,0 +1,1 @@
+ALTER TABLE "merc_active_alerts" ADD COLUMN "mode" text DEFAULT 'hospitalize' NOT NULL;

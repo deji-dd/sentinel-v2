@@ -1,10 +1,13 @@
 import {
 	db,
+	describeUnpaidMercHit,
 	eq,
 	getMercChannelConfig,
 	type MercContract,
+	type MercContractMode,
 	type MercContractSummaryReport,
 	mercContracts,
+	normalizeMercContractMode,
 } from "@sentinel/database";
 import {
 	ActionRowBuilder,
@@ -212,6 +215,14 @@ export async function postMercContractAnnouncement(
 				name: "Standard Hit Value",
 				value: `$${(contract.hitPrice ?? 0).toLocaleString()}`,
 				inline: true,
+			},
+			{
+				name: "Contract Mode",
+				value:
+					normalizeMercContractMode(contract.mode) === "assist"
+						? "Assist — chip the target, the client lands the finishing hit"
+						: "Hospitalize — the mercenary lands the finishing hit",
+				inline: false,
 			},
 			{
 				name: "Stricken Hit Value",
@@ -496,7 +507,33 @@ export interface MercTargetAlertData {
 	};
 	claimedAt?: number;
 	isStrickenEligible?: boolean;
+	/**
+	 * Contract mode. Drives the "do not finish" warning on the alert, since the
+	 * alert is what a mercenary acts on — the contract announcement was posted
+	 * once and is easy to have missed.
+	 */
+	mode?: MercContractMode;
 	rwCooldownUntil?: number | null;
+}
+
+/**
+ * The alert's mode warning, appended to the description.
+ *
+ * Assist mode is the one case a mercenary can get wrong by doing *better* than
+ * asked: hospitalizing the target themselves is not what the client bought, and
+ * under the contract terms it pays nothing. Saying so on the alert — not just
+ * in the contract announcement — is the difference between a paid assist and an
+ * unpaid finish.
+ */
+function buildTargetModeNotice(mode: MercContractMode | undefined): string {
+	return normalizeMercContractMode(mode) === "assist"
+		? "\n\n**ASSIST ONLY — CHIP THE TARGET, DO NOT FINISH IT**"
+		: "";
+}
+
+/** Alert title prefix, so the mode is visible before the embed is read. */
+function buildTargetTitlePrefix(mode: MercContractMode | undefined): string {
+	return normalizeMercContractMode(mode) === "assist" ? "[ASSIST]" : "";
 }
 
 /**
@@ -521,10 +558,14 @@ export async function postMercTargetAlert(
 			desc += "\n\n**STRICKEN HIT ELIGIBLE**";
 		}
 
+		desc += buildTargetModeNotice(target.mode);
+
+		const targetTitlePrefix = buildTargetTitlePrefix(target.mode);
+
 		const embed = createBaseEmbed(
 			target.isStrickenEligible
 				? `[STRICKEN TARGET] ${target.targetName} [${target.targetId}]`
-				: `Target: ${target.targetName} [${target.targetId}]`,
+				: `${targetTitlePrefix ? `${targetTitlePrefix} ` : ""}Target: ${target.targetName} [${target.targetId}]`,
 			desc,
 			target.isStrickenEligible
 				? EMBED_COLORS.DANGER
@@ -615,10 +656,14 @@ export async function updateMercTargetAlert(
 			desc += "\n\n**STRICKEN HIT ELIGIBLE**";
 		}
 
+		desc += buildTargetModeNotice(target.mode);
+
+		const targetTitlePrefix = buildTargetTitlePrefix(target.mode);
+
 		const embed = createBaseEmbed(
 			target.isStrickenEligible
 				? `[STRICKEN TARGET] ${target.targetName} [${target.targetId}]`
-				: `Target: ${target.targetName} [${target.targetId}]`,
+				: `${targetTitlePrefix ? `${targetTitlePrefix} ` : ""}Target: ${target.targetName} [${target.targetId}]`,
 			desc,
 			target.isStrickenEligible
 				? EMBED_COLORS.DANGER
@@ -750,6 +795,8 @@ export async function postMercHitLog(
 		payoutValue: number;
 		attackId: number;
 		attackCode?: string;
+		/** Contract mode, so an unpaid hit can say why it was unpaid. */
+		mode?: MercContractMode;
 		timestamp: string | Date | number;
 	},
 ): Promise<void> {
@@ -764,7 +811,13 @@ export async function postMercHitLog(
 		if (hitData.isStricken && hitData.payoutValue > 0) {
 			payoutDesc = `Payout: $${hitData.payoutValue.toLocaleString()} [STRICKEN HIT]`;
 		} else if (hitData.payoutValue === 0) {
-			payoutDesc = "Payout: $0 (No payout - not a hospitalization)";
+			// The reason differs by mode: under assist mode the result that pays
+			// nothing is a full hospitalization, not a mere non-finishing hit.
+			const reason = describeUnpaidMercHit(
+				normalizeMercContractMode(hitData.mode),
+				hitData.result,
+			);
+			payoutDesc = `Payout: $0 (${reason ?? "No payout for this result"})`;
 		}
 
 		const desc = `${hitData.attackerName} [${hitData.attackerId}] ${hitData.result.toLowerCase()} ${hitData.defenderName} [${hitData.defenderId}]\n${payoutDesc}`;

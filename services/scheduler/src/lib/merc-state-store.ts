@@ -6,6 +6,7 @@ import {
 	mercActiveAlerts,
 	mercHospitalTrackers,
 	mercOfflineTrackers,
+	normalizeMercContractMode,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 // Type-only import: erased at runtime, so this stays free of a module cycle.
@@ -407,6 +408,7 @@ function alertToRow(
 		messageId: alert.messageId ?? null,
 		lastAlertAt: alert.lastAlertAt,
 		isStrickenEligible: alert.isStrickenEligible,
+		mode: normalizeMercContractMode(alert.mode),
 		hospitalUntil: alert.hospitalUntil ?? null,
 		rwCooldownUntil: alert.rwCooldownUntil ?? null,
 		wasInHospital: alert.wasInHospital ?? null,
@@ -450,6 +452,7 @@ function alertRowToPayload(
 		...(row.messageId !== null ? { messageId: row.messageId } : {}),
 		lastAlertAt: row.lastAlertAt,
 		isStrickenEligible: row.isStrickenEligible,
+		mode: normalizeMercContractMode(row.mode),
 		hospitalUntil: row.hospitalUntil,
 		rwCooldownUntil: row.rwCooldownUntil,
 		...(row.wasInHospital !== null ? { wasInHospital: row.wasInHospital } : {}),

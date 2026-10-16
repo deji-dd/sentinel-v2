@@ -34,41 +34,15 @@ import {
 } from "@/components/ui/tooltip";
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
+import { type CalendarEvent, formatEventWindow } from "../lib/calendar-events";
+import { DEFAULT_EVENT_COLOR, dayWashBackground } from "../lib/calendar-wash";
 import {
+	getSubversiveFactionName,
 	PRIMARY_SUBVERSIVE_FACTION_ID,
 	SUBVERSIVE_FAMILY_FACTIONS,
 } from "../lib/subversive-factions";
 import { cn } from "../lib/utils";
 import { useRouter } from "../router";
-
-export interface CalendarEvent {
-	id: string;
-	title: string;
-	description: string;
-	category: string;
-	source: "torn" | "faction";
-	startTime: string; // ISO
-	endTime: string; // ISO
-	startTimestamp: number; // Unix seconds
-	endTimestamp: number; // Unix seconds
-	isAllDay: boolean;
-	color?: string | null;
-	badge?: string | null;
-	/** Display label for `category`, which is also the event's title. */
-	categoryLabel?: string;
-	/** Battlestats a Steadfast Change asks members to hold. */
-	primaryStat?: string | null;
-	secondaryStat?: string | null;
-	factionId?: number;
-	createdById?: string | null;
-	createdByName?: string | null;
-	/**
-	 * Only stored faction events can be changed. Ranked-war entries mirrored from
-	 * the war ledger have no calendar row behind them, so the API marks them
-	 * `false` and the UI hides edit/delete for them.
-	 */
-	editable?: boolean;
-}
 
 /** A faction category: its label is the event title and its accent is fixed. */
 interface FactionCategory {
@@ -86,13 +60,19 @@ interface CalendarAccentKey {
 /** Where the official Torn events came from. */
 type TornEventsSource = "database" | "unavailable";
 
-type CalendarFilter = "all" | "faction" | "competitions" | "events";
+/**
+ * The toolbar's filter.
+ *
+ * Torn's competitions are the one part of Torn's calendar worth isolating — a
+ * competition is something members opt into, an ordinary Torn event is not —
+ * and the rest of Torn's activities are one list with the faction's own.
+ */
+type CalendarFilter = "all" | "faction" | "competitions";
 
 const FILTER_LABELS: Record<CalendarFilter, string> = {
 	all: "All events",
 	faction: "Faction events",
 	competitions: "Torn competitions",
-	events: "Torn events",
 };
 
 const MONTH_NAMES = [
@@ -124,13 +104,36 @@ const STEADFAST_STAT_LABELS = new Map<string, string>(
 	STEADFAST_STAT_OPTIONS.map((stat) => [stat.value, stat.label]),
 );
 
-/** Torn opens Ranked War Enlistment on Tuesday at 12:00 TCT and it runs an hour. */
+/** Ranked War Enlistment is a whole Tuesday: the picker chooses the day, nothing else. */
 const ENLISTMENT_WEEKDAY_UTC = 2; // Tuesday
-const ENLISTMENT_HOUR_UTC = 12;
-const ENLISTMENT_WINDOW_HOURS = 1;
 const ENLISTMENT_OPTION_COUNT = 16;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether an event survives the toolbar's filter and search.
+ *
+ * Shared by the grid and the upcoming list so the two can never disagree about
+ * what the page is currently showing.
+ */
+function matchesFilters(
+	ev: CalendarEvent,
+	filter: CalendarFilter,
+	query: string,
+): boolean {
+	if (filter === "faction" && ev.source !== "faction") return false;
+	if (filter === "competitions" && ev.category !== "torn_competition") {
+		return false;
+	}
+
+	const q = query.trim().toLowerCase();
+	if (!q) return true;
+
+	return (
+		ev.title.toLowerCase().includes(q) ||
+		ev.description.toLowerCase().includes(q)
+	);
+}
 
 /**
  * End-date shortcuts, measured in *whole days the event covers* — "1 day" ends
@@ -149,47 +152,62 @@ const DURATION_OPTIONS = [
 
 type DurationValue = (typeof DURATION_OPTIONS)[number]["value"];
 
-const DEFAULT_EVENT_COLOR = "#228be6";
-
 /** How strongly the day wash sits over the cell. Text stays legible above it. */
 const DAY_WASH_OPACITY = 0.3;
-/** Bands drawn in a day cell before the rest are left to the tooltip. */
-const MAX_WASH_BANDS = 3;
 
 /**
- * The wash a day cell paints: one accent for a single event, split into equal
- * bands when a day carries several, so the count is readable too.
+ * The API's own explanation for a rejected write, when it gave one.
+ *
+ * Eden hands a non-2xx body back under `error.value`, and the calendar's refusals
+ * ("endTime is in the past…", "Ranked War Enlistment must be on a Tuesday.") are
+ * the useful half of the answer — a flat "Failed to create event." throws away
+ * exactly what the admin needs in order to fix the form.
  */
-function dayWash(events: CalendarEvent[]): string {
-	const colors = events
-		.slice(0, MAX_WASH_BANDS)
-		.map((event) => event.color || DEFAULT_EVENT_COLOR);
+function writeErrorMessage(error: unknown, fallback: string): string {
+	if (!error || typeof error !== "object" || !("value" in error))
+		return fallback;
 
-	if (colors.length <= 1) return colors[0] ?? DEFAULT_EVENT_COLOR;
+	const value = (error as { value: unknown }).value;
 
-	const stops: string[] = [];
-	colors.forEach((color, index) => {
-		const from = (index / colors.length) * 100;
-		const to = ((index + 1) / colors.length) * 100;
-		stops.push(`${color} ${from}%`, `${color} ${to}%`);
-	});
+	if (typeof value === "string") return value;
+	if (value && typeof value === "object" && "error" in value) {
+		const message = (value as { error: unknown }).error;
+		if (typeof message === "string") return message;
+	}
 
-	return `linear-gradient(to right, ${stops.join(", ")})`;
+	return fallback;
 }
 
-/** `HH:MM` in Torn City Time (UTC). */
-function formatClockTime(iso: string): string {
-	return new Date(iso).toLocaleTimeString("en-US", {
-		timeZone: "UTC",
-		hour12: false,
-		hour: "2-digit",
-		minute: "2-digit",
-	});
+/** Which family faction an event belongs to, or whose Torn activity it is. */
+function formatUpcomingSource(ev: CalendarEvent): string {
+	if (ev.source === "faction") return getSubversiveFactionName(ev.factionId);
+	return ev.categoryLabel ?? "Official Torn";
 }
 
-function formatEventTime(ev: CalendarEvent): string {
-	if (ev.isAllDay) return "All day (TCT)";
-	return `${formatClockTime(ev.startTime)} - ${formatClockTime(ev.endTime)} TCT`;
+/**
+ * How soon an upcoming event is, counted in whole Torn days rather than hours —
+ * something at 09:00 tomorrow is "tomorrow", not "in 11 hours".
+ */
+function upcomingCountdown(
+	ev: CalendarEvent,
+	nowSec: number,
+): { label: string; tone: "success" | "primary" | "neutral" } {
+	if (ev.startTimestamp <= nowSec) {
+		return { label: "Live now", tone: "success" };
+	}
+
+	const midnightOf = (date: Date) =>
+		Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+
+	const daysAway = Math.round(
+		(midnightOf(new Date(ev.startTimestamp * 1000)) -
+			midnightOf(new Date(nowSec * 1000))) /
+			MS_PER_DAY,
+	);
+
+	if (daysAway <= 0) return { label: "Today", tone: "primary" };
+	if (daysAway === 1) return { label: "Tomorrow", tone: "primary" };
+	return { label: `in ${daysAway} days`, tone: "neutral" };
 }
 
 /** The battlestats a Steadfast Change asks for, e.g. `Speed / Defense`. */
@@ -294,14 +312,168 @@ interface SubversiveCalendarPageProps {
 	isPublic?: boolean;
 }
 
+interface UpcomingEventsPanelProps {
+	events: CalendarEvent[];
+	/** The window the API answered with, in days. */
+	windowDays: number;
+	/** True when the toolbar's search or filter is hiding some of the window. */
+	narrowed: boolean;
+	/** Whether this viewer can open an event's form at all. */
+	canEdit: boolean;
+	/**
+	 * Opens the event's form. Clicking an event is an editing gesture, so this
+	 * goes straight to the form rather than through the day's event list — that
+	 * list is what a bare day click in the grid opens.
+	 */
+	onEditEvent: (ev: CalendarEvent) => void;
+}
+
+/**
+ * What is next, in one list.
+ *
+ * The grid answers "what is on in October", which stops being useful the moment
+ * the running month is nearly over — and it cannot answer December's question at
+ * all, because the next few weeks are in a year the grid is not drawing. This
+ * panel reads the API's own `upcoming` window (from now, across the year
+ * boundary) and keeps the toolbar's search and filter, so it never contradicts
+ * the grid beside it.
+ */
+function UpcomingEventsPanel({
+	events,
+	windowDays,
+	narrowed,
+	canEdit,
+	onEditEvent,
+}: UpcomingEventsPanelProps) {
+	// One tick every half minute is enough to move an event from "in 2 days" to
+	// "Tomorrow" without re-rendering the year of day cells with it.
+	const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+
+	useEffect(() => {
+		const interval = setInterval(
+			() => setNowSec(Math.floor(Date.now() / 1000)),
+			30_000,
+		);
+		return () => clearInterval(interval);
+	}, []);
+
+	return (
+		<Card className="gap-0 overflow-hidden border-border/80 bg-card/90 py-0 shadow-sm">
+			<div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
+				<div className="flex min-w-0 flex-col">
+					<span className="text-sm font-semibold tracking-tight">Upcoming</span>
+				</div>
+			</div>
+
+			{events.length === 0 ? (
+				<p className="px-3 py-6 text-center text-sm text-muted-foreground">
+					{narrowed
+						? "No upcoming events match the current search or filter."
+						: `Nothing scheduled in the next ${windowDays} days.`}
+				</p>
+			) : (
+				<ul className="flex max-h-80 flex-col divide-y divide-border/50 overflow-y-auto">
+					{events.map((ev) => {
+						const start = new Date(ev.startTime);
+						const countdown = upcomingCountdown(ev, nowSec);
+						// Only a stored event can be opened in a form, and only by
+						// someone who may write to it — anything else stays a plain row
+						// rather than a button that does nothing.
+						const openable = canEdit && ev.editable;
+
+						const row = (
+							<>
+								{/* The date reads as a calendar chip: weekday, day, month. */}
+								<span className="flex w-14 shrink-0 flex-col items-center rounded-md border border-border/70 py-1">
+									<span className="text-[10px] text-muted-foreground uppercase">
+										{start.toLocaleDateString("en-GB", {
+											timeZone: "UTC",
+											weekday: "short",
+										})}
+									</span>
+									<span className="text-sm leading-none font-semibold tabular-nums">
+										{start.getUTCDate()}
+									</span>
+									<span className="text-[10px] text-muted-foreground uppercase">
+										{start.toLocaleDateString("en-GB", {
+											timeZone: "UTC",
+											month: "short",
+										})}
+									</span>
+								</span>
+
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="flex min-w-0 items-center gap-2">
+										<span
+											className="size-2 shrink-0 rounded-full"
+											style={{
+												backgroundColor: ev.color || DEFAULT_EVENT_COLOR,
+											}}
+										/>
+										<span className="truncate text-sm font-medium">
+											{ev.title}
+										</span>
+									</span>
+
+									<span className="font-mono text-[11px] text-muted-foreground">
+										{formatEventWindow(ev)}
+									</span>
+
+									<span className="text-[11px] text-muted-foreground">
+										{formatUpcomingSource(ev)}
+										{formatStats(ev) ? ` · ${formatStats(ev)}` : ""}
+									</span>
+
+									{ev.description ? (
+										<span className="line-clamp-2 text-xs text-muted-foreground">
+											{ev.description}
+										</span>
+									) : null}
+								</span>
+
+								<StatusBadge
+									tone={countdown.tone}
+									size="sm"
+									dot={countdown.tone === "success"}
+									pulse={countdown.tone === "success"}
+								>
+									{countdown.label}
+								</StatusBadge>
+							</>
+						);
+
+						return (
+							<li key={ev.id}>
+								{openable ? (
+									<button
+										type="button"
+										onClick={() => onEditEvent(ev)}
+										title="Edit this event"
+										className="flex w-full items-start gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none"
+									>
+										{row}
+									</button>
+								) : (
+									<div className="flex items-start gap-3 px-3 py-2">{row}</div>
+								)}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</Card>
+	);
+}
+
 export function SubversiveCalendarPage({
 	isPublic = false,
 }: SubversiveCalendarPageProps) {
 	const { navigate } = useRouter();
 	const { authenticated } = useAuth();
 
-	// The calendar only ever shows Torn's running year; a year picker would offer
-	// windows Torn's own calendar response does not describe.
+	// Today in Torn City Time. The grid draws one year at a time and `year` is the
+	// one on screen; `today` stays the real date either way, so it still decides
+	// which cell is "today" and which Tuesdays the enlistment picker offers.
 	const today = useMemo(() => {
 		const now = new Date();
 		return {
@@ -310,7 +482,16 @@ export function SubversiveCalendarPage({
 			day: now.getUTCDate(),
 		};
 	}, []);
-	const year = today.year;
+
+	/**
+	 * The year being drawn.
+	 *
+	 * Everyone starts on the running year and viewers stay there — Torn publishes
+	 * nothing but the running year, so there is nothing else for them to look at.
+	 * Admins can ask for another one, which is what makes scheduling next year's
+	 * enlistments possible before January.
+	 */
+	const [year, setYear] = useState(today.year);
 
 	const [activeFilter, setActiveFilter] = useState<CalendarFilter>("all");
 	const [searchQuery, setSearchQuery] = useState("");
@@ -323,12 +504,11 @@ export function SubversiveCalendarPage({
 		useState<TornEventsSource | null>(null);
 	const [accentKey, setAccentKey] = useState<CalendarAccentKey | null>(null);
 	const [factionEvents, setFactionEvents] = useState<CalendarEvent[]>([]);
-
-	// Day details modal
-	const [selectedDate, setSelectedDate] = useState<{
-		year: number;
-		month: number;
-		day: number;
+	// The API's own forward-looking window. Kept apart from `factionEvents` and
+	// `tornEvents`, which describe the requested year and nothing past it.
+	const [upcoming, setUpcoming] = useState<{
+		windowDays: number;
+		events: CalendarEvent[];
 	} | null>(null);
 
 	// Add/Edit event modal
@@ -352,13 +532,46 @@ export function SubversiveCalendarPage({
 	const factionCategories = accentKey?.faction ?? [];
 
 	/**
+	 * The years the picker offers an admin.
+	 *
+	 * A few back cover the history the family has actually scheduled; a couple
+	 * forward cover planning a December enlistment for January. Further out is
+	 * noise: Torn only ever publishes the running year, so a future year is a
+	 * planning surface, not a forecast.
+	 */
+	const yearOptions = useMemo(() => {
+		const years: number[] = [];
+		for (let y = today.year - 3; y <= today.year + 2; y++) years.push(y);
+		return years;
+	}, [today]);
+
+	/**
+	 * Whether an event can still be placed on a day.
+	 *
+	 * The API refuses a window that has already closed, so the controls that open
+	 * the event form are disabled for days it would reject — a button that leads
+	 * straight to an error is worse than one that says why it is off.
+	 */
+	const isSchedulable = (y: number, mIndex: number, dayNumber: number) =>
+		Date.UTC(y, mIndex, dayNumber, 23, 59, 59, 999) >= Date.now();
+
+	const viewYearSchedulable = isSchedulable(year, 11, 31);
+
+	/**
 	 * The Tuesdays a Ranked War Enlistment can be pinned to, plus whatever date an
 	 * event being edited already sits on so an old enlistment stays selectable.
+	 *
+	 * Anchored at the later of today and the start of the year on screen, so
+	 * browsing 2027 in March offers 2027 enlistments rather than the next sixteen
+	 * Tuesdays of the year being left behind.
 	 */
 	const enlistmentDates = useMemo(() => {
 		const dates: string[] = [];
 		const cursor = new Date(
-			Date.UTC(today.year, today.month, today.day, ENLISTMENT_HOUR_UTC),
+			Math.max(
+				Date.UTC(today.year, today.month, today.day),
+				Date.UTC(year, 0, 1),
+			),
 		);
 
 		while (cursor.getUTCDay() !== ENLISTMENT_WEEKDAY_UTC) {
@@ -371,7 +584,7 @@ export function SubversiveCalendarPage({
 		}
 
 		return dates;
-	}, [today]);
+	}, [today, year]);
 
 	// Legacy categories are no longer offered, but an event still sitting in one
 	// has to stay selectable or editing it would silently re-categorise it.
@@ -443,6 +656,18 @@ export function SubversiveCalendarPage({
 					);
 					setAccentKey((data.accentKey as CalendarAccentKey) ?? null);
 					setFactionEvents((data.factionEvents as CalendarEvent[]) ?? []);
+
+					const window = data.upcoming as
+						| { windowDays: number; events: CalendarEvent[] }
+						| undefined;
+					setUpcoming(
+						window
+							? {
+									windowDays: window.windowDays,
+									events: window.events ?? [],
+								}
+							: null,
+					);
 				} else {
 					toast.error("Failed to load calendar events.");
 				}
@@ -461,30 +686,22 @@ export function SubversiveCalendarPage({
 	}, [fetchCalendar]);
 
 	// Combined filtered events
-	const filteredEvents = useMemo(() => {
-		let list: CalendarEvent[] = [];
+	const filteredEvents = useMemo(
+		() =>
+			[...factionEvents, ...tornEvents].filter((ev) =>
+				matchesFilters(ev, activeFilter, searchQuery),
+			),
+		[factionEvents, tornEvents, activeFilter, searchQuery],
+	);
 
-		if (activeFilter === "all") {
-			list = [...factionEvents, ...tornEvents];
-		} else if (activeFilter === "faction") {
-			list = factionEvents;
-		} else if (activeFilter === "competitions") {
-			list = tornEvents.filter((e) => e.category === "torn_competition");
-		} else if (activeFilter === "events") {
-			list = tornEvents.filter((e) => e.category === "torn_event");
-		}
-
-		if (searchQuery.trim()) {
-			const q = searchQuery.toLowerCase().trim();
-			list = list.filter(
-				(e) =>
-					e.title.toLowerCase().includes(q) ||
-					e.description.toLowerCase().includes(q),
-			);
-		}
-
-		return list;
-	}, [factionEvents, tornEvents, activeFilter, searchQuery]);
+	// The same filter and search, over the forward-looking window instead.
+	const filteredUpcoming = useMemo(
+		() =>
+			(upcoming?.events ?? []).filter((ev) =>
+				matchesFilters(ev, activeFilter, searchQuery),
+			),
+		[upcoming, activeFilter, searchQuery],
+	);
 
 	// Filter counts
 	const counts = useMemo(
@@ -493,7 +710,6 @@ export function SubversiveCalendarPage({
 			faction: factionEvents.length,
 			competitions: tornEvents.filter((e) => e.category === "torn_competition")
 				.length,
-			events: tornEvents.filter((e) => e.category === "torn_event").length,
 		}),
 		[factionEvents, tornEvents],
 	);
@@ -506,30 +722,37 @@ export function SubversiveCalendarPage({
 		toast.success("Public Calendar link copied to clipboard!");
 	};
 
-	// Open Day Modal
-	const handleDayClick = (mIndex: number, dayNumber: number) => {
-		setSelectedDate({ year, month: mIndex, day: dayNumber });
-	};
-
-	// Get events active on a specific day
+	/**
+	 * The events that fall on a day of the year on screen.
+	 *
+	 * Only the viewed year is consulted: the upcoming window is a separate list
+	 * with its own dates, and mixing it in here would wash a day of this year for
+	 * something happening in the next one.
+	 */
 	const getEventsForDay = useCallback(
-		(mIndex: number, dayNumber: number) => {
+		(y: number, mIndex: number, dayNumber: number) => {
 			const startSec = Math.floor(
-				Date.UTC(year, mIndex, dayNumber, 0, 0, 0) / 1000,
+				Date.UTC(y, mIndex, dayNumber, 0, 0, 0) / 1000,
 			);
 			const endSec = Math.floor(
-				Date.UTC(year, mIndex, dayNumber, 23, 59, 59) / 1000,
+				Date.UTC(y, mIndex, dayNumber, 23, 59, 59) / 1000,
 			);
 
 			return filteredEvents.filter(
 				(e) => e.startTimestamp <= endSec && e.endTimestamp >= startSec,
 			);
 		},
-		[filteredEvents, year],
+		[filteredEvents],
 	);
 
-	// Open Add Event modal prefilled with day
-	const handleOpenAddEvent = (mIndex?: number, dayNumber?: number) => {
+	// Open Add Event modal prefilled with day. The year is passed in so a day in
+	// another year — or an event being added to a year the admin picked — prefill
+	// the date it was asked for rather than the running year.
+	const handleOpenAddEvent = (
+		mIndex?: number,
+		dayNumber?: number,
+		atYear: number = year,
+	) => {
 		setEditingEventId(null);
 		setFormDescription("");
 		setFormCategory(factionCategories[0]?.value ?? "war");
@@ -540,7 +763,7 @@ export function SubversiveCalendarPage({
 
 		const clickedDay =
 			mIndex !== undefined && dayNumber !== undefined
-				? toDateValue(new Date(Date.UTC(year, mIndex, dayNumber)))
+				? toDateValue(new Date(Date.UTC(atYear, mIndex, dayNumber)))
 				: null;
 
 		// A Ranked War Enlistment ignores a clicked day unless it is a Tuesday; the
@@ -602,22 +825,28 @@ export function SubversiveCalendarPage({
 		const sTime = isAllDayEvent ? "00:00:00" : `${formStartTime}:00`;
 		const eTime = isAllDayEvent ? "23:59:59" : `${formEndTime}:00`;
 
-		// Enlistment runs in a fixed Tuesday window, so the date is all the form
-		// collects and the API pins the times.
+		// Enlistment covers the whole Tuesday, so the date is all the form collects
+		// and the API pins the day boundaries.
 		const startIso = isEnlistment
-			? new Date(
-					`${formStartDate}T${String(ENLISTMENT_HOUR_UTC).padStart(2, "0")}:00:00Z`,
-				).toISOString()
+			? new Date(`${formStartDate}T00:00:00Z`).toISOString()
 			: new Date(`${formStartDate}T${sTime}Z`).toISOString();
 		const endIso = isEnlistment
-			? new Date(
-					new Date(startIso).getTime() +
-						ENLISTMENT_WINDOW_HOURS * 60 * 60 * 1000,
-				).toISOString()
+			? new Date(`${formStartDate}T23:59:59Z`).toISOString()
 			: new Date(`${formEndDate}T${eTime}Z`).toISOString();
 
 		if (new Date(endIso) < new Date(startIso)) {
 			toast.error("End date/time must be after start date/time.");
+			return;
+		}
+
+		// The calendar is a plan, not a log, so a window that has already closed is
+		// refused — here to save the round trip, and by the API, which is where the
+		// rule lives. Only a create is checked: an event that already ended is
+		// history, and its notes still need correcting.
+		if (!editingEventId && new Date(endIso).getTime() < Date.now()) {
+			toast.error(
+				"That window has already passed — pick a date and time still to come.",
+			);
 			return;
 		}
 
@@ -626,7 +855,7 @@ export function SubversiveCalendarPage({
 			category: formCategory,
 			startTime: startIso,
 			endTime: endIso,
-			isAllDay: isEnlistment ? false : isAllDayEvent,
+			isAllDay: isEnlistment ? true : isAllDayEvent,
 			primaryStat: isSteadfast ? formPrimaryStat : null,
 			secondaryStat: isSteadfast ? formSecondaryStat : null,
 			factionId: formFactionId,
@@ -644,7 +873,7 @@ export function SubversiveCalendarPage({
 					setEventModalOpen(false);
 					await fetchCalendar(true);
 				} else {
-					toast.error("Failed to update event.");
+					toast.error(writeErrorMessage(res.error, "Failed to update event."));
 				}
 			} else {
 				const res = await api.v2.subversive.calendar.events.post(payload);
@@ -654,7 +883,7 @@ export function SubversiveCalendarPage({
 					setEventModalOpen(false);
 					await fetchCalendar(true);
 				} else {
-					toast.error("Failed to create event.");
+					toast.error(writeErrorMessage(res.error, "Failed to create event."));
 				}
 			}
 		} catch (_err) {
@@ -664,7 +893,7 @@ export function SubversiveCalendarPage({
 		}
 	};
 
-	// Delete Event
+	// Delete Event. Reached from the form, so the form closes with the event.
 	const handleDeleteEvent = async (id: string) => {
 		if (!confirm("Are you sure you want to delete this faction event?")) return;
 
@@ -672,10 +901,8 @@ export function SubversiveCalendarPage({
 			const res = await api.v2.subversive.calendar.events({ id }).delete();
 			if (res.data && "success" in res.data && res.data.success) {
 				toast.success("Event removed from calendar.");
+				setEventModalOpen(false);
 				await fetchCalendar(true);
-				if (selectedDate) {
-					setSelectedDate({ ...selectedDate });
-				}
 			} else {
 				toast.error("Failed to delete event.");
 			}
@@ -723,46 +950,70 @@ export function SubversiveCalendarPage({
 			const isToday =
 				today.year === year && today.month === mIndex && today.day === d;
 
-			const dayEvents = getEventsForDay(mIndex, d);
+			const dayStartSec = Math.floor(Date.UTC(year, mIndex, d, 0, 0, 0) / 1000);
+			const dayEvents = getEventsForDay(year, mIndex, d);
+			// A day the calendar can still be written to is a way into the form; a
+			// past day, or a viewer's day, is just a cell to read.
+			const openable = canEdit && isSchedulable(year, mIndex, d);
 
-			const cell = (
+			const wash =
+				dayEvents.length > 0 ? (
+					<span
+						aria-hidden="true"
+						className="pointer-events-none absolute inset-0 rounded-md"
+						style={{
+							// The cell is a timeline: each event washes the stretch of the day
+							// it covers, so a noon start leaves the morning clear.
+							background: dayWashBackground(dayEvents, dayStartSec),
+							opacity: DAY_WASH_OPACITY,
+						}}
+					/>
+				) : null;
+
+			const label =
+				dayEvents.length > 0
+					? `${d} ${MONTH_NAMES[mIndex]} ${year}, ${dayEvents.length} event${dayEvents.length === 1 ? "" : "s"}`
+					: `${d} ${MONTH_NAMES[mIndex]} ${year}, no events`;
+
+			const cellClass = cn(
+				"relative h-9 w-full flex-col px-0 text-xs font-medium tabular-nums sm:h-8",
+				// Today sits outside the wash so it cannot be swallowed by it.
+				isToday && "font-semibold text-primary ring-1 ring-primary/50",
+			);
+
+			const cell = openable ? (
 				<Button
 					key={`day-${d}`}
 					type="button"
 					variant="ghost"
 					size="xs"
-					onClick={() => handleDayClick(mIndex, d)}
-					aria-label={
-						dayEvents.length > 0
-							? `${d} ${MONTH_NAMES[mIndex]} ${year}, ${dayEvents.length} event${dayEvents.length === 1 ? "" : "s"}`
-							: `${d} ${MONTH_NAMES[mIndex]} ${year}, no events`
-					}
-					className={cn(
-						"relative h-9 w-full flex-col px-0 text-xs font-medium tabular-nums sm:h-8",
-						// Today sits outside the wash so it cannot be swallowed by it.
-						isToday && "font-semibold text-primary ring-1 ring-primary/50",
-					)}
+					onClick={() => handleOpenAddEvent(mIndex, d, year)}
+					title={`Add an event on ${d} ${MONTH_NAMES[mIndex]} ${year}`}
+					aria-label={`${label}. Add an event`}
+					className={cellClass}
 				>
-					{/* A translucent wash across the whole cell, one band per event, so a
-					    day with something on it reads at a glance from across the grid. */}
-					{dayEvents.length > 0 ? (
-						<span
-							aria-hidden="true"
-							className="pointer-events-none absolute inset-0 rounded-md"
-							style={{
-								// `background`, not `background-image`: a single event is a
-								// colour, and a bare colour is not a valid background-image.
-								background: dayWash(dayEvents),
-								opacity: DAY_WASH_OPACITY,
-							}}
-						/>
-					) : null}
+					{wash}
 					<span className="relative leading-none">{d}</span>
 				</Button>
+			) : (
+				<span
+					key={`day-${d}`}
+					className={cn("flex items-center justify-center", cellClass)}
+				>
+					{wash}
+					<span className="relative leading-none">{d}</span>
+					{/* A plain cell cannot carry a label, so the count is spelled out for
+					    anyone who cannot see the wash. */}
+					{dayEvents.length > 0 ? (
+						<span className="sr-only">
+							{`${dayEvents.length} event${dayEvents.length === 1 ? "" : "s"}`}
+						</span>
+					) : null}
+				</span>
 			);
 
-			// Hovering an event day answers "what is on this day" without a click;
-			// the click still opens the full day view.
+			// Hovering a day answers "what is on this day" without a click — the only
+			// reading a viewer gets, and the quickest one an admin gets.
 			cells.push(
 				dayEvents.length > 0 ? (
 					<Tooltip key={`day-${d}`}>
@@ -781,7 +1032,7 @@ export function SubversiveCalendarPage({
 											{ev.title}
 										</span>
 										<span className="font-mono text-[11px] opacity-80">
-											{formatEventTime(ev)}
+											{formatEventWindow(ev)}
 										</span>
 										{formatStats(ev) ? (
 											<span className="text-[11px] opacity-80">
@@ -817,18 +1068,6 @@ export function SubversiveCalendarPage({
 
 		return cells;
 	};
-
-	// Events active on selected date modal
-	const selectedDateEvents = useMemo(() => {
-		if (!selectedDate) return [];
-		return getEventsForDay(selectedDate.month, selectedDate.day);
-	}, [selectedDate, getEventsForDay]);
-
-	const isTodaySelected =
-		selectedDate !== null &&
-		today.year === selectedDate.year &&
-		today.month === selectedDate.month &&
-		today.day === selectedDate.day;
 
 	/** What the day wash means: one accent per faction category, one for Torn. */
 	const accentLegend = accentKey ? (
@@ -885,6 +1124,32 @@ export function SubversiveCalendarPage({
 				</SelectContent>
 			</Select>
 
+			{/* Only admins get to leave the running year: they are the only ones who
+			    can put anything in another one, and Torn publishes one year's
+			    official activities. */}
+			{canEdit ? (
+				<Select
+					value={String(year)}
+					onValueChange={(val) => setYear(Number(val))}
+				>
+					<SelectTrigger
+						className="h-9 w-full sm:w-40"
+						aria-label="Calendar year"
+					>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						{yearOptions.map((option) => (
+							<SelectItem key={option} value={String(option)}>
+								{option === today.year
+									? `${option} · this year`
+									: String(option)}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			) : null}
+
 			{searchQuery ? (
 				<Button
 					variant="ghost"
@@ -921,15 +1186,10 @@ export function SubversiveCalendarPage({
 					<div className="flex min-w-0 flex-col">
 						<div className="flex min-w-0 items-center gap-2">
 							<span className="text-sm font-semibold tracking-tight">
-								Sentinel
-							</span>
-							<StatusBadge tone="primary" size="sm">
 								Subversive Alliance
-							</StatusBadge>
+							</span>
 						</div>
-						<span className="text-xs text-muted-foreground">
-							Events Calendar
-						</span>
+						<span className="text-xs text-muted-foreground">Calendar</span>
 					</div>
 
 					<div className="flex flex-wrap items-center gap-2">
@@ -943,7 +1203,16 @@ export function SubversiveCalendarPage({
 
 						{authenticated ? (
 							canEdit ? (
-								<Button size="sm" onClick={() => handleOpenAddEvent()}>
+								<Button
+									size="sm"
+									onClick={() => handleOpenAddEvent()}
+									disabled={!viewYearSchedulable}
+									title={
+										viewYearSchedulable
+											? undefined
+											: `${year} has already passed — an event cannot be scheduled into it.`
+									}
+								>
 									Add event
 								</Button>
 							) : null
@@ -981,7 +1250,16 @@ export function SubversiveCalendarPage({
 									</Button>
 
 									{canEdit ? (
-										<Button size="sm" onClick={() => handleOpenAddEvent()}>
+										<Button
+											size="sm"
+											onClick={() => handleOpenAddEvent()}
+											disabled={!viewYearSchedulable}
+											title={
+												viewYearSchedulable
+													? undefined
+													: `${year} has already passed — an event cannot be scheduled into it.`
+											}
+										>
 											New faction event
 										</Button>
 									) : null}
@@ -993,6 +1271,19 @@ export function SubversiveCalendarPage({
 					{toolbar}
 
 					{accentLegend}
+
+					{/* Torn publishes only the running year, so any other year genuinely has
+					    no official activities to show. Say so rather than look broken. */}
+					{!loading && year !== today.year ? (
+						<div className="rounded-lg border border-info/30 bg-info/10 px-3 py-2.5 text-xs text-info">
+							<p className="font-semibold">Showing {year}.</p>
+							<p className="mt-0.5">
+								Torn only publishes the running year ({today.year}), so official
+								Torn competitions and events appear there and not here. Faction
+								events are shown for whichever year is selected.
+							</p>
+						</div>
+					) : null}
 
 					{/* Official Torn events come from the scheduler's daily sync. When that
 					    has not populated yet, say so instead of showing an empty year. */}
@@ -1006,6 +1297,18 @@ export function SubversiveCalendarPage({
 								below are unaffected.
 							</p>
 						</div>
+					) : null}
+
+					{/* What is next, ahead of the year grid: the grid is a reference, this
+					    is the plan. Clicking an event opens its form. */}
+					{!loading && upcoming ? (
+						<UpcomingEventsPanel
+							events={filteredUpcoming}
+							windowDays={upcoming.windowDays}
+							narrowed={activeFilter !== "all" || searchQuery.trim() !== ""}
+							canEdit={canEdit}
+							onEditEvent={handleOpenEditEvent}
+						/>
 					) : null}
 
 					{/* Loading State Skeleton */}
@@ -1064,149 +1367,6 @@ export function SubversiveCalendarPage({
 					)}
 				</PageShell>
 			</main>
-
-			{/* ── Day Details Modal ──────────────────────────────────────────────── */}
-			<Dialog
-				open={Boolean(selectedDate)}
-				onOpenChange={(open) => !open && setSelectedDate(null)}
-			>
-				<DialogContent className="max-w-md sm:max-w-lg">
-					{selectedDate ? (
-						<>
-							<DialogHeader>
-								<div className="flex items-baseline gap-2">
-									<DialogTitle className="text-base sm:text-lg">
-										{selectedDate.day} {MONTH_NAMES[selectedDate.month]}{" "}
-										{selectedDate.year}
-									</DialogTitle>
-									{isTodaySelected ? (
-										<span className="text-xs text-muted-foreground">Today</span>
-									) : null}
-								</div>
-								<DialogDescription>
-									Events scheduled for this date in Torn City Time (TCT / UTC).
-								</DialogDescription>
-							</DialogHeader>
-
-							<div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto pr-1">
-								{selectedDateEvents.length === 0 ? (
-									<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/80 p-6 text-center">
-										<p className="text-sm text-muted-foreground">
-											No events scheduled on this day.
-										</p>
-										{canEdit ? (
-											<Button
-												variant="outline"
-												size="sm"
-												onClick={() => {
-													const m = selectedDate.month;
-													const d = selectedDate.day;
-													setSelectedDate(null);
-													handleOpenAddEvent(m, d);
-												}}
-											>
-												Schedule faction event
-											</Button>
-										) : null}
-									</div>
-								) : (
-									selectedDateEvents.map((ev) => (
-										<Card
-											key={ev.id}
-											className="gap-0 border-border/80 bg-card p-3 shadow-none"
-										>
-											<div className="flex items-start justify-between gap-3">
-												<div className="flex min-w-0 flex-col gap-1">
-													<div className="flex min-w-0 items-center gap-2">
-														<span
-															className="size-2 shrink-0 rounded-full"
-															style={{
-																backgroundColor:
-																	ev.color || DEFAULT_EVENT_COLOR,
-															}}
-														/>
-														<span className="text-sm font-semibold break-anywhere">
-															{ev.title}
-														</span>
-													</div>
-
-													<span className="font-mono text-xs text-muted-foreground">
-														{formatEventTime(ev)}
-													</span>
-
-													{formatStats(ev) ? (
-														<span className="text-xs text-muted-foreground">
-															{`Stats: ${formatStats(ev)}`}
-														</span>
-													) : null}
-
-													{ev.description ? (
-														<p className="text-xs text-muted-foreground sm:text-sm">
-															{ev.description}
-														</p>
-													) : null}
-												</div>
-
-												{/* Only stored events have a row to change; ranked-war
-												    mirrors are read-only. */}
-												{canEdit && ev.editable ? (
-													<div className="flex shrink-0 items-center gap-1">
-														<Button
-															variant="ghost"
-															size="xs"
-															onClick={() => {
-																setSelectedDate(null);
-																handleOpenEditEvent(ev);
-															}}
-														>
-															Edit
-														</Button>
-														<Button
-															variant="ghost"
-															size="xs"
-															onClick={() => handleDeleteEvent(ev.id)}
-															className="text-destructive hover:text-destructive"
-														>
-															Delete
-														</Button>
-													</div>
-												) : null}
-											</div>
-										</Card>
-									))
-								)}
-							</div>
-
-							<DialogFooter className="flex flex-row items-center justify-between sm:justify-between">
-								{canEdit && selectedDateEvents.length > 0 ? (
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={() => {
-											const m = selectedDate.month;
-											const d = selectedDate.day;
-											setSelectedDate(null);
-											handleOpenAddEvent(m, d);
-										}}
-									>
-										Add another event
-									</Button>
-								) : (
-									<div />
-								)}
-
-								<Button
-									variant="secondary"
-									size="sm"
-									onClick={() => setSelectedDate(null)}
-								>
-									Close
-								</Button>
-							</DialogFooter>
-						</>
-					) : null}
-				</DialogContent>
-			</Dialog>
 
 			{/* ── Add / Edit Event Modal ─────────────────────────────────────────── */}
 			<Dialog open={eventModalOpen} onOpenChange={setEventModalOpen}>
@@ -1267,8 +1427,8 @@ export function SubversiveCalendarPage({
 							</Select>
 						</div>
 
-						{/* Enlistment is a Tuesday 12:00 TCT ritual, so the date is the
-						    only thing to choose. */}
+						{/* Enlistment covers a whole Tuesday, so the date is the only thing
+						    to choose. */}
 						{isEnlistment ? (
 							<div className="flex flex-col gap-1.5">
 								<Label htmlFor="enlistment-date">Enlistment Tuesday</Label>
@@ -1291,7 +1451,7 @@ export function SubversiveCalendarPage({
 									</SelectContent>
 								</Select>
 								<p className="text-xs text-muted-foreground">
-									Runs 12:00 - 13:00 TCT, the Tuesday enlistment window.
+									Runs the whole of Tuesday, TCT.
 								</p>
 							</div>
 						) : (
@@ -1447,21 +1607,38 @@ export function SubversiveCalendarPage({
 						</div>
 					</div>
 
-					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => setEventModalOpen(false)}
-							disabled={submitting}
-						>
-							Cancel
-						</Button>
-						<Button onClick={handleSaveEvent} disabled={submitting}>
-							{submitting
-								? "Saving..."
-								: editingEventId
-									? "Update Event"
-									: "Create Event"}
-						</Button>
+					{/* Deleting lives here, with the event open, rather than in a list of
+					    them: the form is the only place an event is shown in detail. */}
+					<DialogFooter className="flex-row items-center justify-between sm:justify-between">
+						{editingEventId ? (
+							<Button
+								variant="ghost"
+								onClick={() => handleDeleteEvent(editingEventId)}
+								disabled={submitting}
+								className="text-destructive hover:text-destructive"
+							>
+								Delete event
+							</Button>
+						) : (
+							<div />
+						)}
+
+						<div className="flex items-center gap-2">
+							<Button
+								variant="outline"
+								onClick={() => setEventModalOpen(false)}
+								disabled={submitting}
+							>
+								Cancel
+							</Button>
+							<Button onClick={handleSaveEvent} disabled={submitting}>
+								{submitting
+									? "Saving..."
+									: editingEventId
+										? "Update Event"
+										: "Create Event"}
+							</Button>
+						</div>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

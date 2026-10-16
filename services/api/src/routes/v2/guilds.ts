@@ -3,6 +3,7 @@ import {
 	authorizeGuild,
 	count,
 	createMercContract,
+	DEFAULT_MERC_CONTRACT_MODE,
 	db,
 	deauthorizeGuild,
 	deleteMercContract,
@@ -2007,6 +2008,7 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 						offlineDurationMinutes: body.terms.offlineDurationMinutes ?? null,
 					},
 					hitPrice: body.hitPrice ?? 3_000_000,
+					mode: body.mode ?? DEFAULT_MERC_CONTRACT_MODE,
 					strickenHitPrice:
 						body.strickenHitPrice ??
 						(body.terms?.strickenHits ? 4_000_000 : null),
@@ -2095,6 +2097,10 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					strickenHits: t.Boolean(),
 					levelRange: t.Tuple([t.Number(), t.Number()]),
 				}),
+				// Omitted means "hospitalize" — the original behaviour.
+				mode: t.Optional(
+					t.Union([t.Literal("hospitalize"), t.Literal("assist")]),
+				),
 				hitPrice: t.Optional(t.Number()),
 				strickenHitPrice: t.Optional(t.Nullable(t.Number())),
 				changeTermsOnWarStart: t.Optional(t.Boolean()),
@@ -2158,7 +2164,8 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				body.warStartTerms === undefined &&
 				body.warStartHitPrice === undefined &&
 				body.warStartStrickenHitPrice === undefined &&
-				body.excludedMembers === undefined;
+				body.excludedMembers === undefined &&
+				body.mode === undefined;
 
 			// Payout rates and start time cannot be changed once a contract has started.
 			// Hit terms, target exclusions, auto-stop price, and duration/timing can be adjusted.
@@ -2201,6 +2208,17 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 					return {
 						error:
 							"Cannot edit hit payout rates on an active or ongoing contract. You may still adjust hit terms, exclusion targets, and duration.",
+					};
+				}
+
+				// The mode decides which attack result is paid at all, so flipping it
+				// mid-contract would retroactively change what already-landed hits
+				// were worth. Locked once started, for the same reason as the rates.
+				if (body.mode !== undefined && body.mode !== current.mode) {
+					set.status = 400;
+					return {
+						error:
+							"Cannot change the contract mode on an active or ongoing contract. Mercenaries are already working to the current mode.",
 					};
 				}
 			}
@@ -2385,6 +2403,11 @@ export const guildRoutes = new Elysia({ prefix: "/guilds" })
 				warStartStrickenHitPrice: t.Optional(t.Nullable(t.Number())),
 				autoStopPrice: t.Optional(t.Nullable(t.Number())),
 				excludedMembers: t.Optional(t.Array(t.Number())),
+				// Changing the mode changes what a mercenary is paid for, so it is
+				// locked once the contract has started, exactly like the rates.
+				mode: t.Optional(
+					t.Union([t.Literal("hospitalize"), t.Literal("assist")]),
+				),
 			}),
 			detail: {
 				summary: "Update Mercenary Contract",

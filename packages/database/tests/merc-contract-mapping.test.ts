@@ -36,6 +36,7 @@ function buildRow(
 		allowStrickenHits: false,
 		minLevel: 1,
 		maxLevel: 100,
+		mode: "hospitalize",
 		hitPrice: 250_000,
 		strickenHitPrice: null,
 		autoStopPrice: null,
@@ -110,5 +111,34 @@ describe("mapRowToMercContract - minimum offline duration", () => {
 		);
 
 		expect(contract.warStartTerms?.offlineDurationMinutes).toBeNull();
+	});
+});
+
+/**
+ * The `mode` column is the contract's payout semantics. It defaults to
+ * 'hospitalize', so every row that predates the column must read back as the
+ * original behaviour rather than as an unrecognised mode.
+ */
+describe("mapRowToMercContract - contract mode", () => {
+	it("maps a stored assist mode through to the contract", () => {
+		expect(mapRowToMercContract(buildRow({ mode: "assist" })).mode).toBe(
+			"assist",
+		);
+	});
+
+	it("maps the hospitalize default through to the contract", () => {
+		expect(mapRowToMercContract(buildRow()).mode).toBe("hospitalize");
+	});
+
+	it("falls back to hospitalize for a row written before the column existed", () => {
+		expect(mapRowToMercContract(buildRow({ mode: null })).mode).toBe(
+			"hospitalize",
+		);
+	});
+
+	it("never invents a mode from an unrecognised stored value", () => {
+		expect(mapRowToMercContract(buildRow({ mode: "chaos" })).mode).toBe(
+			"hospitalize",
+		);
 	});
 });

@@ -81,6 +81,11 @@ export interface MercContract {
 	endTime: string | null;
 	endOnWarEnd?: boolean;
 	terms: MercContractHitTerms;
+	/**
+	 * What the mercenary is paid to do. `hospitalize` pays for finishing hits;
+	 * `assist` pays when the mercenary chips the target and the client finishes.
+	 */
+	mode: "hospitalize" | "assist";
 	hitPrice: number;
 	strickenHitPrice?: number | null;
 	autoStopPrice?: number | null;
@@ -147,6 +152,67 @@ export function formatTctDateTime(date: Date | string): string {
 	const month = pad(d.getUTCMonth() + 1);
 	const year = d.getUTCFullYear();
 	return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} TCT`;
+}
+
+/**
+ * Contract mode picker.
+ *
+ * Two mutually exclusive buttons rather than a checkbox, because a mode is a
+ * choice between two behaviours and "unchecked" would have to mean one of them
+ * arbitrarily. Disabled once a contract has started: the API locks the mode at
+ * that point, since changing it would retroactively change what already-landed
+ * hits were worth.
+ */
+function ContractModeSelector({
+	value,
+	onChange,
+	disabled = false,
+}: {
+	value: "hospitalize" | "assist";
+	onChange: (mode: "hospitalize" | "assist") => void;
+	disabled?: boolean;
+}) {
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center justify-between">
+				<span className="text-xs font-medium text-foreground">
+					Contract Mode
+				</span>
+				{disabled && (
+					<span className="text-[10px] font-mono uppercase text-muted-foreground">
+						Locked
+					</span>
+				)}
+			</div>
+			<div className="grid grid-cols-2 gap-2">
+				<Button
+					type="button"
+					size="sm"
+					variant={value === "hospitalize" ? "default" : "outline"}
+					disabled={disabled}
+					onClick={() => onChange("hospitalize")}
+					className="h-auto py-2 text-xs rounded-xl"
+				>
+					Hospitalize
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					variant={value === "assist" ? "default" : "outline"}
+					disabled={disabled}
+					onClick={() => onChange("assist")}
+					className="h-auto py-2 text-xs rounded-xl"
+				>
+					Assist
+				</Button>
+			</div>
+			<p className="text-[11px] text-muted-foreground leading-relaxed">
+				{value === "assist"
+					? 'Mercenaries chip the target\'s life down and do NOT finish it. A Torn "Assist" result is paid at the standard hit value; a mercenary who finishes the target themselves is recorded but not paid. Stricken pricing does not apply in this mode.'
+					: "Mercenaries land the finishing hit. Only a hospitalization is paid."}
+			</p>
+		</div>
+	);
 }
 
 interface ExcludedTargetsSectionProps {
@@ -367,6 +433,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [offlineMinEnabled, setOfflineMinEnabled] = useState(false);
 	const [offlineMinDuration, setOfflineMinDuration] = useState<number>(15);
 	const [strickenHits, setStrickenHits] = useState(false);
+	const [mode, setMode] = useState<"hospitalize" | "assist">("hospitalize");
 	const [levelRange, setLevelRange] = useState<[number, number]>([1, 100]);
 
 	// Form: Terms on War Start (Upcoming War with startMinutesBeforeWar > 0)
@@ -434,6 +501,9 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 	const [editOfflineMinDuration, setEditOfflineMinDuration] =
 		useState<number>(15);
 	const [editStrickenHits, setEditStrickenHits] = useState(false);
+	const [editMode, setEditMode] = useState<"hospitalize" | "assist">(
+		"hospitalize",
+	);
 	const [editLevelRange, setEditLevelRange] = useState<[number, number]>([
 		1, 100,
 	]);
@@ -515,6 +585,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setOfflineStatus(false);
 		setIdleDuration(15);
 		setStrickenHits(false);
+		setMode("hospitalize");
 		setLevelRange([1, 100]);
 
 		setHitPrice("3000000");
@@ -717,13 +788,17 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					idleDurationMinutes: idleStatus ? idleDuration : null,
 					offlineDurationMinutes:
 						offlineStatus && offlineMinEnabled ? offlineMinDuration : null,
-					strickenHits,
+					// A stricken bonus is a finishing-hit effect, so it cannot apply to an
+					// assist: suppressed here rather than left to the validator to ignore.
+					strickenHits: mode === "assist" ? false : strickenHits,
 					levelRange,
 				},
+				mode,
 				hitPrice: Math.max(0, Number(hitPrice) || 0),
-				strickenHitPrice: strickenHits
-					? Math.max(0, Number(strickenHitPrice) || 0)
-					: null,
+				strickenHitPrice:
+					mode !== "assist" && strickenHits
+						? Math.max(0, Number(strickenHitPrice) || 0)
+						: null,
 				autoStopPrice: autoStopPrice
 					? Math.max(0, Number(autoStopPrice))
 					: null,
@@ -746,7 +821,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 									warStartOffline && warStartOfflineMinEnabled
 										? warStartOfflineMinDuration
 										: null,
-								strickenHits: warStartStricken,
+								strickenHits: mode === "assist" ? false : warStartStricken,
 								levelRange: warStartLevelRange,
 							}
 						: null,
@@ -760,6 +835,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					validatedFaction.warStatus === "upcoming" &&
 					startMinutesBeforeWar > 0 &&
 					changeTermsOnWarStart &&
+					mode !== "assist" &&
 					warStartStricken
 						? Math.max(0, Number(warStartStrickenHitPrice) || 0)
 						: null,
@@ -987,6 +1063,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		setEditOfflineMinEnabled(contract.terms.offlineDurationMinutes != null);
 		setEditOfflineMinDuration(contract.terms.offlineDurationMinutes ?? 15);
 		setEditStrickenHits(Boolean(contract.terms.strickenHits));
+		setEditMode(contract.mode ?? "hospitalize");
 		setEditLevelRange(contract.terms.levelRange ?? [1, 100]);
 
 		setEditHitPrice(String(contract.hitPrice));
@@ -1166,15 +1243,16 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 						editOfflineStatus && editOfflineMinEnabled
 							? editOfflineMinDuration
 							: null,
-					strickenHits: editStrickenHits,
+					strickenHits: editMode === "assist" ? false : editStrickenHits,
 					levelRange: editLevelRange,
 				},
+				mode: editMode,
 				hitPrice: isLiveEdit
 					? editingContract.hitPrice
 					: Math.max(0, Number(editHitPrice) || 0),
 				strickenHitPrice: isLiveEdit
 					? editingContract.strickenHitPrice
-					: editStrickenHits
+					: editMode !== "assist" && editStrickenHits
 						? Math.max(0, Number(editStrickenHitPrice) || 0)
 						: null,
 				changeTermsOnWarStart: warStartTermsEnabled,
@@ -1192,7 +1270,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 								editWarStartOffline && editWarStartOfflineMinEnabled
 									? editWarStartOfflineMinDuration
 									: null,
-							strickenHits: editWarStartStricken,
+							strickenHits:
+								editMode === "assist" ? false : editWarStartStricken,
 							levelRange: editWarStartLevelRange,
 						}
 					: null,
@@ -1200,7 +1279,7 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 					? Math.max(0, Number(editWarStartHitPrice) || 0)
 					: null,
 				warStartStrickenHitPrice:
-					warStartTermsEnabled && editWarStartStricken
+					warStartTermsEnabled && editMode !== "assist" && editWarStartStricken
 						? Math.max(0, Number(editWarStartStrickenHitPrice) || 0)
 						: null,
 				autoStopPrice: editAutoStopPrice
@@ -1675,6 +1754,14 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 															className="text-[11px] font-mono px-2 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/20"
 														>
 															Stricken Hits
+														</Badge>
+													)}
+													{contract.mode === "assist" && (
+														<Badge
+															variant="secondary"
+															className="text-[11px] font-mono px-2 py-0.5 bg-violet-500/10 text-violet-400 border border-violet-500/20"
+														>
+															Assist Mode
 														</Badge>
 													)}
 												</div>
@@ -2305,6 +2392,8 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 													: ""}
 											</h3>
 										</div>
+
+										<ContractModeSelector value={mode} onChange={setMode} />
 
 										{/* Status Checkboxes */}
 										<div className="space-y-3">
@@ -3054,6 +3143,12 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 										? "(Pre-War)"
 										: ""}
 								</h3>
+
+								<ContractModeSelector
+									value={editMode}
+									onChange={setEditMode}
+									disabled={isContractStarted}
+								/>
 
 								{/* Status Checkboxes */}
 								<div className="space-y-3">

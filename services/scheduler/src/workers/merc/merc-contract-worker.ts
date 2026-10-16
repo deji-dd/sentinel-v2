@@ -8,6 +8,7 @@ import {
 	guildConfigs,
 	inArray,
 	type MercContract,
+	type MercContractMode,
 	mapRowToMercContract,
 	mercContracts,
 } from "@sentinel/database";
@@ -53,6 +54,13 @@ export interface MercActiveTargetAlert {
 	messageId?: string;
 	lastAlertAt: number;
 	isStrickenEligible: boolean;
+	/**
+	 * The contract's mode at the time the alert was built. Carried on the alert
+	 * so the target embed can tell a mercenary whether to finish the target or
+	 * only chip it down — the announcement was posted once and is easy to miss,
+	 * while the alert is what a mercenary acts on.
+	 */
+	mode: MercContractMode;
 	hospitalUntil?: number | null;
 	rwCooldownUntil?: number | null;
 	wasInHospital?: boolean;
@@ -305,6 +313,7 @@ export class MercTargetManager {
 					claimedBy: alert.claimedBy,
 					claimedAt: alert.claimedAt,
 					isStrickenEligible: alert.isStrickenEligible,
+					mode: alert.mode,
 					rwCooldownUntil: alert.rwCooldownUntil,
 				},
 			});
@@ -355,6 +364,7 @@ export class MercTargetManager {
 					hospitalUntil: alert.hospitalUntil,
 					status: "open",
 					isStrickenEligible: alert.isStrickenEligible,
+					mode: alert.mode,
 					rwCooldownUntil: alert.rwCooldownUntil,
 				},
 			});
@@ -844,6 +854,10 @@ export class MercTargetManager {
 
 		// 4. Target is valid! Check if alert needs to be posted, updated, or reposted
 		const isStrickenEligible = Boolean(effectiveTerms?.strickenHits);
+		// Mode is a contract-level setting, not a war-start term, so it is read
+		// from the contract rather than from the effective (possibly war-start)
+		// terms that everything else in this method uses.
+		const mode = contract.mode;
 
 		if (!existingAlert) {
 			// Only the fresh-alert path needs the BS estimate; every update/repost
@@ -863,6 +877,7 @@ export class MercTargetManager {
 				status: "open",
 				lastAlertAt: nowMs,
 				isStrickenEligible,
+				mode,
 				hospitalUntil: isHospitalLead ? hospUntil : null,
 				rwCooldownUntil,
 				wasInHospital:
@@ -889,6 +904,7 @@ export class MercTargetManager {
 					hospitalUntil: newAlert.hospitalUntil,
 					status: newAlert.status,
 					isStrickenEligible: newAlert.isStrickenEligible,
+					mode: newAlert.mode,
 					rwCooldownUntil: newAlert.rwCooldownUntil,
 				},
 			});
@@ -949,6 +965,7 @@ export class MercTargetManager {
 					claimedBy: existingAlert.claimedBy,
 					claimedAt: existingAlert.claimedAt,
 					isStrickenEligible: existingAlert.isStrickenEligible,
+					mode: existingAlert.mode,
 					rwCooldownUntil: existingAlert.rwCooldownUntil,
 				},
 			});
@@ -992,6 +1009,7 @@ export class MercTargetManager {
 					hospitalUntil: existingAlert.hospitalUntil,
 					status: existingAlert.status,
 					isStrickenEligible: existingAlert.isStrickenEligible,
+					mode: existingAlert.mode,
 					rwCooldownUntil: existingAlert.rwCooldownUntil,
 				},
 			});
@@ -1030,6 +1048,7 @@ export class MercTargetManager {
 					hospitalUntil: existingAlert.hospitalUntil,
 					status: existingAlert.status,
 					isStrickenEligible: existingAlert.isStrickenEligible,
+					mode: existingAlert.mode,
 					rwCooldownUntil: existingAlert.rwCooldownUntil,
 				},
 			});
@@ -1073,6 +1092,7 @@ export class MercTargetManager {
 					hospitalUntil: existingAlert.hospitalUntil,
 					status: "open",
 					isStrickenEligible: existingAlert.isStrickenEligible,
+					mode: existingAlert.mode,
 					rwCooldownUntil: existingAlert.rwCooldownUntil,
 				},
 			});

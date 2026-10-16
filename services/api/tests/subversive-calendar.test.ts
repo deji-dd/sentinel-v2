@@ -9,6 +9,7 @@ import {
 import {
 	db,
 	eq,
+	like,
 	subversiveCalendarEvents,
 	subversiveRankedWars,
 	tornCalendarActivities,
@@ -18,34 +19,42 @@ import {
 	formatTornEventItem,
 	getFactionCalendarEvents,
 	getTornCalendarEvents,
+	getUpcomingCalendarEvents,
 	repairRolledActivity,
 	resetTornCalendarCache,
 	TORN_CALENDAR_ACCENT,
 	tornCacheTtlMs,
+	UPCOMING_WINDOW_DAYS,
 } from "../src/lib/subversive-calendar";
+import { pastEventError } from "../src/routes/v2/subversive";
 
 /**
  * Coverage for the Subversive / Torn calendar.
  *
  * The formatting helpers are pure. Everything else deliberately exercises the
- * real database, because the interesting failures here are query-shaped: a
- * running ranked war is stored with `end IS NULL`, and the public calendar must
- * not leak the target score those rows carry.
+ * real database, because the interesting failures here are query-shaped: the
+ * upcoming window has to cross the year boundary, and the calendar must show
+ * only what the family scheduled rather than back-filling from the war ledger.
  */
 
 const FACTION_ID = 2013;
+const SECOND_FACTION_ID = 27312;
 const YEAR = new Date().getUTCFullYear();
-const TEST_WAR_ID = 999_000_001;
 const TEST_EVENT_TITLE = "[test] calendar fixture";
+const UPCOMING_TITLE_PREFIX = "[test] upcoming";
+const TEST_WAR_ID = 999_000_001;
 
-/** A war Torn has not reported an end for yet — the live one. */
-async function seedRunningWar(): Promise<void> {
+/** A moment no fixture uses, so its absence from the calendar is unambiguous. */
+const TEST_WAR_START = new Date(Date.UTC(YEAR, 7, 7, 7, 7, 7));
+
+/** A war sitting in the ledger — the rows the calendar used to mirror. */
+async function seedRankedWar(): Promise<void> {
 	await db
 		.delete(subversiveRankedWars)
 		.where(eq(subversiveRankedWars.id, TEST_WAR_ID));
 	await db.insert(subversiveRankedWars).values({
 		id: TEST_WAR_ID,
-		start: new Date(),
+		start: TEST_WAR_START,
 		end: null,
 		target: 1234,
 		status: "processed",
@@ -69,6 +78,9 @@ async function cleanup(): Promise<void> {
 	await db
 		.delete(subversiveCalendarEvents)
 		.where(eq(subversiveCalendarEvents.title, TEST_EVENT_TITLE));
+	await db
+		.delete(subversiveCalendarEvents)
+		.where(like(subversiveCalendarEvents.title, `${UPCOMING_TITLE_PREFIX}%`));
 	await db
 		.delete(subversiveRankedWars)
 		.where(eq(subversiveRankedWars.id, TEST_WAR_ID));
@@ -116,6 +128,91 @@ describe("Subversive & Torn Calendar Helper", () => {
 		expect(formatted.category).toBe("torn_competition");
 		expect(formatted.badge).toBe("Tournament");
 		expect(formatted.color).toBe(TORN_CALENDAR_ACCENT);
+	});
+
+	/**
+	 * Torn fixes some of its activities to a real time and leaves the rest on
+	 * personal calendar time, where the midnight in `/torn/calendar` is only a
+	 * placeholder — its per-user calendar endpoint reports those as starting at
+	 * 12:00 TCT.
+	 */
+	it("reads a midnight-fixed Torn activity as all day", () => {
+		// Awareness Awareness Week: fixed_start_time true, 00:00 → 23:59:59.
+		const week = formatTornEventItem({
+			title: "Awareness Awareness Week",
+			description: "",
+			start: 1768780800,
+			end: 1769385599,
+			fixedStartTime: true,
+		});
+
+		expect(week.isAllDay).toBe(true);
+		expect(week.startTime).toBe("2026-01-19T00:00:00.000Z");
+	});
+
+	it("leaves a fixed noon window exactly as Torn sent it", () => {
+		// Weekend Road Trip: fixed_start_time true, 12:00 → 11:59:59 two days on.
+		const weekend = formatTornEventItem({
+			title: "Weekend Road Trip",
+			description: "",
+			start: 1769860800,
+			end: 1770033599,
+			fixedStartTime: true,
+		});
+
+		expect(weekend.isAllDay).toBe(false);
+		expect(weekend.startTime).toBe("2026-01-31T12:00:00.000Z");
+		expect(weekend.endTime).toBe("2026-02-02T11:59:59.000Z");
+	});
+
+	it("gives a personal-calendar day entry the 48 hours it really runs", () => {
+		// World Diabetes Day: Torn describes one day, 00:00 → 23:59:59 on 14 Nov.
+		// Torn City Times announced these as 48-hour events from noon TCT.
+		const diabetes = formatTornEventItem({
+			title: "World Diabetes Day",
+			description: "Candy effects are tripled",
+			start: 1794614400,
+			end: 1794700799,
+			fixedStartTime: false,
+		});
+
+		expect(diabetes.startTime).toBe("2026-11-14T12:00:00.000Z");
+		expect(diabetes.endTime).toBe("2026-11-16T11:59:59.000Z");
+		expect(diabetes.endTimestamp - diabetes.startTimestamp).toBe(
+			48 * 60 * 60 - 1,
+		);
+		expect(diabetes.isAllDay).toBe(false);
+	});
+
+	it("keeps a personal-calendar entry that already runs longer", () => {
+		// Trick or Treat: eight days in Torn's own window, eight days out — the
+		// 48-hour floor never shortens an activity.
+		const halloween = formatTornEventItem({
+			title: "Trick or Treat",
+			description: "",
+			start: 1792886400,
+			end: 1793577599,
+			fixedStartTime: false,
+		});
+
+		expect(halloween.startTime).toBe("2026-10-25T12:00:00.000Z");
+		expect(halloween.endTime).toBe("2026-11-02T11:59:59.000Z");
+		expect(halloween.endTimestamp - halloween.startTimestamp).toBe(
+			1793577599 - 1792886400,
+		);
+	});
+
+	it("keeps Torn's raw start in the id, so an id never moves", () => {
+		const shifted = formatTornEventItem({
+			title: "World Diabetes Day",
+			description: "",
+			start: 1794614400,
+			end: 1794700799,
+			fixedStartTime: false,
+		});
+
+		expect(shifted.id).toContain("1794614400");
+		expect(shifted.startTimestamp).not.toBe(1794614400);
 	});
 
 	it("falls back to the Torn description when no metadata matches", () => {
@@ -314,32 +411,183 @@ describe("Faction calendar events", () => {
 		expect(stored?.color).toBeTruthy();
 	});
 
-	it("includes a running ranked war, whose end is NULL", async () => {
-		await seedRunningWar();
+	/**
+	 * The calendar used to mirror `subversive_ranked_wars` in, which back-filled
+	 * it with wars that were already over. Only what the family scheduled belongs
+	 * on the calendar, so nothing derived from the ledger is served.
+	 */
+	it("never mirrors the ranked-war ledger into the calendar", async () => {
+		await seedRankedWar();
 
-		const withWars = await getFactionCalendarEvents({
-			year: YEAR,
-			includeRankedWars: true,
-		});
-		const war = withWars.find((e) => e.id === `rw_${TEST_WAR_ID}`);
+		const warStartSec = Math.floor(TEST_WAR_START.getTime() / 1000);
+		const lists = [
+			await getFactionCalendarEvents({ year: YEAR }),
+			await getFactionCalendarEvents({ year: YEAR, factionId: FACTION_ID }),
+			await getUpcomingCalendarEvents({ now: TEST_WAR_START }),
+		];
 
-		expect(war).toBeDefined();
-		expect(war?.category).toBe("war");
-		// Mirrored rows have no calendar row behind them, so the UI must not
-		// offer edit or delete.
-		expect(war?.editable).toBe(false);
+		for (const events of lists) {
+			expect(events.some((e) => e.id.startsWith("rw_"))).toBe(false);
+			expect(events.some((e) => e.startTimestamp === warStartSec)).toBe(false);
+		}
+	});
+});
+
+/**
+ * The window the dashboard's "Upcoming" panel reads.
+ *
+ * Everything here is checked against an injected `now`, because the whole point
+ * of the query is where its edges fall — a window read from the wall clock could
+ * only ever be asserted relative to itself.
+ */
+describe("Upcoming calendar window", () => {
+	const HOUR_MS = 60 * 60 * 1000;
+	const DAY_MS = 24 * HOUR_MS;
+	const NOW = new Date(Date.UTC(YEAR, 4, 15, 12, 0, 0)); // 15 May, 12:00 TCT
+
+	const createdIds: string[] = [];
+
+	async function seed(
+		label: string,
+		startMs: number,
+		endMs: number,
+		factionId: number = FACTION_ID,
+	): Promise<string> {
+		const [row] = await db
+			.insert(subversiveCalendarEvents)
+			.values({
+				title: `${UPCOMING_TITLE_PREFIX} ${label}`,
+				description: "upcoming window fixture",
+				category: "chain",
+				startTime: new Date(startMs),
+				endTime: new Date(endMs),
+				factionId,
+			})
+			.returning();
+
+		const id = row?.id ?? "";
+		createdIds.push(id);
+		return id;
+	}
+
+	let idLive = "";
+	let idSoon = "";
+	let idInsideEdge = "";
+	let idEnded = "";
+	let idBeyondWindow = "";
+	let idOtherFaction = "";
+
+	beforeAll(async () => {
+		await cleanup();
+
+		idLive = await seed(
+			"live",
+			NOW.getTime() - 2 * HOUR_MS,
+			NOW.getTime() + 2 * HOUR_MS,
+		);
+		idSoon = await seed(
+			"soon",
+			NOW.getTime() + 5 * DAY_MS,
+			NOW.getTime() + 5 * DAY_MS + HOUR_MS,
+		);
+		idInsideEdge = await seed(
+			"inside edge",
+			NOW.getTime() + (UPCOMING_WINDOW_DAYS - 1) * DAY_MS,
+			NOW.getTime() + (UPCOMING_WINDOW_DAYS - 1) * DAY_MS + HOUR_MS,
+		);
+		idEnded = await seed(
+			"ended",
+			NOW.getTime() - 3 * DAY_MS,
+			NOW.getTime() - 2 * DAY_MS,
+		);
+		idBeyondWindow = await seed(
+			"beyond window",
+			NOW.getTime() + 45 * DAY_MS,
+			NOW.getTime() + 45 * DAY_MS + HOUR_MS,
+		);
+		idOtherFaction = await seed(
+			"other faction",
+			NOW.getTime() + 3 * DAY_MS,
+			NOW.getTime() + 3 * DAY_MS + HOUR_MS,
+			SECOND_FACTION_ID,
+		);
 	});
 
-	it("omits ranked wars unless the caller opts in", async () => {
-		const withoutWars = await getFactionCalendarEvents({ year: YEAR });
+	afterAll(async () => {
+		await cleanup();
+	});
 
-		expect(withoutWars.some((e) => e.id === `rw_${TEST_WAR_ID}`)).toBe(false);
+	it("keeps what is live or inside the window, and drops what is not", async () => {
+		const ids = (
+			await getUpcomingCalendarEvents({ now: NOW, factionId: FACTION_ID })
+		).map((e) => e.id);
+
+		expect(ids).toContain(idLive);
+		expect(ids).toContain(idSoon);
+		expect(ids).toContain(idInsideEdge);
+		// A chain that started yesterday is over; a chain three weeks out is not a
+		// plan yet.
+		expect(ids).not.toContain(idEnded);
+		expect(ids).not.toContain(idBeyondWindow);
+		// The window is scoped to the faction asked for.
+		expect(ids).not.toContain(idOtherFaction);
+	});
+
+	it("orders the window by start time", async () => {
+		const events = await getUpcomingCalendarEvents({
+			now: NOW,
+			factionId: FACTION_ID,
+		});
+		const starts = events.map((e) => e.startTimestamp);
+
+		expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		// The live chain is under way, so it is the first thing on the list.
+		expect(events[0]?.id).toBe(idLive);
+	});
+
+	it("shows a live event until it ends, not just until it starts", async () => {
+		const duringWindow = await getUpcomingCalendarEvents({
+			now: new Date(NOW.getTime() + 1 * HOUR_MS),
+			factionId: FACTION_ID,
+		});
+
+		expect(duringWindow.map((e) => e.id)).toContain(idLive);
+
+		const afterEnd = await getUpcomingCalendarEvents({
+			now: new Date(NOW.getTime() + 3 * HOUR_MS),
+			factionId: FACTION_ID,
+		});
+
+		expect(afterEnd.map((e) => e.id)).not.toContain(idLive);
+	});
+
+	/**
+	 * Read in late December, a year-scoped query describes a window that is almost
+	 * entirely behind `now`, so the panel would empty out exactly when members
+	 * most need to see what January holds.
+	 */
+	it("crosses the year boundary instead of stopping at the requested year", async () => {
+		const december = new Date(Date.UTC(YEAR, 11, 20, 12, 0, 0));
+		const januaryEvent = await seed(
+			"next year",
+			Date.UTC(YEAR + 1, 0, 3, 18, 0, 0),
+			Date.UTC(YEAR + 1, 0, 3, 19, 0, 0),
+		);
+
+		const upcoming = await getUpcomingCalendarEvents({
+			now: december,
+			factionId: FACTION_ID,
+		});
+		const yearScoped = await getFactionCalendarEvents({ year: YEAR });
+
+		expect(upcoming.map((e) => e.id)).toContain(januaryEvent);
+		expect(yearScoped.map((e) => e.id)).not.toContain(januaryEvent);
 	});
 });
 
 describe("GET /v2/subversive/calendar", () => {
 	beforeAll(async () => {
-		await seedRunningWar();
+		await seedRankedWar();
 	});
 
 	afterAll(async () => {
@@ -380,44 +628,72 @@ describe("GET /v2/subversive/calendar", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("serves anonymous visitors without ranked war target data", async () => {
-		const res = await app.handle(
+	it("serves the same calendar to anonymous visitors as to members", async () => {
+		const anonymous = await app.handle(
 			new Request(`http://localhost/v2/subversive/calendar?year=${YEAR}`),
 		);
 
-		expect(res.status).toBe(200);
-		const json = (await res.json()) as {
+		expect(anonymous.status).toBe(200);
+		const json = (await anonymous.json()) as {
 			success: boolean;
 			canEdit: boolean;
 			tornEventsSource: string;
 			tornEvents: Array<{ editable: boolean }>;
 			factionEvents: Array<{ id: string }>;
+			upcoming: { windowDays: number; events: Array<{ id: string }> };
 		};
 
 		expect(json.success).toBe(true);
 		expect(json.canEdit).toBe(false);
 		expect(["database", "unavailable"]).toContain(json.tornEventsSource);
+		// Nothing on the calendar is derived from the war ledger any more, so there
+		// is nothing to withhold from a signed-out visitor.
 		expect(json.factionEvents.some((e) => e.id.startsWith("rw_"))).toBe(false);
-	});
 
-	it("serves ranked war entries to a signed-in user", async () => {
 		const cookie = await adminCookie();
-		const res = await app.handle(
+		const member = await app.handle(
 			new Request(`http://localhost/v2/subversive/calendar?year=${YEAR}`, {
 				headers: { cookie },
 			}),
 		);
-
-		expect(res.status).toBe(200);
-		const json = (await res.json()) as {
+		const memberJson = (await member.json()) as {
 			canEdit: boolean;
 			factionEvents: Array<{ id: string }>;
 		};
 
-		expect(json.canEdit).toBe(true);
-		expect(json.factionEvents.some((e) => e.id === `rw_${TEST_WAR_ID}`)).toBe(
-			true,
+		expect(memberJson.canEdit).toBe(true);
+		expect(memberJson.factionEvents.map((e) => e.id)).toEqual(
+			json.factionEvents.map((e) => e.id),
 		);
+	});
+
+	it("publishes the upcoming window alongside the year", async () => {
+		const res = await app.handle(
+			new Request(`http://localhost/v2/subversive/calendar?year=${YEAR}`),
+		);
+		const json = (await res.json()) as {
+			upcoming: {
+				windowDays: number;
+				events: Array<{
+					id: string;
+					startTimestamp: number;
+					endTimestamp: number;
+				}>;
+			};
+		};
+
+		expect(json.upcoming.windowDays).toBe(UPCOMING_WINDOW_DAYS);
+
+		const nowSec = Math.floor(Date.now() / 1000);
+		for (const event of json.upcoming.events) {
+			// Every entry is either live now or still ahead: an event that has ended
+			// is not upcoming, whatever year it sits in.
+			expect(event.endTimestamp).toBeGreaterThanOrEqual(nowSec);
+			expect(event.startTimestamp).toBeLessThanOrEqual(
+				nowSec + UPCOMING_WINDOW_DAYS * 24 * 60 * 60,
+			);
+			expect(event.id.startsWith("rw_")).toBe(false);
+		}
 	});
 
 	it("publishes the accent key the calendar paints with", async () => {
@@ -449,6 +725,9 @@ describe("GET /v2/subversive/calendar", () => {
 
 const TUESDAY = "2026-10-13"; // a Tuesday
 const WEDNESDAY = "2026-10-14";
+
+/** The Monday before {@link TUESDAY}: every write fixture below is still ahead of it. */
+const FIXTURE_CLOCK = new Date("2026-10-12T08:00:00.000Z");
 
 describe("Faction calendar event writes", () => {
 	let cookie = "";
@@ -489,10 +768,16 @@ describe("Faction calendar event writes", () => {
 	};
 
 	beforeAll(async () => {
+		// The fixtures below are fixed to October 2026 and a create is refused once
+		// its window has passed, so the clock is pinned rather than chased. Left on
+		// the wall clock, `TUESDAY` quietly becomes history and these tests start
+		// failing on a date instead of on a change.
+		setSystemTime(FIXTURE_CLOCK);
 		cookie = await adminCookie();
 	});
 
 	afterAll(async () => {
+		setSystemTime();
 		for (const id of createdIds) {
 			await db
 				.delete(subversiveCalendarEvents)
@@ -515,8 +800,9 @@ describe("Faction calendar event writes", () => {
 		expect(json.error).toContain("category must be one of");
 	});
 
-	it("pins a Ranked War Enlistment to the Tuesday 12:00 TCT window", async () => {
-		// Whatever time the caller sends, the window is the enlistment's own.
+	it("pins a Ranked War Enlistment to the whole Tuesday", async () => {
+		// Whatever times the caller sends, the day is the enlistment's own: it runs
+		// from midnight to the last second of the Tuesday it is dated.
 		const { status, json } = await post({
 			category: "war",
 			startTime: `${TUESDAY}T09:37:00.000Z`,
@@ -525,15 +811,18 @@ describe("Faction calendar event writes", () => {
 
 		expect(status).toBe(200);
 		expect(json.event?.title).toBe("Ranked War Enlistment");
-		expect(json.event?.startTime).toBe(`${TUESDAY}T12:00:00.000Z`);
-		expect(json.event?.endTime).toBe(`${TUESDAY}T13:00:00.000Z`);
+		expect(json.event?.startTime).toBe(`${TUESDAY}T00:00:00.000Z`);
+		expect(json.event?.endTime).toBe(`${TUESDAY}T23:59:59.000Z`);
+		// A whole-day event, so the calendar paints the whole cell rather than an
+		// hour of it.
+		expect(json.event?.isAllDay).toBe(true);
 	});
 
 	it("refuses an enlistment that is not on a Tuesday", async () => {
 		const { status, json } = await post({
 			category: "war",
 			startTime: `${WEDNESDAY}T12:00:00.000Z`,
-			endTime: `${WEDNESDAY}T13:00:00.000Z`,
+			endTime: `${WEDNESDAY}T12:00:00.000Z`,
 		});
 
 		expect(status).toBe(400);
@@ -679,5 +968,171 @@ describe("Faction calendar event writes", () => {
 		await db
 			.delete(subversiveCalendarEvents)
 			.where(eq(subversiveCalendarEvents.id, legacyId));
+	});
+});
+
+/**
+ * The calendar is a plan, not a log: an event window that has already closed is
+ * refused, so the grid cannot be back-filled (which is also what the removed
+ * ranked-war mirror used to do by accident).
+ */
+describe("pastEventError", () => {
+	const now = new Date("2026-10-12T08:00:00.000Z");
+
+	it("passes a window that is still ahead", () => {
+		expect(pastEventError(new Date("2026-10-12T09:00:00.000Z"), { now })).toBe(
+			null,
+		);
+		expect(pastEventError(new Date("2027-01-01T00:00:00.000Z"), { now })).toBe(
+			null,
+		);
+	});
+
+	it("refuses a window that has closed", () => {
+		expect(
+			pastEventError(new Date("2026-10-11T23:59:59.000Z"), { now }),
+		).toContain("past");
+	});
+
+	it("exempts an event that had already ended, and only that one", () => {
+		// Already history: correcting its notes must stay possible.
+		expect(
+			pastEventError(new Date("2026-10-01T00:00:00.000Z"), {
+				now,
+				storedEnd: new Date("2026-09-30T00:00:00.000Z"),
+			}),
+		).toBeNull();
+
+		// A live event dragged back into the past is exactly what the guard is for,
+		// however far back it is dragged.
+		expect(
+			pastEventError(new Date("2026-10-01T00:00:00.000Z"), {
+				now,
+				storedEnd: new Date("2026-10-20T00:00:00.000Z"),
+			}),
+		).toContain("past");
+	});
+});
+
+describe("Faction calendar event writes refuse the past", () => {
+	const PAST_WINDOW = {
+		startTime: "2026-10-05T12:00:00.000Z",
+		endTime: "2026-10-05T14:00:00.000Z",
+	};
+
+	let cookie = "";
+	const createdIds: string[] = [];
+
+	const send = async (
+		method: "POST" | "PUT",
+		id: string | null,
+		body: Record<string, unknown>,
+	): Promise<{
+		status: number;
+		json: { success: boolean; error?: string; event?: { id: string } };
+	}> => {
+		const res = await app.handle(
+			new Request(
+				`http://localhost/v2/subversive/calendar/events${id ? `/${id}` : ""}`,
+				{
+					method,
+					headers: { "Content-Type": "application/json", cookie },
+					body: JSON.stringify(body),
+				},
+			),
+		);
+		const json = (await res.json()) as {
+			success: boolean;
+			error?: string;
+			event?: { id: string };
+		};
+		if (json.event?.id) createdIds.push(json.event.id);
+		return { status: res.status, json };
+	};
+
+	beforeAll(async () => {
+		setSystemTime(FIXTURE_CLOCK);
+		cookie = await adminCookie();
+	});
+
+	afterAll(async () => {
+		setSystemTime();
+		for (const id of createdIds) {
+			await db
+				.delete(subversiveCalendarEvents)
+				.where(eq(subversiveCalendarEvents.id, id));
+		}
+	});
+
+	it("refuses a create whose window has already closed", async () => {
+		const { status, json } = await send("POST", null, {
+			category: "chain",
+			...PAST_WINDOW,
+		});
+
+		expect(status).toBe(400);
+		expect(json.error).toContain("past");
+		expect(json.event).toBeUndefined();
+	});
+
+	it("still accepts a chain that is running right now", async () => {
+		// The rule is about windows that have closed, not about start times.
+		const { status, json } = await send("POST", null, {
+			category: "chain",
+			startTime: "2026-10-12T06:00:00.000Z",
+			endTime: "2026-10-12T11:00:00.000Z",
+		});
+
+		expect(status).toBe(200);
+		expect(json.event?.id).toBeTruthy();
+	});
+
+	it("refuses to move an event that has not ended into the past", async () => {
+		const created = await send("POST", null, {
+			category: "chain",
+			startTime: `${TUESDAY}T18:00:00.000Z`,
+			endTime: `${TUESDAY}T20:00:00.000Z`,
+		});
+		const id = created.json.event?.id ?? "";
+		expect(id).not.toBe("");
+
+		const { status, json } = await send("PUT", id, PAST_WINDOW);
+
+		expect(status).toBe(400);
+		expect(json.error).toContain("past");
+	});
+
+	it("lets an event that already ended be corrected", async () => {
+		// The API refuses to create this row, so it is seeded directly — which is
+		// also how every event that is already history got there.
+		const [past] = await db
+			.insert(subversiveCalendarEvents)
+			.values({
+				title: "[test] upcoming past row",
+				description: "scheduled before the guard existed",
+				category: "chain",
+				startTime: new Date(PAST_WINDOW.startTime),
+				endTime: new Date(PAST_WINDOW.endTime),
+				factionId: FACTION_ID,
+			})
+			.returning();
+
+		const id = past?.id ?? "";
+		expect(id).not.toBe("");
+
+		const { status, json } = await send("PUT", id, {
+			description: "corrected after the fact",
+		});
+
+		expect(status).toBe(200);
+		expect(json.success).toBe(true);
+
+		// And once it is history, it does not reappear as upcoming.
+		const upcoming = await getUpcomingCalendarEvents({ now: FIXTURE_CLOCK });
+		expect(upcoming.map((e) => e.id)).not.toContain(id);
+
+		await db
+			.delete(subversiveCalendarEvents)
+			.where(eq(subversiveCalendarEvents.id, id));
 	});
 });

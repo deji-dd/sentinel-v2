@@ -29,10 +29,12 @@ import {
 	guildApiKeys,
 	inArray,
 	isAttackProcessed,
+	isMercResultCreditable,
 	mapRowToMercContract,
 	mercContracts,
 	mercMasterKeys,
 	recordMercContractHit,
+	resolveMercHitPayout,
 	sql,
 	sqlClient,
 } from "../packages/database";
@@ -104,14 +106,11 @@ function resolveAttackEnded(attack: OutgoingAttack): number {
 	);
 }
 
-const DISQUALIFYING_RESULTS = new Set([
-	"Lost",
-	"Stalemate",
-	"Escape",
-	"Assist",
-	"Interrupted",
-	"Timeout",
-]);
+// Result eligibility and payout both come from the shared policy in
+// `@sentinel/database`. This script used to carry its own copy of the
+// disqualifying-result list and its own hospitalize-only payout rule, which is
+// exactly how a backfill ends up paying a different rate than the live
+// validator it is recovering hits for.
 
 async function getMasterApiKeys(
 	guildId: string,
@@ -338,7 +337,7 @@ async function processSingleContract(
 			dropReasons.no_participants++;
 			continue;
 		}
-		if (DISQUALIFYING_RESULTS.has(attack.result)) {
+		if (!isMercResultCreditable(contract.mode, attack.result)) {
 			dropReasons.disqualifying_result++;
 			continue;
 		}
@@ -366,21 +365,21 @@ async function processSingleContract(
 			continue;
 		}
 
-		// Calculate payout value: only hospitalized attacks receive payout
-		const isHospitalized = attack.result.toLowerCase() === "hospitalized";
 		const isStricken = Boolean(
 			attack.finishing_hit_effects?.some(
 				(e) => e.name.toLowerCase() === "stricken",
 			),
 		);
 
-		let payoutValue = 0;
-		if (isHospitalized) {
-			payoutValue =
-				isStricken && contract.strickenHitPrice
-					? contract.strickenHitPrice
-					: contract.hitPrice;
-		}
+		// Same mode-aware rule the live validator applies, so a recovered hit is
+		// worth exactly what it would have been worth had it been credited live.
+		const payoutValue = resolveMercHitPayout({
+			mode: contract.mode,
+			result: attack.result,
+			isStricken,
+			hitPrice: contract.hitPrice,
+			strickenHitPrice: contract.strickenHitPrice,
+		});
 
 		const resolvedEnded = resolveAttackEnded(attack);
 		// Never fall back to "now": a fabricated timestamp silently corrupts the

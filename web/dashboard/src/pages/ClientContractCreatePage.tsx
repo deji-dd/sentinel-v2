@@ -129,6 +129,12 @@ export function ClientContractCreatePage() {
 	const [offlineMinEnabled, setOfflineMinEnabled] = useState(false);
 	const [offlineMinDuration, setOfflineMinDuration] = useState<number>(15);
 	const [strickenHits, setStrickenHits] = useState(false);
+	/**
+	 * `hospitalize` (default) pays for the mercenary landing the finishing hit;
+	 * `assist` pays when the mercenary chips the target down and your own member
+	 * lands the finishing blow.
+	 */
+	const [mode, setMode] = useState<"hospitalize" | "assist">("hospitalize");
 	const [levelRange, setLevelRange] = useState<[number, number]>([1, 100]);
 
 	// Target Exclusions
@@ -264,9 +270,12 @@ export function ClientContractCreatePage() {
 		if (!session) return;
 
 		const parsedHitPrice = session.standardHitPrice ?? 3000000;
-		const parsedStrickenPrice = strickenHits
-			? (session.strickenHitPrice ?? 4000000)
-			: null;
+		// Stricken is a finishing-hit effect and an assist is by definition not the
+		// finishing hit, so assist mode never carries a stricken rate.
+		const parsedStrickenPrice =
+			mode !== "assist" && strickenHits
+				? (session.strickenHitPrice ?? 4000000)
+				: null;
 
 		let calculatedStartTime = new Date().toISOString();
 		if (
@@ -322,10 +331,11 @@ export function ClientContractCreatePage() {
 				idleDurationMinutes: idleStatus ? idleDuration : null,
 				offlineDurationMinutes:
 					offlineStatus && offlineMinEnabled ? offlineMinDuration : null,
-				strickenHits,
+				strickenHits: mode === "assist" ? false : strickenHits,
 				levelRange,
 			},
 
+			mode,
 			hitPrice: parsedHitPrice,
 			strickenHitPrice: parsedStrickenPrice,
 
@@ -667,6 +677,9 @@ export function ClientContractCreatePage() {
 					</Card>
 
 					{/* 3. Target Hit Filter Rules */}
+					{/* Mode first: it decides what the mercenaries are paid to do, and
+					    everything below it (stricken in particular) reads differently
+					    depending on the answer. */}
 					<Card className="border-border/80 shadow-xl bg-card/90 backdrop-blur-md rounded-2xl">
 						<CardHeader className="border-b border-border/40 pb-4">
 							<CardTitle className="text-base font-semibold">
@@ -674,6 +687,56 @@ export function ClientContractCreatePage() {
 							</CardTitle>
 						</CardHeader>
 						<CardContent className="pt-0 space-y-6">
+							<div>
+								<div className="text-xs font-semibold text-foreground uppercase tracking-wider block mb-3">
+									Contract Mode
+								</div>
+								<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+									<button
+										type="button"
+										onClick={() => setMode("hospitalize")}
+										className={`text-left p-3 rounded-xl border transition-colors ${
+											mode === "hospitalize"
+												? "border-primary/60 bg-primary/10"
+												: "border-border/80 bg-muted/20 hover:bg-muted/30"
+										}`}
+									>
+										<span className="text-xs font-semibold text-foreground block">
+											Hospitalize
+										</span>
+										<span className="text-[11px] text-muted-foreground block mt-1">
+											Mercenaries land the finishing hit. Only a hospitalization
+											is paid.
+										</span>
+									</button>
+									<button
+										type="button"
+										onClick={() => setMode("assist")}
+										className={`text-left p-3 rounded-xl border transition-colors ${
+											mode === "assist"
+												? "border-primary/60 bg-primary/10"
+												: "border-border/80 bg-muted/20 hover:bg-muted/30"
+										}`}
+									>
+										<span className="text-xs font-semibold text-foreground block">
+											Assist
+										</span>
+										<span className="text-[11px] text-muted-foreground block mt-1">
+											Mercenaries chip the target's life down and do NOT finish
+											it — your own member lands the finishing blow. An Assist
+											is paid at the standard hit value.
+										</span>
+									</button>
+								</div>
+								{mode === "assist" && (
+									<p className="text-[11px] text-muted-foreground mt-2">
+										A mercenary who finishes the target themselves is recorded
+										on your receipt but not charged. Stricken pricing does not
+										apply in this mode.
+									</p>
+								)}
+							</div>
+
 							<div>
 								<div className="text-xs font-semibold text-foreground uppercase tracking-wider block mb-3">
 									Allowed Activity Statuses
