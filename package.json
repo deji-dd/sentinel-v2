@@ -49,5 +49,6 @@
 		"postgres": "latest",
 		"typescript": "latest"
 	},
-	"peerDependencies": {}
+	"peerDependencies": {},
+	"packageManager": "bun@latest"
 }
