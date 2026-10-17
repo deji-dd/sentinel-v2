@@ -50,5 +50,5 @@
 		"typescript": "latest"
 	},
 	"peerDependencies": {},
-	"packageManager": "bun@latest"
+	"packageManager": "bun@1.4.3"
 }
