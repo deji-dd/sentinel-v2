@@ -477,6 +477,13 @@
 			"when": 1792138679542,
 			"tag": "0067_soft_valeria_richards",
 			"breakpoints": true
+		},
+		{
+			"idx": 68,
+			"version": "7",
+			"when": 1792428943841,
+			"tag": "0068_confused_puff_adder",
+			"breakpoints": true
 		}
 	]
 }

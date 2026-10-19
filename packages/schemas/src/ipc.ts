@@ -3,6 +3,7 @@
  * Worker/Scheduler V2, Bot, and API applications.
  */
 
+import type { SubversiveChainAlertPayload } from "./chain-alerts";
 import type {
 	IpcSubversiveRwDisplaysUpdateMessage,
 	IpcSubversiveRwFriendlyUpdateMessage,
@@ -537,6 +538,18 @@ export type IpcUserStockAlertsMessage = {
 	data: IpcUserStockAlertsPayload;
 };
 
+/**
+ * One chain warning for one family faction.
+ *
+ * Sent per warning rather than batched: every warning is a fresh role ping and
+ * carries its own low-stat target list, and both factions may warn in the same
+ * scheduler cycle.
+ */
+export type IpcSubversiveChainAlertMessage = {
+	action: "subversive_chain_alert";
+	data: SubversiveChainAlertPayload;
+};
+
 export type IpcFetchFactionMembersRequestMessage = {
 	action: "fetch_faction_members_request";
 	requestId: string;
@@ -608,6 +621,7 @@ export type IpcMessage =
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcSubversiveStockAlertsMessage
 	| IpcUserStockAlertsMessage
+	| IpcSubversiveChainAlertMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage
 	| IpcSubversiveRetalUpdatedMessage

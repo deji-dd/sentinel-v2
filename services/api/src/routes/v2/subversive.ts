@@ -24,6 +24,13 @@ import {
 	workerState,
 } from "@sentinel/database";
 import {
+	MAX_SUBVERSIVE_CHAIN_START,
+	MAX_SUBVERSIVE_CHAIN_WARNING_INTERVAL_SECONDS,
+	MAX_SUBVERSIVE_CHAIN_WARNING_SECONDS,
+	MIN_SUBVERSIVE_CHAIN_START,
+	MIN_SUBVERSIVE_CHAIN_WARNING_SECONDS,
+} from "@sentinel/schemas";
+import {
 	encryptApiKey,
 	hashApiKey,
 	isValidApiKey,
@@ -38,6 +45,10 @@ import {
 } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
 import { env } from "../../config/env";
+import {
+	ChainConfigError,
+	subversiveChainConfigManager,
+} from "../../lib/chain-config-manager";
 import { subversiveDibsManager } from "../../lib/dibs-manager";
 import { dibsMessageStore } from "../../lib/dibs-message-store";
 import { fetchDiscordApi } from "../../lib/discord-auth";
@@ -136,6 +147,9 @@ function toGuildConfigResponse(row: SubversiveGuildConfigRow | null): {
 
 const INVALID_RW_CHANNELS_FACTION_ERROR =
 	"Invalid factionId: ranked-war channels are only available for the Subversive family factions.";
+
+const INVALID_CHAIN_FACTION_ERROR =
+	"Invalid factionId: chain monitoring is only available for the Subversive family factions.";
 
 /**
  * Validates an optional faction id coming from a request and resolves it to a
@@ -1798,6 +1812,117 @@ export const subversiveRoutes = new Elysia({ prefix: "/subversive" })
 				summary: "Update Subversive Ranked-War Channel Selections",
 				description:
 					"Routes ranked-war tooling channels for one family faction. The primary, secondary and friendly selections must all differ.",
+			},
+		},
+	)
+
+	// ─── GET /api/v2/subversive/chain-config ──────────────────────────────────
+	.get(
+		"/chain-config",
+		async ({ user, set, query }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(query?.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_CHAIN_FACTION_ERROR };
+			}
+
+			const config = await subversiveChainConfigManager.getConfig(factionId);
+			return {
+				factionId,
+				factionName: getSubversiveFactionName(factionId),
+				config,
+			};
+		},
+		{
+			query: t.Object({
+				factionId: t.Optional(t.Numeric()),
+			}),
+			detail: {
+				summary: "Get Subversive Chain Monitor Configuration",
+				description:
+					"Returns chain-monitoring settings for one family faction: threshold, warning window, repeat interval, channel and role.",
+			},
+		},
+	)
+
+	// ─── PUT /api/v2/subversive/chain-config ──────────────────────────────────
+	.put(
+		"/chain-config",
+		async ({ body, user, set }) => {
+			const hasAdmin = await verifySubversiveAdmin(user);
+			if (!hasAdmin) {
+				set.status = 403;
+				return { error: "Forbidden: Subversive admin access required" };
+			}
+
+			const factionId = parseSubversiveFactionId(body.factionId, set);
+			if (factionId === null) {
+				return { error: INVALID_CHAIN_FACTION_ERROR };
+			}
+
+			const { factionId: _ignored, ...patch } = body;
+			try {
+				const updated = await subversiveChainConfigManager.updateConfig(
+					patch,
+					user?.username ?? "admin",
+					factionId,
+				);
+
+				// The scheduler reads the table on its next cycle. A force-run
+				// applies a newly routed channel immediately instead of waiting
+				// out the idle cadence.
+				void notifySchedulerForceRun("subversive:chain_monitor");
+
+				return {
+					success: true,
+					factionId,
+					factionName: getSubversiveFactionName(factionId),
+					config: updated,
+				};
+			} catch (err) {
+				// Only validation failures are the admin's mistake. A database
+				// failure must not be reported as a bad request.
+				if (err instanceof ChainConfigError) {
+					set.status = 400;
+					return { error: err.message };
+				}
+				throw err;
+			}
+		},
+		{
+			body: t.Object({
+				factionId: t.Optional(t.Numeric()),
+				enabled: t.Optional(t.Boolean()),
+				channelId: t.Optional(t.Nullable(t.String())),
+				warningRoleId: t.Optional(t.Nullable(t.String())),
+				minimumChainStart: t.Optional(
+					t.Number({
+						minimum: MIN_SUBVERSIVE_CHAIN_START,
+						maximum: MAX_SUBVERSIVE_CHAIN_START,
+					}),
+				),
+				chainTimeWarningSeconds: t.Optional(
+					t.Number({
+						minimum: MIN_SUBVERSIVE_CHAIN_WARNING_SECONDS,
+						maximum: MAX_SUBVERSIVE_CHAIN_WARNING_SECONDS,
+					}),
+				),
+				subsequentWarningIntervalSeconds: t.Optional(
+					t.Number({
+						minimum: 0,
+						maximum: MAX_SUBVERSIVE_CHAIN_WARNING_INTERVAL_SECONDS,
+					}),
+				),
+			}),
+			detail: {
+				summary: "Update Subversive Chain Monitor Configuration",
+				description:
+					"Updates chain-monitoring settings for one family faction. Warnings fire when the chain timer is at or below chainTimeWarningSeconds; subsequent warnings repeat every subsequentWarningIntervalSeconds (zero = first warning only).",
 			},
 		},
 	)

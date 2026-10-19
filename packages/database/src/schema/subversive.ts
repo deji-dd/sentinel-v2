@@ -418,6 +418,63 @@ export type NewSubversiveRwChannelConfigRow =
 	typeof subversiveRwChannelConfigs.$inferInsert;
 
 /**
+ * Chain-monitoring settings, one row per Subversive family faction.
+ *
+ * Each family faction runs its own chain, so its minimum chain length, warning
+ * window, repeated-warning cadence, alert channel and mention role are stored
+ * separately. A missing row means the dashboard has never saved settings for
+ * that faction; the worker then applies the factory defaults.
+ *
+ * The worker only polls a faction whose row is enabled and routed to a channel.
+ * That keeps a half-configured faction from consuming Torn API quota for
+ * warnings that could never be delivered.
+ */
+export const subversiveChainConfigs = pgTable("subversive_chain_configs", {
+	/** Family faction these chain settings apply to (2013 / 27312). */
+	factionId: integer("faction_id").primaryKey(),
+	/** Master switch for this faction's chain monitor. */
+	enabled: boolean("enabled").default(true).notNull(),
+	/** Discord channel that receives chain warnings, or null when unrouted. */
+	channelId: text("channel_id"),
+	/** Discord role mentioned on every warning, or null for no mention. */
+	warningRoleId: text("warning_role_id"),
+	/**
+	 * Chain length at which the monitor switches from its slow idle cadence to
+	 * its fast active cadence. Warnings never fire below this count.
+	 */
+	minimumChainStart: integer("minimum_chain_start").default(10).notNull(),
+	/**
+	 * Seconds remaining on Torn's chain timer at which the first warning fires.
+	 * `chain.timeout` is a countdown, so this is a "time left" threshold rather
+	 * than elapsed chain duration.
+	 */
+	chainTimeWarningSeconds: integer("chain_time_warning_seconds")
+		.default(60)
+		.notNull(),
+	/**
+	 * Seconds between repeated warnings while the chain is still inside the
+	 * warning window. Zero sends the first warning only.
+	 */
+	subsequentWarningIntervalSeconds: integer(
+		"subsequent_warning_interval_seconds",
+	)
+		.default(10)
+		.notNull(),
+	updatedBy: text("updated_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+		.defaultNow()
+		.notNull(),
+});
+
+export type SubversiveChainConfigRow =
+	typeof subversiveChainConfigs.$inferSelect;
+export type NewSubversiveChainConfigRow =
+	typeof subversiveChainConfigs.$inferInsert;
+
+/**
  * The Discord messages currently rendering the ranked-war primary displays.
  *
  * Deliberately separate from `subversive_rw_channel_configs`: that table is

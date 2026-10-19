@@ -932,7 +932,7 @@ export class StocksTab {
 
 		const body =
 			pageRows.length === 0
-				? `<tr><td colspan="7" style="text-align: center; color: #94a3b8; padding: 18px;">${
+				? `<tr><td colspan="6" style="text-align: center; color: #94a3b8; padding: 18px;">${
 						this.minApr > 0 && all.length > 0
 							? `No block clears the ${this.aprFloorLabel()} APR floor on ${this.aprBasis === "next" ? "Next to Buy" : "Est. APR"}. Lower it to see the rest.`
 							: "No blocks match this filter."
@@ -1001,7 +1001,6 @@ export class StocksTab {
 								${header("cost", "Cost")}
 								${header("pays", "Pays")}
 								${header("apr", "Est. APR")}
-								${header("next", "Next to Buy")}
 							</tr>
 						</thead>
 						<tbody>${body}</tbody>
@@ -1049,13 +1048,6 @@ export class StocksTab {
 				: row.annualizedAprPct >= 0
 					? "profit-pos"
 					: "profit-neg";
-		const nextClass =
-			row.nextToBuyAprPct === null
-				? ""
-				: row.nextToBuyAprPct >= 0
-					? "profit-pos"
-					: "profit-neg";
-
 		const progressCell = row.held
 			? '<span class="stock-held-mark">complete</span>'
 			: `<span>${formatCompactNumber(row.sharesRemaining, 2)} left</span>
@@ -1091,19 +1083,6 @@ export class StocksTab {
 				<td class="td-num">${paysCell}</td>
 				<td class="td-num ${aprClass}">
 					${row.annualizedAprPct === null ? dash(row.payoutNote ?? "No priceable payout, so no APR.") : formatPercent(row.annualizedAprPct)}
-				</td>
-				<td class="td-num ${nextClass}">
-					${
-						row.nextToBuyAprPct === null
-							? row.actionable
-								? dash(
-										row.payoutValue === null
-											? (row.payoutNote ?? "This payout has no dollar value.")
-											: "No share price on record, so the cash still needed cannot be costed.",
-									)
-								: '<span class="stock-dash-muted">—</span>'
-							: formatPercent(row.nextToBuyAprPct)
-					}
 				</td>
 			</tr>
 		`;

@@ -10,6 +10,7 @@ import type {
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 import { deployGuildCommands } from "../../scripts/deploy-commands";
+import { handleSubversiveChainAlert } from "../chain-alert-distributor";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
 import {
 	deleteDibsAlert,
@@ -378,6 +379,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleSubversiveRecruitmentAlert(client, message.data);
 		} else if (message.action === "subversive_stock_alerts" && message.data) {
 			void handleSubversiveStockAlerts(client, message.data);
+		} else if (message.action === "subversive_chain_alert" && message.data) {
+			void handleSubversiveChainAlert(client, message.data);
 		} else if (message.action === "user_stock_alerts" && message.data) {
 			void handleUserStockAlerts(client, message.data);
 		} else if (

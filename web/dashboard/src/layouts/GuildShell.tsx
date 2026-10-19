@@ -15,6 +15,7 @@ import { ElimsProvider, useElims } from "../contexts/ElimsContext";
 import { useTheme } from "../hooks/useTheme";
 import { api } from "../lib/api";
 import { getNavSections, getPageLabel } from "../lib/navigation";
+import { ChainAlertsPage } from "../pages/ChainAlertsPage";
 import { DibsConfigPage } from "../pages/DibsConfigPage";
 import { ElimsGuildConfigPage } from "../pages/ElimsGuildConfigPage";
 import { ElimsReportPage } from "../pages/ElimsReportPage";
@@ -219,6 +220,12 @@ export default function GuildShell() {
 		}
 		if (subPath === "/rw-channels") return <RwChannelsPage guildId={guildId} />;
 		if (subPath === "/dibs") return <DibsConfigPage guildId={guildId} />;
+		if (subPath === "/chain") {
+			// Chain monitoring is per Subversive family faction, which only exists
+			// on the faction server.
+			if (!isFaction) return <NotFound />;
+			return <ChainAlertsPage guildId={guildId} />;
+		}
 		if (subPath === "/stocks") {
 			// Stock alerts are routed per Subversive family faction, which only
 			// exists on the faction server.

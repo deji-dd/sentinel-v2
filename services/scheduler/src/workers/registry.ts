@@ -12,6 +12,7 @@ import { startLogManager } from "./personal/log-manager";
 import { startPersonalReferenceSync } from "./personal/references";
 import { startPersonalStateSync } from "./personal/states";
 import { startSubversiveBountyFinder } from "./subversive/bounty-finder";
+import { startSubversiveChainMonitor } from "./subversive/chain-monitor";
 import { startSubversiveFFScouterCrawlerWorker } from "./subversive/ffscouter-target-crawler";
 import { startHitCounter } from "./subversive/hit-counter";
 import { startSubversiveMembershipAuditor } from "./subversive/membership-auditor";
@@ -166,6 +167,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"5-minute Torn stock market scanner: 24-hour and all-time highs/lows plus significant price moves for the Subversive family factions",
 		start: startSubversiveStockAlerts,
+	},
+	{
+		id: "subversive:chain_monitor",
+		description:
+			"Adaptive (idle / 5s active) per-faction chain monitor: warns a configured role when a chain's timer is low, with three low-stat okay targets",
+		start: startSubversiveChainMonitor,
 	},
 	{
 		id: "merc:contract_worker",

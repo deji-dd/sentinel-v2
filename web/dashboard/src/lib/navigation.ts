@@ -4,6 +4,7 @@ import {
 	Calendar,
 	Gift,
 	Hash,
+	Link2,
 	MapPin,
 	Package,
 	Settings,
@@ -172,6 +173,12 @@ export function getNavSections({
 								subPath: "/stocks",
 								icon: TrendingUp,
 								accent: "text-primary",
+							},
+							{
+								label: "Chain Alerts",
+								subPath: "/chain",
+								icon: Link2,
+								accent: "text-warning",
 							},
 						]
 					: []),
