@@ -19,13 +19,10 @@ import {
 	recordBriefOutcome,
 } from "./oil-rig-brief-store";
 import {
-	buildAnalystPrompt,
-	clipNotes,
 	renderCompanyDetails,
 	renderDeterministicBriefing,
 	renderProvenance,
 	splitDiscordMessages,
-	validateAnalystNotes,
 } from "./oil-rig-render";
 import type { CompanySnapshot } from "./oil-rig-snapshot";
 
@@ -37,16 +34,6 @@ const logger = new Logger("DirectorBriefing");
  * Company id used when the snapshot does not carry one. Succession Oil.
  */
 const DEFAULT_COMPANY_ID = 90288;
-
-/**
- * The analysis model, pinned deliberately.
- *
- * A `-latest` alias silently changes the model underneath the advice, so the same
- * data can produce different prose from one week to the next with no code change
- * and no way to reproduce a past brief. Pin a version and set `GEMINI_MODEL` to
- * override it when a deliberate upgrade is wanted.
- */
-const DEFAULT_ANALYST_MODEL = "gemini-2.5-flash";
 
 export interface DirectorBriefingOptions {
 	useLiveData?: boolean;
@@ -170,58 +157,6 @@ export async function sendDiscordContent(
 				`Failed to send DM message (${content.length} chars): ${await res.text()}`,
 			);
 		}
-	}
-}
-
-/**
- * Requests analysis prose from the configured model.
- *
- * Temperature 0 plus a fixed seed: the same data must produce the same prose, or
- * "the brief says something different this time" becomes unanswerable.
- */
-export async function callGemini(
-	prompt: string,
-	apiKey: string,
-): Promise<string | null> {
-	const model = process.env.GEMINI_MODEL || DEFAULT_ANALYST_MODEL;
-	if (model.endsWith("-latest")) {
-		logger.warn(
-			`Analyst model "${model}" is a moving alias; the same input may produce different analysis over time. Pin a version.`,
-		);
-	}
-	try {
-		logger.info(`Requesting analysis from ${model}...`);
-		const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-		const res = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				contents: [{ parts: [{ text: prompt }] }],
-				generationConfig: {
-					temperature: 0,
-					seed: 0,
-					maxOutputTokens: 800,
-				},
-			}),
-		});
-
-		if (res.ok) {
-			const json = (await res.json()) as {
-				candidates?: Array<{
-					content?: { parts?: Array<{ text?: string }> };
-				}>;
-			};
-			const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-			if (text) return text.trim();
-			logger.warn("Model returned no candidate text.");
-			return null;
-		}
-		const errText = await res.text();
-		logger.warn(`Model ${model} returned ${res.status}: ${errText}`);
-		return null;
-	} catch (err) {
-		logger.warn(`Model ${model} call error: ${err}`);
-		return null;
 	}
 }
 
@@ -438,7 +373,6 @@ export interface BriefingResult {
 	companyDetails: string;
 	outcome?: BriefOutcome;
 	persistedId?: string;
-	rejectedNotes: Array<{ bullet: string; reason: string }>;
 	/** The exact Discord message bodies, so nothing is hidden behind delivery. */
 	discordMessages: string[];
 }
@@ -543,72 +477,7 @@ export async function generateDirectorBriefing(
 		wtd.entries.length > 0 ? formatWeekToDateSummary(wtd) : "";
 	const wtdTable = formatWeekToDateTable(wtd);
 
-	// ---- Analyst notes ------------------------------------------------------
-	// When nothing has changed the analysis is not regenerated at all. Re-asking a
-	// model the same question is how identical advice arrives in different words,
-	// which reads to the director as different advice.
-	let notesText = "";
-	const rejectedNotes: Array<{ bullet: string; reason: string }> = [];
-	const geminiApiKey = process.env.GEMINI_API_KEY;
-
-	if (!deterministic.changed) {
-		notesText = `_Analysis not regenerated: every directive is unchanged from the brief issued ${previous?.asOf.toISOString().slice(0, 10)}, so there is nothing new to interpret._`;
-	} else if (geminiApiKey) {
-		const { prompt, allowedNumbers } = buildAnalystPrompt({
-			analysis,
-			history,
-			actionText: deterministic.actionText,
-		});
-		const raw = await callGemini(prompt, geminiApiKey);
-		if (raw) {
-			const cleaned = raw
-				.replace(/^#{1,6}.*$/gm, "")
-				.replace(/^\*\*(Analyst Notes|Analysis):?\*\*$/gim, "")
-				.trim();
-			// The prompt asks for 700 characters; the cap is headroom, not a target.
-			// Clipping is boundary-aware so a cut can never leave a half-sentence or a
-			// partial figure reading like a measurement.
-			const withinBudget = clipNotes(cleaned, 900);
-			if (cleaned.length > 900) {
-				// Any clipping at all means the model ignored its length instruction, so
-				// record it: a note that ends mid-sentence is otherwise impossible to
-				// diagnose after the fact, because only the clipped text is ever stored.
-				logger.warn(
-					`Analyst notes exceeded the budget: ${cleaned.length} chars returned, clipped to ${withinBudget.length} at a line boundary.`,
-				);
-			}
-			const validated = validateAnalystNotes({
-				notes: withinBudget,
-				allowedNumbers,
-				directives: analysis.directives,
-			});
-			rejectedNotes.push(...validated.rejected);
-			if (validated.rejected.length > 0) {
-				logger.warn(
-					`Dropped ${validated.rejected.length} analyst bullet(s) that contradicted the engines or cited unsupported figures: ${validated.rejected
-						.map((r) => `"${r.bullet.slice(0, 80)}" (${r.reason})`)
-						.join("; ")}`,
-				);
-			}
-			notesText =
-				validated.accepted.length > 0
-					? validated.accepted.join("\n")
-					: withinBudget.length === 0
-						? "_Analyst notes omitted: the model's answer exceeded the length budget and nothing complete fitted._"
-						: "_Analyst notes withheld: every bullet contradicted the engines or cited an unsupported figure._";
-		} else {
-			logger.warn(
-				"No analyst notes returned; delivering the deterministic briefing only.",
-			);
-		}
-	} else {
-		notesText =
-			"_No analyst model configured, so this brief carries the computed advice only._";
-	}
-
-	const advisorText = notesText
-		? `${deterministic.advice}\n\n### Analyst Notes\n${notesText}`
-		: deterministic.advice;
+	const advisorText = deterministic.advice;
 
 	// The previous brief's outcome is still computed and persisted, because it is
 	// the audit trail for "did following the advice work". It is NOT printed: the
@@ -646,7 +515,6 @@ export async function generateDirectorBriefing(
 	const streamed = [
 		header,
 		deterministic.advice,
-		notesText ? `### Analyst Notes\n${notesText}` : "",
 		companyDetails,
 		provenanceText,
 		`### Week To Date\n${wtdTable}${wtdSummaryText ? `\n${wtdSummaryText}` : ""}`,
@@ -692,7 +560,6 @@ export async function generateDirectorBriefing(
 		companyDetails: detailsBlock,
 		outcome,
 		persistedId,
-		rejectedNotes,
 		discordMessages,
 	};
 }

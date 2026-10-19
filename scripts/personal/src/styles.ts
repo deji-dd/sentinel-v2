@@ -954,6 +954,12 @@ tr:hover td {
 	border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
+.tag-upgrade {
+	background: rgba(99, 102, 241, 0.15);
+	color: #a5b4fc;
+	border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
 .tag-structural {
 	background: rgba(244, 63, 94, 0.15);
 	color: #fb7185;

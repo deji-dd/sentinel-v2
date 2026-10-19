@@ -14,6 +14,8 @@ import {
 	type SellThroughResponseAnalysis,
 	type StockAnalysis,
 } from "./oil-rig";
+import type { CompanySnapshot } from "./oil-rig-snapshot";
+import { analyzeUpgrades } from "./oil-rig-upgrades";
 
 /**
  * Assembles the company directive set from the domain engines.
@@ -42,6 +44,8 @@ export interface CompanyDirectiveInputs {
 	/** Staff count the blueprint quotas are derived from. */
 	staffCount: number;
 	baseline?: RosterBaseline;
+	/** Live company profile: capacity, environment and the current upgrade tiers. */
+	profile: CompanySnapshot["profile"];
 }
 
 export function buildCompanyDirectives(
@@ -139,6 +143,32 @@ export function buildCompanyDirectives(
 	const t2 = inputs.roster.rehabTiers.tier2;
 	const t3 = inputs.roster.rehabTiers.tier3;
 
+	// Upgrades are decided from the plan, not alongside it: an open seat is hired
+	// into first, and a size upgrade is listed at medium priority while a free seat
+	// move is still outstanding. It becomes high only once the plan is merely
+	// holding. The engine sees the same regime and stock the other directives do,
+	// so it cannot ask for a seat the roster would not fill or a staff room the
+	// headcount does not need.
+	const upgrades = analyzeUpgrades({
+		profile: inputs.profile,
+		staffCount: inputs.staffCount,
+		openSeats: inputs.openSeats,
+		stock: {
+			fillPct: inputs.stock.fillPct,
+			netFillPerDay: inputs.stock.netFillPerDay,
+			warehouseCritical: inputs.stock.warehouseCritical,
+			isFillingUp: inputs.stock.isFillingUp,
+		},
+		discarded: {
+			barrelsPerDay: plan.discardedBarrelsPerDay,
+			valuePerDay: plan.discardedValuePerDay,
+			evidenceThin: inputs.discarded.evidenceThin,
+		},
+		extractionBound: plan.extractionBound,
+		capacityPlanState: plan.state,
+		barrelPrice: inputs.barrelPrice,
+	});
+
 	return {
 		roleTransfers: inputs.roster.activeTransfers.map((t) => ({
 			name: t.name,
@@ -168,16 +198,18 @@ export function buildCompanyDirectives(
 			confidence: inputs.stock.recommendedPrice.confidence,
 		},
 		rehabTiers: { tier1: t1, tier2: t2, tier3: t3 },
+		upgrades,
 		// "Optimal" means nothing is being asked of the director. A rig that still
 		// cannot clear its output is not optimal, but a rig whose roster already
 		// carries the sell-through weight the bottleneck requires has nothing
 		// outstanding - that state is reported as "holding" by the plan, not as a
-		// repeated demand and not as an all-clear.
+		// repeated demand and not as an all-clear. An open upgrade is a demand too.
 		allOptimal:
 			!hasRoleTransfers &&
 			!hasPriceSuggestion &&
 			!hasAdSuggestion &&
 			t1.length + t2.length + t3.length === 0 &&
+			upgrades.recommendations.length === 0 &&
 			plan.state === "balanced",
 	};
 }

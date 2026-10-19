@@ -1,31 +1,25 @@
-import type { CompanyDirectives } from "../../schemas/src/company";
-import {
-	buildWeekToDateLogEntries,
-	formatHistoryTable,
-	type OilRigHistoryRecord,
-} from "./oil-rig";
+import type {
+	CompanyDirectives,
+	CompanyUpgradeAdvice,
+	CompanyUpgradeCategory,
+} from "../../schemas/src/company";
 import type { OilRigAnalysis } from "./oil-rig-analysis";
 import { OIL_RIG_POLICY } from "./oil-rig-policy";
 
 /**
  * Rendering for the director briefing, kept separate from loading and delivery.
  *
- * The split matters for correctness, not tidiness: the deterministic advice, the
- * model's notes and the details block must all describe the SAME analysis object,
- * and the only way to guarantee that is to have one function that renders it and
- * no other path that can recompute it.
- *
- * Everything numerically actionable is rendered here from the engines. The model
- * is used only for analysis prose, and `validateAnalystNotes` fences even that.
+ * Everything the brief says is rendered here from the engines. There is no model
+ * in the loop: the advice, the capacity plan and the week-to-date figures all
+ * come from the same `OilRigAnalysis`, so two surfaces cannot contradict each
+ * other.
  */
 
 /**
  * Stable signature of the deterministic advice.
  *
- * Used for two things: telling the director "no change since <date>" instead of
- * re-issuing re-worded identical advice, and skipping the model call entirely
- * when nothing has changed - which is what stops the same advice arriving in
- * different words on every fetch.
+ * Used to tell the director "no change since <date>" instead of re-issuing
+ * identical advice as if it were a fresh demand.
  */
 export function adviceSignature(directives: CompanyDirectives): string {
 	const canonical = JSON.stringify({
@@ -48,6 +42,12 @@ export function adviceSignature(directives: CompanyDirectives): string {
 			.map((t) => `${t.name}:${t.penalty}`)
 			.sort(),
 		inventory: directives.stock.state,
+		upgrades: directives.upgrades.recommendations
+			.map(
+				(recommendation) =>
+					`${recommendation.category}:${recommendation.nextTier}>${recommendation.targetTier}:${recommendation.nextCost}:${recommendation.priority}`,
+			)
+			.sort(),
 	});
 	return fnv1a(canonical);
 }
@@ -320,11 +320,38 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 	return lines;
 }
 
+const UPGRADE_LABELS: Record<CompanyUpgradeCategory, string> = {
+	company_size: "Company size",
+	staff_room: "Staff room",
+	warehouse: "Warehouse",
+};
+
+/**
+ * One line per due upgrade.
+ *
+ * The price is rendered here rather than baked into `reason`, so the engine can
+ * be tested on the decision without the prose drifting from the catalog. A
+ * multi-step recommendation prints the whole chain and its total: "two sizes
+ * short" is one decision but two purchases, and hiding the second cost would
+ * make the first line look complete.
+ */
+export function renderUpgradeRecommendations(
+	upgrades: CompanyUpgradeAdvice,
+): string[] {
+	return upgrades.recommendations.map((recommendation) => {
+		const chain = recommendation.steps
+			.map((step) => `${step.tier} ${formatMoney(step.cost)}`)
+			.join(" then ");
+		const purchase =
+			recommendation.steps.length > 1
+				? `${chain} _(${formatMoney(recommendation.totalCostToTarget)} total)_`
+				: `${recommendation.nextTier} ${formatMoney(recommendation.nextCost)}`;
+		return `• **${UPGRADE_LABELS[recommendation.category]} (${recommendation.priority}):** ${recommendation.reason} **Buy:** ${purchase}.`;
+	});
+}
+
 /**
  * Renders the deterministic sections: what to do, and why.
- *
- * The model is deliberately NOT asked to reproduce any of this. Asking a model to
- * copy pre-computed facts is what previously needed regex passes to undo.
  */
 export function renderDeterministicBriefing(
 	analysis: OilRigAnalysis,
@@ -369,7 +396,13 @@ export function renderDeterministicBriefing(
 		d.pricing.isChanged === false &&
 		d.adSpend.isChanged === false;
 
-	if (nothingToDo) {
+	const upgradeLines = renderUpgradeRecommendations(d.upgrades);
+
+	if (nothingToDo && upgradeLines.length > 0) {
+		doThis.push(
+			"• **No operational changes** — roster, price, advertising and staff health are at target; the upgrades below are the outstanding work.",
+		);
+	} else if (nothingToDo) {
 		doThis.push(
 			"• **Nothing outstanding** — roster, price, advertising and staff health are all where the engines want them.",
 		);
@@ -395,10 +428,18 @@ export function renderDeterministicBriefing(
 		sections.push(`### Capacity\n${capacity.join("\n")}`);
 	}
 
+	// ---- Upgrades ------------------------------------------------------------
+	// Last, because an upgrade is a consequence of the operating picture above:
+	// the seat plan says whether more staff are usable, and the environment is the
+	// evidence that the staff room is out of step with the headcount.
+	if (upgradeLines.length > 0) {
+		sections.push(`### Upgrades\n${upgradeLines.join("\n")}`);
+	}
+
 	return {
 		advice: sections.join("\n\n"),
 		signature,
-		actionText: [...doThis, ...capacity].join("\n"),
+		actionText: [...doThis, ...capacity, ...upgradeLines].join("\n"),
 		stockBullets: capacity,
 		changed,
 	};
@@ -536,34 +577,6 @@ export function renderCompanyDetails(
 }
 
 /**
- * Clips model prose to a budget without leaving a half-sentence.
- *
- * The budget used to be a bare `slice(0, 900)`, which cut mid-word: production
- * briefs ended "increasing daily revenue by +1" and "reducing". A partial figure
- * is worse than a missing one, because it reads as a measurement. The trailing
- * incomplete line is dropped instead, and an empty result means nothing complete
- * fitted, so the caller shows no notes at all.
- */
-export function clipNotes(text: string, budget: number): string {
-	if (text.length <= budget) return text;
-	const clipped = text.slice(0, budget);
-
-	// Notes are bullet lists, so a complete line is a complete thought.
-	const lastNewline = clipped.lastIndexOf("\n");
-	if (lastNewline > 0) return clipped.slice(0, lastNewline).trim();
-
-	// A single long line: fall back to the last complete sentence.
-	const lastStop = Math.max(
-		clipped.lastIndexOf(". "),
-		clipped.lastIndexOf("! "),
-		clipped.lastIndexOf("? "),
-	);
-	if (lastStop > 0) return clipped.slice(0, lastStop + 1).trim();
-
-	return "";
-}
-
-/**
  * The caveats block, so "why does this say something different?" is answerable
  * without reading the code.
  *
@@ -573,8 +586,8 @@ export function clipNotes(text: string, budget: number): string {
  *    rule. The exact map stays in the API payload and the stored brief for audit.
  *  - The "**Data:**" bullet, which restated which figures are live and which come
  *    from the recorded tick. It was the longest line in the brief and the least
- *    actionable: the tick date is already in the header and the analyst prompt,
- *    and a reader does not need it to act on the advice.
+ *    actionable: the tick date is already in the header, and a reader does not
+ *    need it to act on the advice.
  *
  * What remains is warnings only, so an empty return means the whole section must
  * be omitted rather than printed as a bare heading.
@@ -584,353 +597,4 @@ export function renderProvenance(analysis: OilRigAnalysis): string {
 	return `• **Read with care:**\n${analysis.warnings
 		.map((w) => `   – ${w}`)
 		.join("\n")}`;
-}
-
-export interface AnalystPromptArgs {
-	analysis: OilRigAnalysis;
-	history: OilRigHistoryRecord[];
-	actionText: string;
-}
-
-export interface AnalystPrompt {
-	prompt: string;
-	/** Every number the model is permitted to cite, normalised. */
-	allowedNumbers: Set<string>;
-}
-
-/**
- * Builds the analysis-only prompt and the numeric allowlist that fences it.
- *
- * The allowlist is derived from the prompt itself, so it cannot drift from what
- * the model was actually shown: if a figure is not in the prompt, the model had
- * no basis for it and the bullet citing it is dropped.
- */
-export function buildAnalystPrompt(args: AnalystPromptArgs): AnalystPrompt {
-	const { analysis } = args;
-	const d = analysis.directives;
-	const { decision, stock } = analysis;
-
-	const historyTable = formatHistoryTable(args.history);
-	const wtd = buildWeekToDateLogEntries({ history: args.history });
-
-	// The tick date matters: "daily" is the day the last snapshot recorded, and a
-	// model told only "Daily Profit" will assume it means today.
-	const tickLabel = analysis.provenance.tickIsoDate
-		? ` (${analysis.provenance.tickIsoDate}${
-				analysis.provenance.tickAgeMinutes !== undefined
-					? `, recorded ${Math.round(analysis.provenance.tickAgeMinutes / 60)}h ago`
-					: ""
-			})`
-		: " (none recorded yet)";
-	const wtdWindow = `${wtd.mondayIso} to ${wtd.sundayIso}`;
-	/**
-	 * An empty week must read as missing data. Rendering it as "$0" is what made
-	 * the model report a "reset or specific accounting period" and speculate about
-	 * the rig's finances instead of the thing the brief is for.
-	 */
-	const wtdBlock =
-		wtd.entries.length === 0
-			? `• NO DAYS RECORDED IN THIS WINDOW YET. Week-to-date profit is unknown, not zero. Do not draw any conclusion from its absence, and do not describe it as a reset.`
-			: `• ${wtd.entries.length} recorded day(s) · revenue ${formatMoney(wtd.totalRevenue)} · wages ${formatMoney(wtd.totalWages)} · advertising ${formatMoney(wtd.totalAd)} · profit ${formatMoney(wtd.totalProfit)} · barrels sold ${wtd.totalSold.toLocaleString()}`;
-	// The RECORDED barrel price, which can differ from the live setting. Quoting the
-	// live price beside a recorded volume implied the day sold at a price it did not.
-	const tickPrice =
-		args.history[args.history.length - 1]?.stock.barrelPrice ??
-		analysis.decision.currentPrice;
-
-	// This line sits under "TELEMETRY — LAST RECORDED DAY", so the day's own
-	// measurement must lead. Printing the multi-day median here told the analyst
-	// that 321,560 bbl/day was what the rig extracted on a day it extracted
-	// 395,024 - and that is how a filling warehouse came to be described as
-	// draining. The smoothed rate follows, labelled as a rate.
-	const extraction = extractionWording(stock.production);
-	const extractionLine =
-		extraction.latest === undefined
-			? "unmeasured"
-			: extraction.smoothed
-				? `${extraction.latest.toLocaleString()} bbl/day · ${extraction.label} ${extraction.median?.toLocaleString()} bbl/day (${extraction.confidence} confidence, ${stock.production.samples} measured days)`
-				: `${extraction.latest.toLocaleString()} bbl/day (${extraction.confidence} confidence)`;
-
-	const employeeRows = analysis.roster.lockedEmployees.length;
-	const employeeTableNote = `${decision.staffCount} staff, ${employeeRows} already in their target role, roster matrix omitted to keep this analysis-only.`;
-
-	const prompt = `
-You are the Chief Operations Advisor for Succession Oil, a Torn City Oil Rig.
-All figures below are computed from this rig's own recorded daily snapshots.
-Your job is ANALYSIS: explain what the numbers mean and what to watch next.
-
-HARD RULES:
-- Use ONLY the figures supplied. Never invent a benchmark, competitor statistic, price range or target.
-- If the data cannot support a conclusion, say so plainly rather than guessing.
-- Output 3 to 4 bullets, each starting with "• ", 700 characters maximum in total.
-- Be brief. The director reads this on a phone; a long answer will be cut.
-- Do NOT repeat or reformat the action list; the director already has it verbatim.
-- Do NOT recommend a change the action list did not ask for. If you think a lever
-  should move and the actions do not move it, say instead what you would watch to
-  decide, and why the current evidence is insufficient.
-- No emojis, no headers, no preamble, no tables, no sign-off.
-
----
-### ACCOUNTING RULES (read before interpreting any figure)
-• "Daily" means the most recent RECORDED day${tickLabel}, a complete day. It is NOT today, and it does not change until the next snapshot is recorded.
-• "WTD" (week to date) covers Monday ${wtdWindow} and is the sum of the days recorded inside that window. At the start of a week it is EMPTY, not zero: an empty week is missing data, not a day of no trading.
-• A day's profit is that day's revenue minus that day's wages and advertising. WTD profit is the sum of those daily profits for the recorded days in the window.
-• Settings (barrel price, advertising budget, roster, storage) are LIVE and may differ from the values in the most recent recorded day. Where they differ, both are shown.
-
-### TELEMETRY — LAST RECORDED DAY${tickLabel}
-• Revenue ${formatMoney(decision.recordedDailyRevenue)} · wages ${formatMoney(decision.recordedDailyWages)} · advertising ${formatMoney(decision.recordedAdBudget)} · profit ${formatMoney(decision.recordedDailyProfit)}
-• Barrels sold ${decision.dailySold.toLocaleString()} at $${tickPrice}/barrel · extraction on this day ${extractionLine}${stock.production.capped ? " · storage was at the cap, so true extraction is at least this high" : ""}
-• The game's own weekly revenue figure at that point: ${formatMoney(decision.recordedWeeklyRevenue)}
-
-### TELEMETRY — WEEK TO DATE (Mon ${wtdWindow})
-${wtdBlock}
-
-### TELEMETRY — LIVE SETTINGS AND STATE
-• Stock on hand ${decision.inStock.toLocaleString()} / ${decision.storageCap.toLocaleString()} bbl (${decision.fillPct}% full) · barrel price $${decision.currentPrice} · advertising ${formatMoney(decision.currentAdBudget)}/day
-• ${decision.staffCount} staff, ${decision.openSeats} open seat(s) · ${analysis.directives.sellThrough.samples} recorded price sample(s)
-• Advertising rank step worth about ${formatMoney(d.adSpend.rankStepValuePerDay)}/day · barrel price advice basis: ${d.pricing.basis} (confidence ${d.pricing.confidence})
-• Inventory state: ${stock.state.toUpperCase()}${stock.stateHeld ? " (held from the previous brief)" : ""} — ${stock.stateDescription}
-• Capacity regime: ${analysis.regime.regime}${analysis.regime.held ? " (held)" : ""} — ${analysis.regime.reason}
-
----
-### COMPUTED ANALYSIS (authoritative — do not contradict)
-• Price response: ${analysis.sellThrough.summary}
-• Capacity: ${analysis.discarded.summary}
-• Demand curve: ${stock.demand.reason}
-• Advertising: ${stock.adResponse.summary}
-• Advertising model: ${stock.adRankModel.rationale}
-${stock.structuralAdvice ? `• Structural constraint: ${stock.structuralAdvice}` : "• Structural constraint: none detected."}
-${analysis.warnings.length > 0 ? `• Caveats that must temper any conclusion:\n${analysis.warnings.map((w) => `  – ${w}`).join("\n")}` : ""}
-
----
-### ROSTER
-${employeeTableNote}
-• Quotas: ${Object.entries(analysis.roster.targetQuotas)
-		.map(([role, count]) => `${role} ${count}`)
-		.join(", ")}
-
----
-### RECORDED HISTORY
-${historyTable}
-
----
-### ACTIONS ALREADY ISSUED (do not repeat these, and do not contradict them)
-${args.actionText}
-
----
-Write the analysis bullets now.`;
-
-	return { prompt, allowedNumbers: expandWithDerived(collectNumbers(prompt)) };
-}
-
-/**
- * Adds the differences of the supplied magnitudes to the allowlist.
- *
- * "Extraction is 310,655 against sales of 283,942, so the shortfall is about
- * 26,700" is arithmetic on figures the model was given, not an invented
- * statistic. Without this the validator drops honest derivations, which is the
- * same failure as accepting invented ones: a brief that says less than it knows.
- *
- * Only differences between figures of 1,000 or more are derived. Sums are
- * deliberately excluded, because they collide with large external reference
- * numbers and a difference is the derivation this advice actually needs.
- */
-function expandWithDerived(values: Set<string>): Set<string> {
-	const magnitudes = [...values]
-		.map(Number)
-		.filter((value) => Number.isFinite(value) && Math.abs(value) >= 1000);
-	const expanded = new Set(values);
-	for (const a of magnitudes) {
-		for (const b of magnitudes) {
-			if (a === b) continue;
-			expanded.add(normaliseNumber(String(Math.abs(a - b))));
-		}
-	}
-	return expanded;
-}
-
-/** Every numeric token in a body of text, normalised for comparison. */
-function collectNumbers(text: string): Set<string> {
-	const tokens = text.match(/\$?\d[\d,]*(?:\.\d+)?[kKmMbB]?%?/g) ?? [];
-	const set = new Set<string>();
-	for (const token of tokens) set.add(normaliseNumber(token));
-	return set;
-}
-
-/**
- * Parses a numeric token, including the k/M/B shorthand models like to use.
- *
- * "$3.46M" is how a model writes $3,459,292. Without suffix support the validator
- * saw the literal 3.46, failed to match it against the supplied figures, and threw
- * away a correct bullet.
- */
-function parseMagnitude(token: string): number | undefined {
-	const match = token.match(/^\$?([\d,]+(?:\.\d+)?)([kKmMbB])?(%?)$/);
-	if (!match) return undefined;
-	const base = Number((match[1] ?? "").replace(/,/g, ""));
-	if (!Number.isFinite(base)) return undefined;
-	const suffix = (match[2] ?? "").toLowerCase();
-	const multiplier =
-		suffix === "k"
-			? 1_000
-			: suffix === "m"
-				? 1_000_000
-				: suffix === "b"
-					? 1_000_000_000
-					: 1;
-	return base * multiplier;
-}
-
-function normaliseNumber(token: string): string {
-	const value = parseMagnitude(token);
-	if (value === undefined) return token;
-	// Amounts are rounded to the nearest thousand: the model paraphrases
-	// magnitudes, and a literal match is too brittle to be useful.
-	if (Math.abs(value) >= 1000) return String(Math.round(value / 1000) * 1000);
-	return String(Number(value.toFixed(2)));
-}
-
-export interface NotesValidationResult {
-	accepted: string[];
-	rejected: Array<{ bullet: string; reason: string }>;
-}
-
-/** Rules that make a claim which the deterministic advice did not authorise. */
-const CONTRADICTION_RULES: Array<{
-	pattern: RegExp;
-	authorised: (d: CompanyDirectives) => boolean;
-	reason: string;
-}> = [
-	{
-		pattern:
-			/(rais|increas|lower|reduc|cut|cutting|decreas|drop)\w*[^.]{0,40}(price|barrel)/i,
-		authorised: (d) => d.pricing.isChanged,
-		reason: "proposes a barrel price change the pricing engine did not ask for",
-	},
-	{
-		pattern:
-			/(price|barrel)[^.]{0,40}(rais|increas|lower|reduc|cut|decreas|drop)\w*/i,
-		authorised: (d) => d.pricing.isChanged,
-		reason: "proposes a barrel price change the pricing engine did not ask for",
-	},
-	{
-		pattern:
-			/(rais|increas|scal|bump|top up)\w*[^.]{0,40}\b(ad|ads|advertis\w*)\b/i,
-		authorised: (d) => d.adSpend.isChanged && d.adSpend.action === "increase",
-		reason: "proposes an advertising increase the ad engine did not authorise",
-	},
-	{
-		pattern:
-			/(cut|reduc|lower|paus|freez)\w*[^.]{0,40}\b(ad|ads|advertis\w*)\b/i,
-		authorised: (d) =>
-			d.adSpend.isChanged &&
-			(d.adSpend.action === "decrease" || d.adSpend.action === "freeze"),
-		reason: "proposes an advertising reduction the ad engine did not authorise",
-	},
-	{
-		pattern:
-			/\b(mov|transfer|reassign|switch|rotat|reshuffl)\w*\b[^.]{0,60}\b(Driller|Roughneck|Derrick Hand|Secretary|Inspector|Sales Executive|Motor Hand)\b/i,
-		authorised: (d) => d.roleTransfers.length > 0,
-		reason: "proposes a role move the roster solver did not issue",
-	},
-	{
-		pattern: /\b(hir(e|es|ing)|recruit\w*)\b/i,
-		authorised: (d) => d.capacityRebalance.hires > 0,
-		reason: "proposes hiring that the capacity plan did not authorise",
-	},
-	{
-		pattern: /\b(rebalanc|restructur)\w*\b/i,
-		authorised: (d) => d.capacityRebalance.state === "action_required",
-		reason:
-			"proposes a roster rebalance the capacity plan is not asking for (it is holding or balanced)",
-	},
-];
-
-/**
- * Validates the model's analysis bullets before they are shown.
- *
- * Two checks, both cheap and both aimed at the failure the director actually
- * sees: the model asserting something the briefing's own engines contradict, or
- * citing a figure that appears nowhere in the data it was given. Rejected bullets
- * are dropped and logged rather than rendered - a shorter honest brief beats a
- * longer one that argues with itself.
- */
-export function validateAnalystNotes(args: {
-	notes: string;
-	allowedNumbers: Set<string>;
-	directives: CompanyDirectives;
-}): NotesValidationResult {
-	const accepted: string[] = [];
-	const rejected: Array<{ bullet: string; reason: string }> = [];
-
-	const bullets = args.notes
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0)
-		.flatMap((line) => {
-			// Keep bullet structure but split a wall of prose into sentences so one
-			// bad claim does not discard the model's whole answer.
-			if (/^[•\-*]\s/.test(line)) return [line];
-			return line
-				.split(/(?<=[.!?])\s+/)
-				.filter((sentence) => sentence.trim().length > 0)
-				.map((sentence) => `• ${sentence.trim()}`);
-		});
-
-	for (const bullet of bullets) {
-		const contradiction = CONTRADICTION_RULES.find(
-			(rule) => rule.pattern.test(bullet) && !rule.authorised(args.directives),
-		);
-		if (contradiction) {
-			rejected.push({ bullet, reason: contradiction.reason });
-			continue;
-		}
-
-		const unsupported = findUnsupportedNumbers(bullet, args.allowedNumbers);
-		if (unsupported.length > 0) {
-			rejected.push({
-				bullet,
-				reason: `cites ${unsupported.join(", ")}, which does not appear in the data it was given`,
-			});
-			continue;
-		}
-
-		accepted.push(bullet);
-	}
-
-	return { accepted, rejected };
-}
-
-/**
- * Numbers in a bullet that the model could not have derived from its prompt.
- *
- * Small integers are allowed through: "3 days", "2 seats" and similar counts are
- * legitimate reasoning, not invented statistics. A currency figure or a percentage
- * is a factual claim, and must match something the model was actually shown.
- */
-function findUnsupportedNumbers(
-	bullet: string,
-	allowed: Set<string>,
-): string[] {
-	const tokens = bullet.match(/\$?\d[\d,]*(?:\.\d+)?[kKmMbB]?%?/g) ?? [];
-	const unsupported: string[] = [];
-	for (const token of tokens) {
-		const value = parseMagnitude(token);
-		if (value === undefined) continue;
-		const isClaim =
-			token.includes("$") || token.includes("%") || Math.abs(value) >= 1000;
-		if (!isClaim) continue;
-		const normalised = normaliseNumber(token);
-		if (allowed.has(normalised)) continue;
-		// Allow a near-match: models round and paraphrase magnitudes.
-		const near = [...allowed].some((candidate) => {
-			const candidateValue = Number(candidate);
-			if (!Number.isFinite(candidateValue) || candidateValue === 0)
-				return false;
-			return Math.abs(candidateValue - value) / Math.abs(candidateValue) < 0.02;
-		});
-		if (near) continue;
-		unsupported.push(token);
-	}
-	return [...new Set(unsupported)];
 }

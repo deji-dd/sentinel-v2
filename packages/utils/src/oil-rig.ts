@@ -1416,9 +1416,10 @@ export function analyzeStockAndPricing(params: {
 				: `Inventory is operating in a healthy equilibrium buffer (${fillPct}% full).`;
 
 	// When the warehouse is full and extraction still keeps pace with sales, no
-	// price or ad setting can clear it: the constraint is structural. Storage
-	// upgrades are deliberately not offered as a fix, because a bigger warehouse
-	// only postpones the same cap.
+	// price or ad setting can clear it: the constraint is structural. Storage is
+	// not offered as a fix here, because a bigger warehouse only postpones the
+	// same cap. The upgrade engine may still name it as a last-resort buffer once
+	// company size and the roster have no seat lever left; it says the same thing.
 	let structuralAdvice: string | undefined;
 	if (state === "surplus") {
 		if (warehouseCritical) {
@@ -1976,7 +1977,7 @@ export interface SellThroughResponseAnalysis {
 		| "unresponsive"
 		| "partially_responsive"
 		| "responsive";
-	/** Plain-language conclusion for the briefing and the LLM. */
+	/** Plain-language conclusion for the briefing. */
 	summary: string;
 }
 

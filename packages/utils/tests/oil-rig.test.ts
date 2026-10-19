@@ -967,7 +967,7 @@ describe("Director briefing loops regression", () => {
 		expect(briefing).toContain("sell-through capacity");
 	});
 
-	it("delivers advice plus details only, and keeps the model out of the action list", async () => {
+	it("delivers the deterministic advice plus details, chunked for Discord", async () => {
 		const { generateAndSendDirectorBriefing } = await import(
 			"../src/oil-rig-briefing"
 		);
@@ -976,31 +976,14 @@ describe("Director briefing loops regression", () => {
 		const savedEnv = {
 			DISCORD_TOKEN: process.env.DISCORD_TOKEN,
 			DISCORD_USER_ID: process.env.DISCORD_USER_ID,
-			GEMINI_API_KEY: process.env.GEMINI_API_KEY,
 		};
 		const payloads: Array<{ content?: string }> = [];
-		let prompt = "";
 
 		process.env.DISCORD_TOKEN = "test-token";
 		process.env.DISCORD_USER_ID = "1";
-		process.env.GEMINI_API_KEY = "test-key";
 
 		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 			const target = String(url);
-			if (target.includes("generativelanguage")) {
-				const body = JSON.parse(String(init?.body)) as {
-					contents: Array<{ parts: Array<{ text: string }> }>;
-				};
-				prompt = body.contents[0]?.parts[0]?.text ?? "";
-				return new Response(
-					JSON.stringify({
-						candidates: [
-							{ content: { parts: [{ text: "• Analyst bullet." }] } },
-						],
-					}),
-					{ status: 200 },
-				);
-			}
 			if (target.endsWith("/channels")) {
 				return new Response(JSON.stringify({ id: "channel-1" }), {
 					status: 200,
@@ -1030,20 +1013,12 @@ describe("Director briefing loops regression", () => {
 			}
 			const wholeDelivery = delivered.join("\n");
 			expect(wholeDelivery).toContain("Operations Brief");
-			expect(wholeDelivery).toContain("• Analyst bullet.");
+			expect(wholeDelivery).toContain("### Do This");
+			expect(wholeDelivery).toContain("**Barrel price:**");
 
-			// The model's output is additive analysis, never the authoritative list.
-			expect(briefing).toContain("### Analyst Notes");
-			expect(briefing).toContain("• Analyst bullet.");
-			expect(briefing.indexOf("### Do This")).toBeLessThan(
-				briefing.indexOf("### Analyst Notes"),
-			);
-
-			// The prompt carries computed facts only, and no invented benchmark.
-			expect(prompt).toContain("Do NOT repeat or reformat the action list");
-			expect(prompt).toContain("COMPUTED ANALYSIS");
-			expect(prompt).not.toContain("COMPETITOR & MARKET BENCHMARK");
-			expect(prompt).not.toContain("10★ Oil Rigs Industry Benchmark");
+			// The brief is the rendered analysis and nothing else.
+			expect(briefing).toContain("### Do This");
+			expect(briefing).not.toContain("### Analyst Notes");
 		} finally {
 			globalThis.fetch = realFetch;
 			for (const [key, value] of Object.entries(savedEnv)) {

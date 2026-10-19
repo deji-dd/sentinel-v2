@@ -297,6 +297,9 @@ export class CompanyTab {
 		const structuralAdvice = directives.stock.structuralAdvice;
 		const insight = directives.sellThrough;
 		const production = directives.stock.production;
+		// Optional chaining: a cached payload from before this field existed must
+		// render as "no upgrades", not crash the whole tab.
+		const upgrades = directives.upgrades?.recommendations ?? [];
 
 		// `allOptimal` is computed server-side and already accounts for the
 		// capacity rebalance, so the tab never claims "optimal" during a storage
@@ -323,6 +326,7 @@ export class CompanyTab {
 			hasPrice ||
 			hasAd ||
 			hasRehab ||
+			upgrades.length > 0 ||
 			Boolean(structuralAdvice);
 
 		const row = (tagClass: string, tag: string, text: string) => `
@@ -394,7 +398,31 @@ export class CompanyTab {
 			itemsHtml += row("tag-structural", "Blocker", structuralAdvice);
 		}
 
-		// 3. Role transfers
+		// 3. Company upgrades. They follow the capacity plan because they are its
+		//    consequence: a size upgrade only becomes due when no seat is left to
+		//    move, and the staff room is due when the headcount has outgrown it.
+		const upgradeLabels = {
+			company_size: "Company size",
+			staff_room: "Staff room",
+			warehouse: "Warehouse",
+		} as const;
+		for (const upgrade of upgrades) {
+			const purchase =
+				upgrade.steps.length > 1
+					? `${upgrade.steps
+							.map((step) => `${step.tier} ${formatMoney(step.cost)}`)
+							.join(
+								" then ",
+							)} <em style="color: #94a3b8;">(${formatMoney(upgrade.totalCostToTarget)} total)</em>`
+					: `${upgrade.nextTier} ${formatMoney(upgrade.nextCost)}`;
+			itemsHtml += row(
+				"tag-upgrade",
+				"Upgrade",
+				`<strong>${upgradeLabels[upgrade.category]} (${upgrade.priority}):</strong> ${escapeHtml(upgrade.reason)} <em style="color: #94a3b8;">Buy ${purchase}.</em>`,
+			);
+		}
+
+		// 4. Role transfers
 		if (hasTransfers) {
 			itemsHtml += directives.roleTransfers
 				.map((t) =>
@@ -407,7 +435,7 @@ export class CompanyTab {
 				.join("");
 		}
 
-		// 4. Price. The basis and confidence travel with the recommendation whether
+		// 5. Price. The basis and confidence travel with the recommendation whether
 		//    or not a change is being asked for: "maintain" is only worth anything
 		//    if the reader can see what it rests on.
 		itemsHtml += row(
@@ -420,7 +448,7 @@ export class CompanyTab {
 			} <em style="color: #94a3b8;">(basis: ${basisLabel(directives.pricing.basis)}, ${directives.pricing.confidence} confidence)</em>`,
 		);
 
-		// 5. Advertising, with what one rank step is worth, so the number can be
+		// 6. Advertising, with what one rank step is worth, so the number can be
 		//    judged rather than taken on faith.
 		itemsHtml += row(
 			hasAd ? "tag-ad" : "tag-insight",
@@ -432,7 +460,7 @@ export class CompanyTab {
 			} <em style="color: #94a3b8;">(basis: ${basisLabel(directives.adSpend.basis)}; one rank step ≈ ${formatMoney(directives.adSpend.rankStepValuePerDay)}/day, cap ${formatMoney(directives.adSpend.operationalCapPerDay)}/day)</em>`,
 		);
 
-		// 6. Extraction. The figure is only actionable to the degree it could be
+		// 7. Extraction. The figure is only actionable to the degree it could be
 		//    measured, so the confidence is never shown apart from it. It is also a
 		//    median over the last few measured days, NOT one day's output, so the
 		//    window is named and the newest day is shown beside it - otherwise the
@@ -460,7 +488,7 @@ export class CompanyTab {
 			}`,
 		);
 
-		// 7. Price-response insight: measured, not assumed.
+		// 8. Price-response insight: measured, not assumed.
 		if (
 			insight.verdict === "unresponsive" ||
 			insight.verdict === "partially_responsive"
@@ -468,7 +496,7 @@ export class CompanyTab {
 			itemsHtml += row("tag-insight", "Measured", insight.summary);
 		}
 
-		// 8. Swiss rehab
+		// 9. Swiss rehab
 		if (hasRehab) {
 			if (t1.length > 0) {
 				const names = t1

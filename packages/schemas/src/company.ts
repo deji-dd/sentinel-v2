@@ -250,6 +250,55 @@ export interface CompanyStockVerdict {
 	demand: CompanyDemandFit;
 }
 
+/** Which company upgrade a recommendation refers to. */
+export type CompanyUpgradeCategory =
+	| "company_size"
+	| "staff_room"
+	| "warehouse";
+
+/** How urgent an upgrade is, given the rig's current operating state. */
+export type CompanyUpgradePriority = "critical" | "high" | "medium" | "low";
+
+/** One purchase in a tier chain. */
+export interface CompanyUpgradeStep {
+	/** Tier label, as Torn reports it ("Large staff room", "24 employees"). */
+	tier: string;
+	cost: number;
+}
+
+/**
+ * One upgrade the analysis says is due.
+ *
+ * The engine recommends the tier that satisfies the need, not merely the next
+ * tier: `steps` carries the whole chain so a director two sizes short sees the
+ * full cost. `nextTier` is the purchase that can be made today.
+ */
+export interface CompanyUpgradeRecommendation {
+	category: CompanyUpgradeCategory;
+	currentTier: string;
+	nextTier: string;
+	targetTier: string;
+	nextCost: number;
+	steps: CompanyUpgradeStep[];
+	totalCostToTarget: number;
+	priority: CompanyUpgradePriority;
+	/** Why the upgrade is due. The renderer adds the prices. */
+	reason: string;
+	/**
+	 * Value per day the upgrade protects, when it can be measured. For company
+	 * size this is the output the extra seats could sell, an upper bound.
+	 */
+	estimatedGainPerDay?: number;
+}
+
+/** Every upgrade that is due, plus the state needed to read the list. */
+export interface CompanyUpgradeAdvice {
+	recommendations: CompanyUpgradeRecommendation[];
+	summary: string;
+	/** True when company size, staff room and warehouse are all at their final tier. */
+	allMaxed: boolean;
+}
+
 export interface CompanyDirectives {
 	roleTransfers: CompanyRoleTransfer[];
 	capacityRebalance: CompanyCapacityRebalance;
@@ -282,7 +331,9 @@ export interface CompanyDirectives {
 		tier2: CompanyRehabTier[];
 		tier3: CompanyRehabTier[];
 	};
-	/** False whenever any directive, including the capacity rebalance, is open. */
+	/** Company size, staff room and warehouse purchases that are due now. */
+	upgrades: CompanyUpgradeAdvice;
+	/** False whenever any directive, including an upgrade, is open. */
 	allOptimal: boolean;
 }
 

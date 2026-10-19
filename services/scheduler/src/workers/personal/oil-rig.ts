@@ -84,6 +84,11 @@ export interface OilRigDailyHistoryEntry {
 	adBudget: number;
 	trains: number;
 	storageCapacity: number;
+	upgrades: {
+		staffRoom?: string;
+		storage?: string;
+		storageCapacity: number;
+	};
 	stock: {
 		barrelPrice: number;
 		inStock: number;
@@ -221,6 +226,11 @@ export async function recordOilRigSnapshot(
 			adBudget: profile.advertisement_budget,
 			trains: profile.trains,
 			storageCapacity,
+			upgrades: {
+				staffRoom: profile.upgrades?.staff_room,
+				storage: profile.upgrades?.storage,
+				storageCapacity,
+			},
 			stock: {
 				barrelPrice: oilStock?.price ?? 0,
 				inStock,
@@ -399,7 +409,11 @@ export function startOilRigCollector(_options?: WorkerStartOptions): void {
 								hired: entry.employees.hired,
 								capacity: entry.employees.capacity,
 							},
-							upgrades: { storage_capacity: entry.storageCapacity },
+							upgrades: {
+								staff_room: entry.upgrades.staffRoom,
+								storage: entry.upgrades.storage,
+								storage_capacity: entry.upgrades.storageCapacity,
+							},
 							advertisement_budget: entry.adBudget,
 						},
 						stock: [

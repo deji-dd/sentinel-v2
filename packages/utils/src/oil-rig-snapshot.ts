@@ -41,7 +41,13 @@ export interface CompanySnapshot {
 		income: { daily: number; weekly: number };
 		customers: { daily: number; weekly: number };
 		employees: { hired: number; capacity: number };
-		upgrades: { storage_capacity?: number };
+		upgrades: {
+			/** Torn's staff-room tier, e.g. "Small staff room". */
+			staff_room?: string;
+			/** Torn's warehouse tier, e.g. "Large room". */
+			storage?: string;
+			storage_capacity?: number;
+		};
 		advertisement_budget: number;
 	};
 	stock: Array<{

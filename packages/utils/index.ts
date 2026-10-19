@@ -13,6 +13,7 @@ export * from "./src/oil-rig-brief-store";
 export * from "./src/oil-rig-briefing";
 export * from "./src/oil-rig-demand";
 export * from "./src/oil-rig-render";
+export * from "./src/oil-rig-upgrades";
 export * from "./src/stock-catalog";
 export * from "./src/stock-portfolio";
 export * from "./src/subversive-factions";

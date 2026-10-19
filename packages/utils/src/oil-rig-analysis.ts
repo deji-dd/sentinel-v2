@@ -289,6 +289,7 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		openSeats,
 		staffCount: snapshot.employees.length,
 		baseline: input.baseline,
+		profile: snapshot.profile,
 	});
 
 	return {
