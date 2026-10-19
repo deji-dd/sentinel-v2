@@ -94,8 +94,15 @@ export interface OilRigAdPolicy {
 export interface OilRigCapacityPolicy {
 	/** Every extraction-side role keeps at least this many seats. */
 	minExtractionRoleCount: number;
-	/** Seats moved from extraction into sell-through in one rebalance. */
+	/** Ceiling on seats moved from extraction into sell-through. */
 	maxShift: number;
+	/**
+	 * Seats moved into sell-through in one brief while the bottleneck is being
+	 * probed. The second seat is only considered after a new recorded tick shows
+	 * storage is still filling above `enterMinFillPct`; at critical fill the
+	 * ceiling is used immediately because waiting a day loses barrels.
+	 */
+	rebalanceStep: number;
 	/** Most seats taken from any single role, so a rebalance stays measured. */
 	maxShiftPerRole: number;
 	/** Open seats proposed for hiring into sell-through. */
@@ -184,6 +191,7 @@ export const OIL_RIG_POLICY: OilRigPolicy = {
 	capacity: {
 		minExtractionRoleCount: 1,
 		maxShift: 2,
+		rebalanceStep: 1,
 		maxShiftPerRole: 1,
 		maxHiresPerPlan: 2,
 		enterConsecutiveFillDays: 2,

@@ -2264,6 +2264,145 @@ export function buildBottleneckQuotas(
 	return { quotas, shifts };
 }
 
+/** The sell-through target this brief acts on, and why it stops where it does. */
+export interface CapacityTarget {
+	/** Sell-through seats in the long-run blueprint. */
+	baseSales: number;
+	/** Sell-through seats currently on the roster. */
+	currentSales: number;
+	/** Target this brief resolves to. Never exceeds `baseSales + maxShift`. */
+	targetSales: number;
+	/** Target expressed as a quota shift above the blueprint. */
+	shift: number;
+	/** Seats this brief still asks to move. */
+	outstanding: number;
+	/** True when a further incremental step was deliberately postponed. */
+	deferred: boolean;
+	/**
+	 * Why the next step is waiting, when it is.
+	 *
+	 * `step_in_flight` means a seat has already been moved and the next one waits
+	 * for the following recorded tick. `already_draining` means no seat was moved
+	 * because sales already outpace extraction; there is nothing to measure.
+	 * Downstream advice needs the distinction: only the first is "a free seat is
+	 * still on the table".
+	 */
+	deferredBecause?: "step_in_flight" | "already_draining";
+	/** The reason in prose, for the briefing. */
+	deferredReason?: string;
+}
+
+export interface CapacityTargetInput {
+	staffCount: number;
+	currentCounts: Record<string, number>;
+	fillPct: number;
+	/** True when the newest measured day shows sales outpacing extraction. */
+	draining: boolean;
+	/**
+	 * True when the current recorded tick is newer than the one the previous brief
+	 * used. A second step is never issued against the same tick: that would let two
+	 * same-day briefs move two seats without either one being measured.
+	 */
+	freshTick: boolean;
+	regime: CapacityRegime;
+	baseline?: RosterBaseline;
+	policy?: OilRigCapacityPolicy;
+}
+
+/**
+ * Decides how far this brief moves the sell-through quota.
+ *
+ * The long-run blueprint is the destination, but jumping straight to
+ * `base + maxShift` treated a two-seat shift as the correction rather than as the
+ * ceiling. It also ignored whether the first seat had worked. This resolver adds
+ * at most `rebalanceStep` seats per recorded tick and only escalates when the
+ * next tick still shows storage under pressure. Critical fill is the exception:
+ * there the full ceiling is used immediately because waiting a day discards
+ * barrels.
+ *
+ * It is deliberately separate from `buildBottleneckQuotas` so the roster solver
+ * and the capacity plan can both consume the SAME target and cannot disagree.
+ */
+export function resolveCapacityTarget(
+	input: CapacityTargetInput,
+): CapacityTarget {
+	const policy = input.policy ?? OIL_RIG_POLICY.capacity;
+	const base = getOptimalRoleQuotas(input.staffCount, input.baseline);
+	const baseSales = base[SELL_THROUGH_ROLE] ?? 0;
+	const currentSales = input.currentCounts[SELL_THROUGH_ROLE] ?? 0;
+	const ceiling = baseSales + policy.maxShift;
+
+	if (input.regime.regime !== "extraction_bound") {
+		return {
+			baseSales,
+			currentSales,
+			targetSales: baseSales,
+			shift: 0,
+			outstanding: 0,
+			deferred: false,
+		};
+	}
+
+	const critical = input.fillPct >= OIL_RIG_POLICY.inventory.criticalEnterPct;
+	const alreadyMoved = Math.max(0, currentSales - baseSales);
+	const stepCap = critical ? policy.maxShift : policy.rebalanceStep;
+
+	let targetSales: number;
+	let deferred = false;
+	let deferredBecause: CapacityTarget["deferredBecause"];
+	let deferredReason: string | undefined;
+
+	if (alreadyMoved === 0) {
+		// No bottleneck seat has been applied yet. A rig that is already draining
+		// does not need one: the held regime is waiting for its release rule, not
+		// asking for more sales capacity. Critical fill still overrides, because
+		// there the stock delta is clamped and the loss is present-tense.
+		const alreadyDraining =
+			input.draining && !critical && currentSales >= baseSales;
+		if (alreadyDraining) {
+			targetSales = Math.max(baseSales, Math.min(currentSales, ceiling));
+			deferred = currentSales < ceiling;
+			deferredBecause = deferred ? "already_draining" : undefined;
+			deferredReason = deferred
+				? `Sales already outpace extraction, so no seat move is needed while the extraction-bound regime waits to release.`
+				: undefined;
+		} else {
+			targetSales = Math.min(
+				ceiling,
+				Math.max(baseSales, currentSales + stepCap),
+			);
+		}
+	} else {
+		const canEscalate =
+			input.freshTick &&
+			(critical ||
+				(!input.draining && input.fillPct >= policy.enterMinFillPct));
+		if (canEscalate) {
+			targetSales = Math.min(ceiling, currentSales + stepCap);
+		} else {
+			targetSales = Math.max(baseSales, Math.min(currentSales, ceiling));
+			if (currentSales < ceiling) {
+				deferred = true;
+				deferredBecause = "step_in_flight";
+				deferredReason = input.draining
+					? `One seat has been moved into ${SELL_THROUGH_ROLE} and sales now outpace extraction. The extra capacity is being measured before any further seat is moved.`
+					: `The next seat move is deferred until a new recorded tick shows storage is still filling above ${policy.enterMinFillPct}% full.`;
+			}
+		}
+	}
+
+	return {
+		baseSales,
+		currentSales,
+		targetSales,
+		shift: Math.max(0, targetSales - baseSales),
+		outstanding: Math.max(0, targetSales - currentSales),
+		deferred,
+		deferredBecause,
+		deferredReason,
+	};
+}
+
 export type CapacityRegimeName = "balanced" | "extraction_bound";
 
 /** What changed since the previous brief, if anything. */
@@ -2498,6 +2637,10 @@ export interface CapacityRebalancePlan {
 	/** True when extraction structurally outruns what the rig can sell. */
 	extractionBound: boolean;
 	state: CapacityPlanState;
+	/** True when a further incremental step is waiting for the next recorded tick. */
+	deferred: boolean;
+	/** Why the next step is waiting, when it is. */
+	deferredReason?: string;
 	/** True when the plan compared the target against the actual roster. */
 	countsKnown: boolean;
 	/** Barrels per day being LOSING right now; 0 while the rig is draining. */
@@ -2561,6 +2704,14 @@ export interface CapacityPlanInput {
 	baseline?: RosterBaseline;
 	/** True when the discarded figure rests on too few measured days. */
 	discardedEvidenceThin?: boolean;
+	/**
+	 * Seats this brief may shift above the blueprint, from
+	 * `resolveCapacityTarget`. Defaults to the policy ceiling so direct callers
+	 * keep the old full-correction behaviour.
+	 */
+	maxShift?: number;
+	/** Set when a further step is deliberately waiting for the next tick. */
+	deferredReason?: string;
 	policy?: OilRigCapacityPolicy;
 }
 
@@ -2620,6 +2771,7 @@ export function planCapacityRebalance(
 		return {
 			extractionBound: false,
 			state: "balanced",
+			deferred: false,
 			countsKnown: params.currentCounts !== undefined,
 			discardedBarrelsPerDay: 0,
 			discardedValuePerDay: 0,
@@ -2638,8 +2790,10 @@ export function planCapacityRebalance(
 	}
 
 	const base = getOptimalRoleQuotas(params.staffCount, params.baseline);
+	const baseSalesTarget = base[SELL_THROUGH_ROLE] ?? 0;
 	const { shifts, quotas } = buildBottleneckQuotas(base, {
 		extractionBound: true,
+		maxShift: params.maxShift,
 	});
 	const salesShift = shifts.find((s) => s.role === SELL_THROUGH_ROLE);
 	const drawnFrom = shifts
@@ -2685,9 +2839,23 @@ export function planCapacityRebalance(
 		const fromLabel = countsKnown
 			? `${salesCurrent ?? 0} ➔ ${salesTarget}`
 			: `${salesShift?.from ?? 0} ➔ ${salesShift?.to ?? 0}`;
+		// A target below the ceiling is an incremental probe, not the whole
+		// correction. Say so, so the director does not read one seat as a demand
+		// for the second one in the same tick.
+		const incremental =
+			salesTarget > baseSalesTarget &&
+			salesTarget < baseSalesTarget + policy.maxShift &&
+			stock.fillPct < OIL_RIG_POLICY.inventory.criticalEnterPct;
+		const stepNote = incremental
+			? ` This is one measured step: the next seat is only considered after a new recorded tick still shows storage filling above ${policy.enterMinFillPct}% full.`
+			: "";
+		const cause =
+			stock.netDrainPerDay !== undefined
+				? "the extraction-bound regime is still held while the extra capacity is measured"
+				: "extraction already outruns what the rig can sell";
 		actions.push({
 			kind: "rebalance",
-			reason: `${seatsStillRequired} seat${seatsStillRequired > 1 ? "s" : ""} move into ${SELL_THROUGH_ROLE} (${fromLabel}), taken from extraction-side headcount${drawnFrom ? ` (${drawnFrom})` : ""}, because extraction already outruns what the rig can sell. Reallocating adds no wage cost, and the target lineup reflects it. ${revertCondition}`,
+			reason: `${seatsStillRequired} seat${seatsStillRequired > 1 ? "s" : ""} move into ${SELL_THROUGH_ROLE} (${fromLabel}), taken from extraction-side headcount${drawnFrom ? ` (${drawnFrom})` : ""}, because ${cause}. Reallocating adds no wage cost, and the target lineup reflects it.${stepNote} ${revertCondition}`,
 			estimatedGainPerDay: discardedValuePerDay,
 			temporary: true,
 		});
@@ -2726,12 +2894,16 @@ export function planCapacityRebalance(
 	// same fact once per section.
 	const summary =
 		state === "holding"
-			? `The roster already carries the sell-through weight this needs (${salesCurrent ?? salesTarget} of ${salesTarget} seats), so no seat change is outstanding. ${revertCondition}`
+			? params.deferredReason
+				? `${params.deferredReason} ${revertCondition}`
+				: `The roster already carries the sell-through weight this needs (${salesCurrent ?? salesTarget} of ${salesTarget} seats), so no seat change is outstanding. ${revertCondition}`
 			: `${seatsStillRequired} seat${seatsStillRequired > 1 ? "s" : ""} still need to move into ${SELL_THROUGH_ROLE}. ${evidenceNote} ${revertCondition}`;
 
 	return {
 		extractionBound: true,
 		state,
+		deferred: params.deferredReason !== undefined,
+		deferredReason: params.deferredReason,
 		countsKnown,
 		discardedBarrelsPerDay: discarded,
 		discardedValuePerDay,

@@ -5,12 +5,14 @@ import {
 	analyzeStockAndPricing,
 	assessCapacityRegime,
 	type CapacityRegime,
+	countRoles,
 	type DiscardedBarrelsEstimate,
 	estimateDiscardedBarrels,
 	type OilRigHistoryRecord,
 	type OptimalRosterResult,
 	type PriceLeverVerdict,
 	type RosterBaseline,
+	resolveCapacityTarget,
 	type SellThroughResponseAnalysis,
 	type StockAnalysis,
 	solveOptimalRoster,
@@ -57,6 +59,12 @@ export interface OilRigAnalysisInput {
 	previousCritical?: boolean;
 	/** Capacity regime recorded by the previous brief, for hysteresis. */
 	previousRegime?: CapacityRegime;
+	/**
+	 * Recorded tick date the previous brief used. When it matches the current
+	 * tick, no second capacity step is issued: the first one has not had a
+	 * recorded day to show whether it worked.
+	 */
+	previousTickIsoDate?: string;
 	/** Measured top-rig roster baseline, when a fresh capture exists. */
 	baseline?: RosterBaseline;
 	policy?: OilRigPolicy;
@@ -240,8 +248,28 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		snapshot.profile.employees.capacity - snapshot.profile.employees.hired,
 	);
 
+	// One target, computed before the roster solver so the target lineup and the
+	// capacity plan encode the same number of seats. `stock.netDrainPerDay` is the
+	// newest measured flow: when it is defined, sales outpaced extraction and the
+	// next seat would buy capacity the rig no longer needs.
+	const capacityTarget = resolveCapacityTarget({
+		staffCount: snapshot.employees.length,
+		currentCounts: countRoles(snapshot.employees),
+		fillPct: stock.fillPct,
+		draining: stock.netDrainPerDay !== undefined,
+		freshTick:
+			input.previousTickIsoDate === undefined ||
+			input.previousTickIsoDate !== tick?.isoDate,
+		regime,
+		baseline: input.baseline,
+		policy: policy.capacity,
+	});
+
 	const roster = solveOptimalRoster(snapshot.employees, {
-		bottleneck: { extractionBound: regime.regime === "extraction_bound" },
+		bottleneck: {
+			extractionBound: regime.regime === "extraction_bound",
+			maxShift: capacityTarget.shift,
+		},
 		baseline: input.baseline,
 	});
 
@@ -290,6 +318,7 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		staffCount: snapshot.employees.length,
 		baseline: input.baseline,
 		profile: snapshot.profile,
+		capacityTarget,
 	});
 
 	return {

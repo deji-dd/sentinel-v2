@@ -6,6 +6,7 @@ import type {
 } from "../../schemas/src/company";
 import {
 	type CapacityRegime,
+	type CapacityTarget,
 	type DiscardedBarrelsEstimate,
 	type OilRigHistoryRecord,
 	type OptimalRosterResult,
@@ -44,6 +45,11 @@ export interface CompanyDirectiveInputs {
 	/** Staff count the blueprint quotas are derived from. */
 	staffCount: number;
 	baseline?: RosterBaseline;
+	/**
+	 * The incremental sell-through target resolved by `analyzeOilRig`. Passed in
+	 * so the plan asks for the same number of seats the roster was solved against.
+	 */
+	capacityTarget: CapacityTarget;
 	/** Live company profile: capacity, environment and the current upgrade tiers. */
 	profile: CompanySnapshot["profile"];
 }
@@ -64,11 +70,17 @@ export function buildCompanyDirectives(
 		regime: inputs.regime,
 		baseline: inputs.baseline,
 		discardedEvidenceThin: inputs.discarded.evidenceThin,
+		maxShift: inputs.capacityTarget.shift,
+		deferredReason: inputs.capacityTarget.deferred
+			? inputs.capacityTarget.deferredReason
+			: undefined,
 	});
 
 	const capacityRebalance: CompanyCapacityRebalance = {
 		extractionBound: plan.extractionBound,
 		state: plan.state,
+		deferred: plan.deferred,
+		deferredReason: plan.deferredReason,
 		countsKnown: plan.countsKnown,
 		discardedBarrelsPerDay: plan.discardedBarrelsPerDay,
 		discardedHistoricPerDay: plan.discardedHistoricPerDay,
@@ -146,9 +158,10 @@ export function buildCompanyDirectives(
 	// Upgrades are decided from the plan, not alongside it: an open seat is hired
 	// into first, and a size upgrade is listed at medium priority while a free seat
 	// move is still outstanding. It becomes high only once the plan is merely
-	// holding. The engine sees the same regime and stock the other directives do,
-	// so it cannot ask for a seat the roster would not fill or a staff room the
-	// headcount does not need.
+	// holding AND no further free seat is being measured; a deferred step is still
+	// a free seat, so buying a bigger company first would be premature. The engine
+	// sees the same regime and stock the other directives do, so it cannot ask for
+	// a seat the roster would not fill or a staff room the headcount does not need.
 	const upgrades = analyzeUpgrades({
 		profile: inputs.profile,
 		staffCount: inputs.staffCount,
@@ -166,6 +179,7 @@ export function buildCompanyDirectives(
 		},
 		extractionBound: plan.extractionBound,
 		capacityPlanState: plan.state,
+		capacityPlanDeferral: inputs.capacityTarget.deferredBecause,
 		barrelPrice: inputs.barrelPrice,
 	});
 

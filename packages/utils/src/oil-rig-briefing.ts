@@ -447,6 +447,7 @@ export async function generateDirectorBriefing(
 		previousState: previous?.inventoryState,
 		previousCritical: previous?.warehouseCritical,
 		previousRegime: previous?.regime,
+		previousTickIsoDate: previous?.tickIsoDate,
 		baseline,
 	});
 

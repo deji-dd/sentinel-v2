@@ -154,6 +154,14 @@ export interface OilRigUpgradeInput {
 	 * outstanding; the size upgrade is listed after it at medium priority.
 	 */
 	capacityPlanState: "balanced" | "action_required" | "holding";
+	/**
+	 * Why the capacity plan is holding, when it is. `step_in_flight` means the next
+	 * free seat move is being measured on the following recorded tick, so a
+	 * multi-billion size upgrade must not be escalated ahead of it.
+	 * `already_draining` means no seat was needed because sales already outpace
+	 * extraction, so added sell-through capacity is not the current constraint.
+	 */
+	capacityPlanDeferral?: "step_in_flight" | "already_draining";
 	barrelPrice: number;
 }
 
@@ -336,9 +344,13 @@ export function analyzeUpgrades(
 					? `Stock is accumulating ${input.stock.netFillPerDay.toLocaleString()} bbl/day faster than the rig sells it.`
 					: "Extraction outruns what the rig can sell.";
 		const seatingClause =
-			input.capacityPlanState === "holding"
-				? "No seat is left to move into sell-through."
-				: "A seat move is still outstanding, so do that first; after it, a bigger company is the only way to add more sell-through.";
+			input.capacityPlanDeferral === "step_in_flight"
+				? "One sell-through seat is still being measured, so a bigger company is only worth buying if that step leaves the rig still filling."
+				: input.capacityPlanDeferral === "already_draining"
+					? "Sales already outpace extraction, so added sell-through capacity is not the current constraint."
+					: input.capacityPlanState === "holding"
+						? "No seat is left to move into sell-through."
+						: "A seat move is still outstanding, so do that first; after it, a bigger company is the only way to add more sell-through.";
 		const staffRoomClause =
 			roomIndex !== undefined && requiredStaffRoomIndex(headcount) > roomIndex
 				? " Upgrade the staff room first: the extra staff would otherwise deepen the environment penalty."
@@ -348,7 +360,8 @@ export function analyzeUpgrades(
 				"company_size",
 				OIL_RIG_COMPANY_SIZE_TIERS[sizeIndex]?.label ?? "Current size",
 				steps,
-				input.capacityPlanState === "holding"
+				input.capacityPlanState === "holding" &&
+					input.capacityPlanDeferral === undefined
 					? input.discarded.barrelsPerDay > 0
 						? "critical"
 						: "high"

@@ -28,6 +28,8 @@ export interface PreviousBriefState {
 	regime?: CapacityRegime;
 	inventoryState?: OilRigInventoryState;
 	warehouseCritical?: boolean;
+	/** Recorded tick the previous brief used, so a step is never double-issued. */
+	tickIsoDate?: string;
 	adviceSignature: string;
 	/** The decision basis recorded by the previous brief, for outcome attribution. */
 	decision?: Record<string, number | string | undefined>;
@@ -87,6 +89,7 @@ export async function loadPreviousBriefState(
 				reason?: string;
 				shortReason?: string;
 			};
+			provenance?: { tickIsoDate?: string };
 		};
 
 		const regimeName =
@@ -112,6 +115,7 @@ export async function loadPreviousBriefState(
 				? row.inventoryState
 				: undefined,
 			warehouseCritical: row.warehouseCritical > 0,
+			tickIsoDate: analysis.provenance?.tickIsoDate,
 			adviceSignature: row.adviceSignature,
 			decision: analysis.decision,
 			outcomeEvaluated: row.outcomeEvaluatedAt !== null,

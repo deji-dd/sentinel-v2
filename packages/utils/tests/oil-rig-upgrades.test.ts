@@ -127,6 +127,42 @@ describe("Company upgrade advice", () => {
 		).toBe(false);
 	});
 
+	it("does not escalate the size upgrade while a free seat step is still being measured", () => {
+		const advice = analyzeUpgrades(
+			upgradeInput({
+				extractionBound: true,
+				capacityPlanState: "holding",
+				capacityPlanDeferral: "step_in_flight",
+			}),
+		);
+		const size = advice.recommendations.find(
+			(r) => r.category === "company_size",
+		);
+		expect(size).toBeDefined();
+		// A deferred second seat is still a free seat, so the multi-billion
+		// upgrade must not jump ahead of it.
+		expect(size?.priority).toBe("medium");
+		expect(size?.reason).toContain(
+			"One sell-through seat is still being measured",
+		);
+		expect(size?.reason).not.toContain("No seat is left");
+	});
+
+	it("does not escalate the size upgrade while sales already outpace extraction", () => {
+		const advice = analyzeUpgrades(
+			upgradeInput({
+				extractionBound: true,
+				capacityPlanState: "holding",
+				capacityPlanDeferral: "already_draining",
+			}),
+		);
+		const size = advice.recommendations.find(
+			(r) => r.category === "company_size",
+		);
+		expect(size?.priority).toBe("medium");
+		expect(size?.reason).toContain("Sales already outpace extraction");
+	});
+
 	it("does not ask for a bigger company when extraction is not the constraint", () => {
 		const advice = analyzeUpgrades(
 			upgradeInput({

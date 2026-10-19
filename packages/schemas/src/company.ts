@@ -157,6 +157,13 @@ export interface CompanyCapacityRebalance {
 	extractionBound: boolean;
 	/** Whether anything is still being asked for. */
 	state: CompanyCapacityPlanState;
+	/**
+	 * True when a further sell-through step is waiting for a new recorded tick.
+	 * The one-seat step is being measured before the second is issued.
+	 */
+	deferred: boolean;
+	/** Why the next step is waiting, when it is. */
+	deferredReason?: string;
 	/** False when the plan could not compare against the actual roster. */
 	countsKnown: boolean;
 	/**

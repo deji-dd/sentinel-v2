@@ -21,6 +21,7 @@ import {
 	OIL_RIG_POLICY,
 	OIL_RIG_ROLES,
 	planCapacityRebalance,
+	resolveCapacityTarget,
 	solveOptimalRoster,
 } from "../src/oil-rig";
 import { analyzeOilRig } from "../src/oil-rig-analysis";
@@ -2038,5 +2039,283 @@ describe("Unmeasured extraction must not fake a bottleneck", () => {
 		];
 		expect(twoDays.length).toBe(2);
 		expect(latestMeasuredProduction(twoDays)).toBe(270_891);
+	});
+});
+
+describe("Incremental sell-through capacity steps", () => {
+	const FIXED_NOW = 1_790_705_443;
+
+	const boundRegime: CapacityRegime = {
+		regime: "extraction_bound",
+		held: false,
+		transition: "entered",
+		dwellDays: 2,
+		fillingDays: 2,
+		drainingDays: 0,
+		since: FIXED_NOW,
+		reason: "storage is under pressure",
+		shortReason: "storage under pressure",
+	};
+
+	const roster = (sales: number): EmployeeSnapshot[] => {
+		// Extra sell-through seats are taken in the same order as
+		// buildBottleneckQuotas: Motor Hand first, then Derrick Hand.
+		const extra = Math.max(0, sales - 4);
+		const roles = [
+			...Array.from({ length: 6 }, () => "Driller"),
+			...Array.from({ length: sales }, () => "Sales Executive"),
+			...Array.from({ length: 4 }, () => "Roughneck"),
+			...Array.from(
+				{ length: 2 - Math.min(1, Math.max(0, extra - 1)) },
+				() => "Derrick Hand",
+			),
+			...Array.from({ length: 2 - Math.min(1, extra) }, () => "Motor Hand"),
+			"Secretary",
+		];
+		return roles.map((role, index) => ({
+			id: index + 1,
+			name: `${role}${index}`,
+			position: { id: index, name: role },
+			days_in_company: 60,
+			wage: 1_400_000,
+			stats: {
+				manual_labor: 100_000,
+				intelligence: 100_000,
+				endurance: 100_000,
+			},
+			effectiveness: {
+				working_stats: 100,
+				settled_in: 10,
+				director_education: 0,
+				addiction: 0,
+				inactivity: 0,
+				total: 110,
+			},
+		}));
+	};
+
+	const snapshot = (
+		inStock: number,
+		employees: EmployeeSnapshot[],
+	): CompanySnapshot => ({
+		profile: {
+			id: 90288,
+			name: "Succession Oil",
+			rating: 4,
+			funds: 50_000_000,
+			efficiency: 92,
+			environment: 100,
+			popularity: 30,
+			income: { daily: 50_000_000, weekly: 350_000_000 },
+			customers: { daily: 40, weekly: 280 },
+			employees: { hired: employees.length, capacity: 21 },
+			upgrades: { storage_capacity: 750_000 },
+			advertisement_budget: 4_500_000,
+		},
+		stock: [
+			{
+				name: "Crude Oil",
+				price: 180,
+				in_stock: inStock,
+				sold_amount: 280_000,
+				sold_worth: 280_000 * 180,
+			},
+		],
+		employees,
+	});
+
+	const history = (produced: number, sold: number) =>
+		[0, 1].map((index) => {
+			const timestamp = 1_790_618_000 + index * 86_400;
+			return {
+				timestamp,
+				isoDate: new Date(timestamp * 1000).toISOString().slice(0, 10),
+				stars: 4,
+				dailyIncome: sold * 180,
+				weeklyIncome: sold * 180 * 7,
+				dailyWages: 28_500_000,
+				dailyProfit: sold * 180 - 28_500_000 - 4_500_000,
+				adBudget: 4_500_000,
+				dailyProduced: produced,
+				producedMeasured: true,
+				dailyCustomers: 40 + index,
+				efficiency: 92,
+				environment: 100,
+				popularity: 30,
+				stock: {
+					barrelPrice: 180,
+					inStock: 600_000,
+					soldAmount: sold,
+					fillPct: 80,
+				},
+				metrics: { totalAddictionPenalty: 0, employeesWithAddiction: 0 },
+			};
+		});
+
+	const counts = (sales: number) => ({ "Sales Executive": sales });
+
+	it("asks for one seat first and leaves the second for the next tick", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(4),
+			fillPct: 80,
+			draining: false,
+			freshTick: true,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(5);
+		expect(target.shift).toBe(1);
+		expect(target.outstanding).toBe(1);
+		expect(target.deferred).toBe(false);
+	});
+
+	it("does not issue the second seat against the same recorded tick", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(5),
+			fillPct: 80,
+			draining: false,
+			freshTick: false,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(5);
+		expect(target.outstanding).toBe(0);
+		expect(target.deferred).toBe(true);
+		expect(target.deferredBecause).toBe("step_in_flight");
+	});
+
+	it("escalates only after a new tick still shows storage under pressure", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(5),
+			fillPct: 80,
+			draining: false,
+			freshTick: true,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(6);
+		expect(target.outstanding).toBe(1);
+		expect(target.deferred).toBe(false);
+	});
+
+	it("holds when the first seat already made sales outpace extraction", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(5),
+			fillPct: 80,
+			draining: true,
+			freshTick: true,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(5);
+		expect(target.outstanding).toBe(0);
+		expect(target.deferred).toBe(true);
+	});
+
+	it("does not move a seat at all while the rig is already draining", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(4),
+			fillPct: 80,
+			draining: true,
+			freshTick: true,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(4);
+		expect(target.outstanding).toBe(0);
+		expect(target.deferred).toBe(true);
+		expect(target.deferredBecause).toBe("already_draining");
+	});
+
+	it("uses the full ceiling immediately at critical fill", () => {
+		const target = resolveCapacityTarget({
+			staffCount: 19,
+			currentCounts: counts(4),
+			fillPct: OIL_RIG_POLICY.inventory.criticalEnterPct,
+			draining: false,
+			freshTick: false,
+			regime: boundRegime,
+		});
+		expect(target.targetSales).toBe(6);
+		expect(target.outstanding).toBe(2);
+	});
+
+	it("solves the target lineup one seat at a time and holds on the same tick", () => {
+		const first = analyzeOilRig({
+			snapshot: snapshot(600_000, roster(4)),
+			history: history(300_000, 280_000),
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+		});
+		expect(first.regime.regime).toBe("extraction_bound");
+		expect(
+			first.directives.capacityRebalance.seatDeltas["Sales Executive"],
+		).toBe(1);
+		expect(first.roster.targetQuotas["Sales Executive"]).toBe(5);
+		expect(first.directives.roleTransfers).toHaveLength(1);
+		expect(first.directives.roleTransfers[0]?.toRole).toBe("Sales Executive");
+		const rebalance = first.directives.capacityRebalance.actions.find(
+			(action) => action.kind === "rebalance",
+		);
+		expect(rebalance?.reason).toContain(
+			"1 seat move into Sales Executive (4 ➔ 5)",
+		);
+		expect(rebalance?.reason).toContain("one measured step");
+
+		// One seat applied, same recorded trip: the second is measured first.
+		// A full rig, so the company-size upgrade is eligible and the deferral
+		// wiring is actually exercised.
+		const fullRoster = snapshot(600_000, roster(5));
+		fullRoster.profile.employees = { hired: 19, capacity: 19 };
+		const sameTick = analyzeOilRig({
+			snapshot: fullRoster,
+			history: history(300_000, 280_000),
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+			previousTickIsoDate: history(300_000, 280_000)[1]?.isoDate,
+		});
+		expect(
+			sameTick.directives.capacityRebalance.seatDeltas["Sales Executive"],
+		).toBe(0);
+		expect(sameTick.directives.capacityRebalance.deferred).toBe(true);
+		expect(sameTick.roster.targetQuotas["Sales Executive"]).toBe(5);
+		// The deferred second seat is still free capacity, so the $4.2B size
+		// upgrade must stay at medium and must not claim no seat is left.
+		const sizeUpgrade = sameTick.directives.upgrades.recommendations.find(
+			(recommendation) => recommendation.category === "company_size",
+		);
+		expect(sizeUpgrade?.priority).toBe("medium");
+		expect(sizeUpgrade?.reason).toContain("still being measured");
+
+		// A new tick still filling under pressure: now the second seat is asked for.
+		const nextTick = analyzeOilRig({
+			snapshot: snapshot(600_000, roster(5)),
+			history: history(300_000, 280_000),
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+			previousTickIsoDate: "2000-01-01",
+		});
+		expect(
+			nextTick.directives.capacityRebalance.seatDeltas["Sales Executive"],
+		).toBe(1);
+		expect(nextTick.roster.targetQuotas["Sales Executive"]).toBe(6);
+	});
+
+	it("holds a bound regime once sales are already outpacing extraction", () => {
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(600_000, roster(5)),
+			history: history(260_000, 280_000),
+			dataBasis: "recorded",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: boundRegime,
+			previousTickIsoDate: "2000-01-01",
+		});
+		expect(analysis.regime.regime).toBe("extraction_bound");
+		expect(analysis.stock.netDrainPerDay).toBeDefined();
+		expect(
+			analysis.directives.capacityRebalance.seatDeltas["Sales Executive"],
+		).toBe(0);
+		expect(analysis.directives.capacityRebalance.deferred).toBe(true);
+		expect(analysis.directives.roleTransfers).toHaveLength(0);
 	});
 });

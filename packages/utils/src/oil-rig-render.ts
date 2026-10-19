@@ -271,6 +271,10 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 							: "Storage is not the fix";
 				lines.push(`• **${label}:** ${item.reason}`);
 			}
+		} else if (plan.deferred) {
+			// A one-seat step is in flight. Saying "nothing to move" here would
+			// read as an all-clear while the second seat is still under evaluation.
+			lines.push(`• **Holding** — ${plan.summary}`);
 		} else {
 			const sales = analysis.roster.currentCounts["Sales Executive"] ?? 0;
 			const target = analysis.roster.targetQuotas["Sales Executive"] ?? 0;
