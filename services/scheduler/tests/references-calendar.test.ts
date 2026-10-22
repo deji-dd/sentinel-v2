@@ -7,7 +7,9 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+
 import { db, inArray, tornCalendarActivities } from "@sentinel/database";
+
 import { runTornReferenceSync } from "../src/workers/torn/references";
 import { removeSystemApiKey, seedSystemApiKey } from "./helpers/system-api-key";
 

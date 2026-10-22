@@ -1,11 +1,13 @@
 import { Loader2, MapPin, Plus, RotateCcw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+
 import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+
 import NotInitializedView from "../components/NotInitializedView";
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";

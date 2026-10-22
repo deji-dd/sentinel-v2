@@ -1,10 +1,12 @@
 import { describe, expect, it, mock } from "bun:test";
+
 import type {
 	MercContract,
 	MercContractSummaryReport,
 } from "@sentinel/database";
 import type { Client } from "discord.js";
 import { Collection } from "discord.js";
+
 import {
 	buildTargetHitBreakdownCsv,
 	postMercContractPaid,

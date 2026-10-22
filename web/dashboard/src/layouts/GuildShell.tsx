@@ -1,5 +1,6 @@
 import { Menu, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+
 import { PageLoader } from "@/components/PageLoader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "@/components/ui/sheet";
+
 import { useAuth } from "../contexts/AuthContext";
 import { ElimsProvider, useElims } from "../contexts/ElimsContext";
 import { useTheme } from "../hooks/useTheme";
@@ -98,12 +100,7 @@ export default function GuildShell() {
 
 	const paramType =
 		(queryParams.type as
-			| "faction"
-			| "merc"
-			| "alliance"
-			| "elims"
-			| "owner"
-			| undefined) ?? null;
+			"faction" | "merc" | "alliance" | "elims" | "owner" | undefined) ?? null;
 
 	const [storedType, setStoredType] = useState<string | null>(() => {
 		if (!guildId) return null;
@@ -141,16 +138,16 @@ export default function GuildShell() {
 		(!activeServerType &&
 			Boolean(
 				serverTypes.merc &&
-					guildId === serverTypes.merc &&
-					serverTypes.faction !== guildId,
+				guildId === serverTypes.merc &&
+				serverTypes.faction !== guildId,
 			));
 	const isFaction =
 		activeServerType === "faction" ||
 		(!activeServerType &&
 			Boolean(
 				serverTypes.faction &&
-					guildId === serverTypes.faction &&
-					serverTypes.merc !== guildId,
+				guildId === serverTypes.faction &&
+				serverTypes.merc !== guildId,
 			));
 	const isAlliance =
 		activeServerType === "alliance" ||

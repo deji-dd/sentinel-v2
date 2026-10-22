@@ -22,10 +22,11 @@ import type {
 import {
 	getPlayerStats,
 	type ManagedApiKey,
-	TornError,
 	tornApi,
+	TornError,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";

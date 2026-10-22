@@ -1,6 +1,7 @@
 import { db, eq, factions, isTargetGuild, tornItems } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import type { Client, EmbedBuilder, TextChannel } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 
 const logger = new Logger("Discord Bot", "TerritoryAlerts");

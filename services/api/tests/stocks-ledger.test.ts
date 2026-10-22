@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+
 import {
 	db,
 	eq,
@@ -8,6 +9,7 @@ import {
 	userStocks,
 } from "@sentinel/database";
 import type { StockPortfolioResponse } from "@sentinel/schemas";
+
 import { app } from "../src/app";
 
 /**

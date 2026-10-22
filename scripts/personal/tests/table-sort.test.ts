@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+
 import {
 	matchesQuery,
 	nextSortState,
-	type SortState,
 	sortRows,
+	type SortState,
 } from "../src/ui/table-sort";
 
 /**

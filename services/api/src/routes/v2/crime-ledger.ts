@@ -20,6 +20,7 @@ import {
 } from "@sentinel/database";
 import { getPersonalKey } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
+
 import { requestCrimeLedgerReinitialize } from "../../lib/scheduler-ipc";
 
 export const CRIME_LOG_IDS = [

@@ -34,21 +34,20 @@
 		"blasted:bump": "bun run scripts/personal/build.ts --bump",
 		"subversive:build": "bun run scripts/subversive/build.ts",
 		"subversive:bump": "bun run scripts/subversive/build.ts --bump",
-		"lint": "biome check .",
-		"lint:fix": "biome check --write .",
+		"format": "bun fmt",
+		"format:check": "bun fmt --check",
 		"typecheck": "bun check",
 		"sync:env": "rsync -avz .env.production root@dejis-cloud:/opt/sentinel-v2/.env.production",
-		"pre-push": "bun typecheck && bun lint:fix && bun test"
+		"pre-push": "bun typecheck && bun run format && bun test"
 	},
 	"type": "module",
 	"private": true,
 	"devDependencies": {
-		"@biomejs/biome": "latest",
 		"@types/bun": "latest",
 		"openapi-typescript": "latest",
 		"postgres": "latest",
 		"typescript": "latest"
 	},
 	"peerDependencies": {},
-	"packageManager": "bun@1.4.3"
+	"packageManager": "bun@1.4.4"
 }

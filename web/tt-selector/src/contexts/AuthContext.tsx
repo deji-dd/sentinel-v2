@@ -6,6 +6,7 @@ import {
 	useEffect,
 	useState,
 } from "react";
+
 import { api } from "../lib/api";
 
 export interface AuthUser {
@@ -54,7 +55,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			}
 
 			if (token) {
-				// biome-ignore lint/suspicious/noDocumentCookie: client session token handover across dev subdomains
 				document.cookie = `session=${token}; path=/; max-age=${7 * 86400}; SameSite=Lax`;
 				const cleanHash = window.location.hash.split("?")[0] || "#/";
 

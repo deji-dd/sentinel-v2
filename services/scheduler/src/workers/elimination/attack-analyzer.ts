@@ -1,5 +1,6 @@
 import { db, elimsTeamAttacks, gt } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 import type { TornEliminationPlayerApiItem } from "./team-tracker";
 
 const logger = new Logger("Scheduler", "ElimsAttackAnalyzer");

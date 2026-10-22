@@ -1,5 +1,6 @@
 import { db, eq, guildConfigs } from "@sentinel/database";
 import { type Client, type EmbedBuilder, TextChannel } from "discord.js";
+
 import { logger } from "./logger";
 
 /**

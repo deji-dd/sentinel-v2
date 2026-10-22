@@ -1,4 +1,4 @@
-import { Logger, loadLatestSnapshotFromDb } from "../../packages/utils";
+import { loadLatestSnapshotFromDb, Logger } from "../../packages/utils";
 
 const logger = new Logger("OilRigAudit");
 

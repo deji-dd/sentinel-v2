@@ -1,5 +1,6 @@
-import { db, eq, userSessions, users } from "@sentinel/database";
+import { db, eq, users, userSessions } from "@sentinel/database";
 import { Elysia } from "elysia";
+
 import { env } from "../config/env";
 import { logger } from "../lib/logger";
 

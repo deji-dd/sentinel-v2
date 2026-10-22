@@ -10,8 +10,10 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-interface SectionCardProps
-	extends Omit<React.ComponentProps<typeof Card>, "title"> {
+interface SectionCardProps extends Omit<
+	React.ComponentProps<typeof Card>,
+	"title"
+> {
 	title?: React.ReactNode;
 	description?: React.ReactNode;
 	/** Right-aligned control in the header (button, switch, badge...). */

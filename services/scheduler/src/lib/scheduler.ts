@@ -80,7 +80,6 @@ export type EventRunnerConfig = {
 	timeoutMs?: number;
 	/** Optional custom retry and failure backoff policy */
 	retryPolicy?: RetryPolicy;
-	// biome-ignore lint/suspicious/noConfusingVoidType: void is required to support async handlers returning void
 	handler: (signal?: AbortSignal) => Promise<number | boolean | void>;
 };
 

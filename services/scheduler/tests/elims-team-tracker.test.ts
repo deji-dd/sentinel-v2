@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import {
 	apiKeys,
 	db,
 	elimsTeamPlayers,
-	elimsTeamSnapshots,
 	elimsTeams,
+	elimsTeamSnapshots,
 	eq,
 	systemStates,
 } from "@sentinel/database";
+
 import {
 	_resetSimulationInMemoryState,
 	CODE_32_BACKOFF_MS,

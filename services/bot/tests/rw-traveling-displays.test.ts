@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+
 import type {
 	RwTravelingBuckets,
 	RwTravelLine,
 	TravelDestination,
 } from "@sentinel/schemas";
+
 import {
 	buildTravelingDestinationEmbed,
 	buildTravelingEmbed,

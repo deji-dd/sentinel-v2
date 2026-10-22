@@ -1,5 +1,6 @@
 import { and, db, gt, inArray, mercContracts } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 import { isAnyFamilyRankedWarEngaged } from "../workers/subversive/ranked-war-worker";
 
 const logger = new Logger("Scheduler", "AttackFeedCadence");

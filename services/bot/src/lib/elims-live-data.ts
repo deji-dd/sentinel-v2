@@ -5,6 +5,7 @@ import {
 	type Message,
 	TextChannel,
 } from "discord.js";
+
 import { EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

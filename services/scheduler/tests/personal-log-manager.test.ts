@@ -8,6 +8,7 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+
 import {
 	apiKeys,
 	db,
@@ -19,6 +20,7 @@ import {
 	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
+
 import {
 	getLogManagerState,
 	loadStateFromDb,
@@ -145,23 +147,23 @@ describe("Personal Log Manager Worker", () => {
 			},
 		];
 
-		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
-			// biome-ignore lint/suspicious/noExplicitAny: mock return
-			(async (path: string, options?: any) => {
-				if (path === "/user/log") {
-					if (options?.queryParams?.from) {
-						return {
-							log: mockLogs,
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-						};
-					}
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation((async (
+			path: string,
+			options?: any,
+		) => {
+			if (path === "/user/log") {
+				if (options?.queryParams?.from) {
+					return {
+						log: mockLogs,
+						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+					};
 				}
-				return {
-					log: [],
-					_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-				};
-			}) as unknown as typeof tornApi.getPersonal,
-		);
+			}
+			return {
+				log: [],
+				_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+			};
+		}) as unknown as typeof tornApi.getPersonal);
 
 		const result = await syncForwardLogs({ maxPages: 1 });
 		expect(result.fetched).toBe(2);
@@ -210,19 +212,15 @@ describe("Personal Log Manager Worker", () => {
 		];
 
 		let callCount = 0;
-		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
-			// biome-ignore lint/suspicious/noExplicitAny: mock return
-			(async (path: string, _options?: any) => {
-				if (path === "/user/log") {
-					callCount++;
-					if (callCount === 1) {
-						return {
-							log: mockBackfillLogs,
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-						};
-					}
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation((async (
+			path: string,
+			_options?: any,
+		) => {
+			if (path === "/user/log") {
+				callCount++;
+				if (callCount === 1) {
 					return {
-						log: [],
+						log: mockBackfillLogs,
 						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 					};
 				}
@@ -230,8 +228,12 @@ describe("Personal Log Manager Worker", () => {
 					log: [],
 					_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 				};
-			}) as unknown as typeof tornApi.getPersonal,
-		);
+			}
+			return {
+				log: [],
+				_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+			};
+		}) as unknown as typeof tornApi.getPersonal);
 
 		// First burst batch
 		const batch1 = await syncHistoricalBackfill(1);
@@ -270,31 +272,20 @@ describe("Personal Log Manager Worker", () => {
 		let forwardCallDone = false;
 		let backfillCallDone = false;
 
-		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
-			// biome-ignore lint/suspicious/noExplicitAny: mock return
-			(async (path: string, options?: any) => {
-				if (path === "/user/log") {
-					if (options?.queryParams?.from !== undefined) {
-						if (!forwardCallDone) {
-							forwardCallDone = true;
-							return {
-								log: [forwardLog],
-								_metadata: {
-									links: { prev: null, next: null },
-									nanostamp: "1",
-								},
-							};
-						}
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation((async (
+			path: string,
+			options?: any,
+		) => {
+			if (path === "/user/log") {
+				if (options?.queryParams?.from !== undefined) {
+					if (!forwardCallDone) {
+						forwardCallDone = true;
 						return {
-							log: [],
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-						};
-					}
-					if (!backfillCallDone) {
-						backfillCallDone = true;
-						return {
-							log: [backfillLog],
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+							log: [forwardLog],
+							_metadata: {
+								links: { prev: null, next: null },
+								nanostamp: "1",
+							},
 						};
 					}
 					return {
@@ -302,12 +293,23 @@ describe("Personal Log Manager Worker", () => {
 						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 					};
 				}
+				if (!backfillCallDone) {
+					backfillCallDone = true;
+					return {
+						log: [backfillLog],
+						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+					};
+				}
 				return {
 					log: [],
 					_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 				};
-			}) as unknown as typeof tornApi.getPersonal,
-		);
+			}
+			return {
+				log: [],
+				_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+			};
+		}) as unknown as typeof tornApi.getPersonal);
 
 		await runLogSyncCycle();
 
@@ -352,19 +354,15 @@ describe("Personal Log Manager Worker", () => {
 		];
 
 		let callCount = 0;
-		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
-			// biome-ignore lint/suspicious/noExplicitAny: mock return
-			(async (path: string, _options?: any) => {
-				if (path === "/user/log") {
-					callCount++;
-					if (callCount === 1) {
-						return {
-							log: mockLogs,
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-						};
-					}
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation((async (
+			path: string,
+			_options?: any,
+		) => {
+			if (path === "/user/log") {
+				callCount++;
+				if (callCount === 1) {
 					return {
-						log: [],
+						log: mockLogs,
 						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 					};
 				}
@@ -372,8 +370,12 @@ describe("Personal Log Manager Worker", () => {
 					log: [],
 					_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 				};
-			}) as unknown as typeof tornApi.getPersonal,
-		);
+			}
+			return {
+				log: [],
+				_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
+			};
+		}) as unknown as typeof tornApi.getPersonal);
 
 		const res = await resyncLogsRange(1700000000, 1700000100);
 		expect(res.fetched).toBe(1);
@@ -407,32 +409,32 @@ describe("Personal Log Manager Worker", () => {
 
 		const calledToParams: number[] = [];
 
-		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation(
-			// biome-ignore lint/suspicious/noExplicitAny: mock return
-			(async (path: string, options?: any) => {
-				if (path === "/user/log") {
-					const to = options?.queryParams?.to;
-					calledToParams.push(to);
-					if (calledToParams.length === 1) {
-						return {
-							log: page1Logs,
-							_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
-						};
-					}
-					if (calledToParams.length === 2) {
-						return {
-							log: page2Logs,
-							_metadata: { links: { prev: null, next: null }, nanostamp: "2" },
-						};
-					}
+		getPersonalSpy = spyOn(tornApi, "getPersonal").mockImplementation((async (
+			path: string,
+			options?: any,
+		) => {
+			if (path === "/user/log") {
+				const to = options?.queryParams?.to;
+				calledToParams.push(to);
+				if (calledToParams.length === 1) {
 					return {
-						log: [],
-						_metadata: { links: { prev: null, next: null }, nanostamp: "3" },
+						log: page1Logs,
+						_metadata: { links: { prev: null, next: null }, nanostamp: "1" },
 					};
 				}
-				return { log: [] };
-			}) as unknown as typeof tornApi.getPersonal,
-		);
+				if (calledToParams.length === 2) {
+					return {
+						log: page2Logs,
+						_metadata: { links: { prev: null, next: null }, nanostamp: "2" },
+					};
+				}
+				return {
+					log: [],
+					_metadata: { links: { prev: null, next: null }, nanostamp: "3" },
+				};
+			}
+			return { log: [] };
+		}) as unknown as typeof tornApi.getPersonal);
 
 		const res = await resyncLogsRange(1700000000, 1700000500);
 		expect(res.fetched).toBe(101);

@@ -1,5 +1,6 @@
 import { db, eq, systemStates } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
@@ -78,8 +79,7 @@ export async function runElimsMemberStatsCycle(): Promise<void> {
 			.where(eq(systemStates.id, STAT_ROLES_CONFIG_ID));
 
 		const rolesData = existingRolesConfig?.data as
-			| { mappings?: Record<string, string> }
-			| undefined;
+			{ mappings?: Record<string, string> } | undefined;
 
 		if (rolesData?.mappings && Object.keys(rolesData.mappings).length > 0) {
 			logger.info("Triggering automated stat bracket role assignments...");

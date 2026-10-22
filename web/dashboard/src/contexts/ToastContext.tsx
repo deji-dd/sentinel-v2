@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { toast as sonnerToast } from "sonner";
+
 import { Toaster } from "@/components/ui/sonner";
 
 export type ToastType = "success" | "error" | "info" | "warning";

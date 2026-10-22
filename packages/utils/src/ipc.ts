@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+
 import { Logger } from "./logger";
 
 const logger = new Logger("IPC");

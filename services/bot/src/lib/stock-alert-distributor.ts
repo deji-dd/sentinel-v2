@@ -6,6 +6,7 @@ import {
 	type UserStockAlertEvent,
 } from "@sentinel/schemas";
 import type { Client, EmbedBuilder, TextChannel } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

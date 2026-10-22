@@ -1,4 +1,5 @@
 import { Resvg } from "@resvg/resvg-js";
+
 import { TORN_TERRITORY_MAP_SVG } from "../assets/torn-territory-map.js";
 
 const DEFAULT_NEUTRAL_FILL = "#2c2c2c";

@@ -1,5 +1,6 @@
 import { db, eq, guildConfigs, isTargetGuild } from "@sentinel/database";
 import { Events, type GuildMember } from "discord.js";
+
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { sendGuildAuditLog } from "../lib/guild-logger";
 import { sendVerificationRequest } from "../lib/ipc";

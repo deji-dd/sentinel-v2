@@ -9,6 +9,7 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+
 import {
 	db,
 	eq,
@@ -26,6 +27,7 @@ import {
 	type StockAlertEvent,
 	type StockAlertState,
 } from "@sentinel/schemas";
+
 import { setActiveIpcServer } from "../src/lib/ipc/server";
 import {
 	createEmptyStockAlertState,

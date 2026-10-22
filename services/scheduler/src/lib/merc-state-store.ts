@@ -9,6 +9,7 @@ import {
 	normalizeMercContractMode,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 // Type-only import: erased at runtime, so this stays free of a module cycle.
 import type { MercActiveTargetAlert } from "../workers/merc/merc-contract-worker";
 

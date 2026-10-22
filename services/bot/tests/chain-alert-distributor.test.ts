@@ -1,6 +1,8 @@
 import { describe, expect, it, mock } from "bun:test";
+
 import type { SubversiveChainAlertPayload } from "@sentinel/schemas";
 import type { Client } from "discord.js";
+
 import {
 	buildChainAlertContent,
 	buildChainAlertEmbed,

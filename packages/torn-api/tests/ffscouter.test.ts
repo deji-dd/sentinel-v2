@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import * as dbModule from "@sentinel/database";
+
 import {
+	fetchFFScouterBatchWithRetry,
+	fetchFFScouterStats,
 	FF_SCOUTER_BATCH_SIZE,
 	FFScouterApiError,
 	FFScouterBatcher,
 	FFScouterCircuitBreaker,
-	FFScouterRateLimiter,
-	fetchFFScouterBatchWithRetry,
-	fetchFFScouterStats,
 	ffScouterCircuitBreaker,
+	FFScouterRateLimiter,
 	getPlayerStats,
 } from "../src/ffscouter";
 

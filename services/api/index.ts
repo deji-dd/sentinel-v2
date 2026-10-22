@@ -1,4 +1,5 @@
 import { ensureTargetGuildConfigs, recordBootAlert } from "@sentinel/database";
+
 import { app } from "./src/app";
 import { env } from "./src/config/env";
 import { subversiveDibsManager } from "./src/lib/dibs-manager";

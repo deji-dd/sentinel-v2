@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import {
 	clearStuckBackfillTracking,
 	deriveDirection,
@@ -15,8 +16,8 @@ import {
 } from "../src/workers/merc/merc-attack-validator-worker";
 import {
 	qualifiesAsRetal,
-	RETAL_WINDOW_SECONDS,
 	resolveRetalTimestamp,
+	RETAL_WINDOW_SECONDS,
 } from "../src/workers/subversive/retal-tracker";
 
 /**

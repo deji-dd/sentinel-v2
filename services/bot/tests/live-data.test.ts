@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
+
 import { db, elimsTeams, eq, inArray, systemStates } from "@sentinel/database";
 import type { Client, Message } from "discord.js";
+
 import { commandsList, elimsCommandsList } from "../src/commands/index";
 import {
 	buildLiveDataEmbed,

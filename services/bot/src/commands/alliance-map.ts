@@ -4,6 +4,7 @@ import {
 	type ChatInputCommandInteraction,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { generateAllianceMapPng } from "../lib/alliance-map-generator";
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { getFactionToAllianceMap } from "../lib/faction-alliances";

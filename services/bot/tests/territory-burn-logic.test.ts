@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import type { WarRecord } from "../src/lib/territory-burn-logic";
 import {
 	checkSector7Cooldown,

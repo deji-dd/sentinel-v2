@@ -1,6 +1,7 @@
 import type { IpcMessage } from "@sentinel/schemas";
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS, IpcServer } from "@sentinel/utils/ipc";
+
 import {
 	handleFetchFactionMembersRequest,
 	handleGuildMembersResponse,

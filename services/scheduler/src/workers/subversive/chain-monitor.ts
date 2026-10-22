@@ -13,12 +13,13 @@ import type {
 	SubversiveChainAlertTarget,
 	SubversiveChainConfig,
 } from "@sentinel/schemas";
-import { TornError, tornApi } from "@sentinel/torn-api";
+import { tornApi, TornError } from "@sentinel/torn-api";
 import {
 	getSubversiveFactionName,
 	Logger,
 	SUBVERSIVE_FAMILY_FACTION_IDS,
 } from "@sentinel/utils";
+
 import { resolveChainConfigs } from "../../lib/chain-config";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";

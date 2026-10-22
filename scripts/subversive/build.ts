@@ -1,4 +1,5 @@
 import { join } from "node:path";
+
 import { getMetadataHeader } from "./metadata";
 
 const SCRIPT_DIR = import.meta.dir;
@@ -68,8 +69,15 @@ async function build(): Promise<boolean> {
 	const output = `${banner}\n\n${code}`;
 	await Bun.write(OUT_FILE, output);
 
-	// Ensure generated bundle conforms to Biome formatting
-	Bun.spawnSync(["bunx", "@biomejs/biome", "format", "--write", OUT_FILE]);
+	// Ensure generated bundle conforms to Bun's formatter. The output file is
+	// gitignored, so bypass the default ignore files with `--ignore-path`.
+	Bun.spawnSync([
+		process.execPath,
+		"fmt",
+		"--ignore-path",
+		"/dev/null",
+		OUT_FILE,
+	]);
 
 	const ms = (performance.now() - start).toFixed(1);
 	console.log(

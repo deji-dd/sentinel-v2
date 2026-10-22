@@ -6,6 +6,7 @@ import {
 	type Message,
 	TextChannel,
 } from "discord.js";
+
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

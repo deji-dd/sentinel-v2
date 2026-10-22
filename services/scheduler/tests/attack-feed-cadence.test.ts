@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import {
 	ATTACK_FEED_CADENCE_MS,
 	type AttackFeedActivity,

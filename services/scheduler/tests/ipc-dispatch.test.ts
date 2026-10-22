@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { setupSchedulerIpc } from "../src/lib/ipc";
 
 describe("IPC Action Dispatcher", () => {

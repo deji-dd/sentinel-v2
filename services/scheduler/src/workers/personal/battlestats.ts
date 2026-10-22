@@ -18,6 +18,7 @@ import {
 	STAT_GAIN_LOG_IDS,
 	type StatType,
 } from "@sentinel/utils";
+
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { runSubscriber } from "../../lib/subscriber-health";

@@ -384,8 +384,7 @@ export function describeRosterBenchmark(
 	return `Captured ${capture.sampleSize}/${capture.offered} top-${capture.rating}★ rigs out of a ${capture.fieldSize}-rig industry${capture.failedRigIds.length > 0 ? ` (${capture.failedRigIds.length} unreadable)` : ""}: median staff ${staff}, role shares summing to ${shareTotal.toFixed(3)}${persistedId ? `, persisted as ${persistedId}` : ""}.`;
 }
 
-export interface RefreshRosterBenchmarkInput
-	extends CaptureRosterBenchmarkInput {
+export interface RefreshRosterBenchmarkInput extends CaptureRosterBenchmarkInput {
 	/**
 	 * Skip the capture when a fresh one already exists.
 	 *

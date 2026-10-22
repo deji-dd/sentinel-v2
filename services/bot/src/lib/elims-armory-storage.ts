@@ -1,8 +1,8 @@
 import {
 	and,
 	db,
-	type ElimsItemRequestConfig,
 	elimsArmoryDeposits,
+	type ElimsItemRequestConfig,
 	eq,
 	getArmoryStock,
 	type ItemStock,
@@ -22,13 +22,14 @@ import {
 	type Message,
 	TextChannel,
 } from "discord.js";
+
 import { syncElimsStockHoldersChannel } from "./elims-stock-holders";
 import { createErrorEmbed, createSuccessEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import {
+	parseArmoryChatInput,
 	type ParsedBuyLog,
 	type ParsedDepositLog,
-	parseArmoryChatInput,
 } from "./torn-log-parser";
 
 const ELIMS_ITEM_REQUESTS_CONFIG_ID = "elims:item_requests_config";

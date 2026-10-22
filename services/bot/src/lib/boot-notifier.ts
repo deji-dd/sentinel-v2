@@ -1,5 +1,6 @@
 import { db, eq, systemAlerts } from "@sentinel/database";
 import type { Client } from "discord.js";
+
 import { createSuccessEmbed } from "./embeds";
 import { logger } from "./logger";
 

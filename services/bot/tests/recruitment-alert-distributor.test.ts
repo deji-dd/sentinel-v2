@@ -1,7 +1,9 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
+
 import type { IpcSubversiveRecruitmentAlertPayload } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import type { Client, EmbedBuilder } from "discord.js";
+
 import {
 	handleSubversiveRecruitmentAlert,
 	isLeaderRole,

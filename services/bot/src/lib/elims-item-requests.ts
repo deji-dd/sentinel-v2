@@ -32,6 +32,7 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from "discord.js";
+
 import { syncElimsStockHoldersChannel } from "./elims-stock-holders";
 import { buildVerificationReminderMessage } from "./elims-verification-reminder";
 import {
@@ -464,10 +465,10 @@ export async function handleItemRequestButton(
 				member && "roles" in member && Array.isArray(member.roles)
 					? member.roles
 					: member &&
-							"roles" in member &&
-							member.roles &&
-							typeof member.roles === "object" &&
-							"cache" in member.roles
+						  "roles" in member &&
+						  member.roles &&
+						  typeof member.roles === "object" &&
+						  "cache" in member.roles
 						? Array.from((member.roles.cache as Map<string, unknown>).keys())
 						: [];
 
@@ -1145,10 +1146,10 @@ export async function handleItemGrantingButton(
 			member && "roles" in member && Array.isArray(member.roles)
 				? member.roles
 				: member &&
-						"roles" in member &&
-						member.roles &&
-						typeof member.roles === "object" &&
-						"cache" in member.roles
+					  "roles" in member &&
+					  member.roles &&
+					  typeof member.roles === "object" &&
+					  "cache" in member.roles
 					? Array.from((member.roles.cache as Map<string, unknown>).keys())
 					: [];
 

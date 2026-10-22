@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell } from "@/components/PageShell";
@@ -33,6 +34,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
 import {
@@ -41,7 +43,7 @@ import {
 	showsEventWindow,
 	wholeDayWindow,
 } from "../lib/calendar-events";
-import { DEFAULT_EVENT_COLOR, dayWashBackground } from "../lib/calendar-wash";
+import { dayWashBackground, DEFAULT_EVENT_COLOR } from "../lib/calendar-wash";
 import {
 	getSubversiveFactionName,
 	PRIMARY_SUBVERSIVE_FACTION_ID,
@@ -845,8 +847,7 @@ export function SubversiveCalendarPage({
 					setFactionEvents((data.factionEvents as CalendarEvent[]) ?? []);
 
 					const window = data.upcoming as
-						| { windowDays: number; events: CalendarEvent[] }
-						| undefined;
+						{ windowDays: number; events: CalendarEvent[] } | undefined;
 					setUpcoming(
 						window
 							? {

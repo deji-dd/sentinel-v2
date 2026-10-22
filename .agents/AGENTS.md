@@ -1,18 +1,22 @@
 # Sentinel v2 — Architecture & Project Rules
 
 ## Technical Stack & Runtime
+
 - **Runtime & Package Manager**: Bun (ESM native, `bun test`, `bun run`)
 - **Monorepo Packages**: `@sentinel/schemas`, `@sentinel/torn-api`, `@sentinel/utils`
-- **Linter & Formatter**: Biome (`@biomejs/biome`)
+- **Formatter**: Bun (`bun fmt`)
 - **Type Checker**: TypeScript (`strict: true`, `noUncheckedIndexedAccess: true`)
 
 ## Core Architectural Flow
+
 `[Client / Bot / App] ➔ @sentinel/torn-api ➔ OpenAPI Schema Inferences (@sentinel/schemas)`
+
 - **Crypto Operations**: Uses `node:crypto` AES-256-GCM
 - **IPC Transport**: Unix Domain Socket communication (`@sentinel/utils/ipc`)
 - **Rate Limiting**: Sliding Window RAM Rate Limiter (`@sentinel/utils`)
 
 ## Strict Coding Guidelines
+
 - **Zero Explicit `any`**
   - Use `unknown` for unstructured payloads, errors, or generic dynamic inputs.
   - Narrow `unknown` using explicit type guards (`typeof x === "object"`, `error instanceof Error`, or `Record<string, unknown>`).
@@ -25,7 +29,7 @@
 - **Testing Standards (`bun test`)**
   - Mock network calls using `spyOn(globalThis, "fetch")` instead of reassigning `globalThis.fetch`.
   - Cast mock implementations via `as unknown as typeof fetch` to satisfy hybrid function interfaces. Always run `spy.mockRestore()` in cleanup.
-- **Biome Linter Compliance**
+- **Code Style Compliance**
   - **Template Strings**: Use template literals (`` `${a}${b}` ``) instead of string concatenation (`a + b`).
   - **Exponentiation**: Use `a ** b` instead of `Math.pow(a, b)`.
   - **No Side-Effect Assignments**: Do not assign variables inside conditional statements or loop headers (`while ((x = getNext()) !== -1)` is prohibited).
@@ -42,21 +46,22 @@
   - **`upsertWorkerState` leaves `init` alone when you omit it**, deliberately: clearing it replays history in the log-manager, recruitment and territory workers. Pass `init` only when you actually mean to change the first-run gate.
   - **Never store a growing collection as one JSON array in a single row.** Use one row per record (`subversive_dibs_records`, `personal_bounty_targets`). A whole-array rewrite is O(n) write amplification and makes that row a single-writer bottleneck.
   - **Never write a read-modify-write of an entire JSON blob.** `SELECT` the row, then `UPDATE` only the columns you are changing. The API, bot and scheduler are separate processes; a whole-blob spread silently reverts whatever another process wrote in between, and no `system_states` write is wrapped in a transaction or row lock. This pattern has already destroyed live configuration.
-  - **Prefer typed columns over `jsonb` for scalars.** `system_states.data` is untyped, so a writer that double-encodes a value (storing JSON as a JSON *string*) is accepted silently, and every reader that guards with `typeof data === "object"` then degrades to a default. A `numeric`/`text`/`timestamp` column makes that state unrepresentable.
+  - **Prefer typed columns over `jsonb` for scalars.** `system_states.data` is untyped, so a writer that double-encodes a value (storing JSON as a JSON _string_) is accepted silently, and every reader that guards with `typeof data === "object"` then degrades to a default. A `numeric`/`text`/`timestamp` column makes that state unrepresentable.
   - **Do not rely on the `init` boolean loosely.** It gates first-run behaviour in the log-manager, recruitment and territory workers; a backfill that leaves it `false` re-triggers a full historical backfill. Preserve it explicitly.
   - **Name the table you added in the change description**, so a reviewer can see that a feature persisted data somewhere deliberate.
   - **Tests must never touch the service database.** `bun test` is pinned to an isolated database by `scripts/test-preload.ts`; refresh it with `bun run test:db:setup`. Never write a suite that mutates a fixed configuration key in place — two existing suites did, and one of them overwrote the live `elims:item_requests_config` row with its own fixture.
 
 ## Torn Terms of Service & Scripting Rules Compliance
+
 The use of scripts, extensions, applications, or any other software is permitted only when they rely on data from our API or from a page that you have manually loaded and are actively viewing. Such software must not make additional non-API requests to Torn, scrape pages that are not currently being viewed, attempt to bypass CAPTCHA protections, or extract data from unfocused pages to send elsewhere, generate alerts, or draw attention to itself or another window.
-Any software that makes non-API requests which are not directly and manually initiated by the user is prohibited and may be tracked. 
+Any software that makes non-API requests which are not directly and manually initiated by the user is prohibited and may be tracked.
 Furthermore, releasing software with malicious or undisclosed functionality is strictly forbidden, and developers of API-based tools are required to comply with the acceptable usage terms outlined:
 When creating a script, userscript, sheet, extension, API service, bot, 3rd party website or any other API tool (collectively "service"), the end user must be aware of how will their API key be used.
 Here's a table with the information that is important to the end user - giving them a good idea of what to expect from the API service they're using:
 
-| Data Storage | Data Sharing | Purpose of Use | Key Storage & Sharing | Key Access Level |
-|---|---|---|---|---|
-| Will the data be stored for any purpose? | Who can access the data besides the end user? | What is the stored data being used for? | Will the API key be stored securely and who can access it? | What key access level or specific selections are required? |
+| Data Storage                                                                                                                                      | Data Sharing                                                                                                   | Purpose of Use                                                                                                                                                                         | Key Storage & Sharing                                                                                                                   | Key Access Level                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Will the data be stored for any purpose?                                                                                                          | Who can access the data besides the end user?                                                                  | What is the stored data being used for?                                                                                                                                                | Will the API key be stored securely and who can access it?                                                                              | What key access level or specific selections are required?          |
 | No / Only locally<br>Temporary - less than a minute<br>Temporary - less than a day<br>Persistent - until account deletion<br>Persistent - forever | Nobody<br>Faction<br>Friends & faction<br>General public<br>Service owners<br>Service owners & their customers | Non malicious statistical analysis<br>Public amusement<br>Public community tools<br>Competitive advantage [Please specify]<br>Personal gain [Please specify]<br>Other [Please specify] | Not stored / Not shared<br>Stored / Used only for automation<br>Stored / Shared with the faction<br>Stored / Shared with other services | Public<br>Minimal<br>Limited<br>Full<br>Custom - specify selections |
 
 If the service is not storing or sharing the data or the key anywhere, it's enough to state so, otherwise ToS with the information above needs to be clearly and visibly stated in any place where user is providing their API key in the table format highlighted above.

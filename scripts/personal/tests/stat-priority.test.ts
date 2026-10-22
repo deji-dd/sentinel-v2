@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { analyseStatPriority, type GymProfile } from "../src/lib/stat-priority";
 import type { StatType } from "../src/types";
 

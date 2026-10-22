@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { isModuleEnabled, normalizeModules } from "../src/modules";
 
 describe("modules utility", () => {

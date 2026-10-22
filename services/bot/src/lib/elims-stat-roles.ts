@@ -1,5 +1,6 @@
 import { db, elimsMemberStats, eq } from "@sentinel/database";
 import type { Client } from "discord.js";
+
 import { logger } from "./logger";
 
 export const STAT_BUCKETS = [

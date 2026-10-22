@@ -5,6 +5,7 @@ import type {
 	PathOperation,
 	paths,
 } from "@sentinel/schemas";
+
 import {
 	and,
 	apiKeys,

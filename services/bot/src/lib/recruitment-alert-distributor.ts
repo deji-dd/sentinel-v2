@@ -10,6 +10,7 @@ import {
 	type Client,
 	type TextChannel,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

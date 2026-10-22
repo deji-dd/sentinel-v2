@@ -7,10 +7,12 @@ import {
 	it,
 	spyOn,
 } from "bun:test";
+
 import type { MercContract } from "@sentinel/database";
 import type { FactionMember } from "@sentinel/schemas";
 import * as tornApiModule from "@sentinel/torn-api";
 import * as ipcModule from "@sentinel/utils/ipc";
+
 import { mercStateStore } from "../src/lib/merc-state-store";
 import {
 	MercTargetManager,

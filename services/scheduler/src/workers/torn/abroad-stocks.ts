@@ -1,5 +1,6 @@
 import { db, travelDestinations } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 

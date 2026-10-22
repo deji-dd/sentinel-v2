@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { catalogStock, STOCK_CATALOG } from "../src/stock-catalog";
 import {
 	buildBenefitProgress,

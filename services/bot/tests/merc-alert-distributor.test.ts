@@ -1,6 +1,8 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
+
 import * as database from "@sentinel/database";
 import type { Client } from "discord.js";
+
 import {
 	parseToEpochSeconds,
 	postMercContractAnnouncement,

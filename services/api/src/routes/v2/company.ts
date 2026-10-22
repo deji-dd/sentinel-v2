@@ -18,6 +18,7 @@ import {
 	type OilRigHistoryRecord,
 } from "@sentinel/utils";
 import { Elysia, t } from "elysia";
+
 import { authenticateCrimeLedgerRequest } from "./crime-ledger";
 
 /**

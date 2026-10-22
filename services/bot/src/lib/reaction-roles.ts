@@ -16,6 +16,7 @@ import type {
 	TextChannel,
 	User,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { sendGuildAuditLog } from "./guild-logger";
 

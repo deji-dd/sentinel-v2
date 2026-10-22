@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+
 import type {
 	BulkVerificationProgressData,
 	FactionMember,
@@ -7,6 +8,7 @@ import type {
 	VerificationRequest,
 	VerificationResponse,
 } from "@sentinel/schemas";
+
 import { logger } from "../logger";
 import {
 	type BulkVerificationResult,

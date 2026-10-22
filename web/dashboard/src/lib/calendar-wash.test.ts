@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
+
 import type { CalendarEvent } from "./calendar-events";
 import {
-	DEFAULT_EVENT_COLOR,
 	dayWashBackground,
 	dayWashBands,
+	DEFAULT_EVENT_COLOR,
 } from "./calendar-wash";
 
 /**

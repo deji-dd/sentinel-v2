@@ -21,6 +21,7 @@ import {
 	userStockAlertConditionNeedsThreshold,
 } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
+
 import { logger } from "./logger";
 
 /**

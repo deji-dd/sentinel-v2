@@ -23,10 +23,7 @@ export type CompanyAdAction = "freeze" | "maintain" | "increase" | "decrease";
 export type CompanyCapacityActionKind = "rebalance" | "hire" | "storage";
 
 export type CompanySellThroughVerdict =
-	| "insufficient_data"
-	| "unresponsive"
-	| "partially_responsive"
-	| "responsive";
+	"insufficient_data" | "unresponsive" | "partially_responsive" | "responsive";
 
 /** How much weight a figure deserves, in plain terms. */
 export type CompanyConfidence = "none" | "low" | "medium" | "high";
@@ -36,10 +33,7 @@ export type CompanyConfidence = "none" | "low" | "medium" | "high";
  * measurement and the surfaces say so.
  */
 export type CompanyPriceBasis =
-	| "demand_fit"
-	| "inventory_buffer"
-	| "measured_unresponsive"
-	| "policy_band";
+	"demand_fit" | "inventory_buffer" | "measured_unresponsive" | "policy_band";
 
 /** Whether the barrel price has been shown to move volume on this rig. */
 export type CompanyPriceLeverVerdict = "works" | "does_not_work" | "unknown";
@@ -48,9 +42,7 @@ export type CompanyCapacityRegimeName = "balanced" | "extraction_bound";
 
 /** Whether the capacity plan is asking for anything, and if not, why not. */
 export type CompanyCapacityPlanState =
-	| "balanced"
-	| "action_required"
-	| "holding";
+	"balanced" | "action_required" | "holding";
 
 export interface CompanyProfile {
 	name: string;
@@ -259,9 +251,7 @@ export interface CompanyStockVerdict {
 
 /** Which company upgrade a recommendation refers to. */
 export type CompanyUpgradeCategory =
-	| "company_size"
-	| "staff_room"
-	| "warehouse";
+	"company_size" | "staff_room" | "warehouse";
 
 /** How urgent an upgrade is, given the rig's current operating state. */
 export type CompanyUpgradePriority = "critical" | "high" | "medium" | "low";

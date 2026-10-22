@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+
 import { db, eq, guildStockAlertConfigs } from "@sentinel/database";
+
 import { app } from "../src/app";
 
 /**

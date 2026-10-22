@@ -32,6 +32,7 @@ import {
 	UserSelectMenuBuilder,
 	type UserSelectMenuInteraction,
 } from "discord.js";
+
 import { resolveTornItem } from "./elims-armory-storage";
 import { createErrorEmbed, createSuccessEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
@@ -70,9 +71,9 @@ export function hasManagerPermission(
 		"roles" in member && Array.isArray(member.roles)
 			? member.roles
 			: "roles" in member &&
-					member.roles &&
-					typeof member.roles === "object" &&
-					"cache" in member.roles
+				  member.roles &&
+				  typeof member.roles === "object" &&
+				  "cache" in member.roles
 				? Array.from((member.roles.cache as Map<string, unknown>).keys())
 				: [];
 

@@ -9,7 +9,7 @@
 # its auth service has returned 504s mid-build; both failed this pipeline. The
 # "Build & Push Container Image" job mirrors a missing tag on its way to the
 # build, and .github/workflows/mirror-ci-images.yml does it by hand.
-FROM ghcr.io/deji-dd/bun-base:1.4.3 AS base
+FROM ghcr.io/deji-dd/bun-base:1.4.4 AS base
 WORKDIR /app
 
 # Install build dependencies & curl for healthchecks
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # Copy root workspace configs and all package.json files for caching
 FROM base AS dependencies
 WORKDIR /app
-COPY package.json bun.lock* tsconfig.json biome.json ./
+COPY package.json bun.lock* tsconfig.json bunfig.toml ./
 COPY packages/database/package.json ./packages/database/
 COPY packages/schemas/package.json ./packages/schemas/
 COPY packages/torn-api/package.json ./packages/torn-api/

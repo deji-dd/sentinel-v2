@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import {
 	apiKeys,
 	db,
@@ -8,6 +9,7 @@ import {
 } from "@sentinel/database";
 import * as ffscouterModule from "@sentinel/torn-api";
 import { clearPlayerStatMemo } from "@sentinel/torn-api";
+
 import * as botIpc from "../src/lib/ipc/listener";
 import {
 	runElimsMemberStatsCycle,

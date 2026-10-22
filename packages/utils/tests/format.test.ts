@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { formatDuration } from "../src/format";
 
 describe("format utility", () => {

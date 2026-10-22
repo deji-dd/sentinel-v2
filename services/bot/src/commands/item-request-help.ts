@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+
 import {
 	AttachmentBuilder,
 	type ChatInputCommandInteraction,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import type { BotCommand } from "./index";
 
 const REQUEST_CHANNEL_ID = "1546125572252504154";

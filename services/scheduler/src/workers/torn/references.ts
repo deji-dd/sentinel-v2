@@ -13,6 +13,7 @@ import {
 import type { TornSchema } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
 

@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
+
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+
 import * as schema from "./src/schema";
 
 /**

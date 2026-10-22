@@ -4,6 +4,7 @@ import {
 	recordBootAlert,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
+
 import { setupSchedulerIpc } from "./src/lib/ipc";
 import { getAllRunnerStatuses, stopAllRunners } from "./src/lib/scheduler";
 import { getSubscriberHealth } from "./src/lib/subscriber-health";

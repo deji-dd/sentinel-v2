@@ -1,5 +1,6 @@
 import type { RwDisplayBuckets, RwOpponentLine } from "@sentinel/schemas";
 import { isInTornHospital } from "@sentinel/utils";
+
 import type { RankedWarOpponent } from "../workers/subversive/ranked-war-worker";
 
 /**

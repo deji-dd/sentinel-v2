@@ -1,6 +1,4 @@
-import allianceSnapshot from "../data/faction-alliances.snapshot.json" with {
-	type: "json",
-};
+import allianceSnapshot from "../data/faction-alliances.snapshot.json" with { type: "json" };
 import { logger } from "./logger";
 
 export interface AllianceMember {

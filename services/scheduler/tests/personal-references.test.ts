@@ -8,6 +8,7 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+
 import {
 	apiKeys,
 	db,
@@ -25,6 +26,7 @@ import {
 	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
+
 import { schedulerEvents } from "../src/lib/events";
 import {
 	calculateTravelTimeSeconds,

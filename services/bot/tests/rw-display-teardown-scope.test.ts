@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+
 import {
 	db,
 	eq,
@@ -11,6 +12,7 @@ import {
 	RW_TRAVELING_CATEGORY,
 } from "@sentinel/schemas";
 import type { Client } from "discord.js";
+
 import { teardownRwPrimaryDisplays } from "../src/lib/rw-primary-displays";
 
 /**

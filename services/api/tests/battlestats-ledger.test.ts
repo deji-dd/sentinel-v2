@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+
 import { app } from "../src/app";
 import * as schedulerIpc from "../src/lib/scheduler-ipc";
 

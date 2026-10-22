@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+
 import { db } from "../../index";
 import {
 	PERSONAL_LIVE_STATE_ID,

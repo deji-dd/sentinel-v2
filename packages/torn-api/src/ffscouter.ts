@@ -2,6 +2,7 @@ import {
 	getPlayerStatCacheRaw,
 	upsertPlayerStatCacheRaw,
 } from "@sentinel/database";
+
 import { Logger } from "../../utils";
 
 const logger = new Logger("FFScouter");

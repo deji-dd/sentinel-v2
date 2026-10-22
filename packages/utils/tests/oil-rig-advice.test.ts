@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import type { CompanyDirectives } from "../../schemas/src/company";
 import {
 	assessCapacityRegime,

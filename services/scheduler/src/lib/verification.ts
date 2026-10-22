@@ -22,6 +22,7 @@ import type {
 } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { type FactionRecord, getFactions } from "./faction-tracker";
 
 const logger = new Logger("Verification");

@@ -226,23 +226,15 @@
 /* ── Native controls ────────────────────────────────────────────────────────── */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	-webkit-appearance: none !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	-moz-appearance: none !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	appearance: none !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	display: none !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	margin: 0 !important;
 }
 
 input[type="number"] {
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	-webkit-appearance: textfield !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	-moz-appearance: textfield !important;
-	/* biome-ignore lint/complexity/noImportantStyles: needed for spin button reset */
 	appearance: textfield !important;
 }

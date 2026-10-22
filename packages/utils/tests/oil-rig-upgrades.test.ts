@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import type { OilRigHistoryRecord } from "../src/oil-rig";
 import { analyzeOilRig } from "../src/oil-rig-analysis";
 import { renderDeterministicBriefing } from "../src/oil-rig-render";

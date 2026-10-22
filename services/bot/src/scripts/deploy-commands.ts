@@ -6,6 +6,7 @@ import {
 	isElimsGuildAsync,
 } from "@sentinel/database";
 import { REST, Routes } from "discord.js";
+
 import {
 	type BotCommand,
 	elimsCommandsList,

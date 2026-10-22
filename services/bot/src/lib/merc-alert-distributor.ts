@@ -5,8 +5,8 @@ import {
 	getMercChannelConfig,
 	type MercContract,
 	type MercContractMode,
-	type MercContractSummaryReport,
 	mercContracts,
+	type MercContractSummaryReport,
 	normalizeMercContractMode,
 } from "@sentinel/database";
 import {
@@ -21,6 +21,7 @@ import {
 	MessageFlags,
 	type TextChannel,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import { formatTctTimestamp } from "./torn-log-parser";

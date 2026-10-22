@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+
 import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+
 import { db } from "../../index";
 import {
 	guildConfigs,
@@ -974,9 +976,7 @@ export function mapRowToMercContract(
 		factionId: row.factionId,
 		factionName: row.factionName,
 		warStatusAtCreation: row.warStatusAtCreation as
-			| "no_war"
-			| "upcoming"
-			| "active",
+			"no_war" | "upcoming" | "active",
 		warId: row.warId ?? null,
 		warStart: row.warStart ? Math.floor(row.warStart.getTime() / 1000) : null,
 		warEnd: row.warEnd ? Math.floor(row.warEnd.getTime() / 1000) : null,
@@ -1145,9 +1145,7 @@ export async function createMercContract(
 		factionId: created.factionId,
 		factionName: created.factionName,
 		warStatusAtCreation: created.warStatusAtCreation as
-			| "no_war"
-			| "upcoming"
-			| "active",
+			"no_war" | "upcoming" | "active",
 		warId: created.warId ?? null,
 		warStart: created.warStart
 			? Math.floor(created.warStart.getTime() / 1000)

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+
 import { eq } from "@sentinel/database";
 import type { ButtonInteraction, GuildMember } from "discord.js";
+
 import {
 	formatDuration,
 	paginateItems,
@@ -88,9 +90,8 @@ describe("Giveaway Helpers", () => {
 
 	describe("purge command scope", () => {
 		it("ensures purge command is scoped to both and included in elimsCommandsList", async () => {
-			const { elimsCommandsList, normalCommandsList } = await import(
-				"../src/commands/index"
-			);
+			const { elimsCommandsList, normalCommandsList } =
+				await import("../src/commands/index");
 
 			const purgeInElims = elimsCommandsList.find(
 				(c) => c.data.name === "purge",
@@ -108,9 +109,8 @@ describe("Giveaway Helpers", () => {
 
 	describe("giveaway embed separation", () => {
 		it("builds persistent creator embed with giveaway_create_init customId", async () => {
-			const { buildGiveawayCreatorComponents } = await import(
-				"../src/lib/giveaways"
-			);
+			const { buildGiveawayCreatorComponents } =
+				await import("../src/lib/giveaways");
 			const { embed, components } = buildGiveawayCreatorComponents();
 
 			expect(embed.data.title).toBe("Giveaways");
@@ -125,9 +125,8 @@ describe("Giveaway Helpers", () => {
 		});
 
 		it("builds distinct active giveaway embed with giveaway_entry customId", async () => {
-			const { buildActiveGiveawayComponents } = await import(
-				"../src/lib/giveaways"
-			);
+			const { buildActiveGiveawayComponents } =
+				await import("../src/lib/giveaways");
 			const mockGiveaway = {
 				id: "gw_test_123",
 				guildId: "guild_123",
@@ -215,12 +214,10 @@ describe("Giveaway Helpers", () => {
 		});
 
 		it("rejects host when trying to enter their own giveaway", async () => {
-			const { handleGiveawayEntryButton } = await import(
-				"../src/lib/giveaways"
-			);
+			const { handleGiveawayEntryButton } =
+				await import("../src/lib/giveaways");
 			let repliedEmbed:
-				| { data: { title?: string; description?: string } }
-				| undefined;
+				{ data: { title?: string; description?: string } } | undefined;
 
 			const mockInteraction = {
 				customId: `giveaway_entry:${testGwId}`,

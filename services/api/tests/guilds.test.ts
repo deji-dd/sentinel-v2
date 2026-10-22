@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import { authorizeGuild, isTargetGuild } from "@sentinel/database";
+
 import { app } from "../src/app";
 
 describe("Elysia API Server - Guild Authorization Endpoints", () => {

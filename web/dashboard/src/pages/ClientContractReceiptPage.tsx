@@ -13,10 +13,12 @@ import {
 	Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 
@@ -113,9 +115,9 @@ export function ClientContractReceiptPage({
 					typeof errorValue === "string"
 						? errorValue
 						: typeof errorValue === "object" &&
-								errorValue !== null &&
-								"error" in errorValue &&
-								typeof (errorValue as { error: unknown }).error === "string"
+							  errorValue !== null &&
+							  "error" in errorValue &&
+							  typeof (errorValue as { error: unknown }).error === "string"
 							? (errorValue as { error: string }).error
 							: "Failed to update contract status.";
 				toast(errMsg, "error");

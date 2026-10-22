@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+
 import {
 	db,
 	eq,
@@ -11,6 +12,7 @@ import {
 } from "@sentinel/database";
 import * as ffscouterModule from "@sentinel/torn-api";
 import * as managerModule from "@sentinel/torn-api";
+
 import {
 	computeAdaptivePageBudget,
 	getCurrentSweepId,

@@ -23,18 +23,13 @@ import {
 	nextSortState,
 	type SortAccessors,
 	type SortDirection,
-	type SortState,
 	sortIndicator,
 	sortRows,
+	type SortState,
 } from "../ui/table-sort";
 
 type CrimeSortKey =
-	| "crimeName"
-	| "count"
-	| "nerve"
-	| "value"
-	| "efficiency"
-	| "percentage";
+	"crimeName" | "count" | "nerve" | "value" | "efficiency" | "percentage";
 
 /** Every column the category table can be ordered by. */
 const CRIME_SORT_KEYS: CrimeSortKey[] = [
@@ -479,10 +474,7 @@ export class CrimesTab {
 			.forEach((btn) => {
 				btn.addEventListener("click", () => {
 					const tf = btn.getAttribute("data-tf") as
-						| "7d"
-						| "30d"
-						| "90d"
-						| "all";
+						"7d" | "30d" | "90d" | "all";
 					if (tf && tf !== this.currentTimeframe) {
 						this.setTimeframe(tf);
 					}
@@ -495,8 +487,7 @@ export class CrimesTab {
 			.forEach((btn) => {
 				btn.addEventListener("click", () => {
 					const metric = btn.getAttribute("data-metric") as
-						| "financials"
-						| "activity";
+						"financials" | "activity";
 					if (metric && metric !== this.currentMetricMode) {
 						this.container
 							.querySelectorAll<HTMLButtonElement>("button[data-metric]")

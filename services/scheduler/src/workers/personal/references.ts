@@ -10,6 +10,7 @@ import {
 } from "@sentinel/database";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { schedulerEvents } from "../../lib/events";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";

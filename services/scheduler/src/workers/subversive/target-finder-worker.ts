@@ -10,7 +10,6 @@ import {
 	sql,
 	subversiveTargetFinderTargets,
 } from "@sentinel/database";
-
 import type { UserProfileResponse } from "@sentinel/schemas";
 import {
 	getPlayerStats,
@@ -23,6 +22,7 @@ import {
 	Logger,
 	tornStateSlug,
 } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {

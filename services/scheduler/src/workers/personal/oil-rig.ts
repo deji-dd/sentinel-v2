@@ -5,6 +5,7 @@ import {
 	Logger,
 	refreshRosterBenchmark,
 } from "@sentinel/utils";
+
 import { schedulerEvents } from "../../lib/events";
 import { runSubscriber } from "../../lib/subscriber-health";
 import type { WorkerStartOptions } from "../registry";

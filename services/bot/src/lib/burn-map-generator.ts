@@ -4,6 +4,7 @@
  */
 
 import { Resvg } from "@resvg/resvg-js";
+
 import { TORN_TERRITORY_MAP_SVG } from "../assets/torn-territory-map.js";
 
 // Neutral colors for reset

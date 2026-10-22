@@ -3,6 +3,7 @@ import {
 	type ChatInputCommandInteraction,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "../lib/embeds";
 
 export const oilBriefingCommand = {

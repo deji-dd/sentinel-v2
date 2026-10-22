@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 
 import type { TornSchema } from "@sentinel/schemas";
+
 import type { FactionAttackEvent } from "../workers/merc/faction-attack-feed-worker";
 
 /**

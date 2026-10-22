@@ -13,10 +13,7 @@ import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
 
 export type IpcWarAction =
-	| "assault_start"
-	| "assault_succeed"
-	| "assault_fail"
-	| "peace_treaty";
+	"assault_start" | "assault_succeed" | "assault_fail" | "peace_treaty";
 
 export type IpcTerritoryAction =
 	| "tt_claim"
@@ -100,8 +97,7 @@ export type VerificationFailureResponse = {
 };
 
 export type VerificationResponse =
-	| VerificationSuccessResponse
-	| VerificationFailureResponse;
+	VerificationSuccessResponse | VerificationFailureResponse;
 
 export type IpcVerifyRequestMessage = {
 	action: "verification_request";

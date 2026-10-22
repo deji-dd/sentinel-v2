@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import { TORN_TRAVEL_DESTINATIONS } from "@sentinel/schemas";
+
 import {
 	buildTravelingSignature,
 	classifyTravelingOpponents,

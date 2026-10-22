@@ -12,6 +12,7 @@ import {
 	type ChatInputCommandInteraction,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { generateBurnMapPng } from "../lib/burn-map-generator";
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { logger } from "../lib/logger";

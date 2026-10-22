@@ -12,8 +12,8 @@ import type {
 import {
 	getGuildKeyPool,
 	getNextGuildKey,
-	TornError,
 	tornApi,
+	TornError,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 

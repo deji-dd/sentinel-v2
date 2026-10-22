@@ -20,8 +20,9 @@ import {
 	type UserStockAlertEvent,
 	type UserStockAlertSubscription,
 } from "@sentinel/schemas";
-import { type ManagedApiKey, TornError, tornApi } from "@sentinel/torn-api";
+import { type ManagedApiKey, tornApi, TornError } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
@@ -486,7 +487,7 @@ export async function runStockAlertCycle(
 	// them share a round trip's latency instead of paying it in series. Outcomes
 	// are applied in market order afterwards, so the snapshots — and therefore the
 	// alerts — are built exactly as they were serially.
-	for (let index = 0; index < stocks.length; ) {
+	for (let index = 0; index < stocks.length;) {
 		if (signal?.aborted) {
 			logger.warn(
 				"Stock alert cycle aborted mid-sweep; the remaining stocks continue next cycle.",

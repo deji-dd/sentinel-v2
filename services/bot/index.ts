@@ -6,6 +6,7 @@ import {
 	Partials,
 	Status,
 } from "discord.js";
+
 import { buildCommandsCollection } from "./src/commands";
 import { guildCreateEvent } from "./src/events/guild-create";
 import { guildMemberAddEvent } from "./src/events/guild-member-add";
@@ -99,9 +100,8 @@ async function main(): Promise<void> {
 						EMBED_COLORS.PRIMARY,
 					);
 					await message.reply({ embeds: [standbyEmbed] });
-					const { generateAndSendDirectorBriefing } = await import(
-						"@sentinel/utils"
-					);
+					const { generateAndSendDirectorBriefing } =
+						await import("@sentinel/utils");
 					// History is intentionally not passed: the briefing loads the
 					// canonical rolling window itself. This was the second verbatim
 					// copy of that mapper in the bot service.

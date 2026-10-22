@@ -22,6 +22,7 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from "discord.js";
+
 import { createErrorEmbed, createSuccessEmbed, EMBED_COLORS } from "./embeds";
 import { sendElimsKeyVerificationRequest } from "./ipc/server";
 import { logger } from "./logger";

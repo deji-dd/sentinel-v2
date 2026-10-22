@@ -37,7 +37,8 @@ const statusBadgeVariants = cva(
 );
 
 interface StatusBadgeProps
-	extends React.ComponentProps<"span">,
+	extends
+		React.ComponentProps<"span">,
 		VariantProps<typeof statusBadgeVariants> {
 	/** Leading dot, e.g. for live/offline indicators. */
 	dot?: boolean;

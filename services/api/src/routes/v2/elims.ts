@@ -3,14 +3,14 @@ import {
 	count,
 	db,
 	desc,
-	type ElimsItemRequestConfig,
 	elimsApiKeys,
 	elimsArmoryDeposits,
+	type ElimsItemRequestConfig,
 	elimsItemRequests,
 	elimsMemberStats,
 	elimsTeamPlayers,
-	elimsTeamSnapshots,
 	elimsTeams,
+	elimsTeamSnapshots,
 	eq,
 	getArmoryStock,
 	getStockHolders,
@@ -34,6 +34,7 @@ import {
 	TornApiClient,
 } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
+
 import { env } from "../../config/env";
 import {
 	assignElimsStatRolesViaIpc,
@@ -1916,8 +1917,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const elimsGuildData = elimsGuildState?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			if (elimsGuildData?.guildId) {
 				void syncElimsItemRequestsViaIpc(
 					elimsGuildData.guildId,
@@ -1974,8 +1974,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.from(systemStates)
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 			const elimsGuildData = elimsGuildState?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const targetGuildId = elimsGuildData?.guildId;
 			if (!targetGuildId) {
 				return { holders: [] };
@@ -2009,8 +2008,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const elimsGuildData = elimsGuildState?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			let guildId = elimsGuildData?.guildId ?? "";
 			if (!guildId) {
 				const [deposit] = await db
@@ -2104,8 +2102,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const elimsGuildData = elimsGuildState?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = elimsGuildData?.guildId ?? "";
 
 			const page = Math.max(1, Number(query.page ?? 1));
@@ -2569,8 +2566,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const elimsGuildData = elimsGuildState?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = elimsGuildData?.guildId ?? "";
 
 			if (!guildId) {
@@ -2989,8 +2985,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			return {
 				workersStopped: Boolean(configData?.workersStopped),
 			};
@@ -3019,8 +3014,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = configData?.guildId;
 
 			if (!guildId) {
@@ -3077,8 +3071,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = configData?.guildId;
 
 			if (!guildId) {
@@ -3230,8 +3223,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = configData?.guildId;
 
 			if (!guildId) {
@@ -3302,8 +3294,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = configData?.guildId;
 
 			if (!guildId) {
@@ -3371,8 +3362,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, "elims:stat_roles"));
 
 			const data = existing?.data as
-				| { mappings?: Record<string, string> }
-				| undefined;
+				{ mappings?: Record<string, string> } | undefined;
 			return {
 				mappings: data?.mappings ?? {},
 			};
@@ -3402,8 +3392,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			const guildId = configData?.guildId;
 
 			if (!guildId) {
@@ -3475,8 +3464,7 @@ export const elimsRoutes = new Elysia({ prefix: "/elims" })
 				.where(eq(systemStates.id, ELIMS_CONFIG_ID));
 
 			const configData = existing?.data as unknown as
-				| ElimsConfigData
-				| undefined;
+				ElimsConfigData | undefined;
 			return {
 				teamRoleId: configData?.teamRoleId ?? null,
 				autoSyncTeamStats: configData?.autoSyncTeamStats ?? false,

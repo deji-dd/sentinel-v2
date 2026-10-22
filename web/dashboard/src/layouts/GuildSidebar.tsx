@@ -1,14 +1,16 @@
 import { ArrowLeft, ChevronRight, LogOut, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+
 import logoImg from "../../public/logo.png";
 import { APP_VERSION } from "../config";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../hooks/useTheme";
 import { api } from "../lib/api";
-import { getNavSections, type NavSection, navHref } from "../lib/navigation";
+import { getNavSections, navHref, type NavSection } from "../lib/navigation";
 import { cn } from "../lib/utils";
 import type { ServerTypeMapping } from "../pages/ServerSelectorPage";
 import { useRouter } from "../router";
@@ -216,16 +218,16 @@ export function GuildSidebar({
 		(!effectiveType &&
 			Boolean(
 				serverTypes.merc &&
-					guildId === serverTypes.merc &&
-					serverTypes.faction !== guildId,
+				guildId === serverTypes.merc &&
+				serverTypes.faction !== guildId,
 			));
 	const isFaction =
 		effectiveType === "faction" ||
 		(!effectiveType &&
 			Boolean(
 				serverTypes.faction &&
-					guildId === serverTypes.faction &&
-					serverTypes.merc !== guildId,
+				guildId === serverTypes.faction &&
+				serverTypes.merc !== guildId,
 			));
 	const isAlliance =
 		effectiveType === "alliance" ||

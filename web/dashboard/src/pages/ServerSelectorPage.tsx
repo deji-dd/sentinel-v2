@@ -15,6 +15,7 @@ import {
 	Trophy,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+
 import logoImg from "../../public/logo.png";
 import { APP_VERSION } from "../config";
 import { useAuth } from "../contexts/AuthContext";

@@ -1,0 +1,5 @@
+dist/
+**/tailwind.css
+**/index.css
+**/*.svg
+**/assets/torn-territory-map.ts

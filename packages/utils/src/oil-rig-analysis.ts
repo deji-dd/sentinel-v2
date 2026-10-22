@@ -11,11 +11,11 @@ import {
 	type OilRigHistoryRecord,
 	type OptimalRosterResult,
 	type PriceLeverVerdict,
-	type RosterBaseline,
 	resolveCapacityTarget,
+	type RosterBaseline,
 	type SellThroughResponseAnalysis,
-	type StockAnalysis,
 	solveOptimalRoster,
+	type StockAnalysis,
 } from "./oil-rig";
 import {
 	OIL_RIG_POLICY,

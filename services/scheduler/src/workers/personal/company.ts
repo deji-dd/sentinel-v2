@@ -8,6 +8,7 @@ import {
 import type { TornSchema } from "@sentinel/schemas";
 import { getPersonalKey, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { type LogIngestSource, schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { runSubscriber } from "../../lib/subscriber-health";

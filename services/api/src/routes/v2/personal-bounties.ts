@@ -9,6 +9,7 @@ import type { UserProfileResponse } from "@sentinel/schemas";
 import { getPersonalKey, tornApi, UserRateLimiter } from "@sentinel/torn-api";
 import { isInTornHospital } from "@sentinel/utils";
 import { type Context, Elysia, t } from "elysia";
+
 import { notifyBountyDefeated } from "../../lib/scheduler-ipc";
 import { resolveUserSession } from "./subversive-target-finder";
 

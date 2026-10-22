@@ -6,6 +6,7 @@ import type {
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import type { IpcServer } from "@sentinel/utils/ipc";
+
 import type { IpcActionHandler, IpcHandlerContext } from "../types";
 
 const logger = new Logger("SchedulerIPC", "BotHandler");

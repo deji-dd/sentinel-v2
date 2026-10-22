@@ -1,4 +1,5 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
+
 import * as database from "@sentinel/database";
 import {
 	ChannelType,
@@ -6,6 +7,7 @@ import {
 	OverwriteType,
 	PermissionFlagsBits,
 } from "discord.js";
+
 import {
 	archiveMercClientChannel,
 	cleanupOldArchivedMercChannels,

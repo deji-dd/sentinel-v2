@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
+
 import { db, eq, guildStockAlertConfigs } from "@sentinel/database";
 import { DEFAULT_GUILD_STOCK_ALERT_CONFIG } from "@sentinel/schemas";
+
 import {
 	guildStockAlertManager,
 	StockAlertConfigError,

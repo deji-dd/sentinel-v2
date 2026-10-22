@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
 import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
@@ -44,8 +45,10 @@ import { Switch } from "@/components/ui/switch";
  * Wire shape of the configuration endpoint: the shared config plus the bookkeeping
  * fields, which arrive as nulls rather than being absent.
  */
-interface StockAlertConfig
-	extends Omit<GuildStockAlertConfig, "updatedAt" | "updatedBy"> {
+interface StockAlertConfig extends Omit<
+	GuildStockAlertConfig,
+	"updatedAt" | "updatedBy"
+> {
 	updatedAt?: string | null;
 	updatedBy?: string | null;
 }

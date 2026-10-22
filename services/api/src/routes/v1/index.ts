@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+
 import { serveBlastedUserscript } from "../v2/personal";
 import { personalBountiesRoutes } from "../v2/personal-bounties";
 import { subversiveRoutes } from "../v2/subversive";

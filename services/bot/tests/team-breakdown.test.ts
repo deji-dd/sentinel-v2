@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
+
 import {
 	db,
 	elimsMemberStats,
@@ -12,6 +13,7 @@ import type {
 	EmbedBuilder,
 	StringSelectMenuInteraction,
 } from "discord.js";
+
 import { elimsCommandsList, normalCommandsList } from "../src/commands/index";
 import {
 	escapeCsvField,

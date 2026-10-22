@@ -9,6 +9,7 @@ import type {
 } from "@sentinel/schemas";
 import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
+
 import { deployGuildCommands } from "../../scripts/deploy-commands";
 import { handleSubversiveChainAlert } from "../chain-alert-distributor";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
@@ -325,8 +326,7 @@ export function setupBotIpcListeners(client: Client): void {
 		} else if (message.action === "elims_assign_stat_roles") {
 			const guildId = message.data?.guildId;
 			const roleMappings = message.data?.roleMappings as
-				| Record<string, string>
-				| undefined;
+				Record<string, string> | undefined;
 			if (typeof guildId === "string" && roleMappings) {
 				void autoAssignElimsStatRoles(client, guildId, roleMappings);
 			}
@@ -606,8 +606,7 @@ export function setupBotIpcListeners(client: Client): void {
 			const guildId = message.data.guildId as string;
 			const channelId = message.data.channelId as string;
 			const clientDiscordId = message.data.clientDiscordId as
-				| string
-				| undefined;
+				string | undefined;
 			const reason = message.data.reason as string | undefined;
 			if (guildId && channelId) {
 				void archiveMercClientChannel(

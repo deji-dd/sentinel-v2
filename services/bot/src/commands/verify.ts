@@ -7,6 +7,7 @@ import {
 	PermissionFlagsBits,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { sendGuildAuditLog } from "../lib/guild-logger";
 import { sendVerificationRequest } from "../lib/ipc";

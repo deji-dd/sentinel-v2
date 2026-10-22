@@ -1,6 +1,7 @@
 import type { SubversiveChainAlertPayload } from "@sentinel/schemas";
 import { formatNumber } from "@sentinel/utils";
 import type { Client, EmbedBuilder, TextChannel } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

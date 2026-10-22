@@ -10,6 +10,7 @@ import {
 import { Link2, RotateCcw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
 import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell } from "@/components/PageShell";
@@ -37,8 +38,10 @@ interface DiscordRole {
 	position: number;
 }
 
-interface ChainAlertConfig
-	extends Omit<SubversiveChainConfig, "updatedAt" | "updatedBy"> {
+interface ChainAlertConfig extends Omit<
+	SubversiveChainConfig,
+	"updatedAt" | "updatedBy"
+> {
 	updatedAt?: string | null;
 	updatedBy?: string | null;
 }

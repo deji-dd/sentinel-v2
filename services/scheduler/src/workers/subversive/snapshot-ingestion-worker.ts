@@ -1,6 +1,7 @@
 import { db, sql, subversiveTargetFinderTargets } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {

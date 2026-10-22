@@ -10,6 +10,7 @@ import {
 	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import {
 	getHolderStock,
 	hasManagerPermission,
@@ -61,8 +62,7 @@ export const assignedStockCommand: BotCommand = {
 					.from(systemStates)
 					.where(eq(systemStates.id, ELIMS_ITEM_REQUESTS_CONFIG_ID));
 				const config = state?.data as unknown as
-					| ElimsItemRequestConfig
-					| undefined;
+					ElimsItemRequestConfig | undefined;
 
 				if (!hasManagerPermission(interaction, config)) {
 					await interaction.editReply({

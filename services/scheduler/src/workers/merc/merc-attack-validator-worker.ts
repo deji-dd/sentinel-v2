@@ -7,14 +7,15 @@ import {
 	inArray,
 	isAttackProcessed,
 	isMercResultCreditable,
-	type MercContract,
 	mapRowToMercContract,
+	type MercContract,
 	mercContracts,
 	recordMercContractHit,
 	resolveMercHitPayout,
 } from "@sentinel/database";
 import { Logger } from "@sentinel/utils";
 import { notifyBotAction } from "@sentinel/utils/ipc";
+
 import { schedulerEvents } from "../../lib/events";
 import { getFamilyMasterApiKeys } from "../../lib/family-master-keys";
 import type { WorkerStarter } from "../registry";

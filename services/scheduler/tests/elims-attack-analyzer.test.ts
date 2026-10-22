@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
 import { db, elimsTeamAttacks, eq } from "@sentinel/database";
+
 import {
 	_resetAttackAnalyzerState,
 	extractAttackerName,

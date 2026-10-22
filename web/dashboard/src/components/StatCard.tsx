@@ -3,15 +3,11 @@ import type * as React from "react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+
 import { StatusBadge } from "./StatusBadge";
 
 type StatTone =
-	| "neutral"
-	| "primary"
-	| "success"
-	| "warning"
-	| "danger"
-	| "info";
+	"neutral" | "primary" | "success" | "warning" | "danger" | "info";
 
 interface StatCardProps {
 	label: React.ReactNode;

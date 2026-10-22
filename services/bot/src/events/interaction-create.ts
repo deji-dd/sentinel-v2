@@ -11,6 +11,7 @@ import {
 	type Interaction,
 	MessageFlags,
 } from "discord.js";
+
 import type { BotCommand } from "../commands/index";
 import {
 	handleMercReceiptSelect,

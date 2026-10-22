@@ -7,13 +7,14 @@ import {
 	setSystemTime,
 	spyOn,
 } from "bun:test";
+
 import * as botIpc from "../src/lib/bot-ipc";
 import { subversiveDibsManager } from "../src/lib/dibs-manager";
 import { dibsMessageStore } from "../src/lib/dibs-message-store";
 import { dibsRecordStore } from "../src/lib/dibs-record-store";
 import {
-	type CurrentWarInfo,
 	createEmptyWarInfo,
+	type CurrentWarInfo,
 	type RankedWarOpponent,
 	subversiveTargetCache,
 } from "../src/lib/subversive-target-cache";
@@ -1357,8 +1358,7 @@ describe("SubversiveDibsManager", () => {
 					([action]) => action === "sweep_dibs_channel",
 				);
 				const sweepPayload = sweepCall?.[1] as
-					| { liveMessageIds?: string[] }
-					| undefined;
+					{ liveMessageIds?: string[] } | undefined;
 				expect(sweepPayload?.liveMessageIds).toContain("msg-restart-1");
 			} finally {
 				ipcSpy.mockRestore();

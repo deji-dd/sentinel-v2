@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import {
 	apiKeys,
 	db,
 	eq,
 	loadPersonalLiveState,
-	type PersonalLiveStateData,
 	personalLiveBars,
+	type PersonalLiveStateData,
 	personalLiveStates,
 	savePersonalLiveState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
+
 import {
 	getPersonalLiveState,
 	loadPersonalLiveStateFromDb,

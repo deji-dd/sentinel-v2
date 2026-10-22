@@ -6,6 +6,7 @@ import {
 	Logger,
 	resolveSubversiveFactionId,
 } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import {

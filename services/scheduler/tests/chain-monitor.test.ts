@@ -7,9 +7,11 @@ import {
 	it,
 	spyOn,
 } from "bun:test";
+
 import { db, inArray, subversiveTargetFinderTargets } from "@sentinel/database";
 import { DEFAULT_SUBVERSIVE_CHAIN_CONFIG } from "@sentinel/schemas";
 import { TornApiClient, TornError } from "@sentinel/torn-api";
+
 import * as chainConfigModule from "../src/lib/chain-config";
 import { setActiveIpcServer } from "../src/lib/ipc/server";
 import {

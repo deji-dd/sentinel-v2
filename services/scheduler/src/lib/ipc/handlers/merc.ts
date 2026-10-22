@@ -1,4 +1,5 @@
 import { Logger } from "@sentinel/utils";
+
 import {
 	type MercClaimant,
 	mercTargetManager,

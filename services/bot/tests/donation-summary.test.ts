@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
 import { db, elimsArmoryDeposits, eq } from "@sentinel/database";
 import type { ChatInputCommandInteraction } from "discord.js";
+
 import {
 	donationSummaryCommand,
 	generateDonationSummary,

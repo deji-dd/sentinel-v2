@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
+
 import {
 	db,
 	elimsStockHolders,
@@ -12,6 +13,7 @@ import type {
 	GuildMember,
 	User,
 } from "discord.js";
+
 import { assignedStockCommand } from "../src/commands/assigned-stock";
 import { elimsCommandsList, normalCommandsList } from "../src/commands/index";
 

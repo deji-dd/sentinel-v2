@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import { app } from "../src/app";
 
 describe("Elysia API Server - Personal Script Routes", () => {

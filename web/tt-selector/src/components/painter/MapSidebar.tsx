@@ -14,8 +14,8 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-
 import { useMemo, useState } from "react";
+
 import {
 	calculateDailyValue,
 	formatCurrency,

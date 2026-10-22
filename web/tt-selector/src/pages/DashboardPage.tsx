@@ -1,9 +1,8 @@
 import { FolderKanban, LogOut, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+
 import logoImg from "../../public/logo.png";
-
 import { ConflictDialog } from "../components/painter/ConflictDialog";
-
 import { HoverTooltip } from "../components/painter/HoverTooltip";
 import { MapManagerModal } from "../components/painter/MapManagerModal";
 import { MapSidebar } from "../components/painter/MapSidebar";

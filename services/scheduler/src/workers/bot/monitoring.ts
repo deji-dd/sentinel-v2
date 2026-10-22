@@ -10,6 +10,7 @@ import {
 import type { FactionMembersResponse } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
@@ -26,8 +27,7 @@ const logger = new Logger("Scheduler", "Monitoring");
  */
 const MONITOR_CONFIG_TTL_MS = 60_000;
 let cachedTargetMonitors:
-	| (typeof guildMonitoredFactions.$inferSelect)[]
-	| null = null;
+	(typeof guildMonitoredFactions.$inferSelect)[] | null = null;
 let cachedTargetMonitorsAt = 0;
 
 /** Test seam: drops the memoised monitor configuration. */

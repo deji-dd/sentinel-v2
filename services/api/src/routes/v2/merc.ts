@@ -1,12 +1,12 @@
 import {
 	createMercContract,
-	DEFAULT_MERC_CONTRACT_MODE,
 	db,
+	DEFAULT_MERC_CONTRACT_MODE,
 	eq,
 	getMercChannelConfig,
 	getMercContractHits,
-	getMercContractSummary,
 	getMercContracts,
+	getMercContractSummary,
 	getMercContractToken,
 	guildConfigs,
 	mapRowToMercContract,
@@ -16,6 +16,7 @@ import {
 } from "@sentinel/database";
 import { notifyBotAction } from "@sentinel/utils/ipc";
 import { Elysia, t } from "elysia";
+
 import { resolveDiscordTornUser } from "../../lib/resolve-discord-torn-user";
 import {
 	requestMercClaimTarget,

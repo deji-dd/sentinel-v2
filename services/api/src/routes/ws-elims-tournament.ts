@@ -1,6 +1,7 @@
 import { db, elimsTeams, sql } from "@sentinel/database";
 import { getElimsKeyPool } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
+
 import {
 	type AttackMatrixSnapshot,
 	type ElimsAttackMatrixTimeframe,
@@ -242,8 +243,7 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 		}),
 		async open(ws) {
 			const queryTf = ws.data.query?.timeframe as
-				| ElimsAttackMatrixTimeframe
-				| undefined;
+				ElimsAttackMatrixTimeframe | undefined;
 			const initialTf: ElimsAttackMatrixTimeframe =
 				queryTf === "24h" || queryTf === "12h" || queryTf === "1h"
 					? queryTf
@@ -282,8 +282,7 @@ export const wsElimsTournamentRoutes = new Elysia().ws(
 				});
 			} else if (message.type === "get_attack_matrix") {
 				const rawTf = message.timeframe as
-					| ElimsAttackMatrixTimeframe
-					| undefined;
+					ElimsAttackMatrixTimeframe | undefined;
 				const tf: ElimsAttackMatrixTimeframe =
 					rawTf === "24h" || rawTf === "12h" || rawTf === "1h" ? rawTf : "all";
 				const entry = activeSockets.get(ws.id);

@@ -15,6 +15,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import { ChannelSelect, type DiscordChannel } from "@/components/ChannelSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+
 import NotInitializedView from "../components/NotInitializedView";
 import VerificationLogsHistory from "../components/VerificationLogsHistory";
 import { useAuth } from "../contexts/AuthContext";

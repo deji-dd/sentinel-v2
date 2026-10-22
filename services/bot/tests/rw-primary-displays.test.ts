@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import type { RwOpponentLine } from "@sentinel/schemas";
+
 import {
 	buildDisplaysPayload,
 	resetRwPrimaryDisplaysState,

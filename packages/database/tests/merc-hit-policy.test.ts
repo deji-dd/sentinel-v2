@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
+
 import {
-	DISQUALIFYING_RESULTS,
 	describeUnpaidMercHit,
+	DISQUALIFYING_RESULTS,
 	isAssistResult,
 	isHospitalizedResult,
 	isLandedHit,

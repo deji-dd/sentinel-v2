@@ -5,6 +5,7 @@ import {
 	TORN_TRAVEL_DESTINATIONS,
 	type TravelDestination,
 } from "@sentinel/schemas";
+
 import type { RankedWarOpponent } from "../workers/subversive/ranked-war-worker";
 
 /**

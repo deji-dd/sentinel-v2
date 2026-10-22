@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import {
 	buildUserStockAlertConditionKey,
 	createEmptyUserStockAlertState,
@@ -9,6 +10,7 @@ import {
 	type UserStockAlertState,
 	type UserStockAlertSubscription,
 } from "@sentinel/schemas";
+
 import type { StockAlertSnapshot } from "../src/workers/subversive/stock-alert-rules";
 import {
 	evaluateUserStockAlert,

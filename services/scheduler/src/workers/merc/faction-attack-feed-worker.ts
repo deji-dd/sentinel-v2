@@ -11,8 +11,9 @@ import {
 	sql,
 	upsertWorkerState,
 } from "@sentinel/database";
-import { TornApiClient, TornError, tornApi } from "@sentinel/torn-api";
+import { tornApi, TornApiClient, TornError } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import {
 	cadenceForActivity,
 	DEFAULT_ATTACK_FEED_CADENCE_MS,

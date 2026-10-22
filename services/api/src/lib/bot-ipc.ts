@@ -1,4 +1,5 @@
 import net from "node:net";
+
 import { Logger } from "@sentinel/utils";
 import { IPC_SOCKET_PATHS } from "@sentinel/utils/ipc";
 

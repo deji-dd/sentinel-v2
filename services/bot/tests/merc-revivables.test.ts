@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import { mapRowToMercContract, type mercContracts } from "@sentinel/database";
+
 import {
 	buildMercRevivablesEmbed,
 	type RevivableMemberPayload,

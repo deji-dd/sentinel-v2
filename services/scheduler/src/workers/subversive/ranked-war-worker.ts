@@ -10,12 +10,13 @@ import {
 } from "@sentinel/schemas";
 import {
 	getPlayerStats,
+	tornApi,
 	TornApiClient,
 	TornError,
-	tornApi,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 import type { IpcServer } from "@sentinel/utils/ipc";
+
 import { schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import {

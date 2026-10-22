@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import type { DibsItem } from "../src/types";
 import { syncDibsFromServer } from "../src/war/dibs-sync";
 

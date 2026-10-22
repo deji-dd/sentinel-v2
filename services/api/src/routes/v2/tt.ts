@@ -10,10 +10,11 @@ import {
 	tornItems,
 	tornMarketPrices,
 	userMaps,
-	userSessions,
 	users,
+	userSessions,
 } from "@sentinel/database";
 import { Elysia, t } from "elysia";
+
 import type { AuthSession, AuthUser } from "../../middleware/auth";
 
 export const ttRoutes = new Elysia({ prefix: "/tt" })

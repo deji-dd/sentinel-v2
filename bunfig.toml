@@ -3,3 +3,10 @@
 # `@sentinel/database` opens its connection pool. See scripts/test-preload.ts
 # for why this is mandatory rather than a convenience.
 preload = ["./scripts/test-preload.ts"]
+
+[fmt]
+useTabs = true
+singleQuote = false
+semi = true
+trailingComma = "all"
+sortImports = true

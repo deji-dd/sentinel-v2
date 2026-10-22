@@ -14,6 +14,7 @@ import {
 	type UserStockAlertState,
 	type UserStockAlertSubscription,
 } from "@sentinel/schemas";
+
 import type { StockAlertSnapshot } from "./stock-alert-rules";
 
 /**

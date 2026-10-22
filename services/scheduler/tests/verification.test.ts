@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import {
 	apiKeys,
 	db,
@@ -10,6 +11,7 @@ import {
 	verifiedUsers,
 } from "@sentinel/database";
 import type { BulkVerificationProgressData } from "@sentinel/schemas";
+
 import {
 	runBulkGuildVerification,
 	runVerificationJob,

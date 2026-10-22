@@ -5,6 +5,7 @@ import {
 	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { createErrorEmbed, createSuccessEmbed } from "../lib/embeds";
 import { logger } from "../lib/logger";
 import type { BotCommand } from "./index";

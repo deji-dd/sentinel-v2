@@ -4,8 +4,8 @@ import {
 	formatCompactNumber,
 	formatDecimal,
 	formatNumber,
-	GYM_DEFINITIONS,
 	getTargetRatios,
+	GYM_DEFINITIONS,
 	parseDateOnly,
 	parseShorthandNumber,
 	STORAGE_KEYS,
@@ -614,11 +614,7 @@ export class BattlestatsTab {
 		this.container.querySelectorAll("[data-tf]").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const tf = btn.getAttribute("data-tf") as
-					| "7d"
-					| "14d"
-					| "30d"
-					| "90d"
-					| "all";
+					"7d" | "14d" | "30d" | "90d" | "all";
 				if (tf) this.setTimeframe(tf);
 			});
 		});

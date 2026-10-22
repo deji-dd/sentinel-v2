@@ -1,4 +1,5 @@
 import type { Elysia } from "elysia";
+
 import { getMethodLogger } from "../lib/logger";
 
 /**
@@ -13,8 +14,7 @@ export const requestLoggerPlugin = (app: Elysia) =>
 		})
 		.onAfterHandle(({ request, store }) => {
 			const startTime = (store as Record<string, unknown>).startTime as
-				| number
-				| undefined;
+				number | undefined;
 			const duration = startTime
 				? Math.round(performance.now() - startTime)
 				: 0;

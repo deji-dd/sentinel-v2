@@ -1,5 +1,6 @@
 import { isTargetGuildAsync } from "@sentinel/database";
 import { Events, type Guild } from "discord.js";
+
 import { logger } from "../lib/logger";
 import { deployGuildCommands } from "../scripts/deploy-commands";
 

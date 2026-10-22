@@ -1,11 +1,13 @@
 import { AlertTriangle, LogOut, RefreshCw } from "lucide-react";
 import { useState } from "react";
+
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
+
 import { useAuth } from "../contexts/AuthContext";
 import { useElims } from "../contexts/ElimsContext";
 import { useRouter } from "../router";

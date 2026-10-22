@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import { classifyOpponentsIntoRwBuckets } from "../src/lib/rw-opponent-buckets";
 import type { RankedWarOpponent } from "../src/workers/subversive/ranked-war-worker";
 

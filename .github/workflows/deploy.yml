@@ -53,9 +53,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          # Kept in lockstep with the `FROM oven/bun:` pin in the Dockerfile so
+          # Kept in lockstep with the pinned Bun image in the Dockerfile so
           # CI and the runtime image cannot drift apart.
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Install Dependencies
         run: bun install --frozen-lockfile
@@ -63,8 +63,8 @@ jobs:
       - name: Run Typecheck
         run: bun run typecheck
 
-      - name: Run Linter
-        run: bun run lint
+      - name: Check Formatting
+        run: bun run format:check
 
       - name: Build Web Dashboards
         run: bun run web:build

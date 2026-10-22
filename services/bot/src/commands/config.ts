@@ -2,6 +2,7 @@ import {
 	type ChatInputCommandInteraction,
 	SlashCommandBuilder,
 } from "discord.js";
+
 import { dashboardCommand } from "./dashboard";
 
 export const configCommand = {

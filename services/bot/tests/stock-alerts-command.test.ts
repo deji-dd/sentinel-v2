@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
+
 import { USER_STOCK_ALERT_CONDITIONS } from "@sentinel/schemas";
 import { MessageFlags } from "discord.js";
+
 import {
 	buildAlertModal,
 	buildStockPicker,

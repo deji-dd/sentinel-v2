@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+
 import { tornApi } from "@sentinel/torn-api";
+
 import {
 	resolveDiscordTornUser,
 	resolveTornUser,

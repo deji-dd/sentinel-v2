@@ -1,8 +1,8 @@
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useRef } from "react";
-import type { RewardInfo } from "../../lib/racket-utils";
 
+import type { RewardInfo } from "../../lib/racket-utils";
 import { calculateDailyValue, parseRewardString } from "../../lib/racket-utils";
 
 export interface MapLabel {

@@ -20,9 +20,9 @@ import {
 	nextSortState,
 	type SortAccessors,
 	type SortDirection,
-	type SortState,
 	sortIndicator,
 	sortRows,
+	type SortState,
 } from "../ui/table-sort";
 
 declare function GM_getValue<T>(key: string, defaultValue?: T): T;
@@ -823,8 +823,7 @@ export class CompanyTab {
 			.forEach((btn) => {
 				btn.addEventListener("click", () => {
 					const mode = btn.getAttribute("data-chart-mode") as
-						| "financials"
-						| "production";
+						"financials" | "production";
 					if (mode && mode !== this.currentChartMode) {
 						this.container
 							.querySelectorAll<HTMLButtonElement>("button[data-chart-mode]")

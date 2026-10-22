@@ -1,4 +1,5 @@
 import { join } from "node:path";
+
 import { Logger } from "../packages/utils";
 
 const logger = new Logger("FactionAlliancesRefresher");

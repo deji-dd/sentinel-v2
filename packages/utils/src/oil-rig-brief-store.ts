@@ -182,8 +182,7 @@ export function attributeBriefOutcome(
 	analysis: OilRigAnalysis,
 ): BriefOutcome {
 	const before = previous.decision as
-		| Record<string, number | string | undefined>
-		| undefined;
+		Record<string, number | string | undefined> | undefined;
 	const after = analysis.decision;
 
 	const fillBefore = num(before, "fillPct") ?? 0;

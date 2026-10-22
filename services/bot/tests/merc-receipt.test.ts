@@ -1,4 +1,5 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
+
 import * as database from "@sentinel/database";
 import type {
 	AttachmentBuilder,
@@ -6,6 +7,7 @@ import type {
 	EmbedBuilder,
 	StringSelectMenuInteraction,
 } from "discord.js";
+
 import {
 	createMercReceiptSelectActionRow,
 	handleMercReceiptSelect,

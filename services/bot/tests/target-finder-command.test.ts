@@ -2,6 +2,7 @@ import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import * as databaseModule from "@sentinel/database";
 import type { ChatInputCommandInteraction } from "discord.js";
+
 import { normalCommandsList } from "../src/commands/index";
 import { targetFinderCommand } from "../src/commands/target-finder";
 

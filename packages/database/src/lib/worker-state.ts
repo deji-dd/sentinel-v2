@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
+
 import { db } from "../../index";
-import { type WorkerStateRow, workerState } from "../schema/system";
+import { workerState, type WorkerStateRow } from "../schema/system";
 
 /**
  * Read/write access to {@link workerState}, the sanctioned home for background

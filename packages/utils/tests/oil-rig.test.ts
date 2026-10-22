@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import type { EmployeeData } from "../src/oil-rig";
 import {
 	analyzeHiringPriorities,
@@ -7,9 +8,9 @@ import {
 	analyzeStockAndPricing,
 	assessCapacityRegime,
 	buildBottleneckQuotas,
-	type CapacityRegime,
 	calcRoleFit,
 	calcStatScore,
+	type CapacityRegime,
 	deriveRosterBaseline,
 	estimateDailyProduced,
 	estimateDiscardedBarrels,
@@ -259,9 +260,8 @@ describe("Oil Rig Domain & Solver Engine", () => {
 	});
 
 	it("builds strictly Monday - Sunday week-to-date daily logs and profit (income - wages - ad)", async () => {
-		const { buildWeekToDateLogEntries, formatWeekToDateTable } = await import(
-			"../src/oil-rig"
-		);
+		const { buildWeekToDateLogEntries, formatWeekToDateTable } =
+			await import("../src/oil-rig");
 
 		// Reference date: Wednesday 2026-09-30
 		const refDate = new Date("2026-09-30T12:00:00Z");
@@ -382,9 +382,8 @@ describe("Oil Rig Domain & Solver Engine", () => {
 	});
 
 	it("omits role transfers, target lineups, pricing, ad budget, and 10* roadmap when no changes needed", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		// Rig where employees are already in target positions, price 181 is maintained, ad budget maintained
 		const briefing = await generateAndSendDirectorBriefing({
@@ -513,9 +512,8 @@ describe("Oil Rig Domain & Solver Engine", () => {
 	});
 
 	it("verifies profit calculations are taken from DB snapshots and immune to live wage changes", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		// DB snapshot has dailyIncome: 55M, dailyWages: 3.5M, adBudget: 3M -> Profit: 48.5M
 		const history = [
@@ -949,9 +947,8 @@ describe("Director briefing loops regression", () => {
 	};
 
 	it("does not repeat the ad-budget demand when the live setting already matches the target", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		const briefing = await generateAndSendDirectorBriefing({
 			isolateFromDatabase: true,
@@ -969,9 +966,8 @@ describe("Director briefing loops regression", () => {
 	});
 
 	it("delivers the deterministic advice plus details, chunked for Discord", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		const realFetch = globalThis.fetch;
 		const savedEnv = {
@@ -1261,9 +1257,8 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 	});
 
 	it("wires the bottleneck through the briefing so both sections agree", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		const employees = build19().map((e) => ({
 			id: e.id ?? 0,
@@ -1330,9 +1325,8 @@ describe("Capacity rebalance (smart employee re-arrangement)", () => {
 	});
 
 	it("does not rebalance a rig whose stock is draining normally", async () => {
-		const { generateAndSendDirectorBriefing } = await import(
-			"../src/oil-rig-briefing"
-		);
+		const { generateAndSendDirectorBriefing } =
+			await import("../src/oil-rig-briefing");
 
 		const briefing = await generateAndSendDirectorBriefing({
 			isolateFromDatabase: true,

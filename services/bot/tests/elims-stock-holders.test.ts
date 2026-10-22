@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+
 import {
 	assignStockToHolder,
 	db,
@@ -10,6 +11,7 @@ import {
 	getUnassignedStock,
 	reclaimStockFromHolder,
 } from "@sentinel/database";
+
 import { resolveTornItem } from "../src/lib/elims-armory-storage";
 import { buildStockHolderItemEmbed } from "../src/lib/elims-stock-holders";
 
@@ -311,9 +313,8 @@ describe("Elims Stock Holders Module", () => {
 	});
 
 	test("hasManagerPermission correctly checks administrator permissions and manager roles", async () => {
-		const { hasManagerPermission } = await import(
-			"../src/lib/elims-stock-holders"
-		);
+		const { hasManagerPermission } =
+			await import("../src/lib/elims-stock-holders");
 
 		const adminInteraction = {
 			member: {

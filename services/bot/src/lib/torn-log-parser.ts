@@ -577,7 +577,7 @@ export function validateSentLogAgainstRequest(
 			expected.requestCreatedAt instanceof Date
 				? expected.requestCreatedAt.getTime()
 				: typeof expected.requestCreatedAt === "string" ||
-						typeof expected.requestCreatedAt === "number"
+					  typeof expected.requestCreatedAt === "number"
 					? new Date(expected.requestCreatedAt).getTime()
 					: null;
 

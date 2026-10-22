@@ -4743,12 +4743,7 @@ export interface components {
 			| "loot";
 		/** @enum {string} */
 		MissionDifficultyEnum:
-			| "Very easy"
-			| "Easy"
-			| "Medium"
-			| "Hard"
-			| "Very hard"
-			| "Expert";
+			"Very easy" | "Easy" | "Medium" | "Hard" | "Very hard" | "Expert";
 		/** @enum {string} */
 		MissionStatusEnum: "Accepted" | "Available" | "Failed" | "Completed";
 		/** @enum {string} */
@@ -4757,10 +4752,7 @@ export interface components {
 		UserDonatorStatusEnum: "Donator" | "Subscriber";
 		/** @enum {string} */
 		UserMessageTypeEnum:
-			| "Company newsletter"
-			| "Faction newsletter"
-			| "Warning"
-			| "User message";
+			"Company newsletter" | "Faction newsletter" | "Warning" | "User message";
 		/** @enum {string} */
 		JobTypeEnum: "Army" | "Casino" | "Education" | "Grocer" | "Law" | "Medical";
 		/** @enum {string} */
@@ -9164,12 +9156,7 @@ export interface components {
 		CompanyNewsCategory: "main" | "funds" | "training" | "employees" | "all";
 		/** @enum {string} */
 		FactionRankEnum:
-			| "Unranked"
-			| "Bronze"
-			| "Silver"
-			| "Gold"
-			| "Platinum"
-			| "Diamond";
+			"Unranked" | "Bronze" | "Silver" | "Gold" | "Platinum" | "Diamond";
 		/** @enum {string} */
 		UserCrimeUniquesRewardAmmoEnum: "standard" | "special";
 		/** @enum {string} */
@@ -9200,12 +9187,7 @@ export interface components {
 		 * @enum {string}
 		 */
 		TornOrganizedCrimePositionIdDeprecated:
-			| "P1"
-			| "P2"
-			| "P3"
-			| "P4"
-			| "P5"
-			| "P6";
+			"P1" | "P2" | "P3" | "P4" | "P5" | "P6";
 		/** @enum {string} */
 		FactionTerritoryWarResultEnum:
 			| "success_assault"
@@ -9256,11 +9238,7 @@ export interface components {
 			| "General";
 		/** @enum {string} */
 		JobPositionGrocerEnum:
-			| "Bagboy"
-			| "Price Labeler"
-			| "Cashier"
-			| "Food Delivery"
-			| "Manager";
+			"Bagboy" | "Price Labeler" | "Cashier" | "Food Delivery" | "Manager";
 		/** @enum {string} */
 		WeaponBonusEnum:
 			| "Any"
@@ -9447,11 +9425,7 @@ export interface components {
 		TradeCategoryEnum: "finished" | "ongoing";
 		/** @enum {string} */
 		FactionCrimeUserOutcome:
-			| "Successful"
-			| "Failed"
-			| "Jailed"
-			| "Injured"
-			| "Hospitalized";
+			"Successful" | "Failed" | "Jailed" | "Injured" | "Hospitalized";
 		/** @enum {string} */
 		FactionCrimeUserItemOutcomeEnum: "user" | "faction";
 		/** @enum {string} */
@@ -9513,8 +9487,7 @@ export interface components {
 		StockId: number;
 		DiscordId: string;
 		UserDiscordPathId:
-			| components["schemas"]["UserId"]
-			| components["schemas"]["DiscordId"];
+			components["schemas"]["UserId"] | components["schemas"]["DiscordId"];
 		/** Format: int32 */
 		EliminationTeamId: number;
 		/** Format: int64 */
@@ -9595,11 +9568,7 @@ export interface components {
 		ForumFeedTypeEnum: 1 | 2 | 3 | 4 | 5 | 6 | 7;
 		/** @enum {string} */
 		GymClassEnum:
-			| "Basic"
-			| "Lightweight"
-			| "Middleweight"
-			| "Heavyweight"
-			| "Specialist";
+			"Basic" | "Lightweight" | "Middleweight" | "Heavyweight" | "Specialist";
 		/** @enum {string} */
 		ShopNameEnum:
 			| "Arms Dealer"
@@ -9682,8 +9651,7 @@ export interface components {
 			  )
 			| string;
 		Parameters:
-			| ("destroyed" | "notDestroyed" | "recruiting" | "notRecruiting")
-			| string;
+			("destroyed" | "notDestroyed" | "recruiting" | "notRecruiting") | string;
 		/** @enum {string} */
 		TornShopliftingStatusTitleEnum:
 			| "One camera"
@@ -9697,12 +9665,7 @@ export interface components {
 		ReviveSetting: "Everyone" | "Friends & faction" | "No one" | "Unknown";
 		/** @enum {string} */
 		FactionWarfareTypeEnum:
-			| "ranked"
-			| "territory"
-			| "raid"
-			| "chain"
-			| "chainOngoing"
-			| "db";
+			"ranked" | "territory" | "raid" | "chain" | "chainOngoing" | "db";
 		/** @enum {string} */
 		PropertyModificationEnum:
 			| "Hot Tub"
@@ -9725,11 +9688,7 @@ export interface components {
 		PropertyStaffEnum: "Maid" | "Guard" | "Doctor" | "Pilot" | "Butler";
 		/** @enum {string} */
 		FactionCrimeStatusEnum:
-			| "Recruiting"
-			| "Planning"
-			| "Successful"
-			| "Failure"
-			| "Expired";
+			"Recruiting" | "Planning" | "Successful" | "Failure" | "Expired";
 		/** @enum {string} */
 		AttackActionEnum:
 			| "attackerhosp"
@@ -9762,11 +9721,7 @@ export interface components {
 			| "won";
 		/** @enum {string} */
 		TornItemAmmoTypeEnum:
-			| "Standard"
-			| "Hollow Point"
-			| "Piercing"
-			| "Tracer"
-			| "Incendiary";
+			"Standard" | "Hollow Point" | "Piercing" | "Tracer" | "Incendiary";
 		/** @enum {string} */
 		TornItemWeaponTypeEnum:
 			| "Heavy artillery"
@@ -15593,8 +15548,7 @@ export interface components {
 			position_info: components["schemas"]["FactionSlotPositionInfo"];
 			name: string;
 			required_item:
-				| components["schemas"]["TornOrganizedCrimeRequiredItem"]
-				| null;
+				components["schemas"]["TornOrganizedCrimeRequiredItem"] | null;
 		};
 		TornOrganizedCrimeRequiredItem: {
 			id: components["schemas"]["ItemId"];
@@ -16140,8 +16094,7 @@ export interface components {
 		 *      * `filters=respect:>=:20000,id:<:100,notRecruiting`
 		 */
 		ApiFactionSearchFilter: (
-			| ("destroyed" | "notDestroyed" | "recruiting" | "notRecruiting")
-			| string
+			("destroyed" | "notDestroyed" | "recruiting" | "notRecruiting") | string
 		)[];
 		/** @description Comment for your tool/service/bot/website to be visible in the logs. */
 		ApiComment: string;

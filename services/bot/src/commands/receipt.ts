@@ -1,7 +1,7 @@
 import {
 	getMercContractById,
-	getMercContractSummary,
 	getMercContracts,
+	getMercContractSummary,
 	type MercContract,
 } from "@sentinel/database";
 import {
@@ -12,6 +12,7 @@ import {
 	StringSelectMenuBuilder,
 	type StringSelectMenuInteraction,
 } from "discord.js";
+
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { logger } from "../lib/logger";
 import { buildMercContractReceiptPayload } from "../lib/merc-alert-distributor";

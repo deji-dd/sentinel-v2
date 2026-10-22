@@ -24,6 +24,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import { useToast } from "../contexts/ToastContext";
 import { api } from "../lib/api";
 
@@ -475,11 +477,11 @@ export function MercContractsPage({ guildId }: MercContractsPageProps) {
 		editingContract?.status === "paused";
 	const isContractStarted = Boolean(
 		editingContract &&
-			(editingContract.status === "active" ||
-				editingContract.status === "paused" ||
-				editingContract.status === "completed" ||
-				editingContract.status === "cancelled" ||
-				new Date(editingContract.startTime).getTime() <= Date.now()),
+		(editingContract.status === "active" ||
+			editingContract.status === "paused" ||
+			editingContract.status === "completed" ||
+			editingContract.status === "cancelled" ||
+			new Date(editingContract.startTime).getTime() <= Date.now()),
 	);
 	const [editStartImmediately, setEditStartImmediately] = useState(true);
 	const [editCustomStartTime, setEditCustomStartTime] = useState(() =>

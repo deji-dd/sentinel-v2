@@ -1,4 +1,4 @@
-import { Logger, loadLatestSnapshotFromDb } from "../../packages/utils";
+import { loadLatestSnapshotFromDb, Logger } from "../../packages/utils";
 import { calcRoleFit, OIL_RIG_ROLES } from "./role-audit";
 
 const logger = new Logger("LineupOptimizer");

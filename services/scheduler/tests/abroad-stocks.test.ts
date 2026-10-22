@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import { db, eq, travelDestinations } from "@sentinel/database";
+
 import { runTravelSync } from "../src/workers/torn/abroad-stocks";
 
 describe("Torn Abroad Stocks Sync Worker", () => {

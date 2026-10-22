@@ -10,16 +10,16 @@ Tailwind utilities through `@theme inline`. **Never** write raw palette colours
 (`text-amber-400`, `bg-blue-500/10`, `border-emerald-500/30`) or hex values.
 They do not respond to the light/dark theme toggle.
 
-| Need | Use |
-| --- | --- |
+| Need                           | Use                                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------- |
 | Page / card / popover surfaces | `bg-background`, `bg-card`, `bg-popover`, `bg-muted`, `bg-accent`, `bg-secondary` |
-| Body copy | `text-foreground`, `text-muted-foreground` |
-| Primary action / active state | `bg-primary`, `text-primary`, `border-primary/30`, `bg-primary/10` |
-| Positive / live / saved | `text-success`, `bg-success/10`, `border-success/30` |
-| Caution / pending / dirty | `text-warning`, `bg-warning/10`, `border-warning/30` |
-| Error / destructive | `text-destructive`, `bg-destructive/10`, `border-destructive/30` |
-| Neutral status / counters | `text-info`, `bg-info/10`, `border-info/30` |
-| Dividers | `border-border`, `border-border/60`, `border-border/40` |
+| Body copy                      | `text-foreground`, `text-muted-foreground`                                        |
+| Primary action / active state  | `bg-primary`, `text-primary`, `border-primary/30`, `bg-primary/10`                |
+| Positive / live / saved        | `text-success`, `bg-success/10`, `border-success/30`                              |
+| Caution / pending / dirty      | `text-warning`, `bg-warning/10`, `border-warning/30`                              |
+| Error / destructive            | `text-destructive`, `bg-destructive/10`, `border-destructive/30`                  |
+| Neutral status / counters      | `text-info`, `bg-info/10`, `border-info/30`                                       |
+| Dividers                       | `border-border`, `border-border/60`, `border-border/40`                           |
 
 For anything shaped like a status pill use the shared `StatusBadge`
 (`@/components/StatusBadge`) with `tone="neutral | primary | success | warning |
@@ -39,19 +39,19 @@ because `@custom-variant dark` is declared in `index.css`. Do not add
 
 ## Shared components — use these, do not re-implement
 
-| Component | Import | Purpose |
-| --- | --- | --- |
-| `PageShell` | `@/components/PageShell` | Page container: max width, vertical rhythm, bottom padding |
-| `PageSection` | `@/components/PageShell` | Titled block inside a page |
-| `PageHeader` | `@/components/PageHeader` | Title / description / icon / badge / actions row |
-| `SectionCard` | `@/components/SectionCard` | Card with header + body and standard padding |
-| `SectionCardFooter` | `@/components/SectionCard` | Card footer: status text + stacked action buttons |
-| `StatusBadge` | `@/components/StatusBadge` | Semantic status pill |
-| `StatCard`, `StatGrid` | `@/components/StatCard` | Metric tiles |
-| `EmptyState` | `@/components/EmptyState` | "Nothing here yet" block |
-| `ConfirmDialog` | `@/components/ConfirmDialog` | Destructive-action confirmation |
-| `ScrollX`, `ScrollableTabs`, `Pagination` | `@/components/ScrollX` | Horizontal overflow, tab strips, table paging |
-| `PageLoader`, `InlineLoader` | `@/components/PageLoader` | Loading states |
+| Component                                 | Import                       | Purpose                                                    |
+| ----------------------------------------- | ---------------------------- | ---------------------------------------------------------- |
+| `PageShell`                               | `@/components/PageShell`     | Page container: max width, vertical rhythm, bottom padding |
+| `PageSection`                             | `@/components/PageShell`     | Titled block inside a page                                 |
+| `PageHeader`                              | `@/components/PageHeader`    | Title / description / icon / badge / actions row           |
+| `SectionCard`                             | `@/components/SectionCard`   | Card with header + body and standard padding               |
+| `SectionCardFooter`                       | `@/components/SectionCard`   | Card footer: status text + stacked action buttons          |
+| `StatusBadge`                             | `@/components/StatusBadge`   | Semantic status pill                                       |
+| `StatCard`, `StatGrid`                    | `@/components/StatCard`      | Metric tiles                                               |
+| `EmptyState`                              | `@/components/EmptyState`    | "Nothing here yet" block                                   |
+| `ConfirmDialog`                           | `@/components/ConfirmDialog` | Destructive-action confirmation                            |
+| `ScrollX`, `ScrollableTabs`, `Pagination` | `@/components/ScrollX`       | Horizontal overflow, tab strips, table paging              |
+| `PageLoader`, `InlineLoader`              | `@/components/PageLoader`    | Loading states                                             |
 
 Everything else must come from `@/components/ui/*` (shadcn). Available:
 `accordion`, `alert`, `alert-dialog`, `avatar`, `badge`, `button`, `card`,
@@ -77,7 +77,7 @@ default; **write the mobile layout first and add `sm:`/`lg:` overrides.**
    This applies to card footers, toolbar/header rows, filter bars, form rows and
    button groups.
 3. Multi-column grids start at one column: `grid grid-cols-1 gap-3 sm:grid-cols-2
-   lg:grid-cols-4`. Never `grid-cols-2` as the base.
+lg:grid-cols-4`. Never `grid-cols-2` as the base.
 4. Any horizontal row that can overflow (tables, tab strips, chip lists, long
    values) must live in `ScrollX` / `ScrollableTabs`, or be `min-w-0` + `truncate`.
 5. Long dynamic text (guild names, channel names, usernames, URLs, error
@@ -103,5 +103,5 @@ default; **write the mobile layout first and add `sm:`/`lg:` overrides.**
 - Preserve all existing behaviour, data fetching, handlers, validation and copy.
   This is a presentation refactor — do not rename props, remove features, or
   change API calls.
-- Keep files formatted the way Biome expects (tabs, double quotes, trailing
-  commas). Run `npx biome check --write <files>` on the files you touch.
+- Keep files formatted the way `bun fmt` expects (tabs, double quotes, trailing
+  commas). Run `bun fmt <files>` on the files you touch.

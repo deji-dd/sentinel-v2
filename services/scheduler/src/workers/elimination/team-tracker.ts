@@ -1,8 +1,8 @@
 import {
 	db,
 	elimsTeamPlayers,
-	elimsTeamSnapshots,
 	elimsTeams,
+	elimsTeamSnapshots,
 	eq,
 	sql,
 	systemStates,
@@ -10,10 +10,11 @@ import {
 import {
 	getElimsKeyPool,
 	type ManagedApiKey,
-	TornError,
 	tornApi,
+	TornError,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStarter } from "../registry";
 import { queueAttackAnalysis } from "./attack-analyzer";
@@ -196,8 +197,7 @@ export async function runElimsTrackingCycle(): Promise<number> {
 			.from(systemStates)
 			.where(eq(systemStates.id, "elims:guild_config"));
 		const configData = configRecord?.data as
-			| { workersStopped?: boolean }
-			| undefined;
+			{ workersStopped?: boolean } | undefined;
 		if (configData?.workersStopped) {
 			logger.info(
 				"Elims workers are powered off in guild config. Pausing team tracker for 60s...",

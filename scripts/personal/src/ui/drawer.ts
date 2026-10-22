@@ -33,11 +33,7 @@ function clampDrawerWidth(width: number, viewportWidth: number): number {
 
 /** Tabs that render a body. */
 export type DrawerTabName =
-	| "crimes"
-	| "battlestats"
-	| "company"
-	| "stocks"
-	| "settings";
+	"crimes" | "battlestats" | "company" | "stocks" | "settings";
 
 /** The lifecycle every tab body implements, so the drawer has one code path. */
 interface DrawerTab {

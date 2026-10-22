@@ -1,6 +1,7 @@
-import { apiKeys, db, desc, eq, userSessions, users } from "@sentinel/database";
+import { apiKeys, db, desc, eq, users, userSessions } from "@sentinel/database";
 import { encryptApiKey, hashApiKey, TornApiClient } from "@sentinel/torn-api";
 import { Elysia, t } from "elysia";
+
 import { env } from "../../config/env";
 import { battlestatsLedgerRoutes } from "./battlestats-ledger";
 import { companyRoutes } from "./company";

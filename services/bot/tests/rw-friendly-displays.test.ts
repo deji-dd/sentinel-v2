@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import type { RwFriendlyLine } from "@sentinel/schemas";
+
 import {
 	buildFriendlyPayload,
 	resetRwFriendlyDisplaysState,

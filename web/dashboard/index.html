@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
@@ -16,8 +16,7 @@
 				var stored, theme, root;
 				try {
 					stored = localStorage.getItem("sentinel-theme");
-					theme =
-						stored === "light" || stored === "dark" ? stored : "dark";
+					theme = stored === "light" || stored === "dark" ? stored : "dark";
 					root = document.documentElement;
 					root.setAttribute("data-theme", theme);
 					root.classList.toggle("dark", theme === "dark");
@@ -35,20 +34,73 @@
 		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-		<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+		<link
+			href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap"
+			rel="stylesheet"
+		/>
 	</head>
-	<body style="margin: 0; background: #060911;">
+	<body style="margin: 0; background: #060911">
 		<div id="root">
-			<div style="display: flex; height: 100dvh; width: 100%; align-items: center; justify-content: center; background: #060911; color: #94a3b8; font-family: system-ui, -apple-system, sans-serif; flex-direction: column; gap: 16px; position: fixed; inset: 0; z-index: 99999;">
-				<div style="width: 44px; height: 44px; border: 3px solid rgba(255, 255, 255, 0.08); border-top-color: #6366f1; border-radius: 50%; animation: sentinel-spin 0.75s linear infinite;"></div>
-				<div style="display: flex; align-items: center; gap: 8px;">
-					<span style="font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; font-family: monospace; color: #f8fafc;">SENTINEL</span>
-					<span style="font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; font-family: monospace; color: #64748b;">• Loading Dashboard</span>
+			<div
+				style="
+					display: flex;
+					height: 100dvh;
+					width: 100%;
+					align-items: center;
+					justify-content: center;
+					background: #060911;
+					color: #94a3b8;
+					font-family:
+						system-ui,
+						-apple-system,
+						sans-serif;
+					flex-direction: column;
+					gap: 16px;
+					position: fixed;
+					inset: 0;
+					z-index: 99999;
+				"
+			>
+				<div
+					style="
+						width: 44px;
+						height: 44px;
+						border: 3px solid rgba(255, 255, 255, 0.08);
+						border-top-color: #6366f1;
+						border-radius: 50%;
+						animation: sentinel-spin 0.75s linear infinite;
+					"
+				></div>
+				<div style="display: flex; align-items: center; gap: 8px">
+					<span
+						style="
+							font-size: 13px;
+							font-weight: 700;
+							letter-spacing: 0.1em;
+							text-transform: uppercase;
+							font-family: monospace;
+							color: #f8fafc;
+						"
+						>SENTINEL</span
+					>
+					<span
+						style="
+							font-size: 11px;
+							font-weight: 500;
+							letter-spacing: 0.05em;
+							text-transform: uppercase;
+							font-family: monospace;
+							color: #64748b;
+						"
+						>• Loading Dashboard</span
+					>
 				</div>
 			</div>
 			<style>
 				@keyframes sentinel-spin {
-					to { transform: rotate(360deg); }
+					to {
+						transform: rotate(360deg);
+					}
 				}
 			</style>
 		</div>

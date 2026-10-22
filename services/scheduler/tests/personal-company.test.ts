@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import {
 	apiKeys,
 	companyDailyProfits,
@@ -9,6 +10,7 @@ import {
 	workerState,
 } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
+
 import { schedulerEvents } from "../src/lib/events";
 import { stopWorkerByName } from "../src/lib/scheduler";
 import {

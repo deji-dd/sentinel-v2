@@ -6,6 +6,7 @@ import {
 	type Client,
 	EmbedBuilder,
 } from "discord.js";
+
 import { EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import { formatTctTimestamp } from "./torn-log-parser";

@@ -5,6 +5,7 @@ import {
 	type SlashCommandOptionsOnlyBuilder,
 	type SlashCommandSubcommandsOnlyBuilder,
 } from "discord.js";
+
 import { allianceMapCommand } from "./alliance-map";
 import { assaultCheckCommand } from "./assault-check";
 import { assignedStockCommand } from "./assigned-stock";
@@ -33,10 +34,7 @@ export {
 };
 
 export type BotModule =
-	| "verification"
-	| "territory"
-	| "reaction_roles"
-	| "monitoring";
+	"verification" | "territory" | "reaction_roles" | "monitoring";
 
 /**
  * Where a command may be deployed and run.

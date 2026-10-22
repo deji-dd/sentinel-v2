@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+
 import { db, eq, subversiveChainConfigs } from "@sentinel/database";
 import { DEFAULT_SUBVERSIVE_CHAIN_CONFIG } from "@sentinel/schemas";
+
 import { app } from "../src/app";
 
 /**

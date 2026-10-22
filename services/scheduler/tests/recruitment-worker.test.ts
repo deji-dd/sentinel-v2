@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+
 import * as databaseModule from "@sentinel/database";
 import * as tornApiModule from "@sentinel/torn-api";
+
 import {
 	MAX_RANKED_WAR_DURATION_SECONDS,
 	resetRecruitmentCache,

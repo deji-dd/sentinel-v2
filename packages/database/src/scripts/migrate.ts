@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
 import { migrate } from "drizzle-orm/postgres-js/migrator";
+
 import { closeDatabase, db, sqlClient } from "../../index";
 
 const migrationsFolder = join(import.meta.dir, "../../drizzle");

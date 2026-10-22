@@ -9,6 +9,7 @@ import {
 	X,
 } from "lucide-react";
 import { useState } from "react";
+
 import type { UserMap } from "./TacticalMapCanvas";
 
 interface MapManagerModalProps {

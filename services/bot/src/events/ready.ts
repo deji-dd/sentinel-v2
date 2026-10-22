@@ -5,6 +5,7 @@ import {
 	recordBootAlert,
 } from "@sentinel/database";
 import { ActivityType, type Client, Events } from "discord.js";
+
 import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";

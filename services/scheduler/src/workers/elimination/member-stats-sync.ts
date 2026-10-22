@@ -12,6 +12,7 @@ import {
 	getPlayerStats,
 } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
+
 import { requestGuildMembersFromBot } from "../../lib/ipc/listener";
 import { getActiveIpcServer } from "../../lib/ipc/server";
 

@@ -14,8 +14,8 @@ import {
 	type BriefOutcome,
 	loadPreviousBriefState,
 	loadRecentRosterBaselineRows,
-	type PreviousBriefState,
 	persistBrief,
+	type PreviousBriefState,
 	recordBriefOutcome,
 } from "./oil-rig-brief-store";
 import {

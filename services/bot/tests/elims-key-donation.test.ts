@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+
 import { db, elimsApiKeys, eq } from "@sentinel/database";
 import {
 	type ButtonInteraction,
@@ -6,6 +7,7 @@ import {
 	type ModalBuilder,
 	type ModalSubmitInteraction,
 } from "discord.js";
+
 import {
 	buildKeyDonationEmbed,
 	handleKeyDonationButton,
@@ -51,12 +53,10 @@ describe("Elims Key Donation Module", () => {
 		expect(modalJson.custom_id).toBe("elims_donate_key_modal");
 
 		const comp = modalJson.components?.[0] as
-			| Record<string, unknown>
-			| undefined;
+			Record<string, unknown> | undefined;
 		const textInput = (comp?.component ??
 			(comp?.components as unknown[] | undefined)?.[0]) as
-			| Record<string, unknown>
-			| undefined;
+			Record<string, unknown> | undefined;
 		expect(textInput?.custom_id).toBe("torn_api_key");
 		expect(textInput?.min_length).toBe(16);
 		expect(textInput?.max_length).toBe(16);
@@ -64,9 +64,8 @@ describe("Elims Key Donation Module", () => {
 	});
 
 	it("sendElimsKeyVerificationRequest dispatches IPC request and resolves on valid response", async () => {
-		const { sendElimsKeyVerificationRequest } = await import(
-			"../src/lib/ipc/server"
-		);
+		const { sendElimsKeyVerificationRequest } =
+			await import("../src/lib/ipc/server");
 		const { workerIpcClient } = await import("../src/lib/ipc/listener");
 
 		let sentMessage: unknown = null;
@@ -89,9 +88,8 @@ describe("Elims Key Donation Module", () => {
 
 			// Simulate worker responding back over IPC
 			// Trigger the listener via workerIpcClient onMessage
-			const { pendingElimsVerifyKeyRequests } = await import(
-				"../src/lib/ipc/listener"
-			);
+			const { pendingElimsVerifyKeyRequests } =
+				await import("../src/lib/ipc/listener");
 			const pending = pendingElimsVerifyKeyRequests.get(req.requestId);
 			expect(pending).toBeDefined();
 
@@ -106,12 +104,10 @@ describe("Elims Key Donation Module", () => {
 	});
 
 	it("sendElimsUserResolutionRequest dispatches IPC request and resolves user", async () => {
-		const { sendElimsUserResolutionRequest } = await import(
-			"../src/lib/ipc/server"
-		);
-		const { workerIpcClient, pendingElimsResolveUserRequests } = await import(
-			"../src/lib/ipc/listener"
-		);
+		const { sendElimsUserResolutionRequest } =
+			await import("../src/lib/ipc/server");
+		const { workerIpcClient, pendingElimsResolveUserRequests } =
+			await import("../src/lib/ipc/listener");
 
 		let sentMessage: unknown = null;
 		const originalSend = workerIpcClient.send.bind(workerIpcClient);
@@ -171,9 +167,8 @@ describe("Elims Key Donation Module", () => {
 		process.env.API_KEY_HASH_PEPPER = "test-pepper";
 
 		// Intercept IPC
-		const { workerIpcClient, pendingElimsVerifyKeyRequests } = await import(
-			"../src/lib/ipc/listener"
-		);
+		const { workerIpcClient, pendingElimsVerifyKeyRequests } =
+			await import("../src/lib/ipc/listener");
 		const originalSend = workerIpcClient.send.bind(workerIpcClient);
 		workerIpcClient.send = ((msg: unknown) => {
 			const req = msg as {

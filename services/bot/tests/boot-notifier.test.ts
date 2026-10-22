@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
+
 import { db, eq, systemAlerts } from "@sentinel/database";
 import type { Client } from "discord.js";
+
 import { processPendingBootAlerts } from "../src/lib/boot-notifier";
 
 describe("Boot Notifier", () => {

@@ -24,6 +24,7 @@ import {
 	type StringSelectMenuInteraction,
 	TextChannel,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 

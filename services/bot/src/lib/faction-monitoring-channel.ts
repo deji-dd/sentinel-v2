@@ -15,6 +15,7 @@ import {
 	type Client,
 	TextChannel,
 } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { sendFetchFactionMembersRequest } from "./ipc/server";
 import { logger } from "./logger";

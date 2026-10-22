@@ -4,9 +4,9 @@ import {
 	db,
 	type ElimsGiveawayConfig,
 	eq,
-	type GiveawayWinner,
 	giveawayEntries,
 	giveaways,
+	type GiveawayWinner,
 	isGiveawaysModuleEnabled,
 	isNotNull,
 	lte,
@@ -30,6 +30,7 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from "discord.js";
+
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "./embeds";
 import {
 	ALLOWED_GIVEAWAY_CATEGORIES,
@@ -404,7 +405,7 @@ export async function updateGiveawayChannel(
 
 			const hasDedicatedManagerChannel = Boolean(
 				config.managerChannelId &&
-					config.managerChannelId !== config.announcementChannelId,
+				config.managerChannelId !== config.announcementChannelId,
 			);
 
 			if (hasDedicatedManagerChannel) {
@@ -550,8 +551,7 @@ async function renderItemSelectPage(
 ): Promise<{
 	embed: ReturnType<typeof createBaseEmbed>;
 	components: (
-		| ActionRowBuilder<StringSelectMenuBuilder>
-		| ActionRowBuilder<ButtonBuilder>
+		ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
 	)[];
 } | null> {
 	const allItems = await db.select().from(tornItems);
@@ -599,8 +599,7 @@ async function renderItemSelectPage(
 	const selectRow =
 		new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 	const components: (
-		| ActionRowBuilder<StringSelectMenuBuilder>
-		| ActionRowBuilder<ButtonBuilder>
+		ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
 	)[] = [selectRow];
 
 	if (totalPages > 1) {
@@ -913,7 +912,7 @@ export async function handleGiveawayModalSubmit(
 
 		const hasDedicatedManagerChannel = Boolean(
 			config.managerChannelId &&
-				config.managerChannelId !== config.announcementChannelId,
+			config.managerChannelId !== config.announcementChannelId,
 		);
 
 		if (!hasDedicatedManagerChannel) {
@@ -1164,7 +1163,7 @@ export async function endGiveaway(
 		const config = await getGiveawayConfig(giveaway.guildId);
 		const hasDedicatedManagerChannel = Boolean(
 			config?.managerChannelId &&
-				config.managerChannelId !== config.announcementChannelId,
+			config.managerChannelId !== config.announcementChannelId,
 		);
 
 		if (!hasDedicatedManagerChannel) {

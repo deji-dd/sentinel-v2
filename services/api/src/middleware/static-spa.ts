@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
+
 import { Elysia } from "elysia";
 
 const MIME_TYPES: Record<string, string> = {
@@ -131,8 +132,8 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 			(await Bun.file(filePath).exists())
 				? filePath
 				: relativePath &&
-						existsSync(sharedFilePath) &&
-						(await Bun.file(sharedFilePath).exists())
+					  existsSync(sharedFilePath) &&
+					  (await Bun.file(sharedFilePath).exists())
 					? sharedFilePath
 					: null;
 

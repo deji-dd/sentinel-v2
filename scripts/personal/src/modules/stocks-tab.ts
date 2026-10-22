@@ -1,4 +1,4 @@
-import { ApiError, apiClient } from "../api";
+import { apiClient, ApiError } from "../api";
 import {
 	escapeHtml,
 	formatCompactNumber,

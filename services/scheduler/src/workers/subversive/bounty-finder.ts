@@ -12,11 +12,12 @@ import {
 	getPersonalKey,
 	getPlayerStats,
 	type ManagedApiKey,
-	TornError,
 	tornApi,
+	TornError,
 	UserRateLimiter,
 } from "@sentinel/torn-api";
 import { isInTornHospital, Logger } from "@sentinel/utils";
+
 import { getActiveIpcServer } from "../../lib/ipc";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";

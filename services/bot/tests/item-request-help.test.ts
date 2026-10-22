@@ -1,5 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
+
 import type { ChatInputCommandInteraction, User } from "discord.js";
+
 import { elimsCommandsList, normalCommandsList } from "../src/commands/index";
 import { itemRequestHelpCommand } from "../src/commands/item-request-help";
 

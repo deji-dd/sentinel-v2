@@ -27,6 +27,8 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from "discord.js";
+
+import type { BotCommand } from ".";
 import { createBaseEmbed, createErrorEmbed, EMBED_COLORS } from "../lib/embeds";
 import { logger } from "../lib/logger";
 import {
@@ -41,7 +43,6 @@ import {
 	UserStockAlertError,
 	type UserStockAlertView,
 } from "../lib/stock-alert-subscriptions";
-import type { BotCommand } from ".";
 
 /**
  * `/stock-alerts` — per-user Torn stock alerts delivered by DM.

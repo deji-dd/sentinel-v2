@@ -3,6 +3,7 @@ import {
 	updateMercContractRevivablesMessageId,
 } from "@sentinel/database";
 import type { Client } from "discord.js";
+
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
 import { resolveChannelByName } from "./merc-alert-distributor";

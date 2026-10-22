@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
 import { db } from "@sentinel/database";
 import { tornApi } from "@sentinel/torn-api";
+
 import { schedulerEvents } from "../src/lib/events";
 import {
 	type OilRigApiResponse,
