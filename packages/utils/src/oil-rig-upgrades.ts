@@ -137,6 +137,7 @@ export interface OilRigUpgradeInput {
 	stock: {
 		fillPct: number;
 		netFillPerDay?: number;
+		atCapacity: boolean;
 		warehouseCritical: boolean;
 		isFillingUp: boolean;
 	};
@@ -382,7 +383,7 @@ export function analyzeUpgrades(
 		warehouseIndex !== undefined &&
 		warehouseIndex < OIL_RIG_WAREHOUSE_TIERS.length - 1 &&
 		input.capacityPlanState === "holding" &&
-		input.stock.warehouseCritical &&
+		input.stock.atCapacity &&
 		input.stock.isFillingUp
 	) {
 		const steps = stepsBetween(

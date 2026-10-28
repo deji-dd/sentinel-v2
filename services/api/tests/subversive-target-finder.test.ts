@@ -1623,3 +1623,88 @@ describe("Chain target checks run on the requesting member's own key", () => {
 		expect(data.retryAfter).toBe(5);
 	});
 });
+
+describe("Subversive war status polling", () => {
+	const MASTER_KEY = "subversive-war-status-test-master-key";
+	let fetchSpy: ReturnType<typeof spyOn> | undefined;
+
+	afterEach(() => {
+		fetchSpy?.mockRestore();
+		fetchSpy = undefined;
+	});
+
+	it("does not spend a Torn faction-wars request on every /war/status poll", async () => {
+		const memberId = 7_730_001;
+		const memberKey = "fallbackkey00001";
+		const token = "satf_7730001_warstatustoken";
+		const factionId = 27312;
+		const previousWar = subversiveTargetCache.getWarState(factionId);
+		const previousKey = process.env.ENCRYPTION_KEY;
+		process.env.ENCRYPTION_KEY = MASTER_KEY;
+
+		subversiveTargetCache.setUserSession({
+			tornId: memberId,
+			tornName: "War Status Probe",
+			factionId,
+			factionName: "SA Succession",
+			bsScore: 1000,
+			token,
+			isActive: true,
+			expiresAt: Date.now() + 3_600_000,
+			statsCachedAt: Date.now(),
+			apiKeyEncrypted: encryptApiKey(memberKey, MASTER_KEY),
+		});
+		subversiveTargetCache.setWarState(
+			{
+				state: "no_war",
+				warId: null,
+				start: null,
+				target: null,
+				winner: null,
+				opponent: null,
+				subversive: null,
+				lastUpdated: 0,
+			},
+			factionId,
+		);
+
+		let factionCalls = 0;
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+			input: string | URL | Request,
+		) => {
+			const raw =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.href
+						: input.url;
+			if (raw.includes(`/faction/${factionId}/wars`)) factionCalls++;
+			return new Response(JSON.stringify({ wars: { ranked: null } }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch);
+
+		try {
+			for (let poll = 0; poll < 5; poll++) {
+				const response = await app.handle(
+					new Request("http://localhost/api/v1/target-finder/war/status", {
+						headers: { Authorization: `Bearer ${token}` },
+					}),
+				);
+				expect(response.status).toBe(200);
+			}
+
+			// The userscript polls once a second; one Torn fallback a minute is
+			// enough to notice a new war without burning the member's key quota.
+			expect(factionCalls).toBe(1);
+		} finally {
+			subversiveTargetCache.setWarState(previousWar, factionId);
+			if (previousKey === undefined) {
+				delete process.env.ENCRYPTION_KEY;
+			} else {
+				process.env.ENCRYPTION_KEY = previousKey;
+			}
+		}
+	});
+});

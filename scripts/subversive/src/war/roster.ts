@@ -131,8 +131,8 @@ export function renderAvailableTargets(targets?: WarTarget[]): void {
 					<div class="satf-roster-left">
 						<div class="satf-roster-name">
 							${onlineDot}
-							<span style="font-weight:700;">${t.name}</span>
-							<span style="color:var(--muted); font-size:11px;">[${t.id}] Lvl ${t.level}</span>
+							<span class="satf-entity-name" style="font-weight:700;">${t.name}</span>
+							<span class="satf-entity-id" style="color:var(--muted); font-size:11px;">[${t.id}] Lvl ${t.level}</span>
 						</div>
 						<div class="satf-roster-sub">
 								BS ${formatStats(t.estimatedBs)} · <span class="ff-${getFFTier(ff)}" style="font-weight:700; color:${getFFColor(ff)};">FF: ${ff.toFixed(2)}</span>

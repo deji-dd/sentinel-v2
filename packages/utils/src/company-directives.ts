@@ -126,6 +126,7 @@ export function buildCompanyDirectives(
 		fillPct: inputs.stock.fillPct,
 		daysOfSales: inputs.stock.daysOfSales,
 		isFillingUp: inputs.stock.isFillingUp,
+		atCapacity: inputs.stock.atCapacity,
 		warehouseCritical: inputs.stock.warehouseCritical,
 		netDrainPerDay: inputs.stock.netDrainPerDay,
 		netFillPerDay: inputs.stock.netFillPerDay,
@@ -169,6 +170,7 @@ export function buildCompanyDirectives(
 		stock: {
 			fillPct: inputs.stock.fillPct,
 			netFillPerDay: inputs.stock.netFillPerDay,
+			atCapacity: inputs.stock.atCapacity,
 			warehouseCritical: inputs.stock.warehouseCritical,
 			isFillingUp: inputs.stock.isFillingUp,
 		},

@@ -343,6 +343,35 @@ describe("Barrel demand fit", () => {
 		expect(fit.reason).toContain("5 required");
 	});
 
+	it("does not blame price variation when the problem is too few days", () => {
+		// Two usable days were recorded at two different prices, so telling the
+		// director to vary the price would be false advice.
+		const fit = fitBarrelDemand(linearDemand([180, 182]));
+		expect(fit.reason).toContain("usable recorded days");
+		expect(fit.reason).not.toContain("price variation");
+	});
+
+	it("distinguishes flat sales from a flat price", () => {
+		// Price varied every day, but volume did not move at all. This is evidence
+		// of no price response, not evidence that price was never varied.
+		const fit = fitBarrelDemand(
+			[178, 180, 182, 184, 186].map((price, index) =>
+				record({
+					timestamp: FIXED_NOW - (5 - index) * DAY,
+					stock: {
+						barrelPrice: price,
+						inStock: 400_000,
+						soldAmount: 200_000,
+						fillPct: 53,
+					},
+				}),
+			),
+		);
+		expect(fit.usable).toBe(false);
+		expect(fit.reason).toContain("identical");
+		expect(fit.reason).not.toContain("same barrel price");
+	});
+
 	it("excludes days the warehouse was too empty to express demand", () => {
 		// On a nearly empty rig, sales are capped by what extraction delivered, not
 		// by what customers wanted, so those days say nothing about price.
@@ -414,7 +443,10 @@ describe("Capacity regime hysteresis", () => {
 			asOfSeconds: FIXED_NOW,
 		});
 		expect(regime.regime).toBe("extraction_bound");
-		expect(regime.reason).toContain("clamped");
+		// 98% is a warning, not the cap: the wording must not claim the delta is
+		// already clamped or that barrels are already being discarded.
+		expect(regime.reason).toContain("before output is discarded");
+		expect(regime.reason).not.toContain("clamped");
 	});
 
 	it("does not release the regime on a single draining day", () => {
@@ -1244,6 +1276,57 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		expect(analysis.regime.reason).toContain("66.4%");
 	});
 
+	it("attributes the policy-band price warning to the measured reason", () => {
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: fillingHistory,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		const warning = analysis.warnings.find((w) =>
+			w.includes("policy-band default"),
+		);
+		expect(warning).toBeDefined();
+		// Every recorded day used $176, so that is the honest reason for the
+		// fallback - the generic "too little recorded price variation" text hid it.
+		expect(warning).toContain("same barrel price");
+	});
+
+	it("says the demand curve is weak, not missing, when a fit was rejected", () => {
+		// Price varied, a downward-sloping curve was fitted, but the scatter is
+		// too noisy to act on. The brief must not claim there was no price
+		// variation to fit.
+		const noisy = [178, 180, 182, 184, 186].map((price, index) =>
+			record({
+				timestamp: FIXED_NOW - (5 - index) * DAY,
+				stock: {
+					barrelPrice: price,
+					inStock: 400_000,
+					soldAmount: [200_000, 205_000, 198_000, 203_000, 199_000][
+						index
+					] as number,
+					fillPct: 53,
+				},
+			}),
+		);
+		const fit = fitBarrelDemand(noisy);
+		expect(fit.usable).toBe(true);
+		expect(fit.r2).toBeLessThan(OIL_RIG_POLICY.price.minR2ForFit);
+
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: noisy,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		const warning = analysis.warnings.find((w) =>
+			w.includes("policy-band default"),
+		);
+		expect(warning).toBeDefined();
+		expect(warning).toContain("too weak to set price from");
+		expect(warning).not.toContain("Not enough recorded price variation");
+	});
+
 	/**
 	 * A held extraction-bound regime on a rig that is FILLING with room left: the
 	 * newest measured day extracts 62,138 bbl more than it sells, at 65% fill.
@@ -1385,6 +1468,69 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		);
 		expect(advice).toContain("pinned at the cap");
 		expect(advice).not.toContain("Nothing lost yet");
+	});
+
+	it("does not call 95-99% full a loss, because there is still room", () => {
+		// The 95% figure is a WARNING threshold. Treating it as the physical cap made
+		// the brief claim a present-tense loss with 30,000 bbl of free capacity left.
+		const nearlyFull = Array.from({ length: 6 }, (_, i) => {
+			const sold = 270_000 + i * 3_000;
+			return record({
+				timestamp: FIXED_NOW - (6 - i) * DAY,
+				producedMeasured: i !== 0,
+				dailyProduced: sold + 40_000,
+				stock: {
+					barrelPrice: 176,
+					inStock: Math.round(0.96 * 750_000),
+					soldAmount: sold,
+					fillPct: 96,
+				},
+			});
+		});
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(96, 176),
+			history: nearlyFull,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousRegime: heldRegime,
+			previousState: "surplus",
+			previousCritical: true,
+		});
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		expect(analysis.stock.warehouseCritical).toBe(true);
+		expect(analysis.stock.atCapacity).toBe(false);
+		expect(analysis.directives.capacityRebalance.currentlyDiscarding).toBe(
+			false,
+		);
+		expect(analysis.directives.capacityRebalance.discardedBarrelsPerDay).toBe(
+			0,
+		);
+		expect(advice).not.toContain("Losing");
+		expect(advice).toContain("Not losing yet");
+		expect(advice).toContain("30,000 bbl of room");
+		expect(advice).toContain("100%");
+	});
+
+	it("states that stock is accumulating before the pressure threshold", () => {
+		// Extraction beat sales on every recorded day, but fill is 65% - below the
+		// 78% pressure threshold, where accumulating is desirable. The brief used to
+		// say nothing at all, which reads as "no recommendation" beside a visibly
+		// filling warehouse.
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(65, 176),
+			history: fillingWithRoom(false),
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+			previousState: "surplus",
+		});
+		const advice = renderDeterministicBriefing(analysis).advice;
+
+		expect(analysis.regime.regime).toBe("balanced");
+		expect(analysis.stock.isFillingUp).toBe(true);
+		expect(advice).toContain("Accumulating, not yet a constraint");
+		expect(advice).toContain("62,138");
+		expect(advice).toContain("78%");
 	});
 });
 

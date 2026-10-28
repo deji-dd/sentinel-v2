@@ -13,6 +13,37 @@ let statusTextElem: HTMLElement | null = null;
 let userBadgeElem: HTMLElement | null = null;
 let travelLockElem: HTMLElement | null = null;
 
+const MIN_PANEL_WIDTH = 340;
+const MAX_PANEL_WIDTH = 720;
+const DEFAULT_PANEL_WIDTH = 380;
+const MIN_PANEL_HEIGHT = 420;
+const DEFAULT_PANEL_HEIGHT = 680;
+/** Gap kept between the panel and the window edge. */
+const PANEL_MARGIN = 10;
+/** Below this the panel is full-width and the resize handles are hidden. */
+const RESIZE_MIN_VIEWPORT_PX = 700;
+
+/** User-dragged size in pixels; 0 means "use the default". */
+let panelWidth = 0;
+let panelHeight = 0;
+
+function clampPanelWidth(width: number, viewportWidth: number): number {
+	const max = Math.max(
+		MIN_PANEL_WIDTH,
+		Math.min(MAX_PANEL_WIDTH, viewportWidth - PANEL_MARGIN * 2),
+	);
+	const desired =
+		Number.isFinite(width) && width > 0 ? width : DEFAULT_PANEL_WIDTH;
+	return Math.round(Math.min(Math.max(desired, MIN_PANEL_WIDTH), max));
+}
+
+function clampPanelHeight(height: number, viewportHeight: number): number {
+	const max = Math.max(MIN_PANEL_HEIGHT, viewportHeight - PANEL_MARGIN * 2);
+	const desired =
+		Number.isFinite(height) && height > 0 ? height : DEFAULT_PANEL_HEIGHT;
+	return Math.round(Math.min(Math.max(desired, MIN_PANEL_HEIGHT), max));
+}
+
 export function initPanel(root: ShadowRoot | Document): void {
 	rootElement = root;
 	panelElem = root.getElementById("satf-panel");
@@ -20,6 +51,10 @@ export function initPanel(root: ShadowRoot | Document): void {
 	statusTextElem = root.getElementById("satf-status-text");
 	userBadgeElem = root.getElementById("satf-user-badge");
 	travelLockElem = root.getElementById("satf-travel-lock");
+
+	panelWidth = GM_getValue<number>(STORAGE.panelWidth, 0);
+	panelHeight = GM_getValue<number>(STORAGE.panelHeight, 0);
+	bindPanelResize();
 }
 
 export function setStatus(msg: string, type: "ok" | "error" = "ok"): void {
@@ -95,10 +130,16 @@ export function positionPanel(): void {
 		panelElem.style.right = "12px";
 		panelElem.style.width = "calc(100vw - 24px)";
 		panelElem.style.top = "12px";
+		panelElem.style.height = "calc(100vh - 24px)";
 		return;
 	}
 	panelElem.style.right = "";
-	panelElem.style.width = "430px";
+
+	const width = clampPanelWidth(panelWidth, window.innerWidth);
+	const height = clampPanelHeight(panelHeight, window.innerHeight);
+	panelElem.style.width = `${width}px`;
+	panelElem.style.height = `${height}px`;
+
 	const rect = launcherElem.getBoundingClientRect();
 	let launcherX = rect.left;
 	let launcherY = rect.top;
@@ -115,16 +156,117 @@ export function positionPanel(): void {
 			launcherY = Math.max(10, window.innerHeight - 84);
 		}
 	}
-	let left = launcherX - 440;
+
+	let left = launcherX - width - PANEL_MARGIN;
+	if (left < PANEL_MARGIN) {
+		left = (rect.right > 0 ? rect.right : launcherX + 48) + PANEL_MARGIN;
+	}
+	left = Math.max(
+		PANEL_MARGIN,
+		Math.min(left, window.innerWidth - width - PANEL_MARGIN),
+	);
+
+	// Keep the top near the launcher, but pull it up rather than let a taller
+	// panel hang off the bottom of the window.
 	let top = launcherY;
-	if (left < 10) left = (rect.right > 0 ? rect.right : launcherX + 48) + 10;
-	if (left + 440 > window.innerWidth)
-		left = Math.max(10, window.innerWidth - 442);
-	if (top + 500 > window.innerHeight)
-		top = Math.max(10, window.innerHeight - 510);
-	if (top < 10) top = 10;
+	top = Math.max(
+		PANEL_MARGIN,
+		Math.min(top, window.innerHeight - height - PANEL_MARGIN),
+	);
+
 	panelElem.style.left = `${left}px`;
 	panelElem.style.top = `${top}px`;
+}
+
+/**
+ * Wires the left and bottom edges as resize handles.
+ *
+ * Width is tracked as a delta against the drag start, so the panel's
+ * launcher-relative left edge can be re-clamped mid-drag without the width
+ * running away. Sizes are persisted only on pointerup, and double-clicking
+ * either handle restores the defaults.
+ */
+function bindPanelResize(): void {
+	if (!panelElem) return;
+
+	const attach = (
+		handle: HTMLElement | null,
+		axis: "width" | "height",
+	): void => {
+		if (!handle) return;
+
+		let dragging = false;
+		let startX = 0;
+		let startY = 0;
+		let startWidth = 0;
+		let startHeight = 0;
+
+		const onMove = (event: PointerEvent): void => {
+			if (!dragging) return;
+			event.preventDefault();
+			if (axis === "width") {
+				panelWidth = clampPanelWidth(
+					startWidth + (startX - event.clientX),
+					window.innerWidth,
+				);
+			} else {
+				panelHeight = clampPanelHeight(
+					startHeight + (event.clientY - startY),
+					window.innerHeight,
+				);
+			}
+			positionPanel();
+		};
+
+		const end = (): void => {
+			if (!dragging) return;
+			dragging = false;
+			panelElem?.classList.remove("resizing");
+			document.body.style.removeProperty("cursor");
+			document.body.style.removeProperty("user-select");
+			GM_setValue(STORAGE.panelWidth, panelWidth);
+			GM_setValue(STORAGE.panelHeight, panelHeight);
+			handle.removeEventListener("pointermove", onMove);
+			handle.removeEventListener("pointerup", end);
+			handle.removeEventListener("pointercancel", end);
+		};
+
+		handle.addEventListener("pointerdown", (event: PointerEvent) => {
+			if (event.button !== 0) return;
+			if (window.innerWidth < RESIZE_MIN_VIEWPORT_PX) return;
+			const rect = panelElem?.getBoundingClientRect();
+			if (!rect) return;
+
+			event.preventDefault();
+			dragging = true;
+			startX = event.clientX;
+			startY = event.clientY;
+			startWidth = rect.width;
+			startHeight = rect.height;
+
+			panelElem?.classList.add("resizing");
+			// Text selection fights the drag, and the cursor has to stay a resize
+			// cursor even when the pointer outruns the 6px handle.
+			document.body.style.cursor =
+				axis === "width" ? "col-resize" : "row-resize";
+			document.body.style.userSelect = "none";
+			handle.setPointerCapture(event.pointerId);
+			handle.addEventListener("pointermove", onMove);
+			handle.addEventListener("pointerup", end);
+			handle.addEventListener("pointercancel", end);
+		});
+
+		handle.addEventListener("dblclick", () => {
+			panelWidth = 0;
+			panelHeight = 0;
+			GM_setValue(STORAGE.panelWidth, 0);
+			GM_setValue(STORAGE.panelHeight, 0);
+			positionPanel();
+		});
+	};
+
+	attach(panelElem.querySelector<HTMLElement>("#satf-resize-x"), "width");
+	attach(panelElem.querySelector<HTMLElement>("#satf-resize-y"), "height");
 }
 
 export function switchWarSubTab(subtab: string): void {

@@ -986,8 +986,7 @@ export function estimateMeasuredProduction(
 	const values = measured.slice(-policy.smoothedProductionDays);
 	const lastRecord = history[history.length - 1];
 	const capped =
-		(lastRecord?.stock?.fillPct ?? 0) >=
-		OIL_RIG_POLICY.inventory.criticalEnterPct;
+		(lastRecord?.stock?.fillPct ?? 0) >= OIL_RIG_POLICY.inventory.atCapPct;
 
 	if (values.length === 0) {
 		return {
@@ -1033,7 +1032,7 @@ export function estimateMeasuredProduction(
 		capped,
 		summary: `Extraction of about ${dailyProduced.toLocaleString()} bbl/day, the median of ${values.length} measured day${values.length === 1 ? "" : "s"} (${confidence} confidence).${latestClause}${
 			capped
-				? " Storage was at or above the critical fill on the most recent record, where the stock delta is clamped at zero, so true extraction is at least this high."
+				? " Storage was physically full on the most recent record, where the stock delta is clamped at zero, so true extraction is at least this high."
 				: ""
 		}${confidence === "low" ? " One measured day is not enough to separate a real rate from a single unusual day." : ""}`,
 	};
@@ -1055,7 +1054,16 @@ export interface StockAnalysis {
 	netFillPerDay?: number;
 	/** True when extraction matches or outpaces sales: stock cannot self-drain. */
 	isFillingUp: boolean;
-	/** True at/above the critical fill threshold, where output may be discarded. */
+	/**
+	 * True when the warehouse is PHYSICALLY full (at `atCapPct`), which is the
+	 * only state in which the game discards output above the sales rate.
+	 */
+	atCapacity: boolean;
+	/**
+	 * True at/above the critical fill WARNING threshold, meaning storage is close
+	 * to the cap and the brief should act ahead of loss. This is not "full": see
+	 * `atCapacity` for the point where barrels are actually discarded.
+	 */
 	warehouseCritical: boolean;
 	state: "deficit" | "equilibrium" | "surplus";
 	/**
@@ -1297,6 +1305,10 @@ export function analyzeStockAndPricing(params: {
 	const inv = policy.inventory;
 	const storageCap = params.storageCap > 0 ? params.storageCap : 750_000;
 	const fillPct = Number(((params.inStock / storageCap) * 100).toFixed(1));
+	// The physical cap, taken from the barrel counts rather than the rounded
+	// percentage. This is the only state in which the game discards output; the
+	// critical warning below is a separate, earlier threshold.
+	const atCapacity = params.inStock >= storageCap;
 	const currentPrice =
 		params.currentPrice > 0
 			? params.currentPrice
@@ -1406,23 +1418,26 @@ export function analyzeStockAndPricing(params: {
 						: ""
 				}).`
 			: state === "surplus"
-				? warehouseCritical
+				? atCapacity
 					? isFillingUp
 						? `Warehouse is full (${fillPct}%) and cannot drain on its own: extraction matches or exceeds sales.`
-						: `Warehouse is effectively full (${fillPct}% full).`
-					: netDrainPerDay !== undefined
-						? `Inventory is above the healthy buffer (${fillPct}% full) but still draining at ${netDrainPerDay.toLocaleString()} bbl/day.`
-						: `Inventory is above the healthy buffer (${fillPct}% full).`
+						: `Warehouse is full (${fillPct}% full).`
+					: warehouseCritical
+						? isFillingUp
+							? `Warehouse is near capacity (${fillPct}% full) and still filling: ${(storageCap - params.inStock).toLocaleString()} bbl of free space remain before output is discarded.`
+							: `Warehouse is near capacity (${fillPct}% full).`
+						: netDrainPerDay !== undefined
+							? `Inventory is above the healthy buffer (${fillPct}% full) but still draining at ${netDrainPerDay.toLocaleString()} bbl/day.`
+							: `Inventory is above the healthy buffer (${fillPct}% full).`
 				: `Inventory is operating in a healthy equilibrium buffer (${fillPct}% full).`;
 
 	// When the warehouse is full and extraction still keeps pace with sales, no
-	// price or ad setting can clear it: the constraint is structural. Storage is
-	// not offered as a fix here, because a bigger warehouse only postpones the
-	// same cap. The upgrade engine may still name it as a last-resort buffer once
-	// company size and the roster have no seat lever left; it says the same thing.
+	// price or ad setting can clear it: the constraint is structural. A near-full
+	// warehouse gets its own, weaker warning: nothing has been discarded yet, but
+	// there is very little room left to absorb the surplus.
 	let structuralAdvice: string | undefined;
 	if (state === "surplus") {
-		if (warehouseCritical) {
+		if (atCapacity) {
 			// Deliberately terse: the capacity section already states the storage level
 			// and the discard. This says only what price and advertising CANNOT do.
 			structuralAdvice = isFillingUp
@@ -1434,6 +1449,8 @@ export function analyzeStockAndPricing(params: {
 								: ""
 					}`
 				: `Confirm extraction against the sales rate; raising sell-through capacity helps, adding storage does not.`;
+		} else if (warehouseCritical && isFillingUp) {
+			structuralAdvice = `Storage is nearly full at ${fillPct}% and extraction still outpaces sales. No barrels are being discarded yet, but only ${(storageCap - params.inStock).toLocaleString()} bbl remain before the cap binds; raise sell-through capacity ahead of that, because a bigger warehouse only postpones it.`;
 		} else if (isFillingUp) {
 			structuralAdvice =
 				"Extraction currently matches or outpaces sales, so the warehouse will keep filling until it hits the storage limit. Raise sell-through capacity (Sales Executives, customer volume); more storage would only delay the same outcome.";
@@ -1450,6 +1467,7 @@ export function analyzeStockAndPricing(params: {
 		netDrainPerDay,
 		netFillPerDay,
 		isFillingUp,
+		atCapacity,
 		warehouseCritical,
 		state,
 		stateHeld,
@@ -2072,9 +2090,10 @@ export function analyzeSellThroughResponse(
  * sell, i.e. output that is discarded once the warehouse is at capacity.
  *
  * Daily production is derived from stock deltas, which are capped at zero when
- * the warehouse is full, so the *capped* days understate true extraction. The
- * uncapped days in the window are therefore the honest evidence, and the median
- * of their surplus is used so one unusual day cannot drive the figure.
+ * the warehouse is physically full, so the *capped* days understate true
+ * extraction. The uncapped days in the window are therefore the honest evidence,
+ * and the median of their surplus is used so one unusual day cannot drive the
+ * figure. A near-full day is still uncapped and counts.
  */
 export interface DiscardedBarrelsEstimate {
 	/** Median measured surplus per day across uncapped days. */
@@ -2089,7 +2108,7 @@ export interface DiscardedBarrelsEstimate {
 	 * clamped measurement still exceeds sales proves discard is happening.
 	 */
 	cappedLowerBound: number;
-	/** Days in the window where storage was already at or above critical fill. */
+	/** Days in the window where the warehouse was already physically full. */
 	cappedDays: number;
 	/** True when no uncapped evidence exists, so only the lower bound is available. */
 	evidenceThin: boolean;
@@ -2100,21 +2119,16 @@ export interface DiscardedBarrelsEstimate {
 /**
  * Estimates how many barrels per day are produced beyond what the rig can sell.
  *
- * `dailyProduced` is derived from stock deltas, which are clamped at zero when
- * the warehouse is full, so the *capped* days understate true extraction. The
- * uncapped days are therefore the honest evidence and their median surplus is
- * used so one unusual day cannot drive the figure.
- *
- * The old implementation discarded capped days entirely, which meant a warehouse
- * that had been full all week reported zero discarded barrels with zero samples -
- * precisely the situation in which the question matters most, and the situation
- * in which the briefing was nonetheless demanding a roster restructure. Capped
- * days are now used as a lower bound, and `evidenceThin` says plainly when the
- * median rests on too little to justify a structural change.
+ * `dailyProduced` is derived from stock deltas, which are clamped at zero only
+ * when the warehouse is PHYSICALLY full. A day at 95-99.9% fill still has room,
+ * so its surplus is a real measurement and belongs in the median; treating the
+ * critical warning as "capped" discarded the best evidence and described a loss
+ * that had not started. Capped days are therefore exactly those at `atCapPct`,
+ * and they are used as a lower bound rather than being thrown away.
  */
 export function estimateDiscardedBarrels(
 	history: OilRigHistoryRecord[],
-	criticalFillPct = 95,
+	capFillPct = OIL_RIG_POLICY.inventory.atCapPct,
 ): DiscardedBarrelsEstimate {
 	// Only records the estimator also accepts may contribute evidence, so the
 	// discard figure and the drain model can never disagree about a day.
@@ -2128,14 +2142,12 @@ export function estimateDiscardedBarrels(
 			.map(({ index }) => index),
 	);
 
-	const capped = history.filter(
-		(h) => (h.stock?.fillPct ?? 0) >= criticalFillPct,
-	);
+	const capped = history.filter((h) => (h.stock?.fillPct ?? 0) >= capFillPct);
 
 	const surpluses = history
 		.map((h, index) => ({ h, index }))
 		.filter(({ index }) => measuredIndexes.has(index))
-		.filter(({ h }) => (h.stock?.fillPct ?? 0) < criticalFillPct)
+		.filter(({ h }) => (h.stock?.fillPct ?? 0) < capFillPct)
 		.map(({ h }) => (h.dailyProduced ?? 0) - (h.stock?.soldAmount ?? 0))
 		.filter((value) => value > 0)
 		.sort((a, b) => a - b);
@@ -2147,7 +2159,7 @@ export function estimateDiscardedBarrels(
 	const cappedSurpluses = history
 		.map((h, index) => ({ h, index }))
 		.filter(({ index }) => measuredIndexes.has(index))
-		.filter(({ h }) => (h.stock?.fillPct ?? 0) >= criticalFillPct)
+		.filter(({ h }) => (h.stock?.fillPct ?? 0) >= capFillPct)
 		.map(({ h }) => (h.dailyProduced ?? 0) - (h.stock?.soldAmount ?? 0))
 		.filter((value) => value > 0);
 
@@ -2164,7 +2176,7 @@ export function estimateDiscardedBarrels(
 			evidenceThin: true,
 			summary:
 				capped.length > 0
-					? `Storage was at or above ${criticalFillPct}% on all ${capped.length} recorded day${capped.length === 1 ? "" : "s"}, and a full warehouse clamps the measured stock delta to zero, so the discarded volume cannot be measured from these records. Output above the sales rate is being lost, but its size is unknown.`
+					? `Storage was at or above ${capFillPct}% on all ${capped.length} recorded day${capped.length === 1 ? "" : "s"}, and a full warehouse clamps the measured stock delta to zero, so the discarded volume cannot be measured from these records. Output above the sales rate is being lost, but its size is unknown.`
 					: "No recorded days yet, so discarded output cannot be estimated.",
 		};
 	}
@@ -2184,7 +2196,7 @@ export function estimateDiscardedBarrels(
 		cappedLowerBound,
 		cappedDays: capped.length,
 		evidenceThin,
-		summary: `Measured across ${surpluses.length} day${surpluses.length === 1 ? "" : "s"} where storage had room: a median ${Math.round(median).toLocaleString()} bbl/day and a peak ${peak.toLocaleString()} bbl/day were produced beyond what the rig sold.${capped.length > 0 ? ` A further ${capped.length} day${capped.length === 1 ? " was" : "s were"} already at or above ${criticalFillPct}% fill, where the stock delta is clamped and any excess is unmeasurable, so these figures are a lower bound.` : ""}${evidenceThin ? " Fewer than three usable days means this is not yet enough evidence to restructure the roster on." : ""}`,
+		summary: `Measured across ${surpluses.length} day${surpluses.length === 1 ? "" : "s"} where storage had room: a median ${Math.round(median).toLocaleString()} bbl/day and a peak ${peak.toLocaleString()} bbl/day were produced beyond what the rig sold.${capped.length > 0 ? ` A further ${capped.length} day${capped.length === 1 ? " was" : "s were"} already at or above ${capFillPct}% fill, where the stock delta is clamped and any excess is unmeasurable, so these figures are a lower bound.` : ""}${evidenceThin ? " Fewer than three usable days means this is not yet enough evidence to restructure the roster on." : ""}`,
 	};
 }
 
@@ -2316,9 +2328,9 @@ export interface CapacityTargetInput {
  * `base + maxShift` treated a two-seat shift as the correction rather than as the
  * ceiling. It also ignored whether the first seat had worked. This resolver adds
  * at most `rebalanceStep` seats per recorded tick and only escalates when the
- * next tick still shows storage under pressure. Critical fill is the exception:
- * there the full ceiling is used immediately because waiting a day discards
- * barrels.
+ * next tick still shows storage under pressure. The critical warning is the
+ * exception: there the full ceiling is used immediately, because the remaining
+ * room may not survive another day of surplus.
  *
  * It is deliberately separate from `buildBottleneckQuotas` so the roster solver
  * and the capacity plan can both consume the SAME target and cannot disagree.
@@ -2355,8 +2367,8 @@ export function resolveCapacityTarget(
 	if (alreadyMoved === 0) {
 		// No bottleneck seat has been applied yet. A rig that is already draining
 		// does not need one: the held regime is waiting for its release rule, not
-		// asking for more sales capacity. Critical fill still overrides, because
-		// there the stock delta is clamped and the loss is present-tense.
+		// asking for more sales capacity. The critical warning still overrides,
+		// because the remaining room is too small to absorb even one more day.
 		const alreadyDraining =
 			input.draining && !critical && currentSales >= baseSales;
 		if (alreadyDraining) {
@@ -2459,11 +2471,12 @@ export interface CapacityRegime {
  *    this function is the only thing that decides whether a rig is
  *    extraction-bound and there is no second, single-day answer to reconcile it
  *    with.
- *  - `warehouseCritical`. The cap test below reads `fillPct` against
- *    `criticalEnterPct` on purpose. The hysteretic flag stays true down to a
- *    lower exit threshold, so feeding it in would let the regime ENTER at, say,
- *    91% full, which is not a critical fill at all. Wiring the flag up here would
- *    loosen entry rather than tighten it.
+ *  - `warehouseCritical`. The warning test below reads `fillPct` against
+ *    `criticalEnterPct` directly, and the wording reads `atCapPct` separately so
+ *    a near-full rig is never described as already discarding. The hysteretic
+ *    flag stays true down to a lower exit threshold, so feeding it in would let
+ *    the regime ENTER at, say, 91% full, which is not a critical fill at all.
+ *    Wiring the flag up here would loosen entry rather than tighten it.
  *
  * A parameter that looks like it matters and is ignored is worse than a missing
  * one: it reads as a wired signal and invites a caller to believe it steers the
@@ -2521,6 +2534,7 @@ export function assessCapacityRegime(input: {
 	const underPressure = input.fillPct >= policy.enterMinFillPct;
 	const atCriticalFill =
 		input.fillPct >= OIL_RIG_POLICY.inventory.criticalEnterPct;
+	const atCap = input.fillPct >= OIL_RIG_POLICY.inventory.atCapPct;
 	const enterEvidence =
 		atCriticalFill ||
 		(underPressure && trailingFilling >= policy.enterConsecutiveFillDays);
@@ -2578,9 +2592,11 @@ export function assessCapacityRegime(input: {
 					: "extraction still matches or beats sales";
 			reason = `Extraction-bound regime held: ${flow}, and storage is at ${input.fillPct}%, above the ${policy.exitMaxFillPct}% release threshold. It releases after ${policy.exitConsecutiveDrainDays} consecutive draining days with storage at or below ${policy.exitMaxFillPct}%.`;
 		} else {
-			const because = atCriticalFill
-				? `storage is at ${input.fillPct}% of capacity, where the stock delta is clamped and output above the sales rate cannot be stored`
-				: `${trailingFilling} consecutive measured day${trailingFilling === 1 ? "" : "s"} showed extraction matching or beating sales while storage was at ${input.fillPct}%, above the ${policy.enterMinFillPct}% pressure threshold`;
+			const because = atCap
+				? `storage is at ${input.fillPct}% of capacity, so the warehouse is physically full and output above the sales rate is being discarded`
+				: atCriticalFill
+					? `storage is at ${input.fillPct}%, within ${(OIL_RIG_POLICY.inventory.atCapPct - input.fillPct).toFixed(1)} points of the cap, so the brief is acting before output is discarded`
+					: `${trailingFilling} consecutive measured day${trailingFilling === 1 ? "" : "s"} showed extraction matching or beating sales while storage was at ${input.fillPct}%, above the ${policy.enterMinFillPct}% pressure threshold`;
 			reason = `Extraction-bound regime entered: ${because}.`;
 		}
 	} else {
@@ -2601,7 +2617,11 @@ export function assessCapacityRegime(input: {
 		regime === "extraction_bound"
 			? transition === "held"
 				? `storage at ${input.fillPct}%; exits after ${policy.exitConsecutiveDrainDays} draining days with storage at or below ${policy.exitMaxFillPct}%`
-				: `storage at ${input.fillPct}%, where output above the sales rate cannot be stored`
+				: atCap
+					? `storage at ${input.fillPct}%, where the warehouse is full and output above the sales rate is discarded`
+					: atCriticalFill
+						? `storage at ${input.fillPct}%, close enough to the cap to act before output is discarded`
+						: `storage at ${input.fillPct}%, above the ${policy.enterMinFillPct}% pressure threshold and filling`
 			: transition === "released"
 				? trailingDraining > 0
 					? `sales outpaced extraction for ${trailingDraining} recorded day${trailingDraining === 1 ? "" : "s"} and storage is back at ${input.fillPct}%`
@@ -2757,7 +2777,7 @@ export function planCapacityRebalance(
 		0,
 		Math.round(params.discardedBarrelsPerDay ?? 0),
 	);
-	const atCapacity = stock.warehouseCritical;
+	const atCapacity = stock.atCapacity;
 	const currentlyDiscarding = atCapacity && stock.isFillingUp;
 	// At the cap the stock delta is clamped, so the current rate cannot be measured
 	// and the historical median is the best available estimate of the true loss.

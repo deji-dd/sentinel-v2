@@ -32,6 +32,7 @@ function upgradeInput(
 		stock: {
 			fillPct: 76.6,
 			netFillPerDay: 32_829,
+			atCapacity: false,
 			warehouseCritical: false,
 			isFillingUp: true,
 		},
@@ -209,8 +210,9 @@ describe("Company upgrade advice", () => {
 			},
 			staffCount: 30,
 			stock: {
-				fillPct: 99,
+				fillPct: 100,
 				netFillPerDay: 30_000,
+				atCapacity: true,
 				warehouseCritical: true,
 				isFillingUp: true,
 			},
@@ -234,8 +236,9 @@ describe("Company upgrade advice", () => {
 		const notMaxed = analyzeUpgrades(
 			upgradeInput({
 				stock: {
-					fillPct: 99,
+					fillPct: 100,
 					netFillPerDay: 30_000,
+					atCapacity: true,
 					warehouseCritical: true,
 					isFillingUp: true,
 				},

@@ -230,14 +230,21 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 		// can happen at all.
 		//
 		// The first branch is genuinely present-tense: the plan zeroes
-		// `discardedBarrelsPerDay` unless the warehouse is at its cap AND filling.
-		// The two branches after it keyed off HISTORICAL cap evidence alone, so on a
-		// held extraction-bound regime at 65% fill they asserted a present loss and
-		// said storage was "pinned at the cap" when it was nowhere near it. A rig
-		// with room left is storing its excess, not throwing it away; the loss begins
-		// when storage reaches the cap. Old evidence about past capped days still
-		// supports a number, but only once the cap is binding again.
-		const atCap = d.stock.warehouseCritical;
+		// `discardedBarrelsPerDay` unless the warehouse is physically full.
+		//
+		// `warehouseCritical` is a WARNING threshold (95%), not the cap. Treating it
+		// as "at capacity" made the brief claim a present-tense loss with thousands
+		// of barrels of free room left, which is both wrong and alarming. Only
+		// `atCapacity` (100%) may assert a loss; the warning gets its own line
+		// stating exactly how much room is left.
+		const atCap = d.stock.atCapacity;
+		const freeBarrels = Math.max(
+			0,
+			analysis.decision.storageCap - analysis.decision.inStock,
+		);
+		const netFill = d.stock.netFillPerDay ?? 0;
+		const daysToCap =
+			netFill > 0 ? Math.max(1, Math.ceil(freeBarrels / netFill)) : undefined;
 
 		if (plan.discardedBarrelsPerDay > 0) {
 			lines.push(
@@ -251,13 +258,19 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 			lines.push(
 				"• **Loss cannot be sized** while storage is pinned at the cap: a full warehouse clamps the stock delta to zero.",
 			);
+		} else if (d.stock.warehouseCritical && !draining) {
+			// Near the cap and still filling: nothing has been lost yet, but the
+			// remaining room is the number that matters.
+			lines.push(
+				`• **Not losing yet** — ${d.stock.fillPct}% full leaves ${freeBarrels.toLocaleString()} bbl of room${daysToCap ? `, about ${daysToCap} day${daysToCap === 1 ? "" : "s"} of surplus at the measured ${netFill.toLocaleString()} bbl/day` : ""}. Barrels are only discarded once the warehouse is completely full (${OIL_RIG_POLICY.inventory.atCapPct}%).`,
+			);
 		} else if (!draining) {
 			// Filling, with room left. Reporting a sized loss here would be inventing
 			// one; reporting nothing would leave the capacity section silent about
 			// cost, which is the question it exists to answer. The fill level is NOT
 			// restated, because the flow line directly above already states it.
 			lines.push(
-				`• **Nothing lost yet** — the excess above the sales rate is being stored. Barrels begin to be discarded at ${OIL_RIG_POLICY.inventory.criticalEnterPct}% full.`,
+				`• **Nothing lost yet** — the excess above the sales rate is being stored. Barrels begin to be discarded at ${OIL_RIG_POLICY.inventory.atCapPct}% full.`,
 			);
 		}
 
@@ -318,6 +331,36 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 		}
 		if (d.stock.structuralAdvice) {
 			lines.push(`• ${d.stock.structuralAdvice}`);
+		}
+		// Extraction outrunning sales is a fact worth stating even when it is not yet
+		// a constraint. Without this the brief said "nothing outstanding" while stock
+		// was visibly accumulating, because the regime correctly waits for storage
+		// pressure and the renderer never mentioned the trend it was waiting on.
+		if (d.stock.isFillingUp) {
+			const netFill = d.stock.netFillPerDay ?? 0;
+			const pressure = OIL_RIG_POLICY.capacity.enterMinFillPct;
+			const fillFlow =
+				produced !== undefined
+					? `extraction ${produced.toLocaleString()} vs sales ${sold.toLocaleString()} bbl/day`
+					: `sales ${sold.toLocaleString()} bbl/day, with extraction unmeasured`;
+			const rate =
+				netFill > 0
+					? `so storage is filling about ${netFill.toLocaleString()} bbl/day`
+					: "and extraction only matches sales, so storage is holding its level";
+			const barrelsToPressure = Math.round(
+				((pressure - d.stock.fillPct) / 100) * analysis.decision.storageCap,
+			);
+			const daysToPressure =
+				netFill > 0
+					? Math.max(1, Math.ceil(barrelsToPressure / netFill))
+					: undefined;
+			const trigger =
+				d.stock.fillPct < pressure
+					? `Sell-through advice starts at ${pressure}% full — about ${barrelsToPressure.toLocaleString()} bbl away${daysToPressure ? ` (~${daysToPressure} day${daysToPressure === 1 ? "" : "s"} at this rate)` : ""} — plus ${OIL_RIG_POLICY.capacity.enterConsecutiveFillDays} consecutive recorded fill days once there.`
+					: `A sell-through rebalance needs ${OIL_RIG_POLICY.capacity.enterConsecutiveFillDays} consecutive recorded fill days at or above ${pressure}% full, which the records do not yet show.`;
+			lines.push(
+				`• **Accumulating, not yet a constraint** — ${fillFlow}, ${rate} (now ${d.stock.fillPct}%). ${trigger}`,
+			);
 		}
 	}
 
@@ -402,13 +445,19 @@ export function renderDeterministicBriefing(
 
 	const upgradeLines = renderUpgradeRecommendations(d.upgrades);
 
+	const accumulationNote = analysis.stock.isFillingUp
+		? (analysis.stock.netFillPerDay ?? 0) > 0
+			? ` Stock is accumulating ${(analysis.stock.netFillPerDay ?? 0).toLocaleString()} bbl/day at ${analysis.stock.fillPct}% full; the Capacity section states the trigger and the room left.`
+			: ` Extraction matches sales, so storage is holding at ${analysis.stock.fillPct}% full; the Capacity section states the trigger and the room left.`
+		: "";
+
 	if (nothingToDo && upgradeLines.length > 0) {
 		doThis.push(
-			"• **No operational changes** — roster, price, advertising and staff health are at target; the upgrades below are the outstanding work.",
+			`• **No operational changes** — roster, price, advertising and staff health are at target; the upgrades below are the outstanding work.${accumulationNote}`,
 		);
 	} else if (nothingToDo) {
 		doThis.push(
-			"• **Nothing outstanding** — roster, price, advertising and staff health are all where the engines want them.",
+			`• **${accumulationNote ? "No action yet" : "Nothing outstanding"}** — roster, price, advertising and staff health are all where the engines want them.${accumulationNote}`,
 		);
 	}
 

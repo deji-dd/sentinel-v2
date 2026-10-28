@@ -56,7 +56,25 @@ export function toClientTarget(
 
 const recheckRateLimiter = new UserRateLimiter(50, 60_000);
 
+/**
+ * How long the assembled bounty board is served from RAM.
+ *
+ * The userscript polls this endpoint every second while its panel is open, and
+ * the scheduler only republishes the pool every 30s. Rebuilding the board from
+ * two database queries on every poll therefore bought no freshness: it just
+ * multiplied one row read (plus the personal-key lookup in the auth check) by
+ * every open panel. A few seconds bounds staleness well inside the scheduler
+ * cadence while collapsing a burst of polls into one read. Set to 0 to disable.
+ */
+const BOUNTY_STATE_CACHE_MS = (() => {
+	const configured = Number(process.env.SUBVERSIVE_BOUNTY_CACHE_MS);
+	return Number.isFinite(configured) && configured >= 0 ? configured : 3_000;
+})();
+
 let inMemoryBountyStateCache: PersonalBountyState | null = null;
+let bountyStateCachedAt = 0;
+let bountyStateLoad: Promise<PersonalBountyState> | null = null;
+let bountyStateGeneration = 0;
 let isMockOverride = false;
 
 export function setMockBountyStateObject(
@@ -68,27 +86,68 @@ export function setMockBountyStateObject(
 
 export const setBountyStateObject = setMockBountyStateObject;
 
+/**
+ * Drops the short-lived board cache so the next read sees rows written by this
+ * process (the scheduler's writes are picked up when the window expires).
+ */
+export function invalidateBountyStateObject(): void {
+	bountyStateGeneration++;
+	bountyStateCachedAt = 0;
+	bountyStateLoad = null;
+}
+
 export async function getBountyStateObject(): Promise<PersonalBountyState> {
 	if (isMockOverride && inMemoryBountyStateCache) {
 		return inMemoryBountyStateCache;
 	}
 
-	try {
-		// Targets are rows in `personal_bounty_targets`; the counters live in
-		// `worker_state`. The cache below is only a fallback for a DB outage.
-		inMemoryBountyStateCache = await loadPersonalBountyState();
-	} catch {
-		// Fallback to in-memory cache if DB is offline
+	if (
+		inMemoryBountyStateCache &&
+		Date.now() - bountyStateCachedAt < BOUNTY_STATE_CACHE_MS
+	) {
+		return inMemoryBountyStateCache;
 	}
 
-	return (
-		inMemoryBountyStateCache ?? {
-			readyTargets: [],
-			hospitalQueue: [],
-			lastSyncTimestamp: 0,
-			targetCount: 0,
+	// Coalesce concurrent polls: one database read feeds every request that
+	// arrives while it is in flight, instead of one read per request.
+	if (bountyStateLoad) return bountyStateLoad;
+
+	const generation = bountyStateGeneration;
+	const load = (async () => {
+		try {
+			// Targets are rows in `personal_bounty_targets`; the counters live in
+			// `worker_state`. The cache below is only a fallback for a DB outage.
+			const state = await loadPersonalBountyState();
+			if (generation === bountyStateGeneration) {
+				inMemoryBountyStateCache = state;
+			}
+		} catch {
+			// Fallback to in-memory cache if DB is offline
+		} finally {
+			// Cache successes and failures alike for the window: a struggling
+			// database must not be retried by every open panel once a second.
+			// A read superseded by `invalidateBountyStateObject` must not stamp a
+			// fresh window on state that predates the write that invalidated it.
+			if (generation === bountyStateGeneration) {
+				bountyStateCachedAt = Date.now();
+			}
 		}
-	);
+
+		return (
+			inMemoryBountyStateCache ?? {
+				readyTargets: [],
+				hospitalQueue: [],
+				lastSyncTimestamp: 0,
+				targetCount: 0,
+			}
+		);
+	})();
+
+	bountyStateLoad = load;
+	void load.finally(() => {
+		if (bountyStateLoad === load) bountyStateLoad = null;
+	});
+	return load;
 }
 
 /**
@@ -112,18 +171,22 @@ async function authenticatePersonalRequest(
 
 	if (!providedKey) return false;
 
-	// 1. Validate against personal API key
-	const personalKey = await getPersonalKey();
-	if (personalKey?.apiKey && providedKey === personalKey.apiKey) {
-		return true;
-	}
-
-	// 2. Validate against Subversive Target Finder session token
+	// 1. Validate against Subversive Target Finder session token first.
+	//
+	// The userscript's hot polling path is always a `satf_` token, and its
+	// sessions live in RAM. Checking the personal key first made every one of
+	// those polls pay a `api_keys` lookup for a key it could never match.
 	if (providedKey.startsWith("satf_")) {
 		const session = await resolveUserSession(providedKey);
 		if (session?.isActive) {
 			return true;
 		}
+	}
+
+	// 2. Validate against personal API key
+	const personalKey = await getPersonalKey();
+	if (personalKey?.apiKey && providedKey === personalKey.apiKey) {
+		return true;
 	}
 
 	return false;
@@ -332,6 +395,9 @@ export const personalBountiesRoutes = new Elysia({
 					lastSyncTimestamp: nowSec,
 					pendingCount: state.pendingCount ?? 0,
 				});
+				// The target may have moved between queues, so the next poll must
+				// rebuild the board rather than serve the previous window's copy.
+				invalidateBountyStateObject();
 
 				return {
 					success: true,
@@ -422,6 +488,7 @@ export const personalBountiesRoutes = new Elysia({
 				targetCount: nextReady.length + nextHosp.length,
 				pendingCount: state.pendingCount ?? 0,
 			};
+			bountyStateCachedAt = Date.now();
 
 			try {
 				// Only the defeated target's row changes; every other target is

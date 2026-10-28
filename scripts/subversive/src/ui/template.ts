@@ -54,10 +54,12 @@ export function getPanelHtml(): string {
 			#satf-panel {
 				position: fixed;
 				z-index: 2147483645;
-				width: 430px;
+				width: 380px;
+				height: min(680px, calc(100vh - 24px));
 				max-width: calc(100vw - 24px);
 				max-height: calc(100vh - 24px);
 				display: none;
+				flex-direction: column;
 				padding: 16px;
 				border-radius: 16px;
 				border: 1px solid var(--border);
@@ -65,14 +67,74 @@ export function getPanelHtml(): string {
 				backdrop-filter: blur(18px);
 				color: var(--text);
 				box-shadow: 0 12px 48px rgba(0,0,0,0.75);
+				overflow: hidden;
+			}
+			#satf-panel.open { display: flex; }
+			#satf-panel.resizing { user-select: none; }
+
+			.satf-resize {
+				position: absolute;
+				z-index: 5;
+				opacity: 0;
+				background: transparent;
+				transition: opacity 0.15s, background 0.15s;
+				touch-action: none;
+			}
+			#satf-panel:hover .satf-resize { opacity: 1; }
+			.satf-resize-x {
+				top: 0;
+				bottom: 0;
+				left: 0;
+				width: 6px;
+				cursor: col-resize;
+			}
+			.satf-resize-y {
+				left: 0;
+				right: 0;
+				bottom: 0;
+				height: 6px;
+				cursor: row-resize;
+			}
+			.satf-resize:hover { background: rgba(16, 185, 129, 0.35); }
+			.satf-resize-x::after {
+				content: "";
+				position: absolute;
+				top: 50%;
+				left: 2px;
+				width: 2px;
+				height: 34px;
+				transform: translateY(-50%);
+				border-radius: 2px;
+				background: rgba(255, 255, 255, 0.28);
+			}
+			.satf-resize-y::after {
+				content: "";
+				position: absolute;
+				left: 50%;
+				bottom: 2px;
+				width: 34px;
+				height: 2px;
+				transform: translateX(-50%);
+				border-radius: 2px;
+				background: rgba(255, 255, 255, 0.28);
+			}
+			@media (max-width: 700px) {
+				.satf-resize { display: none; }
+			}
+
+			/* Only the active view scrolls, so the panel has one scrollbar and the
+			   header/status stay put no matter how tall the list is. */
+			.satf-view {
+				flex: 1 1 auto;
+				min-height: 0;
 				overflow-y: auto;
 			}
-			#satf-panel.open { display: block; }
 
 			.satf-header {
 				display: flex;
 				flex-direction: column;
 				gap: 10px;
+				flex: 0 0 auto;
 				margin-bottom: 12px;
 				padding-bottom: 10px;
 				border-bottom: 1px solid var(--border);
@@ -175,13 +237,13 @@ export function getPanelHtml(): string {
 				display: flex;
 				flex-direction: column;
 				gap: 6px;
-				max-height: 400px;
-				overflow-y: auto;
 			}
 			.satf-bounty-row {
 				display: flex;
+				flex-wrap: wrap;
 				justify-content: space-between;
 				align-items: center;
+				row-gap: 6px;
 				padding: 9px 12px;
 				border-radius: 8px;
 				background: var(--card);
@@ -197,16 +259,26 @@ export function getPanelHtml(): string {
 				display: flex;
 				flex-direction: column;
 				gap: 3px;
+				flex: 1 1 auto;
+				min-width: 200px;
 			}
 			.satf-bounty-name-row {
 				display: flex;
 				align-items: center;
 				gap: 6px;
+				min-width: 0;
 				font-size: 13px;
 				font-weight: 700;
 				color: var(--text);
 			}
+			.satf-bounty-name-row a {
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
 			.satf-bounty-id {
+				flex: 0 0 auto;
 				font-size: 11px;
 				color: var(--muted);
 				font-weight: 500;
@@ -221,6 +293,8 @@ export function getPanelHtml(): string {
 			.satf-bounty-right {
 				display: flex;
 				align-items: center;
+				flex: 0 0 auto;
+				margin-left: auto;
 				gap: 10px;
 			}
 			.satf-bounty-reward {
@@ -591,8 +665,6 @@ export function getPanelHtml(): string {
 				display: flex;
 				flex-direction: column;
 				gap: 6px;
-				max-height: 340px;
-				overflow-y: auto;
 			}
 			.satf-roster-row {
 				display: flex;
@@ -613,6 +685,8 @@ export function getPanelHtml(): string {
 			.satf-roster-left {
 				display: flex;
 				flex-direction: column;
+				flex: 1 1 auto;
+				min-width: 120px;
 				gap: 2px;
 			}
 			.satf-roster-name {
@@ -620,7 +694,17 @@ export function getPanelHtml(): string {
 				color: #fff;
 				display: flex;
 				align-items: center;
+				min-width: 0;
 				gap: 6px;
+			}
+			.satf-entity-name {
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.satf-entity-id {
+				flex: 0 0 auto;
 			}
 			.satf-roster-sub {
 				font-size: 10px;
@@ -629,6 +713,7 @@ export function getPanelHtml(): string {
 			.satf-roster-right {
 				display: flex;
 				align-items: center;
+				flex: 0 0 auto;
 				gap: 8px;
 			}
 
@@ -636,13 +721,13 @@ export function getPanelHtml(): string {
 				display: flex;
 				flex-direction: column;
 				gap: 6px;
-				max-height: 340px;
-				overflow-y: auto;
 			}
 			.satf-queue-row {
 				display: flex;
+				flex-wrap: wrap;
 				justify-content: space-between;
 				align-items: center;
+				row-gap: 6px;
 				padding: 8px 10px;
 				background: var(--card);
 				border: 1px solid var(--border);
@@ -656,6 +741,7 @@ export function getPanelHtml(): string {
 			}
 			.satf-queue-time {
 				font-weight: 700;
+				white-space: nowrap;
 				color: #f59e0b;
 			}
 			.satf-queue-time.ready {
@@ -663,8 +749,14 @@ export function getPanelHtml(): string {
 			}
 			.satf-queue-right {
 				display: flex;
+				flex-wrap: wrap;
 				align-items: center;
+				justify-content: flex-end;
+				flex: 0 0 auto;
+				max-width: 100%;
+				margin-left: auto;
 				gap: 8px;
+				row-gap: 4px;
 			}
 			.satf-dibs-btn {
 				padding: 3px 8px;
@@ -711,6 +803,10 @@ export function getPanelHtml(): string {
 				background: rgba(245, 158, 11, 0.15);
 				color: #f59e0b;
 				border: 1px solid rgba(245, 158, 11, 0.3);
+				display: inline-block;
+				max-width: 100%;
+				overflow-wrap: anywhere;
+				text-align: right;
 			}
 			.satf-dibs-claimed-label.you {
 				background: rgba(16, 185, 129, 0.15);
@@ -730,6 +826,7 @@ export function getPanelHtml(): string {
 			}
 
 			.satf-status {
+				flex: 0 0 auto;
 				margin-top: 12px;
 				font-size: 11px;
 				padding: 6px 10px;
@@ -739,6 +836,7 @@ export function getPanelHtml(): string {
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
+				gap: 8px;
 			}
 			.satf-status.error { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
 			.satf-status.ok { color: var(--accent); }
@@ -815,6 +913,25 @@ export function getPanelHtml(): string {
 		</div>
 
 		<div id="satf-panel">
+			<!-- Drag handles: left edge changes width, bottom edge changes height.
+			     Both are hidden below the desktop breakpoint. -->
+			<div
+				id="satf-resize-x"
+				class="satf-resize satf-resize-x"
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="Drag to resize the panel width, double-click to reset"
+				title="Drag to resize · double-click to reset"
+			></div>
+			<div
+				id="satf-resize-y"
+				class="satf-resize satf-resize-y"
+				role="separator"
+				aria-orientation="horizontal"
+				aria-label="Drag to resize the panel height, double-click to reset"
+				title="Drag to resize · double-click to reset"
+			></div>
+
 			<div class="satf-header">
 				<div class="satf-header-top">
 					<div class="satf-title">
@@ -833,7 +950,7 @@ export function getPanelHtml(): string {
 			</div>
 
 			<!-- RANKED WAR VIEW -->
-			<div id="satf-view-war" style="display: none;">
+			<div id="satf-view-war" class="satf-view" style="display: none;">
 				<div id="satf-war-empty" style="display: none; text-align: center; padding: 30px 16px; color: var(--muted); font-size: 12px;">
 					No active or scheduled ranked war.
 				</div>
@@ -935,7 +1052,7 @@ export function getPanelHtml(): string {
 			</div>
 
 			<!-- BOUNTIES VIEW -->
-			<div id="satf-view-bounties" style="display: none;">
+			<div id="satf-view-bounties" class="satf-view" style="display: none;">
 				<div class="satf-bounty-controls" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
 					<span style="font-size: 11px; font-weight: 700; color: #fff;">Available Bounties (<span id="satf-bounty-ready-count">0</span>)</span>
 					<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
@@ -946,7 +1063,7 @@ export function getPanelHtml(): string {
 			</div>
 
 			<!-- SETTINGS VIEW -->
-			<div id="satf-view-settings" style="display: none;">
+			<div id="satf-view-settings" class="satf-view" style="display: none;">
 				<!-- CONNECTED PLAYER STATUS -->
 				<div id="satf-auth-connected" class="satf-auth-connected-box" style="display: none;">
 					<div style="display: flex; justify-content: space-between; align-items: center;">

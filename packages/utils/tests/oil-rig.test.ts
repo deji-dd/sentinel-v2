@@ -1466,6 +1466,22 @@ describe("Sell-through response and discarded output analysis", () => {
 		expect(discarded.evidenceThin).toBe(true);
 		expect(discarded.summary).toContain("cannot be measured");
 	});
+
+	it("counts a near-full day as usable evidence instead of a capped day", () => {
+		// Only a physically full warehouse clamps the stock delta. A day at 96-98%
+		// still has room, so its measured surplus is real evidence and must not be
+		// discarded by the estimator as though the cap were binding.
+		const discarded = estimateDiscardedBarrels(
+			makeHistory([
+				{ price: 176, sold: 280_000, produced: 340_000, fill: 96 },
+				{ price: 176, sold: 280_000, produced: 350_000, fill: 98 },
+				{ price: 176, sold: 280_000, produced: 280_000, fill: 100 },
+			]).map((record) => ({ ...record, producedMeasured: true })),
+		);
+		expect(discarded.samples).toBe(2);
+		expect(discarded.medianSurplus).toBe(65_000);
+		expect(discarded.cappedDays).toBe(1);
+	});
 });
 
 describe("The single analysis pipeline", () => {

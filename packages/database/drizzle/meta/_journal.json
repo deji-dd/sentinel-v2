@@ -484,6 +484,13 @@
 			"when": 1792428943841,
 			"tag": "0068_confused_puff_adder",
 			"breakpoints": true
+		},
+		{
+			"idx": 69,
+			"version": "7",
+			"when": 1793177218669,
+			"tag": "0069_redundant_whirlwind",
+			"breakpoints": true
 		}
 	]
 }

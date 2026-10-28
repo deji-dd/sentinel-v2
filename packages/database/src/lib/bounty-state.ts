@@ -59,8 +59,12 @@ export interface PersonalBountyState {
 
 /** Reads the full board: target rows plus the counters held in `worker_state`. */
 export async function loadPersonalBountyState(): Promise<PersonalBountyState> {
-	const rows = await db.select().from(personalBountyTargets);
-	const meta = await getWorkerState(WORKER_STATE_IDS.bounties);
+	// The target rows and the worker counters are independent, so they are read
+	// concurrently instead of paying two sequential round trips per poll.
+	const [rows, meta] = await Promise.all([
+		db.select().from(personalBountyTargets),
+		getWorkerState(WORKER_STATE_IDS.bounties),
+	]);
 	const details = (meta?.details ?? {}) as { pendingCount?: number };
 
 	const readyTargets: PersonalBountyTarget[] = [];

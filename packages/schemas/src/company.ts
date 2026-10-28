@@ -239,6 +239,8 @@ export interface CompanyStockVerdict {
 	fillPct: number;
 	daysOfSales: number;
 	isFillingUp: boolean;
+	/** True only when the warehouse is physically full and discarding output. */
+	atCapacity: boolean;
 	warehouseCritical: boolean;
 	netDrainPerDay?: number;
 	netFillPerDay?: number;

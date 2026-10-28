@@ -49,8 +49,15 @@ export interface DemandFitOptions {
 	minSamples?: number;
 }
 
-const EMPTY_FIT_REASON =
-	"Not enough recorded price variation to measure how barrels sell at different prices yet.";
+/**
+ * Two different problems, deliberately described differently: too few usable
+ * days is not the same as days that all used one price, and conflating them told
+ * directors to vary the price when the real problem was missing history.
+ */
+const TOO_FEW_OBSERVATIONS =
+	"Not enough usable recorded days to measure how barrels sell at different prices yet.";
+const NO_PRICE_VARIATION =
+	"Not enough recorded price variation to measure how barrels sell at different prices yet. The recorded days all used the same barrel price, so no price response can be separated from day-to-day variation.";
 
 function unusable(params: {
 	samples: number;
@@ -108,7 +115,7 @@ export function fitBarrelDemand(
 	if (usable.length < minSamples) {
 		return unusable({
 			samples: usable.length,
-			reason: `${EMPTY_FIT_REASON} ${usable.length} usable demand observation${usable.length === 1 ? "" : "s"} recorded, ${minSamples} required.`,
+			reason: `${TOO_FEW_OBSERVATIONS} ${usable.length} usable demand observation${usable.length === 1 ? "" : "s"} recorded, ${minSamples} required.`,
 			caveats,
 			policy,
 		});
@@ -131,10 +138,21 @@ export function fitBarrelDemand(
 	}
 
 	// With no spread in price there is nothing to identify a slope from.
-	if (sxx <= 0 || syy <= 0) {
+	if (sxx <= 0) {
 		return unusable({
 			samples: usable.length,
-			reason: `${EMPTY_FIT_REASON} The recorded days all used the same barrel price, so no price response can be separated from day-to-day variation.`,
+			reason: NO_PRICE_VARIATION,
+			caveats,
+			policy,
+		});
+	}
+
+	// Price moved, but sales did not: that is a measured non-response, not a
+	// missing price experiment, so it must not be reported as "same price".
+	if (syy <= 0) {
+		return unusable({
+			samples: usable.length,
+			reason: `Barrels sold were identical on all ${usable.length} recorded days, so no part of the sales movement can be attributed to price.`,
 			caveats,
 			policy,
 		});

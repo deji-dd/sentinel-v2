@@ -52,6 +52,7 @@ import { handleSubversiveRecruitmentAlert } from "../recruitment-alert-distribut
 import { updateRwFriendlyDisplays } from "../rw-friendly-displays";
 import { updateRwPrimaryDisplays } from "../rw-primary-displays";
 import { updateRwTravelingDisplays } from "../rw-traveling-displays";
+import { handleUserShopliftingAlerts } from "../shoplifting-alert-distributor";
 import {
 	handleSubversiveStockAlerts,
 	handleUserStockAlerts,
@@ -383,6 +384,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleSubversiveChainAlert(client, message.data);
 		} else if (message.action === "user_stock_alerts" && message.data) {
 			void handleUserStockAlerts(client, message.data);
+		} else if (message.action === "user_shoplifting_alerts" && message.data) {
+			void handleUserShopliftingAlerts(client, message.data);
 		} else if (
 			message.action === "subversive_rw_displays_update" &&
 			message.data

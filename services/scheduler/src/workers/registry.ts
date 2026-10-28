@@ -20,6 +20,7 @@ import { startSubversiveMembershipAuditor } from "./subversive/membership-audito
 import { startSubversiveRankedWarWorker } from "./subversive/ranked-war-worker";
 import { startSubversiveRecruitmentWorker } from "./subversive/recruitment-worker";
 import { startRetalTracker } from "./subversive/retal-tracker";
+import { startSubversiveShopliftingAlerts } from "./subversive/shoplifting-alerts";
 import { startSubversiveSnapshotIngestionWorker } from "./subversive/snapshot-ingestion-worker";
 import { startSubversiveStockAlerts } from "./subversive/stock-alerts";
 import { startSubversiveTargetFinderWorker } from "./subversive/target-finder-worker";
@@ -168,6 +169,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"5-minute Torn stock market scanner: 24-hour and all-time highs/lows plus significant price moves for the Subversive family factions",
 		start: startSubversiveStockAlerts,
+	},
+	{
+		id: "subversive:shoplifting_alerts",
+		description:
+			"1-minute Torn shoplifting security monitor: DMs users when cameras, guards or all security at a shop are disabled",
+		start: startSubversiveShopliftingAlerts,
 	},
 	{
 		id: "subversive:chain_monitor",

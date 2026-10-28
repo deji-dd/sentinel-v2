@@ -7,6 +7,12 @@ import { formatMoney, getBountyFF, getFFColor } from "../utils/formatters";
 let rootElement: ShadowRoot | Document | null = null;
 let setBountiesStatusFn: ((msg: string, type: "ok" | "error") => void) | null =
 	null;
+let lastFetchAt = 0;
+
+/** Timestamp of the last bounty request, used to throttle background polling. */
+export function getLastBountyFetchAt(): number {
+	return lastFetchAt;
+}
 
 export function initBounties(
 	root: ShadowRoot | Document,
@@ -111,6 +117,7 @@ export function applyBountyData(
 
 export async function fetchBounties(): Promise<void> {
 	if (!state.token) return;
+	lastFetchAt = Date.now();
 	try {
 		const res = await apiRequest<{ readyTargets?: BountyTarget[] }>(
 			"/v2/personal/bounties",

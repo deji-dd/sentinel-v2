@@ -18,6 +18,18 @@ import {
 	MERC_RECEIPT_SELECT_ID,
 } from "../commands/receipt";
 import {
+	handleShopliftingAlertClearCancel,
+	handleShopliftingAlertClearConfirm,
+	handleShopliftingAlertConditionSelect,
+	handleShopliftingAlertRemoveSelect,
+	handleShopliftingAlertShopSelect,
+	SHOPLIFTING_ALERT_CLEAR_CANCEL_ID,
+	SHOPLIFTING_ALERT_CLEAR_CONFIRM_ID,
+	SHOPLIFTING_ALERT_CONDITION_SELECT_ID,
+	SHOPLIFTING_ALERT_REMOVE_SELECT_ID,
+	SHOPLIFTING_ALERT_SHOP_SELECT_ID,
+} from "../commands/shoplifting-alerts";
+import {
 	handleStockAlertClearCancel,
 	handleStockAlertClearConfirm,
 	handleStockAlertModalSubmit,
@@ -161,6 +173,12 @@ export const interactionCreateEvent = {
 				} else if (interaction.customId === STOCK_ALERT_CLEAR_CANCEL_ID) {
 					await handleStockAlertClearCancel(interaction);
 				} else if (
+					interaction.customId === SHOPLIFTING_ALERT_CLEAR_CONFIRM_ID
+				) {
+					await handleShopliftingAlertClearConfirm(interaction);
+				} else if (interaction.customId === SHOPLIFTING_ALERT_CLEAR_CANCEL_ID) {
+					await handleShopliftingAlertClearCancel(interaction);
+				} else if (
 					interaction.customId.startsWith(`${STOCK_ALERT_STOCK_PAGE_ID}:`)
 				) {
 					await handleStockAlertPageButton(interaction);
@@ -198,6 +216,18 @@ export const interactionCreateEvent = {
 					await handleStockAlertStockSelect(interaction);
 				} else if (interaction.customId === STOCK_ALERT_REMOVE_SELECT_ID) {
 					await handleStockAlertRemoveSelect(interaction);
+				} else if (interaction.customId === SHOPLIFTING_ALERT_SHOP_SELECT_ID) {
+					await handleShopliftingAlertShopSelect(interaction);
+				} else if (
+					interaction.customId === SHOPLIFTING_ALERT_REMOVE_SELECT_ID
+				) {
+					await handleShopliftingAlertRemoveSelect(interaction);
+				} else if (
+					interaction.customId.startsWith(
+						`${SHOPLIFTING_ALERT_CONDITION_SELECT_ID}:`,
+					)
+				) {
+					await handleShopliftingAlertConditionSelect(interaction);
 				}
 				return;
 			}

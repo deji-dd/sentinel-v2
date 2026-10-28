@@ -300,8 +300,15 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 		);
 	}
 	if (stock.recommendedPrice.basis === "policy_band") {
+		// The demand fit already diagnoses why it could not be used: too few usable
+		// days, no price variation, a non-negative slope, or a weak fit. Repeating
+		// one hardcoded cause here made the brief blame price variation even when
+		// the price had moved and the real problem was a thin or noisy sample.
+		const why = stock.demand.usable
+			? `The demand curve fitted from ${stock.demand.samples} recorded day${stock.demand.samples === 1 ? "" : "s"} is too weak to set price from (R² ${stock.demand.r2.toFixed(2)}; ${policy.price.minR2ForFit.toFixed(2)} required), so the policy band supplies the target.`
+			: stock.demand.reason;
 		warnings.push(
-			"Price advice is a policy-band default, not a measured optimum: too little recorded price variation to fit a demand curve.",
+			`Price advice is a policy-band default, not a measured optimum. ${why}`,
 		);
 	}
 

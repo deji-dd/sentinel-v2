@@ -1,4 +1,5 @@
 import { apiRequest, detectAttackerFlightState } from "../api/client";
+import { getLastBountyFetchAt } from "../bounties/bounties";
 import { STORAGE, SYNC_CONFIG } from "../constants";
 import {
 	isHudCyclingActive,
@@ -260,8 +261,7 @@ export async function executeGetTarget(): Promise<void> {
 		btnGetTargetElem.textContent = "Scouting...";
 		btnGetTargetElem.disabled = true;
 	}
-	if (setStatusFn)
-		setStatusFn("Scouting target via on-demand profile verification...", "ok");
+	if (setStatusFn) setStatusFn("Searching for a target...", "ok");
 
 	try {
 		const params = new URLSearchParams({
@@ -359,6 +359,16 @@ export async function executeGetTarget(): Promise<void> {
 let isRampedUpActive = false;
 let isSyncing = false;
 
+function shouldRefreshBounties(isFastTick: boolean): boolean {
+	if (!isFastTick) return true;
+	if (
+		!(state.panelOpen && state.activeTab === "bounties") &&
+		!isHudCyclingActive()
+	)
+		return false;
+	return Date.now() - getLastBountyFetchAt() >= SYNC_CONFIG.BOUNTY_REFRESH_MS;
+}
+
 export function shouldSyncFast(): boolean {
 	return Boolean(state.panelOpen || isHudCyclingActive());
 }
@@ -390,13 +400,8 @@ export async function executeSyncTick(isFastTick = false): Promise<void> {
 			}
 		}
 
-		if (state.activeTab === "bounties" && fetchBountiesFn) {
+		if (fetchBountiesFn && shouldRefreshBounties(isFastTick)) {
 			await fetchBountiesFn();
-		} else if (!isFastTick) {
-			// Ramped-down idle tick
-			if (fetchBountiesFn) {
-				await fetchBountiesFn();
-			}
 		}
 	} finally {
 		isSyncing = false;

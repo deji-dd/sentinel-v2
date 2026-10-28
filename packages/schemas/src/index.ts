@@ -4,6 +4,7 @@ export * from "./dibs";
 export * from "./ipc";
 export * from "./rw-channels";
 export * from "./rw-displays";
+export * from "./shoplifting-alerts";
 export * from "./stock-alerts";
 export * from "./stocks";
 export * from "./torn/index";

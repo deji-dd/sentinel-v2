@@ -9,6 +9,7 @@ import type {
 	IpcSubversiveRwFriendlyUpdateMessage,
 	IpcSubversiveRwTravelingUpdateMessage,
 } from "./rw-displays";
+import type { UserShopliftingAlertEvent } from "./shoplifting-alerts";
 import type { StockAlertEvent, UserStockAlertEvent } from "./stock-alerts";
 import type { FactionMember } from "./torn/api";
 
@@ -535,6 +536,21 @@ export type IpcUserStockAlertsMessage = {
 };
 
 /**
+ * One batched delivery of *personal* shoplifting alerts.
+ *
+ * Delivered exactly like the personal stock alerts: one DM per user, and one
+ * user's closed DMs never affect the rest of the batch.
+ */
+export type IpcUserShopliftingAlertsPayload = {
+	alerts: UserShopliftingAlertEvent[];
+};
+
+export type IpcUserShopliftingAlertsMessage = {
+	action: "user_shoplifting_alerts";
+	data: IpcUserShopliftingAlertsPayload;
+};
+
+/**
  * One chain warning for one family faction.
  *
  * Sent per warning rather than batched: every warning is a fresh role ping and
@@ -617,6 +633,7 @@ export type IpcMessage =
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcSubversiveStockAlertsMessage
 	| IpcUserStockAlertsMessage
+	| IpcUserShopliftingAlertsMessage
 	| IpcSubversiveChainAlertMessage
 	| IpcResetSubversiveRecruitmentMessage
 	| IpcSubversiveWarUpdatedMessage

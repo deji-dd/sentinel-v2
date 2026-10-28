@@ -18,6 +18,7 @@ import { oilBriefingCommand } from "./oil-briefing";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { receiptCommand } from "./receipt";
+import { shopliftingAlertsCommand } from "./shoplifting-alerts";
 import { stockAlertsCommand } from "./stock-alerts";
 import { targetFinderCommand } from "./target-finder";
 import { teamBreakdownCommand } from "./team-breakdown";
@@ -28,6 +29,7 @@ import { verifyallCommand } from "./verifyall";
 export {
 	assignedStockCommand,
 	receiptCommand,
+	shopliftingAlertsCommand,
 	stockAlertsCommand,
 	targetFinderCommand,
 	teamBreakdownCommand,
@@ -75,6 +77,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...targetFinderCommand, scope: "normal" },
 	{ ...oilBriefingCommand, scope: "both" },
 	{ ...stockAlertsCommand, scope: "faction" },
+	{ ...shopliftingAlertsCommand, scope: "faction" },
 ];
 
 // 2. Elims Commands (scoped strictly to the active tournament operations guild)

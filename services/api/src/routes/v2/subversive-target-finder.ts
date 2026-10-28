@@ -4,6 +4,7 @@ import {
 	and,
 	db,
 	eq,
+	sql,
 	subversiveTargetFinderTargets,
 	subversiveTargetFinderUsers,
 	tornUsers,
@@ -126,6 +127,28 @@ function verificationBudgetMs(): number {
 		? configured
 		: DEFAULT_VERIFICATION_BUDGET_MS;
 }
+
+/**
+ * Minimum gap between opportunistic `faction/{id}/wars` fallbacks per faction.
+ *
+ * The userscript polls /war/status every second while its panel or attack HUD is
+ * open. Without a guard, every poll during a period the scheduler has no
+ * active-war snapshot (i.e. between ranked wars) spent one Torn request from the
+ * caller's own key: ~60 a minute per open client, enough to exhaust the same
+ * key the on-demand target verification depends on. One attempt a minute is
+ * plenty to notice the next war, and the scheduler's normal snapshot path is
+ * unaffected.
+ */
+const WAR_STATE_FALLBACK_INTERVAL_MS = (() => {
+	const configured = Number(process.env.SUBVERSIVE_WAR_FALLBACK_INTERVAL_MS);
+	return Number.isFinite(configured) && configured >= 0 ? configured : 60_000;
+})();
+
+const warStateFallbackAt = new Map<number, number>();
+
+/** One diagnostic line a minute per member is enough to spot a cold hit-count. */
+const WAR_STATUS_DIAGNOSTIC_INTERVAL_MS = 60_000;
+const warStatusDiagnosticAt = new Map<string, number>();
 
 /** Returned by `awaitWithinDeadline` when the scout runs out of wall clock. */
 const BUDGET_SPENT = Symbol("verification-budget-spent");
@@ -553,60 +576,94 @@ export const subversiveTargetFinderRoutes = new Elysia({
 				});
 
 				const now = new Date();
+				// Collect first, then write once. The old loop awaited one
+				// INSERT ... ON CONFLICT per FFScouter result, so a pool refill of
+				// 30 targets paid 30 sequential round trips before verification
+				// could even start.
+				const seedRows: Array<{
+					targetId: number;
+					name: string;
+					level: number;
+					factionId: number | null;
+					factionName: string | null;
+					daysOld: number;
+					isInactive: boolean;
+					isFactionless: boolean;
+					inHospital: boolean;
+					hospitalUntil: Date | null;
+					estimatedBs: number;
+					estimatedScore: number;
+					status: string;
+					updatedAt: Date;
+				}> = [];
+				const seenSeedIds = new Set<number>();
+
 				for (const t of freshTargets) {
 					if (!t.player_id || t.player_id <= 0) continue;
+					// A duplicate would make ON CONFLICT DO UPDATE touch the same row
+					// twice in one statement, which Postgres rejects.
+					if (seenSeedIds.has(t.player_id)) continue;
+					seenSeedIds.add(t.player_id);
 					const score =
 						t.bs_estimate && t.bs_estimate > 0
 							? 2 * Math.sqrt(t.bs_estimate)
 							: 0;
 					const isFactionless = !t.faction_id || t.faction_id === 0;
 
-					await db
-						.insert(subversiveTargetFinderTargets)
-						.values({
-							targetId: t.player_id,
-							name: t.name ?? `Player ${t.player_id}`,
-							level: t.level ?? 1,
-							factionId: t.faction_id ?? null,
-							factionName: t.faction_name ?? null,
-							daysOld: 30,
-							isInactive: true,
-							isFactionless,
-							inHospital: false,
-							hospitalUntil: null,
-							estimatedBs: t.bs_estimate ?? 0,
-							estimatedScore: score,
-							status: "okay",
-							updatedAt: now,
-						})
-						.onConflictDoUpdate({
-							target: subversiveTargetFinderTargets.targetId,
-							set: {
-								name: t.name ? t.name : undefined,
-								level: t.level ? t.level : undefined,
-								factionId: t.faction_id ?? null,
-								factionName: t.faction_name ?? null,
-								estimatedBs: t.bs_estimate ?? 0,
-								estimatedScore: score,
-								updatedAt: now,
-							},
-						});
-
-					subversiveTargetCache.addOrUpdate({
+					seedRows.push({
 						targetId: t.player_id,
 						name: t.name ?? `Player ${t.player_id}`,
 						level: t.level ?? 1,
 						factionId: t.faction_id ?? null,
 						factionName: t.faction_name ?? null,
 						daysOld: 30,
-						lastAction: null,
 						isInactive: true,
 						isFactionless,
 						inHospital: false,
 						hospitalUntil: null,
 						estimatedBs: t.bs_estimate ?? 0,
 						estimatedScore: score,
+						status: "okay",
+						updatedAt: now,
 					});
+				}
+
+				if (seedRows.length > 0) {
+					await db
+						.insert(subversiveTargetFinderTargets)
+						.values(seedRows)
+						.onConflictDoUpdate({
+							target: subversiveTargetFinderTargets.targetId,
+							set: {
+								// Keep a real stored name/level when FFScouter omits
+								// them, mirroring the per-row update this replaces.
+								name: sql`case when excluded.name like 'Player %' then ${subversiveTargetFinderTargets.name} else excluded.name end`,
+								level: sql`case when excluded.level > 1 then excluded.level else ${subversiveTargetFinderTargets.level} end`,
+								factionId: sql`excluded.faction_id`,
+								factionName: sql`excluded.faction_name`,
+								estimatedBs: sql`excluded.estimated_bs`,
+								estimatedScore: sql`excluded.estimated_score`,
+								updatedAt: sql`excluded.updated_at`,
+							},
+						});
+
+					for (const row of seedRows) {
+						subversiveTargetCache.addOrUpdate({
+							targetId: row.targetId,
+							name: row.name,
+							level: row.level,
+							factionId: row.factionId,
+							factionName: row.factionName,
+							daysOld: row.daysOld,
+							lastAction: null,
+							isInactive: true,
+							isFactionless: row.isFactionless,
+							inHospital: false,
+							hospitalUntil: null,
+							estimatedBs: row.estimatedBs,
+							estimatedScore: row.estimatedScore,
+						});
+					}
 				}
 
 				candidates = subversiveTargetCache.getCandidatesForVerification({
@@ -1036,10 +1093,15 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		const factionId = resolveSubversiveFactionId(session.factionId);
 		let war = subversiveTargetCache.getWarState(factionId);
+		const lastWarFallbackAt = warStateFallbackAt.get(factionId) ?? 0;
 		if (
 			(war.state === "no_war" || war.target === null) &&
-			session.apiKeyEncrypted
+			session.apiKeyEncrypted &&
+			Date.now() - lastWarFallbackAt >= WAR_STATE_FALLBACK_INTERVAL_MS
 		) {
+			// Stamp the attempt *before* the call so a failing key or a Torn
+			// outage cannot turn every poll into another outbound request.
+			warStateFallbackAt.set(factionId, Date.now());
 			try {
 				const masterKey = process.env.ENCRYPTION_KEY ?? "";
 				const plainKey = decryptApiKey(session.apiKeyEncrypted, masterKey);
@@ -1114,15 +1176,23 @@ export const subversiveTargetFinderRoutes = new Elysia({
 		}
 
 		// Diagnostics: the userscript renders nothing when this is 0, so record
-		// which side is empty (cache miss vs member genuinely at zero).
+		// which side is empty (cache miss vs member genuinely at zero). Only a
+		// zero count is diagnostic, and only once a minute per member: logging
+		// every poll turned a healthy active war into a WARN line per member per
+		// second.
 		const userHitCount = subversiveTargetCache.getUserHitCount(
 			session.tornId,
 			factionId,
 		);
-		if (war.state === "active") {
-			logger.warn(
-				`War status: user ${session.tornId} on faction ${factionId} -> userHitCount=${userHitCount} (factionCached=${subversiveTargetCache.hasHitCounts(factionId)}).`,
-			);
+		if (war.state === "active" && userHitCount === 0) {
+			const diagnosticKey = `${session.tornId}:${factionId}`;
+			const lastDiagnosticAt = warStatusDiagnosticAt.get(diagnosticKey) ?? 0;
+			if (Date.now() - lastDiagnosticAt >= WAR_STATUS_DIAGNOSTIC_INTERVAL_MS) {
+				warStatusDiagnosticAt.set(diagnosticKey, Date.now());
+				logger.warn(
+					`War status: user ${session.tornId} on faction ${factionId} -> userHitCount=0 (factionCached=${subversiveTargetCache.hasHitCounts(factionId)}).`,
+				);
+			}
 		}
 
 		return {

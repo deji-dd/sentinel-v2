@@ -32,10 +32,24 @@ export interface OilRigInventoryPolicy {
 	surplusEnterPct: number;
 	/** Fill percentage below which a surplus state is released. */
 	surplusExitPct: number;
-	/** Fill percentage at or above which output may be discarded. */
+	/**
+	 * Fill percentage at or above which storage is critically close to the cap.
+	 *
+	 * This is a WARNING threshold, not the point of loss. It exists so the brief
+	 * can act before the warehouse fills; barrels are not discarded at 95%, they
+	 * are discarded at `atCapPct`. Conflating the two made the brief claim a
+	 * present-tense loss while there were still tens of thousands of barrels of
+	 * free capacity.
+	 */
 	criticalEnterPct: number;
-	/** Fill percentage below which the critical flag is released. */
+	/** Fill percentage below which the critical warning is released. */
 	criticalExitPct: number;
+	/**
+	 * Fill percentage at which the warehouse is physically full and the game
+	 * starts discarding output above the sales rate. This is the only threshold
+	 * that may be described as "at the cap" or "losing barrels".
+	 */
+	atCapPct: number;
 	/** Stock below this many days of sales counts as effectively exhausted. */
 	minDaysOfStock: number;
 	/** Healthy buffer the advice steers toward, for rationale text only. */
@@ -162,6 +176,9 @@ export const OIL_RIG_POLICY: OilRigPolicy = {
 		surplusExitPct: 73,
 		criticalEnterPct: 95,
 		criticalExitPct: 90,
+		// Physical cap, not a policy choice: 100% is when the game has nowhere to
+		// put the next barrel.
+		atCapPct: 100,
 		minDaysOfStock: 1.5,
 		bufferLowPct: 45,
 		bufferHighPct: 70,

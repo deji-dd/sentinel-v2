@@ -5,6 +5,8 @@ export const STORAGE = {
 	position: "satf_launcher_position",
 	panelOpen: "satf_panel_open",
 	persistOpen: "satf_persist_open",
+	panelWidth: "satf_panel_width",
+	panelHeight: "satf_panel_height",
 	activeTab: "satf_active_tab",
 	minFFThreshold: "satf_min_ff_threshold",
 	maxFFThreshold: "satf_max_ff_threshold",
@@ -30,6 +32,9 @@ export const STORAGE = {
 export const SYNC_CONFIG = {
 	FAST_INTERVAL_MS: 1000,
 	SLOW_INTERVAL_MS: 120000,
+	// Bounty lists change slowly; don't refetch them on every 1s fast tick even
+	// while the tab is visible. Tab switches/auth still trigger an immediate fetch.
+	BOUNTY_REFRESH_MS: 15000,
 	HUD_ACTIVITY_TIMEOUT_MS: 60000,
 	STORAGE_HUD_CYCLE: "sentinel_last_hud_cycle",
 } as const;

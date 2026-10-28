@@ -238,8 +238,8 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 				<div class="satf-queue-row" data-id="${item.id}" data-until="${until}">
 					<div class="satf-roster-left">
 						<div class="satf-roster-name">
-							<span style="font-weight:700;">${item.name}</span>
-							<span style="color:var(--muted); font-size:11px;">[${item.id}] Lvl ${item.level}</span>
+							<span class="satf-entity-name" style="font-weight:700;">${item.name}</span>
+							<span class="satf-entity-id" style="color:var(--muted); font-size:11px;">[${item.id}] Lvl ${item.level}</span>
 						</div>
 						<div class="satf-roster-sub">
 								BS ${formatStats(item.estimatedBs)} · <span class="ff-${getFFTier(item.fairFight)}" style="font-weight:700; color:${getFFColor(item.fairFight)};">FF: ${item.fairFight.toFixed(2)}</span>
