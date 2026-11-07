@@ -15,6 +15,7 @@ import { dashboardCommand } from "./dashboard";
 import { donationSummaryCommand } from "./donation-summary";
 import { itemRequestHelpCommand } from "./item-request-help";
 import { oilBriefingCommand } from "./oil-briefing";
+import { oilPositionsCommand } from "./oil-positions";
 import { pingCommand } from "./ping";
 import { purgeCommand } from "./purge";
 import { receiptCommand } from "./receipt";
@@ -76,6 +77,7 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...burnMapCommand, scope: "normal" },
 	{ ...targetFinderCommand, scope: "normal" },
 	{ ...oilBriefingCommand, scope: "both" },
+	{ ...oilPositionsCommand, scope: "both" },
 	{ ...stockAlertsCommand, scope: "faction" },
 	{ ...shopliftingAlertsCommand, scope: "faction" },
 ];

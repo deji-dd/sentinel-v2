@@ -4,6 +4,7 @@ import {
 	SlashCommandBuilder,
 } from "discord.js";
 
+import { isDirectorUser } from "../lib/director-auth";
 import { createBaseEmbed, EMBED_COLORS } from "../lib/embeds";
 
 export const oilBriefingCommand = {
@@ -14,8 +15,7 @@ export const oilBriefingCommand = {
 		),
 
 	async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-		const allowedUserId = process.env.DISCORD_USER_ID;
-		if (allowedUserId && interaction.user.id !== allowedUserId) {
+		if (!isDirectorUser(interaction.user.id)) {
 			await interaction.reply({
 				content: "You are not authorized to request director briefings.",
 				ephemeral: true,

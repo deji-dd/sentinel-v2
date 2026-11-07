@@ -3,8 +3,16 @@ import type {
 	CompanyUpgradeAdvice,
 	CompanyUpgradeCategory,
 } from "../../schemas/src/company";
+import {
+	OIL_RIG_ROLE_ORDER,
+	OIL_RIG_ROLES,
+	type OilRigRoleName,
+	roleFitScore,
+	roleOfEmployee,
+} from "./oil-rig";
 import type { OilRigAnalysis } from "./oil-rig-analysis";
 import { OIL_RIG_POLICY } from "./oil-rig-policy";
+import type { CompanySnapshot } from "./oil-rig-snapshot";
 
 /**
  * Rendering for the director briefing, kept separate from loading and delivery.
@@ -34,11 +42,7 @@ export function adviceSignature(directives: CompanyDirectives): string {
 		],
 		pricing: [directives.pricing.action, directives.pricing.exact],
 		advertising: [directives.adSpend.action, directives.adSpend.amount],
-		rehab: [
-			...directives.rehabTiers.tier1,
-			...directives.rehabTiers.tier2,
-			...directives.rehabTiers.tier3,
-		]
+		rehab: directives.rehabTiers.tier1
 			.map((t) => `${t.name}:${t.penalty}`)
 			.sort(),
 		inventory: directives.stock.state,
@@ -182,6 +186,340 @@ function renderLineup(rosterByRole: Record<string, string[]>): string {
 	return lines.join("\n");
 }
 
+/** One employee, flattened for the positioning report. */
+export interface EmployeePositionRow {
+	id?: number;
+	name: string;
+	currentRole: string;
+	recommendedRole: string;
+	stats: {
+		manualLabor: number;
+		intelligence: number;
+		endurance: number;
+		total: number;
+	};
+	wage: number;
+	workingStats: number;
+	effectiveness: number;
+	addiction: number;
+	/** Fit in the role the employee currently holds, when it is a known role. */
+	currentFit?: number;
+	/** Fit in the role the solver would put them in. */
+	recommendedFit?: number;
+}
+
+function isKnownRole(role: string): role is OilRigRoleName {
+	return Object.prototype.hasOwnProperty.call(OIL_RIG_ROLES, role);
+}
+
+/**
+ * Builds the report rows from the same analysis the brief uses.
+ *
+ * The list is ordered by raw stat total descending because the director asked
+ * for it that way: it answers "who are my strongest employees" before role fit
+ * enters the picture. Fit is still shown, so a high-stat employee in the wrong
+ * seat is visible rather than buried.
+ */
+export function buildEmployeePositionRows(
+	analysis: OilRigAnalysis,
+	snapshot: CompanySnapshot,
+): EmployeePositionRow[] {
+	const transferByName = new Map(
+		analysis.roster.activeTransfers.map((transfer) => [
+			transfer.name,
+			transfer,
+		]),
+	);
+
+	return snapshot.employees
+		.map((employee) => {
+			const currentRole = roleOfEmployee(employee);
+			const transfer = transferByName.get(employee.name);
+			const recommendedRole = transfer?.toRole ?? currentRole;
+			const manualLabor = employee.stats?.manual_labor ?? 0;
+			const intelligence = employee.stats?.intelligence ?? 0;
+			const endurance = employee.stats?.endurance ?? 0;
+			const currentFit = isKnownRole(currentRole)
+				? roleFitScore(employee, currentRole)
+				: undefined;
+			const recommendedFit = isKnownRole(recommendedRole)
+				? roleFitScore(employee, recommendedRole)
+				: currentFit;
+
+			return {
+				id: employee.id,
+				name: employee.name,
+				currentRole,
+				recommendedRole,
+				stats: {
+					manualLabor,
+					intelligence,
+					endurance,
+					total: manualLabor + intelligence + endurance,
+				},
+				wage: employee.wage ?? 0,
+				workingStats: employee.effectiveness?.working_stats ?? 0,
+				effectiveness: employee.effectiveness?.total ?? 0,
+				addiction: employee.effectiveness?.addiction ?? 0,
+				currentFit,
+				recommendedFit,
+			};
+		})
+		.sort(
+			(a, b) => b.stats.total - a.stats.total || a.name.localeCompare(b.name),
+		);
+}
+
+function formatStat(value: number): string {
+	return Math.round(value).toLocaleString("en-US");
+}
+
+function formatWage(value: number): string {
+	return `$${Math.round(value).toLocaleString("en-US")}`;
+}
+
+function maxWidth(values: string[], minimum: number): number {
+	return values.reduce(
+		(width, value) => Math.max(width, value.length),
+		minimum,
+	);
+}
+
+function fitLabel(row: EmployeePositionRow): string {
+	if (row.currentFit === undefined) return "—";
+	if (
+		row.recommendedRole !== row.currentRole &&
+		row.recommendedFit !== undefined
+	) {
+		return `${row.currentFit}→${row.recommendedFit}`;
+	}
+	return String(row.currentFit);
+}
+
+function renderEmployeeTable(rows: EmployeePositionRow[]): string {
+	const headers = [
+		"#",
+		"Employee",
+		"MAN",
+		"INT",
+		"END",
+		"Total",
+		"WS",
+		"Eff",
+		"Current Role",
+		"Pay/day",
+		"Fit",
+	];
+	const cells = rows.map((row) => [
+		row.name,
+		formatStat(row.stats.manualLabor),
+		formatStat(row.stats.intelligence),
+		formatStat(row.stats.endurance),
+		formatStat(row.stats.total),
+		formatStat(row.workingStats),
+		formatStat(row.effectiveness),
+		row.currentRole,
+		formatWage(row.wage),
+		fitLabel(row),
+	]);
+	const widths = [
+		Math.max(1, String(Math.max(1, rows.length)).length),
+		...headers.slice(1).map((header, index) =>
+			maxWidth(
+				cells.map((row) => row[index] ?? ""),
+				header.length,
+			),
+		),
+	];
+	const indexWidth = widths[0] ?? 1;
+
+	const renderRow = (values: string[], index?: number) => {
+		const indexCell = String(index ?? "").padStart(indexWidth);
+		const rest = values.map((value, cellIndex) => {
+			const width = widths[cellIndex + 1] ?? value.length;
+			// User names and role labels read better left-aligned; numbers and
+			// money read better right-aligned, where digits line up.
+			return cellIndex === 0 || cellIndex === 7
+				? value.padEnd(width)
+				: value.padStart(width);
+		});
+		return [indexCell, ...rest].join("  ").trimEnd();
+	};
+
+	const header = [
+		"#".padStart(indexWidth),
+		...headers.slice(1).map((value, cellIndex) => {
+			const width = widths[cellIndex + 1] ?? value.length;
+			return cellIndex === 0 || cellIndex === 7
+				? value.padEnd(width)
+				: value.padStart(width);
+		}),
+	].join("  ");
+	const separator = "-".repeat(header.length);
+	const body = rows.map((row, index) =>
+		renderRow(cells[index] ?? [], index + 1),
+	);
+
+	return ["```", header, separator, ...body, "```"].join("\n");
+}
+
+function renderRoleCoverage(analysis: OilRigAnalysis): string {
+	const current = analysis.roster.currentCounts;
+	const target = analysis.roster.targetQuotas;
+	const roles = [
+		...OIL_RIG_ROLE_ORDER,
+		...Object.keys(current).filter(
+			(role) => !(OIL_RIG_ROLE_ORDER as string[]).includes(role),
+		),
+		...Object.keys(target).filter(
+			(role) =>
+				!(OIL_RIG_ROLE_ORDER as string[]).includes(role) && !(role in current),
+		),
+	];
+
+	return [...new Set(roles)]
+		.filter((role) => (current[role] ?? 0) > 0 || (target[role] ?? 0) > 0)
+		.map((role) => `${role} ${current[role] ?? 0}→${target[role] ?? 0}`)
+		.join(" · ");
+}
+
+/**
+ * Employee positioning report.
+ *
+ * Answers three questions in order: who should move, who works here and how
+ * strong are they, and how does the roster look as a whole. The table is a code
+ * block so columns line up on every client without relying on Discord's very
+ * limited markdown table support.
+ */
+export function renderEmployeePositioning(
+	analysis: OilRigAnalysis,
+	snapshot: CompanySnapshot,
+): string {
+	const rows = buildEmployeePositionRows(analysis, snapshot);
+	const rowByName = new Map(rows.map((row) => [row.name, row]));
+	const sections: string[] = [];
+
+	// ---- Recommended moves ---------------------------------------------------
+	const moves = analysis.roster.activeTransfers;
+	if (moves.length > 0) {
+		const moveLines = moves.map((transfer) => {
+			const row = rowByName.get(transfer.name);
+			const fit =
+				row && row.currentFit !== undefined && row.recommendedFit !== undefined
+					? ` — fit ${row.currentFit} ➔ ${row.recommendedFit} (${row.recommendedFit - row.currentFit >= 0 ? "+" : ""}${row.recommendedFit - row.currentFit})`
+					: "";
+			return `• **${transfer.name}** (${transfer.statsStr}) ${transfer.fromRole} ➔ **${transfer.toRole}**${fit}${transfer.rationale ? ` _(${transfer.rationale})_` : ""}`;
+		});
+		const quotaDriven = moves.some((transfer) => {
+			const row = rowByName.get(transfer.name);
+			return (
+				row?.currentFit !== undefined &&
+				row.recommendedFit !== undefined &&
+				row.recommendedFit < row.currentFit
+			);
+		});
+		sections.push(
+			`### Recommended Moves\n${moveLines.join("\n")}${quotaDriven ? "\n_Some moves optimise the whole lineup rather than that employee's individual fit._" : ""}`,
+		);
+	} else {
+		sections.push(
+			"### Recommended Moves\n• None — every employee is already in the seat the engine would choose.",
+		);
+	}
+
+	// ---- Everyone, strongest first -------------------------------------------
+	sections.push(
+		`### Employees (by stat total, high to low)\n${renderEmployeeTable(rows)}\n_WS = working stats · Eff = total effectiveness · Fit = current role fit → recommended role fit_`,
+	);
+
+	// ---- Roster summary ------------------------------------------------------
+	const headcount = rows.length;
+	const payroll = rows.reduce((sum, row) => sum + row.wage, 0);
+	const totalStats = rows.reduce((sum, row) => sum + row.stats.total, 0);
+	const totalWorkingStats = rows.reduce(
+		(sum, row) => sum + row.workingStats,
+		0,
+	);
+	const totalEffectiveness = rows.reduce(
+		(sum, row) => sum + row.effectiveness,
+		0,
+	);
+	const highest = rows[0];
+	const lowest = rows[rows.length - 1];
+	const openSeats = Math.max(
+		0,
+		snapshot.profile.employees.capacity - snapshot.profile.employees.hired,
+	);
+	const roleCoverage = renderRoleCoverage(analysis);
+
+	const summary = [
+		`• **Payroll:** ${formatWage(payroll)}/day across ${headcount} employee${headcount === 1 ? "" : "s"}${headcount > 0 ? ` (average ${formatWage(payroll / headcount)}/day)` : ""}.`,
+		headcount > 0
+			? `• **Stats:** ${formatStat(totalStats)} total · ${formatStat(totalStats / headcount)} average · strongest ${highest?.name} (${formatStat(highest?.stats.total ?? 0)}) · weakest ${lowest?.name} (${formatStat(lowest?.stats.total ?? 0)}).`
+			: "• **Stats:** no employees on the roster.",
+		headcount > 0
+			? `• **Effectiveness:** ${formatStat(totalWorkingStats / headcount)} average working stats · ${formatStat(totalEffectiveness / headcount)} average total effectiveness.`
+			: "",
+		`• **Seats:** ${snapshot.profile.employees.hired}/${snapshot.profile.employees.capacity} filled${openSeats > 0 ? ` (${openSeats} open)` : ""} · blueprint: ${analysis.roster.blueprintSource}.`,
+		roleCoverage ? `• **Role coverage (now → target):** ${roleCoverage}.` : "",
+	].filter((line) => line.length > 0);
+	sections.push(`### Roster Summary\n${summary.join("\n")}`);
+
+	// ---- Health flags --------------------------------------------------------
+	const health: string[] = [];
+	const { tier1 } = analysis.roster.rehabTiers;
+	if (tier1.length > 0) health.push(`• **Rehab now:** ${rehabList(tier1)}`);
+
+	const unsettled = snapshot.employees
+		.filter((employee) => (employee.effectiveness?.settled_in ?? 0) < 10)
+		.sort(
+			(a, b) =>
+				(a.effectiveness?.settled_in ?? 0) - (b.effectiveness?.settled_in ?? 0),
+		);
+	if (unsettled.length > 0) {
+		health.push(
+			`• **Unsettled:** ${unsettled
+				.map(
+					(employee) =>
+						`${employee.name} (${employee.effectiveness?.settled_in ?? 0}/10 settled)`,
+				)
+				.join(", ")}`,
+		);
+	}
+
+	const inactive = snapshot.employees.filter(
+		(employee) => (employee.effectiveness?.inactivity ?? 0) < 0,
+	);
+	if (inactive.length > 0) {
+		health.push(
+			`• **Inactive:** ${inactive
+				.map(
+					(employee) =>
+						`${employee.name} (${employee.effectiveness?.inactivity ?? 0})`,
+				)
+				.join(", ")}`,
+		);
+	}
+
+	if (health.length > 0) {
+		sections.push(`### Staff Health\n${health.join("\n")}`);
+	}
+
+	// ---- Caveats -------------------------------------------------------------
+	const warnings = renderProvenance(analysis);
+	if (warnings.length > 0) {
+		const warningLines = warnings
+			.replace("• **Read with care:**", "")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0)
+			.map((line) => line.replace(/^–\s*/, "• "));
+		sections.push(`### Read With Care\n${warningLines.join("\n")}`);
+	}
+
+	return sections.join("\n\n");
+}
+
 /**
  * The capacity story, told once.
  *
@@ -217,12 +555,17 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 				} bbl/day, so storage is falling about ${analysis.stock.netDrainPerDay?.toLocaleString()} bbl/day (now ${d.stock.fillPct}% full).`,
 			);
 		} else {
-			const flow =
-				produced !== undefined
-					? `extraction ${produced.toLocaleString()} vs sales ${sold.toLocaleString()} bbl/day`
-					: `sales ${sold.toLocaleString()} bbl/day, with extraction unmeasured`;
+			const netFill = analysis.stock.netFillPerDay;
+			// The sign comes from the flow only: extraction above sales is a gain
+			// (+), sales above extraction is a loss (-). The cap is a separate fact
+			// - it decides whether a gain is stored or discarded, which the loss
+			// line below states.
+			const rate =
+				netFill !== undefined
+					? `rate of loss/gain is ${netFill > 0 ? "+" : ""}${netFill.toLocaleString()} bbl/day`
+					: "the rate of loss/gain is unknown because extraction is unmeasured";
 			lines.push(
-				`• **Cannot drain** — storage is ${d.stock.fillPct}% full, and ${flow}.`,
+				`• **Cannot drain** — storage is ${d.stock.fillPct}% full, and ${rate}.`,
 			);
 		}
 
@@ -264,14 +607,6 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 			lines.push(
 				`• **Not losing yet** — ${d.stock.fillPct}% full leaves ${freeBarrels.toLocaleString()} bbl of room${daysToCap ? `, about ${daysToCap} day${daysToCap === 1 ? "" : "s"} of surplus at the measured ${netFill.toLocaleString()} bbl/day` : ""}. Barrels are only discarded once the warehouse is completely full (${OIL_RIG_POLICY.inventory.atCapPct}%).`,
 			);
-		} else if (!draining) {
-			// Filling, with room left. Reporting a sized loss here would be inventing
-			// one; reporting nothing would leave the capacity section silent about
-			// cost, which is the question it exists to answer. The fill level is NOT
-			// restated, because the flow line directly above already states it.
-			lines.push(
-				`• **Nothing lost yet** — the excess above the sales rate is being stored. Barrels begin to be discarded at ${OIL_RIG_POLICY.inventory.atCapPct}% full.`,
-			);
 		}
 
 		if (plan.state === "action_required") {
@@ -288,34 +623,7 @@ function renderCapacity(analysis: OilRigAnalysis): string[] {
 			// A one-seat step is in flight. Saying "nothing to move" here would
 			// read as an all-clear while the second seat is still under evaluation.
 			lines.push(`• **Holding** — ${plan.summary}`);
-		} else {
-			const sales = analysis.roster.currentCounts["Sales Executive"] ?? 0;
-			const target = analysis.roster.targetQuotas["Sales Executive"] ?? 0;
-			lines.push(
-				`• **Nothing to move** — the roster already carries the sell-through weight this needs (${sales}/${target} seats).`,
-			);
 		}
-
-		// What the hold is actually waiting for, rather than the whole rule again.
-		const policy = OIL_RIG_POLICY.capacity;
-		const outstanding: string[] = [];
-		if (d.stock.fillPct > policy.exitMaxFillPct) {
-			outstanding.push(
-				`storage falls to ${policy.exitMaxFillPct}% (now ${d.stock.fillPct}%)`,
-			);
-		}
-		const drainDaysNeeded =
-			policy.exitConsecutiveDrainDays - analysis.regime.drainingDays;
-		if (drainDaysNeeded > 0) {
-			outstanding.push(
-				`${drainDaysNeeded} more draining day${drainDaysNeeded === 1 ? "" : "s"}`,
-			);
-		}
-		lines.push(
-			outstanding.length > 0
-				? `• **Releases when** ${outstanding.join(" and ")}. The roster is left alone until then, so the correction is not undone and reapplied.`
-				: `• **Releases when** ${plan.holdCondition}.`,
-		);
 
 		if (d.stock.structuralAdvice) {
 			lines.push(`• ${d.stock.structuralAdvice}`);
@@ -420,11 +728,7 @@ export function renderDeterministicBriefing(
 	}
 
 	const t1 = d.rehabTiers.tier1;
-	const t2 = d.rehabTiers.tier2;
-	const t3 = d.rehabTiers.tier3;
 	if (t1.length > 0) doThis.push(`• **Rehab now:** ${rehabList(t1)}`);
-	if (t2.length > 0) doThis.push(`• **Rehab next:** ${rehabList(t2)}`);
-	if (t3.length > 0) doThis.push(`• **Rehab watch:** ${rehabList(t3)}`);
 
 	if (d.pricing.isChanged) {
 		doThis.push(
@@ -433,13 +737,13 @@ export function renderDeterministicBriefing(
 	}
 	if (d.adSpend.isChanged) {
 		doThis.push(
-			`• **Ad budget:** ${d.adSpend.formatted} _(${d.adSpend.basis.replace(/_/g, " ")})_`,
+			`• **Ad budget:** ${d.adSpend.formatted} (${d.adSpend.basis.replace(/_/g, " ")})`,
 		);
 	}
 
 	const nothingToDo =
 		d.roleTransfers.length === 0 &&
-		t1.length + t2.length + t3.length === 0 &&
+		t1.length === 0 &&
 		d.pricing.isChanged === false &&
 		d.adSpend.isChanged === false;
 

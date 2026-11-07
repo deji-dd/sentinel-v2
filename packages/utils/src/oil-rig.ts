@@ -552,7 +552,7 @@ function maxWeightBipartiteMatching(costMatrix: number[][]): number[] {
 			for (let j = 0; j <= dim; j++) {
 				if (used[j]) {
 					u[p[j] ?? 0] += delta;
-					v[j] += delta;
+					v[j] -= delta;
 				} else {
 					minv[j] -= delta;
 				}
@@ -670,8 +670,14 @@ function _expandSlots(quotas: Record<string, number>): OilRigRoleName[] {
  * How well an employee fits a role, including the strategic domain anchors the
  * engine has always applied (a very high-INT worker anchors sales, a very high-MAN
  * worker anchors drilling).
+ *
+ * Exported so the positioning report can show the same number the solver
+ * optimised, rather than a second, subtly different fit calculation.
  */
-function fitScore(employee: EmployeeData, role: OilRigRoleName): number {
+export function roleFitScore(
+	employee: EmployeeData,
+	role: OilRigRoleName,
+): number {
 	const roleDef = OIL_RIG_ROLES[role];
 	if (!roleDef) return 0;
 	const stats = employee.stats ?? {};
@@ -726,21 +732,22 @@ function describeTransfer(
 /**
  * Solves the target lineup.
  *
- * WHY TWO PASSES. The previous version maximised total role fit subject only to a
- * small "already in this role" bonus, which made churn an optimisation variable
- * rather than a constraint. Two consequences, both reproduced:
+ * WHY A GLOBAL MATCHING. The solver used to settle incumbents into their existing
+ * role first and then optimise only the employees who were left over (the
+ * unassigned, or those shed from an over-quota role). That made "positioning"
+ * mean "place the unassigned": an employee already holding a seat was never
+ * considered for a role they fit better, even when the whole roster would be
+ * stronger with them elsewhere. Every employee is now a candidate for every
+ * quota seat, and one Hungarian matching maximises total role fit across the
+ * whole roster.
  *
- *  - a quota change of two seats moved eight people, because a better global
- *    assignment was worth more than the inertia bonus; and
- *  - a roster already exactly on the blueprint was still told to swap two
- *    employees, because the fit scores are close enough that the solver preferred
- *    a different-but-equally-good matching and named a different pair depending
- *    on the order the employees arrived in.
- *
- * So "who keeps their job" is decided first, deterministically, and the Hungarian
- * matching is used only on the employees who could not be settled. Moves are then
- * proportional to the quota delta - which is the quantity the director is
- * actually being asked to change - instead of to the spread of fit scores.
+ * Ties are broken toward the incumbent. Fit scores are whole numbers, so the
+ * matrix is scaled by `headcount + 1` and a single point is added for the
+ * employee's current role. That makes the objective lexicographic: total fit is
+ * maximised first, and only an equally-good matching prefers to leave someone
+ * where they are. This keeps the answer deterministic (and stops two
+ * interchangeable employees being swapped on every run) without ever paying a
+ * fit point to avoid a move.
  */
 export function solveOptimalRoster(
 	employees: EmployeeData[],
@@ -761,63 +768,33 @@ export function solveOptimalRoster(
 	});
 
 	const currentCounts = countRoles(ordered);
-	const quotaRoles = orderedQuotaRoles(quotas);
+	const slots = _expandSlots(quotas);
 
-	// ---- Pass 1: settle incumbents into their existing roles -------------------
+	// ---- Global assignment: every employee against every quota seat ----------
+	// A fit point is worth `headcount + 1`, so it outweighs every incumbency
+	// tie-break combined; the +1 below can only decide between assignments of
+	// identical total fit.
+	const tieBreakScale = ordered.length + 1;
+	const costMatrix = ordered.map((employee) => {
+		const currentRole = roleOfEmployee(employee);
+		return slots.map((role) => {
+			const fit = roleFitScore(employee, role);
+			const incumbentBonus = role === currentRole ? 1 : 0;
+			return fit * tieBreakScale + incumbentBonus;
+		});
+	});
+	const match = maxWeightBipartiteMatching(costMatrix);
+
 	const assigned: Array<string | undefined> = new Array(ordered.length).fill(
 		undefined,
 	);
-	const seatsLeft: Record<string, number> = {};
-	for (const role of quotaRoles) {
-		seatsLeft[role] = Math.max(0, Math.floor(quotas[role] ?? 0));
-	}
-
-	for (const role of quotaRoles) {
-		const seats = seatsLeft[role] ?? 0;
-		if (seats <= 0) continue;
-		const incumbents = ordered
-			.map((employee, index) => ({ index, employee }))
-			.filter(({ employee }) => roleOfEmployee(employee) === role)
-			.map(({ index, employee }) => ({
-				index,
-				fit: fitScore(employee, role as OilRigRoleName),
-			}))
-			// The best-fitting incumbents keep their seats, so a role that is over
-			// quota sheds its weakest members rather than an arbitrary pair. Exact
-			// ties fall back to the stable employee order.
-			.sort((a, b) => b.fit - a.fit || a.index - b.index);
-
-		const keep = incumbents.slice(0, seats);
-		for (const { index } of keep) assigned[index] = role;
-		seatsLeft[role] = seats - keep.length;
-	}
-
-	// ---- Pass 2: optimise only the unsettled employees ------------------------
-	const unmatched: number[] = [];
-	for (let index = 0; index < ordered.length; index++) {
-		if (assigned[index] === undefined) unmatched.push(index);
-	}
-
-	const openSlots: OilRigRoleName[] = [];
-	for (const role of quotaRoles) {
-		const seats = seatsLeft[role] ?? 0;
-		for (let i = 0; i < seats; i++) openSlots.push(role as OilRigRoleName);
-	}
-
-	if (unmatched.length > 0 && openSlots.length > 0) {
-		const costMatrix = unmatched.map((index) => {
-			const employee = ordered[index];
-			return employee
-				? openSlots.map((role) => fitScore(employee, role))
-				: openSlots.map(() => 0);
-		});
-		const match = maxWeightBipartiteMatching(costMatrix);
-		unmatched.forEach((index, row) => {
-			const slotIdx = match[row] ?? -1;
-			const role = openSlots[slotIdx];
-			if (role !== undefined) assigned[index] = role;
-		});
-	}
+	ordered.forEach((_employee, index) => {
+		const slotIdx = match[index] ?? -1;
+		const role = slots[slotIdx];
+		// When there are fewer seats than employees the unmatched rows point at a
+		// padded dummy column; those employees keep their current role below.
+		if (role !== undefined) assigned[index] = role;
+	});
 
 	// ---- Outputs --------------------------------------------------------------
 	const activeTransfers: ActiveTransfer[] = [];
@@ -1451,9 +1428,6 @@ export function analyzeStockAndPricing(params: {
 				: `Confirm extraction against the sales rate; raising sell-through capacity helps, adding storage does not.`;
 		} else if (warehouseCritical && isFillingUp) {
 			structuralAdvice = `Storage is nearly full at ${fillPct}% and extraction still outpaces sales. No barrels are being discarded yet, but only ${(storageCap - params.inStock).toLocaleString()} bbl remain before the cap binds; raise sell-through capacity ahead of that, because a bigger warehouse only postpones it.`;
-		} else if (isFillingUp) {
-			structuralAdvice =
-				"Extraction currently matches or outpaces sales, so the warehouse will keep filling until it hits the storage limit. Raise sell-through capacity (Sales Executives, customer volume); more storage would only delay the same outcome.";
 		}
 		if (production.confidence === "low" || production.confidence === "none") {
 			structuralAdvice =

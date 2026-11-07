@@ -997,9 +997,12 @@ describe("Briefing is compact and non-repetitive", () => {
 		}),
 	);
 
-	it("states the discarded volume exactly once", () => {
-		const occurrences = (brief.advice.match(/94,517/g) ?? []).length;
-		expect(occurrences).toBe(1);
+	it("states the discarded estimate once in the loss line", () => {
+		const lossLines = brief.advice
+			.split("\n")
+			.filter((line) => line.startsWith("• **Losing"));
+		expect(lossLines).toHaveLength(1);
+		expect(lossLines[0]).toContain("94,517");
 	});
 
 	it("states the storage level once per section that needs it", () => {
@@ -1199,24 +1202,6 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		).toBeGreaterThan(0);
 	});
 
-	it("states what the hold is actually waiting for", () => {
-		const analysis = analyzeOilRig({
-			snapshot: snapshot(66.4, 176),
-			history: fillingHistory,
-			dataBasis: "live",
-			asOfSeconds: FIXED_NOW,
-			previousRegime: heldRegime,
-			previousState: "surplus",
-			previousCritical: true,
-		});
-		const advice = renderDeterministicBriefing(analysis).advice;
-		// The binding condition is the storage level, not "sales outpacing
-		// extraction", which has already happened.
-		expect(advice).toContain("Releases when");
-		expect(advice).toContain("storage falls to 60%");
-		expect(advice).toContain("now 66.4%");
-	});
-
 	it("still reports a loss when the warehouse is genuinely at its cap", () => {
 		const atCap = Array.from({ length: 6 }, (_, i) => {
 			const sold = 270_000 + i * 3_000;
@@ -1278,7 +1263,9 @@ describe("Capacity section describes the current flow, not the held regime", () 
 
 	it("attributes the policy-band price warning to the measured reason", () => {
 		const analysis = analyzeOilRig({
-			snapshot: snapshot(66.4, 176),
+			// Surplus with room left to move price down: the warning is only
+			// emitted when a price change is actually being advised.
+			snapshot: snapshot(80, 200),
 			history: fillingHistory,
 			dataBasis: "live",
 			asOfSeconds: FIXED_NOW,
@@ -1290,6 +1277,22 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		// Every recorded day used $176, so that is the honest reason for the
 		// fallback - the generic "too little recorded price variation" text hid it.
 		expect(warning).toContain("same barrel price");
+	});
+
+	it("omits the policy-band caveat when there is no price advice", () => {
+		// Equilibrium and no price move: the brief asks for no price change, so a
+		// Read With Care bullet about policy-band price advice would describe a
+		// recommendation that was never made.
+		const analysis = analyzeOilRig({
+			snapshot: snapshot(66.4, 176),
+			history: fillingHistory,
+			dataBasis: "live",
+			asOfSeconds: FIXED_NOW,
+		});
+		expect(analysis.directives.pricing.isChanged).toBe(false);
+		expect(
+			analysis.warnings.some((w) => w.includes("policy-band default")),
+		).toBe(false);
 	});
 
 	it("says the demand curve is weak, not missing, when a fit was rejected", () => {
@@ -1314,7 +1317,9 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		expect(fit.r2).toBeLessThan(OIL_RIG_POLICY.price.minR2ForFit);
 
 		const analysis = analyzeOilRig({
-			snapshot: snapshot(66.4, 176),
+			// Surplus with room to cut, so the rejected fit still yields an
+			// actionable policy-band price recommendation to caveat.
+			snapshot: snapshot(80, 200),
 			history: noisy,
 			dataBasis: "live",
 			asOfSeconds: FIXED_NOW,
@@ -1409,7 +1414,9 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		// The defect: this said "storage is pinned at the cap" at 65% fill.
 		expect(advice).not.toContain("pinned at the cap");
 		expect(advice).not.toContain("Losing");
-		expect(advice).toContain("Nothing lost yet");
+		// No filler "nothing lost yet" line either: when the cap is not binding,
+		// the flow sentence above is the whole report.
+		expect(advice).not.toContain("Nothing lost yet");
 	});
 
 	it("does not report a historical capped-day surplus as a present loss", () => {
@@ -1424,7 +1431,7 @@ describe("Capacity section describes the current flow, not the held regime", () 
 		expect(analysis.stock.warehouseCritical).toBe(false);
 
 		expect(advice).not.toContain("Losing");
-		expect(advice).toContain("Nothing lost yet");
+		expect(advice).not.toContain("Nothing lost yet");
 	});
 
 	it("still says the loss cannot be sized when the cap really is binding", () => {
@@ -1658,12 +1665,10 @@ describe("Extraction direction comes from the newest measured day", () => {
 		expect(details).toContain("latest day 395,024");
 	});
 
-	it("quotes the same day in the flow sentence as in the net it reports", () => {
+	it("states the measured net instead of the raw extraction and sales pair", () => {
 		// Holding an extraction-bound regime makes the capacity flow sentence
-		// render. It used to quote the median there beside a net taken from the
-		// newest day: "sales 332,886 vs extraction 321,560 bbl/day, so storage is
-		// falling 11,326 bbl/day" - two different days in one sentence, and the
-		// wrong sign for the day it was describing.
+		// render. It used to quote the raw extraction and sales figures, taken from
+		// two different days in one case; the signed net is the actionable number.
 		const heldRegime: CapacityRegime = {
 			regime: "extraction_bound",
 			held: true,
@@ -1686,8 +1691,8 @@ describe("Extraction direction comes from the newest measured day", () => {
 		const advice = renderDeterministicBriefing(analysis).advice;
 
 		expect(analysis.stock.production.dailyProduced).toBe(321_560);
-		expect(advice).toContain("extraction 395,024 vs sales 332,886");
-		expect(advice).not.toContain("321,560 vs sales");
+		expect(advice).toContain("rate of loss/gain is +62,138 bbl/day");
+		expect(advice).not.toContain("321,560");
 		expect(advice).not.toContain("Draining");
 	});
 

@@ -12,14 +12,14 @@ import { guildCreateEvent } from "./src/events/guild-create";
 import { guildMemberAddEvent } from "./src/events/guild-member-add";
 import { interactionCreateEvent } from "./src/events/interaction-create";
 import { readyEvent } from "./src/events/ready";
+import { isDirectorUser } from "./src/lib/director-auth";
 import { handleArmoryStorageChatMessage } from "./src/lib/elims-armory-storage";
-import {
-	createBaseEmbed,
-	createErrorEmbed,
-	EMBED_COLORS,
-} from "./src/lib/embeds";
 import { setupBotIpcListeners } from "./src/lib/ipc";
 import { logger } from "./src/lib/logger";
+import {
+	handleOilDmCommand,
+	parseOilDmCommand,
+} from "./src/lib/oil-dm-commands";
 import { handleReactionRoleAdd } from "./src/lib/reaction-roles";
 import { deployCommands } from "./src/scripts/deploy-commands";
 
@@ -78,54 +78,13 @@ async function main(): Promise<void> {
 	client.on(Events.MessageCreate, async (message) => {
 		void handleArmoryStorageChatMessage(message);
 
-		// Handle on-demand personal DM command for Succession Oil briefing
-		const allowedUserId = process.env.DISCORD_USER_ID;
-		if (
-			allowedUserId &&
-			message.author.id === allowedUserId &&
-			!message.guild
-		) {
-			const clean = message.content.trim().toLowerCase();
-			if (
-				clean === "!oil" ||
-				clean === "oil" ||
-				clean === "!briefing" ||
-				clean === "briefing"
-			) {
-				try {
-					await message.channel.sendTyping();
-					const standbyEmbed = createBaseEmbed(
-						"Director Briefing",
-						"Analyzing...Stand by for your briefing.",
-						EMBED_COLORS.PRIMARY,
-					);
-					await message.reply({ embeds: [standbyEmbed] });
-					const { generateAndSendDirectorBriefing } =
-						await import("@sentinel/utils");
-					// History is intentionally not passed: the briefing loads the
-					// canonical rolling window itself. This was the second verbatim
-					// copy of that mapper in the bot service.
-					await generateAndSendDirectorBriefing({
-						useLiveData: true,
-						fetchLiveData: async () => {
-							const { tornApi } = await import("@sentinel/torn-api");
-							const live = await tornApi.getPersonal("/company", {
-								queryParams: { selections: ["profile", "employees", "stock"] },
-							});
-							return live as unknown as import("@sentinel/utils").CompanySnapshot;
-						},
-					});
-				} catch (err) {
-					logger.error("Failed to generate on-demand oil briefing in DM:", err);
-					await message.reply({
-						embeds: [
-							createErrorEmbed(
-								"Briefing Generation Failed",
-								`Failed to generate briefing: ${err instanceof Error ? err.message : String(err)}`,
-							),
-						],
-					});
-				}
+		// On-demand oil-rig reports are DM-only and restricted to the director.
+		// The trigger words are parsed outside this file so the accepted names can
+		// be tested without booting the gateway client.
+		if (!message.guild && isDirectorUser(message.author.id)) {
+			const command = parseOilDmCommand(message.content);
+			if (command) {
+				await handleOilDmCommand(message, command);
 			}
 		}
 	});

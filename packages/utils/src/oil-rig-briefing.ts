@@ -21,6 +21,7 @@ import {
 import {
 	renderCompanyDetails,
 	renderDeterministicBriefing,
+	renderEmployeePositioning,
 	renderProvenance,
 	splitDiscordMessages,
 } from "./oil-rig-render";
@@ -377,22 +378,30 @@ export interface BriefingResult {
 	discordMessages: string[];
 }
 
+interface LoadedOilRigAnalysis {
+	snapshot: CompanySnapshot;
+	history: OilRigHistoryRecord[];
+	previous?: PreviousBriefState;
+	baseline?: RosterBaseline;
+	companyId: number;
+	asOfSeconds: number;
+	analysis: OilRigAnalysis;
+}
+
 /**
- * Generates, delivers and records a director briefing.
+ * Loads and analyses the current oil rig picture.
  *
- * The body is deliberately a straight line: load, analyse, render, deliver,
- * record. Every decision comes from `analyzeOilRig`, so the brief, the dashboard
- * and the in-page badges cannot disagree, and the two pieces of state the advice
- * needs to be stable - the inventory state and the capacity regime - are read back
- * from the previous brief before the analysis runs rather than being recomputed
- * from a single day's numbers.
+ * Shared by the director briefing and the employee positioning report so both
+ * surfaces start from the same snapshot, the same hysteretic state and the same
+ * measured roster baseline. A separate loader for the positioning report would
+ * let its recommended moves disagree with the brief's, which is exactly the
+ * class of bug the single analysis pipeline exists to prevent.
  */
-export async function generateDirectorBriefing(
+async function loadOilRigAnalysis(
 	options?: DirectorBriefingOptions,
-): Promise<BriefingResult> {
+): Promise<LoadedOilRigAnalysis> {
 	const asOfSeconds = options?.asOfSeconds ?? Math.floor(Date.now() / 1000);
 
-	// ---- Load ---------------------------------------------------------------
 	let snap: CompanySnapshot | null = options?.customSnapshot ?? null;
 	let dataBasis: "live" | "recorded" = "recorded";
 
@@ -437,7 +446,6 @@ export async function generateDirectorBriefing(
 		}
 	}
 
-	// ---- Analyse ------------------------------------------------------------
 	const analysis = analyzeOilRig({
 		snapshot: snap,
 		history,
@@ -450,6 +458,38 @@ export async function generateDirectorBriefing(
 		previousTickIsoDate: previous?.tickIsoDate,
 		baseline,
 	});
+
+	return {
+		snapshot: snap,
+		history,
+		previous,
+		baseline,
+		companyId,
+		asOfSeconds,
+		analysis,
+	};
+}
+
+/**
+ * Generates, delivers and records a director briefing.
+ *
+ * The body is deliberately a straight line: load, analyse, render, deliver,
+ * record. Every decision comes from `analyzeOilRig`, so the brief, the dashboard
+ * and the in-page badges cannot disagree, and the two pieces of state the advice
+ * needs to be stable - the inventory state and the capacity regime - are read back
+ * from the previous brief before the analysis runs rather than being recomputed
+ * from a single day's numbers.
+ */
+export async function generateDirectorBriefing(
+	options?: DirectorBriefingOptions,
+): Promise<BriefingResult> {
+	const {
+		snapshot: snap,
+		history,
+		previous,
+		companyId,
+		analysis,
+	} = await loadOilRigAnalysis(options);
 
 	// ---- Record what happened after the previous brief ----------------------
 	let outcome: BriefOutcome | undefined;
@@ -575,5 +615,59 @@ export async function generateAndSendDirectorBriefing(
 	options?: DirectorBriefingOptions,
 ): Promise<string> {
 	const result = await generateDirectorBriefing(options);
+	return result.text;
+}
+
+export interface EmployeePositioningResult {
+	/** The same analysis the director briefing would use for the same data. */
+	analysis: OilRigAnalysis;
+	/** The full positioning report as markdown. */
+	text: string;
+	/** The exact Discord message bodies, so nothing is hidden behind delivery. */
+	discordMessages: string[];
+}
+
+/**
+ * Generates and delivers the detailed employee positioning report.
+ *
+ * This is deliberately read-only: it does not persist a brief, record an
+ * outcome, or touch the hysteresis state. It answers "where should everyone
+ * stand, and what does the roster look like" without claiming a new advice
+ * cycle, which is what makes it safe to ask for at any time.
+ */
+export async function generateEmployeePositioning(
+	options?: DirectorBriefingOptions,
+): Promise<EmployeePositioningResult> {
+	const { snapshot, analysis } = await loadOilRigAnalysis(options);
+
+	const header = `## ${snapshot.profile.name} (${snapshot.profile.rating}★) — Employee Positioning\n_${new Date(analysis.decision.asOfSeconds * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC · ${analysis.provenance.dataBasis} settings · ${snapshot.employees.length} staff_`;
+	const text = renderEmployeePositioning(analysis, snapshot);
+	const discordMessages = splitDiscordMessages([header, text].join("\n\n"));
+
+	logger.info("================ EMPLOYEE POSITIONING ================");
+	console.log(text);
+	logger.info("=====================================================");
+
+	const discordToken = process.env.DISCORD_TOKEN;
+	const discordUserId = process.env.DISCORD_USER_ID;
+	if (discordToken && discordUserId && !options?.skipDelivery) {
+		logger.info(
+			`Sending employee positioning to user ${discordUserId} (${discordMessages.length} message(s))...`,
+		);
+		await sendDiscordContent(discordUserId, discordToken, discordMessages);
+		logger.info(
+			`Employee positioning delivered (${discordMessages.length} message(s))!`,
+		);
+	} else if (!options?.skipDelivery) {
+		logger.warn("Discord credentials missing. Skipping DM.");
+	}
+
+	return { analysis, text, discordMessages };
+}
+
+export async function generateAndSendEmployeePositioning(
+	options?: DirectorBriefingOptions,
+): Promise<string> {
+	const result = await generateEmployeePositioning(options);
 	return result.text;
 }

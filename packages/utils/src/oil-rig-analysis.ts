@@ -299,7 +299,13 @@ export function analyzeOilRig(input: OilRigAnalysisInput): OilRigAnalysis {
 			`The advertising rank step assumes ${policy.advertising.assumedFieldSize} companies; the real field size is not yet measured, so a probe may be sized too small.`,
 		);
 	}
-	if (stock.recommendedPrice.basis === "policy_band") {
+	// Only caveat price advice that is actually being given. A policy-band hold
+	// ("maintain") is not advice, so describing it as a policy-band default would
+	// add a Read With Care bullet about a change the brief never asked for.
+	if (
+		stock.recommendedPrice.changeNeeded &&
+		stock.recommendedPrice.basis === "policy_band"
+	) {
 		// The demand fit already diagnoses why it could not be used: too few usable
 		// days, no price variation, a non-negative slope, or a weak fit. Repeating
 		// one hardcoded cause here made the brief blame price variation even when

@@ -962,6 +962,9 @@ describe("Director briefing loops regression", () => {
 		expect(briefing).not.toContain("**Pricing:**");
 		// ...but the real blocker must be stated.
 		expect(briefing).toContain("Cannot drain");
+		// Positive = extraction outpaces sales. The cap is what turns that flow
+		// into a loss, and the next line states that separately.
+		expect(briefing).toContain("rate of loss/gain is +10,000 bbl/day");
 		expect(briefing).toContain("sell-through capacity");
 	});
 
@@ -1839,9 +1842,10 @@ describe("The single analysis pipeline", () => {
 		);
 	});
 
-	it("moves only the seats the quota change requires", () => {
-		// The old solver maximised total role fit, so a two-seat quota change moved
-		// eight people. Churn is now decided before fit is optimised.
+	it("re-optimises the whole lineup around a quota change", () => {
+		// Positioning is a global matching now, so a quota change may reposition an
+		// incumbent too when that raises total role fit. What must hold is the seat
+		// shape the capacity plan asked for - not a cap on the number of moves.
 		const analysis = analyzeOilRig({
 			snapshot: snapshot({
 				inStock: 750_000,
@@ -1855,10 +1859,45 @@ describe("The single analysis pipeline", () => {
 			asOfSeconds: FIXED_NOW,
 		});
 		const salesDeltas = analysis.directives.capacityRebalance.seatDeltas;
-		const seatsToAdd = salesDeltas["Sales Executive"] ?? 0;
-		expect(seatsToAdd).toBe(2);
-		// Two seats into sell-through, and the extraction side gives up exactly two.
-		expect(analysis.directives.roleTransfers.length).toBeLessThanOrEqual(2);
+		expect(salesDeltas["Sales Executive"] ?? 0).toBe(2);
+		expect(analysis.roster.targetQuotas["Sales Executive"]).toBe(6);
+		expect(analysis.roster.rosterByRole["Sales Executive"]?.length).toBe(6);
+		// Every seat still filled: 19 staff across 19 seats.
+		const total = Object.values(analysis.roster.rosterByRole).reduce(
+			(sum, members) => sum + members.length,
+			0,
+		);
+		expect(total).toBe(19);
+		expect(analysis.directives.roleTransfers.length).toBeGreaterThan(0);
+	});
+
+	it("repositions an assigned employee who fits another role better", () => {
+		// The regression this guards: the solver used to settle incumbents into
+		// their current role first and only place the employees left over. An
+		// employee already holding a quota seat was therefore never considered for
+		// a role they fit better, so "positioning" only ever meant "place the
+		// unassigned".
+		const employees = roster19();
+		const driller = employees.find((e) => e.name === "Driller0");
+		const secretary = employees.find((e) => e.name === "Secretary0");
+		if (!driller || !secretary) throw new Error("fixture is missing employees");
+
+		// Swap their positions. Every role is still exactly at quota, so the old
+		// two-pass solver saw nothing to do and left both where they were.
+		driller.position = { ...driller.position, name: "Secretary" };
+		secretary.position = { ...secretary.position, name: "Driller" };
+
+		const roster = solveOptimalRoster(employees);
+		const moves = new Map(
+			roster.activeTransfers.map((transfer) => [
+				transfer.name,
+				transfer.toRole,
+			]),
+		);
+		// The strong driller goes back to drilling and the secretary back to the
+		// office, even though no quota changed.
+		expect(moves.get("Driller0")).toBe("Driller");
+		expect(moves.get("Secretary0")).toBe("Secretary");
 	});
 
 	it("asks for nothing at all when the roster is already on blueprint", () => {
