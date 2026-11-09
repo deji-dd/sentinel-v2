@@ -35,6 +35,8 @@ import {
 	markRead,
 	onReactions,
 	onRoomMessage,
+	PANEL_SIZE_LIMITS,
+	panelSizeFor,
 	type PendingMessage,
 	react,
 	refreshRooms,
@@ -42,6 +44,7 @@ import {
 	seeMentions,
 	send,
 	senderName,
+	setRoomPanelSize,
 	state,
 	tagsMe,
 	toggleRoom,
@@ -58,7 +61,8 @@ import {
 import { gifFromTypedText, type GifPickerHandle, openGifPicker } from "./gif";
 import { roomForm } from "./roomForm";
 
-type View = "chat" | "members" | "invite" | "settings" | "leave" | "delete";
+type View =
+	"chat" | "members" | "invite" | "settings" | "size" | "leave" | "delete";
 
 const GAP_MS = 15 * 60 * 1000;
 
@@ -90,6 +94,7 @@ export class RoomPanel {
 	private gif: ChatGif | null = null;
 	private gifPicker: GifPickerHandle | null = null;
 	private gifViewer: HTMLElement | null = null;
+	private gifKey: ((event: KeyboardEvent) => void) | null = null;
 	private overlay: HTMLElement | null = null;
 	private view: View = "chat";
 	private menuOpen = false;
@@ -300,7 +305,7 @@ export class RoomPanel {
 		this.closeSuggest();
 		this.hideWho();
 		this.gifPicker?.close();
-		this.gifViewer?.remove();
+		this.closeGifViewer();
 		this.mentionWatch.disconnect();
 		document.removeEventListener("visibilitychange", this.onVisible);
 		clearTimeout(this.hoverTimer);
@@ -352,6 +357,7 @@ export class RoomPanel {
 		if (room.joined) {
 			options.push(["tabFriends", "Members", () => this.show("members")]);
 		}
+		options.push(["settings", "Panel size", () => this.show("size")]);
 		if (room.role !== "member") {
 			options.push(["tabRecent", "Invite", () => this.show("invite")]);
 			options.push(["settings", "Room settings", () => this.show("settings")]);
@@ -804,12 +810,30 @@ export class RoomPanel {
 		return h("span", { c: "sc-gif-wrap" }, image);
 	}
 
-	private openGifViewer(gif: ChatGif): void {
+	private closeGifViewer(): void {
 		this.gifViewer?.remove();
-		const close = () => {
-			this.gifViewer?.remove();
-			this.gifViewer = null;
+		this.gifViewer = null;
+		if (this.gifKey) {
+			document.removeEventListener("keydown", this.gifKey);
+			this.gifKey = null;
+		}
+	}
+
+	private openGifViewer(gif: ChatGif): void {
+		this.closeGifViewer();
+		const close = () => this.closeGifViewer();
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") close();
 		};
+		this.gifKey = onKey;
+		const viewerImage = h("img", {
+			src: gif.url,
+			alt: gif.title || "GIF",
+		});
+		if (gif.width && gif.height) {
+			viewerImage.width = gif.width;
+			viewerImage.height = gif.height;
+		}
 		this.gifViewer = h(
 			"div",
 			{
@@ -822,7 +846,7 @@ export class RoomPanel {
 					},
 				},
 			},
-			h("img", { src: gif.url, alt: gif.title || "GIF" }),
+			viewerImage,
 			h(
 				"button",
 				{
@@ -834,7 +858,8 @@ export class RoomPanel {
 				icon("cross"),
 			),
 		);
-		this.el.append(this.gifViewer);
+		document.body.append(this.gifViewer);
+		document.addEventListener("keydown", onKey);
 	}
 
 	// ---------------------------------------------------------------- mentions
@@ -1746,6 +1771,8 @@ export class RoomPanel {
 			node = this.inviteView(back);
 		} else if (view === "members") {
 			node = this.membersView(back);
+		} else if (view === "size") {
+			node = this.sizeView(back);
 		} else {
 			const deleting = view === "delete";
 			node = backView("Back to chat", back, "root___bdV8w", [
@@ -1770,6 +1797,81 @@ export class RoomPanel {
 		}
 		this.overlay = node;
 		this.content.append(node);
+	}
+
+	private sizeView(back: () => void): HTMLElement {
+		const current = panelSizeFor(this.id);
+		const custom = state.panelSizes.has(this.id);
+		const widthInput = textInput({
+			type: "number",
+			min: PANEL_SIZE_LIMITS.minWidth,
+			max: PANEL_SIZE_LIMITS.maxWidth,
+			step: 1,
+			value: String(current.width),
+			inputCls: "sc-size-input",
+		});
+		const heightInput = textInput({
+			type: "number",
+			min: PANEL_SIZE_LIMITS.minHeight,
+			max: PANEL_SIZE_LIMITS.maxHeight,
+			step: 1,
+			value: String(current.height),
+			inputCls: "sc-size-input",
+		});
+		const status = text(
+			"body",
+			"sc-size-hint",
+			{},
+			custom
+				? "This room has its own size."
+				: "This room uses the default size.",
+		);
+		const readSize = () => {
+			const clamp = (value: number, min: number, max: number) =>
+				Math.round(Math.max(min, Math.min(max, value)));
+			const width = clamp(
+				Number(widthInput.input.value) || current.width,
+				PANEL_SIZE_LIMITS.minWidth,
+				PANEL_SIZE_LIMITS.maxWidth,
+			);
+			const height = clamp(
+				Number(heightInput.input.value) || current.height,
+				PANEL_SIZE_LIMITS.minHeight,
+				PANEL_SIZE_LIMITS.maxHeight,
+			);
+			widthInput.input.value = String(width);
+			heightInput.input.value = String(height);
+			return { width, height };
+		};
+		return backView("Back to chat", back, "", [
+			setting("Panel size", [
+				text(
+					"body",
+					"sc-size-hint",
+					{},
+					"Only changes your own view. You can also drag this room's left edge to change its width, or its top edge to change its height.",
+				),
+				h(
+					"div",
+					{ c: "sc-size-row", style: "margin-top: 8px;" },
+					widthInput.root,
+					heightInput.root,
+					tornBtn("Save for this room", () => {
+						setRoomPanelSize(this.id, readSize());
+						back();
+					}),
+				),
+				h(
+					"div",
+					{ c: "sc-size-row", style: "margin-top: 6px;" },
+					tornBtn("Use default size", () => {
+						setRoomPanelSize(this.id, null);
+						back();
+					}),
+				),
+				status,
+			]),
+		]);
 	}
 
 	private inviteView(back: () => void): HTMLElement {

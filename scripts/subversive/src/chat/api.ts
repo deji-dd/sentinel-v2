@@ -61,8 +61,11 @@ function request(
 				try {
 					data = JSON.parse(response.responseText);
 				} catch {
+					const text = response.responseText.trim();
 					data = {
-						error: response.responseText.slice(0, 200),
+						error: text.startsWith("<")
+							? "The chat server returned an error page. Try again in a moment."
+							: text.slice(0, 200),
 					};
 				}
 				resolve({ status: response.status, data });
@@ -79,7 +82,13 @@ function errorMessage(data: unknown, fallback: string): string {
 	if (typeof data !== "object" || data === null) return fallback;
 	const record = data as Record<string, unknown>;
 	const message = record.error ?? record.message ?? record.reason;
-	return typeof message === "string" && message ? message : fallback;
+	if (typeof message !== "string" || !message) return fallback;
+	// A proxy/WAF can answer with an HTML page; never show that wall of markup
+	// in the chat status line.
+	if (/^\s*<(!doctype|html)/i.test(message)) {
+		return "The chat server returned an error page. Try again in a moment.";
+	}
+	return message;
 }
 
 export function hasToken(): boolean {
@@ -93,7 +102,16 @@ export async function api<T>(
 ): Promise<T> {
 	if (!state.token) throw new ChatApiError(401, "Not connected");
 	const response = await request(method, path, body, state.token);
-	if (response.status < 200 || response.status >= 300) {
+	const record =
+		typeof response.data === "object" && response.data !== null
+			? (response.data as Record<string, unknown>)
+			: null;
+	const failed =
+		response.status < 200 ||
+		response.status >= 300 ||
+		record?.success === false ||
+		(record !== null && "error" in record && !("success" in record));
+	if (failed) {
 		throw new ChatApiError(
 			response.status,
 			errorMessage(response.data, `Request failed (${response.status})`),

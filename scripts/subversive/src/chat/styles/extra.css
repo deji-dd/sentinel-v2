@@ -784,20 +784,31 @@
 	max-height: 180px;
 	vertical-align: bottom;
 }
-/* Full-size view: click a GIF in a message. */
+/* Full-size view: click a GIF in a message. Appended to <body> (not the
+   transformed chat panel) so it can cover the whole Torn window. The image
+   fills the content box and `object-fit: contain` preserves its aspect ratio;
+   width/height avoid the image collapsing to its intrinsic line height. */
 .sc-gif-viewer {
-	position: absolute;
+	position: fixed;
 	inset: 0;
-	z-index: 5;
-	display: grid;
-	place-items: center;
-	padding: 24px;
-	background: rgba(0, 0, 0, 0.78);
+	z-index: 2147483646;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	padding: clamp(12px, 5vmin, 48px);
+	background: rgba(0, 0, 0, 0.86);
 	cursor: zoom-out;
 }
 .sc-gif-viewer img {
-	max-width: 100%;
-	max-height: 100%;
+	display: block;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	max-width: none;
+	max-height: none;
+	object-fit: contain;
 	border-radius: 4px;
 	box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
 }
@@ -887,8 +898,17 @@
 	margin-top: 4px;
 }
 .sc-gif-item {
+	/* Torn's page CSS styles bare buttons; override the height and let the
+	   aspect ratio (with a min-height fallback) size the card instead. */
+	position: relative;
 	display: block;
+	width: 100%;
+	height: auto;
+	min-height: 64px;
 	padding: 0;
+	box-sizing: border-box;
+	line-height: 0;
+	font-size: 0;
 	border: 1px solid transparent;
 	border-radius: 4px;
 	background: rgba(127, 127, 127, 0.12);
@@ -900,6 +920,8 @@
 	border-color: #4a90c8;
 }
 .sc-gif-item img {
+	position: absolute;
+	inset: 0;
 	display: block;
 	width: 100%;
 	height: 100%;
@@ -917,4 +939,73 @@
 .sc-gif-attr a {
 	color: inherit;
 	text-decoration: underline;
+}
+
+/* ------------------------------------------------------------------ panel size */
+
+/* Drag the left edge to change width and the top edge to change height. The
+   panel stays anchored to the bottom-right, so dragging left/up grows it. */
+.sc-resize-width,
+.sc-resize-height {
+	position: absolute;
+	z-index: 7;
+	opacity: 0;
+	background: transparent;
+	touch-action: none;
+	transition:
+		opacity 0.15s,
+		background 0.15s;
+}
+.sc-resize-width {
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 6px;
+	cursor: ew-resize;
+}
+.sc-resize-height {
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 6px;
+	cursor: ns-resize;
+}
+.sc-panel:hover .sc-resize-width,
+.sc-panel:hover .sc-resize-height {
+	opacity: 1;
+}
+.sc-resize-width:hover {
+	background: rgba(74, 144, 200, 0.35);
+}
+.sc-resize-height:hover {
+	background: rgba(74, 144, 200, 0.35);
+}
+.sc-panel.sc-resizing {
+	transition: none !important;
+	user-select: none;
+}
+.sc-size-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.sc-size-input {
+	width: 58px;
+}
+.sc-size-hint {
+	margin: 5px 0 0;
+	padding: 0;
+	opacity: 0.72;
+	font:
+		11px/15px Arial,
+		sans-serif;
+	color: inherit;
+}
+@media (hover: none) {
+	/* No hover on touch screens: keep the resize edges faintly visible. */
+	.sc-resize-width,
+	.sc-resize-height {
+		opacity: 0.45;
+	}
 }

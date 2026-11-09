@@ -48,6 +48,7 @@ import {
 	updateRoom,
 } from "../../lib/chat-service";
 import type { CachedUserSession } from "../../lib/subversive-target-cache";
+import { pickTornAvatarUrl } from "../../lib/torn-avatar";
 import {
 	resolveMemberApiKey,
 	resolveUserSession,
@@ -147,13 +148,17 @@ async function loadTornAvatar(
 	const apiKey = await resolveMemberApiKey(session);
 	if (!apiKey) return null;
 	try {
-		const profile = await new TornApiClient().getRaw<{
-			profile?: { image?: string | null };
-		}>("user/", { apiKey, queryParams: { selections: "profile" } });
-		const image = profile.profile?.image;
-		return typeof image === "string" && image.startsWith("https://")
-			? image
-			: null;
+		// Torn API v1 returns a flat profile object with `profile_image`; v2 and
+		// older responses nested it under `profile.image`. The old code only read
+		// the nested field, so every avatar toggle failed with a 502.
+		const profile = await new TornApiClient({
+			timeout: 8_000,
+			maxAttempts: 1,
+		}).getRaw<unknown>("user/", {
+			apiKey,
+			queryParams: { selections: "profile" },
+		});
+		return pickTornAvatarUrl(profile);
 	} catch {
 		return null;
 	}

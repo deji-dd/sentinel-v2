@@ -13,6 +13,11 @@ chat while the data lives in the Sentinel Postgres database.
 - Chat: live messages, unread counters, typing indicators, replies via
   `@Name` mentions (with an `@ N mentions` pill), emoji reactions, message
   deletion, history paging.
+- Panel size: drag a room's left edge to change its width or its top edge to
+  change its height, or use **Panel size** in a room's title menu for exact
+  values. The **Rooms → Settings** tab sets a default for every room without
+  its own size. Sizes are stored in Tampermonkey, so they are per player and
+  per browser.
 - GIFs: a KLIPY-backed picker (when `KLIPY_API_KEY` is configured) and a
   paste-a-GIF-link fallback that works without a key. GIFs render in the bubble
   and open full size on click. KLIPY's terms require the search request to come

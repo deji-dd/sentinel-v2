@@ -24,12 +24,16 @@ import {
 	join,
 	joinedRooms,
 	openRoom,
+	PANEL_SIZE_LIMITS,
 	refreshRooms,
+	resetAllPanelSizes,
 	senderName,
+	setDefaultPanelSize,
 	setDirectoryTab,
 	setOwnAvatar,
 	state,
 	toggleDirectory,
+	tornChatPanelSize,
 } from "../store";
 import {
 	actionButton,
@@ -386,6 +390,63 @@ export class Directory {
 		const me = state.me;
 		if (!me) return h("div", {});
 		const status = text("body", "", { style: "margin-top: 6px;" }, "");
+		const initialSize = state.defaultPanelSize ?? tornChatPanelSize();
+		const widthInput = textInput({
+			type: "number",
+			min: PANEL_SIZE_LIMITS.minWidth,
+			max: PANEL_SIZE_LIMITS.maxWidth,
+			step: 1,
+			value: String(initialSize.width),
+			inputCls: "sc-size-input",
+		});
+		const heightInput = textInput({
+			type: "number",
+			min: PANEL_SIZE_LIMITS.minHeight,
+			max: PANEL_SIZE_LIMITS.maxHeight,
+			step: 1,
+			value: String(initialSize.height),
+			inputCls: "sc-size-input",
+		});
+		const sizeStatus = text("body", "", { style: "margin-top: 6px;" }, "");
+		const readSize = () => {
+			const clamp = (value: number, min: number, max: number) =>
+				Math.round(Math.max(min, Math.min(max, value)));
+			const width = clamp(
+				Number(widthInput.input.value) || initialSize.width,
+				PANEL_SIZE_LIMITS.minWidth,
+				PANEL_SIZE_LIMITS.maxWidth,
+			);
+			const height = clamp(
+				Number(heightInput.input.value) || initialSize.height,
+				PANEL_SIZE_LIMITS.minHeight,
+				PANEL_SIZE_LIMITS.maxHeight,
+			);
+			widthInput.input.value = String(width);
+			heightInput.input.value = String(height);
+			return { width, height };
+		};
+		const saveDefault = () => {
+			const size = readSize();
+			setDefaultPanelSize(size);
+			sizeStatus.textContent =
+				"Saved. Every room without its own size now uses this.";
+		};
+		const useTornSize = () => {
+			setDefaultPanelSize(null);
+			const size = tornChatPanelSize();
+			widthInput.input.value = String(size.width);
+			heightInput.input.value = String(size.height);
+			sizeStatus.textContent =
+				"Default cleared. Every room without its own size uses Torn's chat size.";
+		};
+		const resetAll = () => {
+			resetAllPanelSizes();
+			const size = tornChatPanelSize();
+			widthInput.input.value = String(size.width);
+			heightInput.input.value = String(size.height);
+			sizeStatus.textContent =
+				"Cleared every custom room size. Drag a room edge to set one again.";
+		};
 		const consent = avatarCheckbox(me.showAvatar, (show) => {
 			consent.input.disabled = true;
 			void api<{ me: typeof me }>("PATCH", "/v2/chat/me", {
@@ -419,6 +480,28 @@ export class Directory {
 					"Off by default. When off, the server keeps no link to your picture and others see Torn's default avatar.",
 				),
 				status,
+			]),
+			setting("Chat panel size", [
+				text(
+					"body",
+					"sc-size-hint",
+					{},
+					"This is your own view and applies to every room without its own size. Drag a room's left edge to change its width or its top edge to change its height; double-click either edge to reset that room.",
+				),
+				h(
+					"div",
+					{ c: "sc-size-row", style: "margin-top: 8px;" },
+					widthInput.root,
+					heightInput.root,
+					tornBtn("Save default", saveDefault),
+				),
+				h(
+					"div",
+					{ c: "sc-size-row", style: "margin-top: 6px;" },
+					tornBtn("Clear default", useTornSize),
+					tornBtn("Reset all room sizes", resetAll),
+				),
+				sizeStatus,
 			]),
 			setting("Account", [
 				text(

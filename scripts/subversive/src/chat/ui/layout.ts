@@ -9,6 +9,8 @@ import {
 	minimizePanels,
 	moveBarButton,
 	movePanel,
+	PANEL_SIZE_LIMITS,
+	panelSizeFor,
 	state,
 	toggleDirectory,
 	toggleRoom,
@@ -16,28 +18,12 @@ import {
 } from "../store";
 import { Directory } from "./directory";
 import { sortable } from "./drag";
+import { attachPanelResize, isResizingPanel } from "./resize";
 import { RoomPanel } from "./room";
 
 const PANEL_GAP = 3; // Torn spaces its 300px panels 303px apart
 const BAR_HEIGHT = 38;
 const BAR_GAP = 5;
-
-/** Torn's chat settings: Height / Width sliders, in percent of 400 x 300. */
-function panelSize(): { width: number; height: number } {
-	let pct = { width: 100, height: 100 };
-	try {
-		pct = {
-			...pct,
-			...JSON.parse(localStorage.getItem("tchat:panel_size") ?? "{}"),
-		};
-	} catch {
-		// keep the defaults
-	}
-	return {
-		width: Math.round((300 * pct.width) / 100),
-		height: Math.round((400 * pct.height) / 100),
-	};
-}
 
 /** A pointerdown that may start dragging a panel: on its header, not on its menu or inputs. */
 const isPanelHandle = (target: Element) =>
@@ -60,6 +46,7 @@ export class Layout {
 	constructor(onOpenSettings: () => void) {
 		this.directory = new Directory(onOpenSettings);
 		this.bindPanelDrag(this.directory.el, DIRECTORY);
+		this.bindPanelResize(this.directory.el, DIRECTORY);
 		this.root.append(this.panels);
 		document.body.append(this.root);
 		this.observer = new MutationObserver(() => this.schedule());
@@ -113,6 +100,7 @@ export class Layout {
 
 	/** Our stack sits left of Torn's visible panels, on the same baseline; each panel slides to its slot. */
 	private position(): void {
+		if (isResizingPanel()) return;
 		let left = window.innerWidth - 5 + PANEL_GAP;
 		for (const panel of document.querySelectorAll<HTMLElement>(
 			'#chatRoot [class*="visible___"][class*="root___"]',
@@ -128,32 +116,42 @@ export class Layout {
 		this.root.style.right = `${Math.max(5, window.innerWidth - left + PANEL_GAP)}px`;
 		this.root.style.bottom = `${bottom}px`;
 
-		const size = panelSize();
 		const room = left - PANEL_GAP - 5; // width left of Torn's panels
+		const maxHeight = Math.max(
+			PANEL_SIZE_LIMITS.minHeight,
+			window.innerHeight - bottom - 10,
+		);
 		let offset = 0;
 		const overflow: string[] = [];
 		this.offsets.clear();
 		for (const key of visiblePanels()) {
 			const element = this.panelEl(key);
 			if (!element) continue;
+			const size = panelSizeFor(key);
+			const width = Math.min(size.width, Math.max(200, room));
+			const height = Math.min(size.height, maxHeight);
 			// Keep at least the rightmost panel; the rest must fit on screen.
-			if (offset > 0 && offset + size.width > room && key !== this.dragging) {
+			if (offset > 0 && offset + width > room && key !== this.dragging) {
 				overflow.push(key);
 				continue;
 			}
 			this.offsets.set(key, offset);
-			element.style.width = `${size.width}px`;
-			element.style.height = `${size.height}px`;
+			element.style.width = `${width}px`;
+			element.style.height = `${height}px`;
 			if (key !== this.dragging) {
 				element.style.transform = `translateX(-${offset}px)`;
 			}
-			offset += size.width + PANEL_GAP;
+			offset += width + PANEL_GAP;
 		}
 		if (overflow.length && !this.dragging) minimizePanels(overflow);
 	}
 
 	private panelEl(key: string): HTMLElement | undefined {
 		return key === DIRECTORY ? this.directory.el : this.rooms.get(key)?.el;
+	}
+
+	private bindPanelResize(el: HTMLElement, key: string): void {
+		attachPanelResize(el, key);
 	}
 
 	private bindPanelDrag(el: HTMLElement, key: string): void {
@@ -283,6 +281,7 @@ export class Layout {
 				panel = new RoomPanel(key);
 				this.rooms.set(key, panel);
 				this.bindPanelDrag(panel.el, key);
+				this.bindPanelResize(panel.el, key);
 				// Start at its slot, then slide like Torn's panels do.
 				panel.el.style.transform = `translateX(-${this.offsets.get(key) ?? 0}px)`;
 			} else {

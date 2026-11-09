@@ -51,11 +51,19 @@ export function textInput(opts: {
 	icon?: IconName;
 	cls?: string;
 	inputCls?: string;
+	type?: string;
+	min?: number;
+	max?: number;
+	step?: number;
 	onInput?: (value: string) => void;
 	onEnter?: (value: string) => void;
 }): { root: HTMLElement; input: HTMLInputElement } {
 	const input = h("input", {
 		c: `input___yyCYj ${opts.icon ? "withIcon___MvvN8" : ""} ${opts.inputCls ?? ""}`,
+		type: opts.type ?? "text",
+		min: opts.min,
+		max: opts.max,
+		step: opts.step,
 		placeholder: opts.placeholder,
 		maxlength: opts.maxLength,
 		value: opts.value ?? "",

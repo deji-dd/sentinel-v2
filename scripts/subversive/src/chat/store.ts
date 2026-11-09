@@ -18,6 +18,63 @@ export type DirectoryTab = "rooms" | "invites" | "browse" | "settings";
 /** Panel key of the Rooms (directory) panel; room panels use their room id. */
 export const DIRECTORY = "directory";
 
+export interface ChatPanelSize {
+	width: number;
+	height: number;
+}
+
+export const PANEL_SIZE_LIMITS = {
+	minWidth: 240,
+	minHeight: 260,
+	maxWidth: 720,
+	maxHeight: 1400,
+} as const;
+
+function normalizePanelSize(size: ChatPanelSize): ChatPanelSize {
+	const clamp = (value: number, min: number, max: number) =>
+		Math.round(Math.max(min, Math.min(max, value)));
+	return {
+		width: clamp(
+			Number(size.width) || 300,
+			PANEL_SIZE_LIMITS.minWidth,
+			PANEL_SIZE_LIMITS.maxWidth,
+		),
+		height: clamp(
+			Number(size.height) || 400,
+			PANEL_SIZE_LIMITS.minHeight,
+			PANEL_SIZE_LIMITS.maxHeight,
+		),
+	};
+}
+
+/** Torn's own chat panel size: Height / Width sliders, in percent of 400 x 300. */
+export function tornChatPanelSize(): ChatPanelSize {
+	let pct = { width: 100, height: 100 };
+	try {
+		pct = {
+			...pct,
+			...JSON.parse(localStorage.getItem("tchat:panel_size") ?? "{}"),
+		};
+	} catch {
+		// keep Torn's defaults
+	}
+	return normalizePanelSize({
+		width: (300 * Number(pct.width)) / 100,
+		height: (400 * Number(pct.height)) / 100,
+	});
+}
+
+function loadPanelSizes(): Map<string, ChatPanelSize> {
+	const raw = stored<Record<string, ChatPanelSize>>("panel_sizes", {});
+	const out = new Map<string, ChatPanelSize>();
+	for (const [key, size] of Object.entries(raw ?? {})) {
+		if (size && typeof size === "object") {
+			out.set(key, normalizePanelSize(size));
+		}
+	}
+	return out;
+}
+
 const STORAGE_PREFIX = "satf_chat_";
 
 function stored<T>(key: string, fallback: T): T {
@@ -61,6 +118,13 @@ export const state = {
 	chatStyle: { bubbles: true, avatars: true },
 	/** who else is typing, by room, until when */
 	typing: new Map<string, { userId: number; name: string; until: number }[]>(),
+	/** Width/height for every room without its own size; null follows Torn's chat setting. */
+	defaultPanelSize: (() => {
+		const saved = stored<ChatPanelSize | null>("panel_size", null);
+		return saved ? normalizePanelSize(saved) : null;
+	})(),
+	/** Per-panel overrides, by room id (or DIRECTORY). */
+	panelSizes: loadPanelSizes(),
 };
 
 type Listener = () => void;
@@ -106,6 +170,43 @@ function persist(): void {
 	persistValue("open", state.open);
 	persistValue("expanded", [...state.expanded]);
 	persistValue("directory", state.directory);
+}
+
+function persistPanelSizes(): void {
+	persistValue("panel_size", state.defaultPanelSize);
+	persistValue("panel_sizes", Object.fromEntries(state.panelSizes));
+}
+
+/** The size a panel should use: its own override, the saved default, or Torn's setting. */
+export function panelSizeFor(key: string): ChatPanelSize {
+	const custom = state.panelSizes.get(key) ?? state.defaultPanelSize;
+	return custom ? normalizePanelSize(custom) : tornChatPanelSize();
+}
+
+/** Saves the size used by every panel without its own override. */
+export function setDefaultPanelSize(size: ChatPanelSize | null): void {
+	state.defaultPanelSize = size ? normalizePanelSize(size) : null;
+	persistPanelSizes();
+	changed();
+}
+
+/** Saves (or clears, with null) the size of one room. */
+export function setRoomPanelSize(
+	key: string,
+	size: ChatPanelSize | null,
+): void {
+	if (size) state.panelSizes.set(key, normalizePanelSize(size));
+	else state.panelSizes.delete(key);
+	persistPanelSizes();
+	changed();
+}
+
+/** Forgets every custom size and goes back to Torn's chat size. */
+export function resetAllPanelSizes(): void {
+	state.defaultPanelSize = null;
+	state.panelSizes.clear();
+	persistPanelSizes();
+	changed();
 }
 
 /** After a consent change: show or hide our own picture on messages already loaded. */
