@@ -4,6 +4,7 @@ import {
 	renderBountyReadyTargets,
 	updateBountyBadges,
 } from "../bounties/bounties";
+import { refreshChatAuth } from "../chat/main";
 import { STORAGE } from "../constants";
 import { initAttackPageHud } from "../hud/attack-hud";
 import { state } from "../state";
@@ -84,6 +85,7 @@ export async function handleAuth(): Promise<void> {
 		if (keyInput) keyInput.value = "";
 		updateUserBadge();
 		updateSettingsAuthView();
+		refreshChatAuth();
 		setStatus("Connected! Ready for Ranked War.", "ok");
 		switchTab("war");
 		fetchWarStatus();
@@ -384,6 +386,7 @@ export function initSettings(root: ShadowRoot | Document): void {
 		GM_setValue(STORAGE.user, null);
 		updateUserBadge();
 		updateSettingsAuthView();
+		refreshChatAuth();
 		renderAvailableTargets([]);
 		state.bountiesReady = [];
 		renderBountyReadyTargets([]);

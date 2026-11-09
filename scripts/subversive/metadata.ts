@@ -3,7 +3,7 @@ export function getMetadataHeader(version: string): string {
 // @name         Subversive Alliance
 // @namespace    subversive.torn
 // @version      ${version}
-// @description  Userscript for Subversive Alliance
+// @description  Ranked war target finder, bounties and family chat for Subversive Alliance
 // @author       Blasted [1934909]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
@@ -13,6 +13,7 @@ export function getMetadataHeader(version: string): string {
 // @grant        GM_registerMenuCommand
 // @connect      api.blasted-labs.tech
 // @connect      subversive.blasted-labs.tech
+// @connect      api.klipy.com
 // @connect      localhost
 // @connect      *
 // @downloadURL  https://api.blasted-labs.tech/v2/subversive/script.user.js

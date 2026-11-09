@@ -7,10 +7,19 @@ declare global {
 		headers?: Record<string, string>;
 		data?: string;
 		timeout?: number;
+		responseType?: string;
 		onload?: (response: { status: number; responseText: string }) => void;
+		onloadstart?: (response: {
+			status: number;
+			response?: ReadableStream<Uint8Array> | null;
+		}) => void;
 		onerror?: (error: unknown) => void;
 		ontimeout?: () => void;
-	}): void;
+		onabort?: () => void;
+	}): { abort(): void };
+	const GM_info:
+		{ scriptHandler?: string; script?: { version?: string } } | undefined;
+	function GM_deleteValue(key: string): void;
 	function GM_openInTab(url: string, active?: boolean): void;
 	function GM_registerMenuCommand(caption: string, onClick: () => void): void;
 }

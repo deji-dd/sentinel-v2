@@ -13,6 +13,7 @@ export const env = {
 		"https://elims.blasted-labs.tech",
 		"https://api.elims.blasted-labs.tech",
 		"https://subversive.blasted-labs.tech",
+		"https://www.torn.com",
 		"https://aquasense.ayodejib.dev",
 		"https://api.ayodejib.dev",
 		"http://localhost:3000",
@@ -56,4 +57,8 @@ export const env = {
 		process.env.MERCENARY_GUILD_ID ||
 		process.env.DISCORD_MERCENARY_GUILD_ID ||
 		null,
+
+	// Subversive chat
+	CHAT_SUPERADMINS: process.env.CHAT_SUPERADMINS ?? "",
+	SUPERADMINS: process.env.SUPERADMINS ?? "",
 };

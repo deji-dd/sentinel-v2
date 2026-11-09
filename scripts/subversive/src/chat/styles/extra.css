@@ -1,0 +1,920 @@
+/* Our own layout glue; everything visual comes from torn-chat.css. */
+.sc-root {
+	position: fixed;
+	right: 5px;
+	bottom: 43px;
+	/* One below Torn's chat layer (999990, click-through), so the chat bar's unread badges, which
+     stick up out of the bar, are drawn over the bottom of our panels as over Torn's own. */
+	z-index: 999989;
+	display: flex;
+	pointer-events: none;
+	font-family: Arial, sans-serif;
+	font-size: 12px;
+	line-height: normal;
+}
+/* Like Torn's root___PF7AM / item___Db3l9: one grid cell, panels slid left with translateX. */
+.sc-root {
+	transition: right 150ms linear;
+}
+.sc-panels {
+	display: grid;
+	align-items: end;
+	justify-items: end;
+}
+.sc-panel {
+	grid-area: 1 / 1;
+	pointer-events: auto;
+	width: 300px;
+	height: 400px;
+	position: relative;
+	transition: transform 150ms linear;
+}
+.sc-panel .sc_root___RdBC0 > button,
+.sc-panel > .sc_root___zZRe1 {
+	cursor: grab;
+	touch-action: none;
+}
+.sc-bar-item {
+	touch-action: none;
+	position: relative;
+}
+.sc-dragging {
+	transition: none !important;
+	z-index: 2;
+	cursor: grabbing;
+}
+.sc-dragging * {
+	cursor: grabbing !important;
+}
+
+/* Room colors: header and bar button gradients from the room's color, also while unread
+   (the counter badge shows it); rooms without a color turn Torn's green. */
+.sc-panel.sc-colored .sc_header___cccSy,
+.sc-bar .sc-colored {
+	background: linear-gradient(
+		var(--sc-room),
+		color-mix(in srgb, var(--sc-room) 45%, black)
+	);
+}
+.sc-panel.sc-colored .sc_header___cccSy:hover,
+.sc-bar .sc-colored:hover {
+	background: linear-gradient(
+		color-mix(in srgb, var(--sc-room) 75%, white),
+		var(--sc-room)
+	);
+}
+.sc-bar .sc-colored.sc_opened___PTx4p {
+	background: linear-gradient(
+		color-mix(in srgb, var(--sc-room) 35%, black),
+		color-mix(in srgb, var(--sc-room) 70%, black)
+	);
+}
+/* The title button (hovered, or pressed while its menu is open) is Torn's gray; use the room color, darker. */
+.sc-panel.sc-colored .sc_actionButton___CPUK5.sc_enabled___Zme4G:hover,
+.sc-panel.sc-colored .sc_actionButtonPressed___U2o81.sc_enabled___Zme4G {
+	background: linear-gradient(
+		color-mix(in srgb, var(--sc-room) 35%, black),
+		color-mix(in srgb, var(--sc-room) 70%, black)
+	);
+}
+.sc-card.sc-colored .sc-card-icon {
+	background: color-mix(in srgb, var(--sc-room) 45%, transparent);
+}
+.sc-swatches {
+	display: flex;
+	flex-wrap: wrap;
+	margin: -3px;
+}
+/* The selection ring is the swatch's own border, around a 22px circle (::before) with a 1px gap:
+   an outline outside the box was not repainted when the selection moved. */
+.sc-swatch {
+	box-sizing: border-box;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	border: 2px solid transparent;
+	background: none;
+	cursor: pointer;
+	padding: 0;
+	position: relative;
+}
+.sc-swatch::before {
+	content: "";
+	position: absolute;
+	inset: 1px;
+	border-radius: 50%;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	background: linear-gradient(
+		var(--sc-room),
+		color-mix(in srgb, var(--sc-room) 45%, black)
+	);
+	pointer-events: none;
+}
+.sc-swatch-default::before {
+	background: linear-gradient(#666, #333);
+}
+.sc-swatch-on {
+	border-color: #fff;
+}
+.sc-swatch-custom::before {
+	background: conic-gradient(
+		#e53935,
+		#fdd835,
+		#43a047,
+		#1e88e5,
+		#8e24aa,
+		#e53935
+	);
+}
+.sc-swatch-custom.sc-swatch-on::before {
+	background: var(--sc-room);
+}
+.sc-swatch-custom input {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+	cursor: pointer;
+	border-radius: 50%;
+}
+.sc-bar {
+	display: contents;
+}
+.sc-scroll {
+	overflow-y: auto;
+}
+.sc-list {
+	display: flex;
+	flex-direction: column;
+}
+.sc-card {
+	position: relative !important;
+	flex: 0 0 68px;
+	height: 68px;
+}
+.sc-card-icon {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.sc-line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 0;
+}
+.sc-line > :nth-child(2) {
+	margin-right: auto;
+}
+.sc-role {
+	opacity: 0.7;
+	text-transform: capitalize;
+}
+.sc-empty {
+	padding: 12px;
+	text-align: center;
+}
+.sc-login {
+	position: static;
+}
+.sc-act {
+	font-size: 11px;
+}
+/* Torn's chat inherits the page's 12px line height; our bubble rows match Torn's at "normal", its
+   classic rows (no bubbles) only at 12px. */
+.sc-root .sc_classic___S4LnO {
+	line-height: 12px;
+}
+.sc-panel .sc_root___EP_Dq,
+.sc-panel .sc_root___yvwp3 {
+	position: relative;
+}
+/* Hovering a message (tracked in room.ts, with a safe triangle to reach them): its time, the reaction bubble and Delete, beside the message (the free side:
+   right of others' messages, left of ours), or over its top corner when the message is too wide.
+   Colors follow Torn's light/dark switch (var(--chat-theme-dark, a) var(--chat-theme-light, b)). */
+.sc-panel .sc_root___EP_Dq:focus,
+.sc-panel .sc_root___yvwp3:focus {
+	outline: none;
+}
+.sc-tools {
+	position: absolute;
+	top: 2px;
+	left: calc(100% + 4px);
+	z-index: 1;
+	/* hidden with display, not visibility: hidden tools beside wide lines would still make the list scroll sideways */
+	display: none;
+	align-items: center;
+	gap: 3px;
+	height: 20px;
+	padding: 0 3px 0 7px;
+	box-sizing: border-box;
+	border-radius: 10px;
+	border: 1px solid var(--chat-theme-dark, #444) var(--chat-theme-light, #ddd);
+	background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+	color: var(--chat-theme-dark, #999) var(--chat-theme-light, #777);
+	font-size: 11px;
+	line-height: 1;
+	white-space: nowrap;
+}
+.sc-panel .sc_scrollWrapper___DmIrl {
+	overflow-x: hidden;
+}
+/* The gap around the tools counts as the tools, so a pointer resting in it keeps them. */
+.sc-tools::before {
+	content: "";
+	position: absolute;
+	inset: -4px -6px;
+	z-index: -1;
+}
+.sc_self___HgXOK > .sc-tools {
+	left: auto;
+	right: calc(100% + 4px);
+}
+.sc-tools-over > .sc-tools {
+	top: -12px;
+	left: auto;
+	right: 4px;
+}
+.sc_self___HgXOK.sc-tools-over > .sc-tools {
+	right: auto;
+	left: 4px;
+}
+.sc-hover > .sc-tools,
+.sc-picking > .sc-tools {
+	display: flex;
+}
+@media (hover: none) {
+	.sc_root___EP_Dq:focus-within > .sc-tools,
+	.sc_root___yvwp3:focus-within > .sc-tools {
+		display: flex;
+	}
+}
+.sc-tools-time {
+	margin-right: 2px;
+}
+.sc-tools-react {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+.sc-tools-react:hover,
+.sc-picking .sc-tools-react {
+	color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #333);
+	background: var(--chat-theme-dark, #444) var(--chat-theme-light, #eee);
+}
+.sc-tools-del {
+	width: 10px;
+	height: 10px;
+	padding: 0 3px;
+	cursor: pointer;
+	filter: none;
+}
+.sc-tools-del stop {
+	stop-color: currentColor;
+}
+.sc-tools-del:hover {
+	color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #333);
+}
+.sc-picker {
+	position: absolute;
+	z-index: 3;
+	display: flex;
+	gap: 2px;
+	padding: 3px;
+	border-radius: 18px;
+	border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+	background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+}
+.sc-pick {
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: none;
+	font-size: 18px;
+	line-height: 30px;
+	cursor: pointer;
+	transition: transform 80ms linear;
+}
+.sc-pick:hover {
+	background: var(--chat-theme-dark, #444) var(--chat-theme-light, #eee);
+	transform: scale(1.15);
+}
+.sc-pick-on {
+	background: var(--chat-theme-dark, #2c4a63) var(--chat-theme-light, #dbeafa);
+}
+/* Reactions live in the message's bubble, bottom right: the bubble wraps, so they follow the text on
+   its line when there is room and get a line of their own (still at the right) when there is not. */
+.sc-panel .sc_root___EP_Dq,
+.sc-panel .sc_root___yvwp3 {
+	flex-wrap: wrap;
+	align-items: flex-end;
+}
+.sc-reactions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 3px;
+	margin: 3px 0 -1px auto;
+	padding-left: 6px;
+}
+.sc-reactions:empty {
+	display: none;
+}
+.sc-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	height: 18px;
+	padding: 0 5px;
+	box-sizing: border-box;
+	border-radius: 9px;
+	border: 1px solid transparent;
+	background: rgba(127, 127, 127, 0.16);
+	color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #444);
+	font:
+		bold 11px Arial,
+		sans-serif;
+	cursor: pointer;
+}
+.sc_self___HgXOK .sc-chip {
+	background: rgba(255, 255, 255, 0.14);
+	color: #eee;
+}
+.sc-chip:disabled {
+	cursor: default;
+}
+.sc-chip:not(:disabled):hover {
+	border-color: rgba(127, 127, 127, 0.5);
+}
+.sc-chip.sc-chip-on {
+	border-color: #4a90c8;
+	background: rgba(74, 144, 200, 0.22);
+	color: var(--chat-theme-dark, #a5d8ff) var(--chat-theme-light, #1c6aa8);
+}
+.sc_self___HgXOK .sc-chip.sc-chip-on {
+	color: #a5d8ff;
+}
+/* Who reacted with one emoji, while the pointer is on its reaction. */
+.sc-who {
+	position: absolute;
+	z-index: 3;
+	min-width: 60px;
+	max-width: 180px;
+	padding: 5px 8px;
+	border-radius: 5px;
+	border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+	background: var(--chat-theme-dark, #111) var(--chat-theme-light, #fff);
+	color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #333);
+	font-size: 11px;
+	line-height: 15px;
+	pointer-events: none;
+}
+.sc-who > div {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sc-who-head {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	margin-bottom: 2px;
+	font-weight: bold;
+}
+.sc-who-emoji {
+	font-size: 14px;
+}
+.sc-who-more {
+	opacity: 0.7;
+}
+.sc-chip-emoji {
+	font-size: 13px;
+	font-weight: normal;
+}
+
+/* A reaction going in: the chip bumps and its emoji plays its own animation. */
+.sc-chip-emoji {
+	display: inline-block;
+}
+.sc-chip-pop {
+	animation: sc-chip-bump 300ms ease-out;
+}
+.sc-chip-pop .sc-chip-emoji {
+	animation: 600ms ease-out sc-react-pop;
+}
+.sc-chip-pop .sc-chip-emoji[data-anim="fire"] {
+	animation: 900ms ease-out sc-react-fire;
+}
+.sc-chip-pop .sc-chip-emoji[data-anim="heart"] {
+	animation: 800ms ease-in-out sc-react-heart;
+}
+.sc-chip-pop .sc-chip-emoji[data-anim="thumb"] {
+	animation: 650ms ease-out sc-react-thumb;
+}
+.sc-chip-pop .sc-chip-emoji[data-anim="laugh"] {
+	animation: 750ms ease-in-out sc-react-laugh;
+}
+.sc-chip-pop .sc-chip-emoji[data-anim="sad"] {
+	animation: 900ms ease-in-out sc-react-sad;
+}
+@keyframes sc-chip-bump {
+	40% {
+		transform: scale(1.12);
+	}
+}
+@keyframes sc-react-pop {
+	0% {
+		transform: scale(0.3);
+	}
+	45% {
+		transform: scale(1.6) translateY(-3px);
+	}
+	70% {
+		transform: scale(0.9);
+	}
+}
+/* Flickers and pulses, glowing like a flame. */
+@keyframes sc-react-fire {
+	0% {
+		transform: scale(0.6) translateY(2px);
+		filter: none;
+	}
+	20% {
+		transform: scale(1.55) translateY(-3px) rotate(-6deg);
+		filter: drop-shadow(0 0 4px #ff7a00) drop-shadow(0 -2px 3px #ffd000);
+	}
+	35% {
+		transform: scale(1.2) rotate(5deg);
+		filter: drop-shadow(0 0 2px #ff7a00);
+	}
+	50% {
+		transform: scale(1.45) translateY(-2px) rotate(-4deg);
+		filter: drop-shadow(0 0 5px #ff5a00) drop-shadow(0 -2px 3px #ffd000);
+	}
+	65% {
+		transform: scale(1.15) rotate(3deg);
+		filter: drop-shadow(0 0 2px #ff7a00);
+	}
+	80% {
+		transform: scale(1.3) translateY(-1px);
+		filter: drop-shadow(0 0 3px #ff7a00);
+	}
+	100% {
+		transform: none;
+		filter: none;
+	}
+}
+/* Two beats, like a heart. */
+@keyframes sc-react-heart {
+	0%,
+	30%,
+	60%,
+	100% {
+		transform: scale(1);
+	}
+	15% {
+		transform: scale(1.5);
+		filter: drop-shadow(0 0 3px #ff3b5c);
+	}
+	45% {
+		transform: scale(1.35);
+		filter: drop-shadow(0 0 2px #ff3b5c);
+	}
+}
+@keyframes sc-react-thumb {
+	0% {
+		transform: scale(0.5);
+	}
+	35% {
+		transform: scale(1.5) translateY(-4px) rotate(-22deg);
+	}
+	60% {
+		transform: scale(1.1) rotate(8deg);
+	}
+	80% {
+		transform: rotate(-4deg);
+	}
+}
+/* Shakes with laughter. */
+@keyframes sc-react-laugh {
+	0% {
+		transform: scale(0.6);
+	}
+	15% {
+		transform: scale(1.45) rotate(-14deg);
+	}
+	30% {
+		transform: scale(1.35) rotate(14deg);
+	}
+	45% {
+		transform: scale(1.3) rotate(-12deg);
+	}
+	60% {
+		transform: scale(1.2) rotate(10deg);
+	}
+	75% {
+		transform: scale(1.1) rotate(-5deg);
+	}
+}
+/* Sinks and droops. */
+@keyframes sc-react-sad {
+	0% {
+		transform: scale(0.6) translateY(-4px);
+	}
+	30% {
+		transform: scale(1.35) translateY(-2px);
+	}
+	60% {
+		transform: scale(1.1) translateY(3px) rotate(-8deg);
+	}
+	80% {
+		transform: translateY(1px) rotate(-4deg);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.sc-chip-pop,
+	.sc-chip-pop .sc-chip-emoji {
+		animation: none !important;
+	}
+}
+.sc-panel .sc_root___PCyAT,
+.sc-panel .sc_root___XpFMX {
+	height: auto;
+	min-height: 38px;
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+.sc-panel .sc_message___GOEQ9 {
+	white-space: normal;
+}
+.sc-card .sc_wrapper___pXMZO {
+	flex: 1;
+	min-width: 0;
+}
+
+/* Mentions. A tagged name links to the profile; your own name stands out. */
+.sc-panel a.sc-mention {
+	font-weight: bold;
+	text-decoration: none;
+	color: var(--chat-theme-dark, #74c0fc) var(--chat-theme-light, #1864ab);
+}
+.sc_self___HgXOK a.sc-mention {
+	color: #d0ebff;
+}
+.sc-panel a.sc-mention-me {
+	padding: 0 3px;
+	border-radius: 3px;
+	background: rgba(24, 100, 171, 0.35);
+	color: var(--chat-theme-dark, #d0ebff) var(--chat-theme-light, #1864ab);
+}
+.sc-panel a.sc-mention:hover {
+	text-decoration: underline;
+}
+/* The message the @ button went to. */
+.sc-flash {
+	animation: sc-flash 1600ms ease-out;
+}
+@keyframes sc-flash {
+	0%,
+	30% {
+		box-shadow:
+			0 0 0 2px #4dabf7,
+			0 0 10px rgba(77, 171, 247, 0.7);
+	}
+	100% {
+		box-shadow:
+			0 0 0 2px rgba(77, 171, 247, 0),
+			0 0 10px rgba(77, 171, 247, 0);
+	}
+}
+/* "@ N mentions": Torn's blue "new messages" pill again, above it when both show. */
+.sc-at-pill {
+	z-index: 2;
+	animation: sc-at-in 150ms ease-out;
+}
+.sc-at-pill.sc-at-up {
+	bottom: 40px;
+}
+.sc-at-sign {
+	font:
+		bold 14px/1 Arial,
+		sans-serif;
+	margin-top: -1px;
+}
+@keyframes sc-at-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+/* "@" beside a room's unread counter: on its chat-bar button and its card in the Rooms list. */
+.sc-at-badge {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 17px;
+	height: 17px;
+	box-sizing: border-box;
+	border: 1px solid #a5d8ff;
+	border-radius: 50%;
+	background: #1864ab;
+	box-shadow: 0 0 5px rgba(77, 171, 247, 0.5);
+	color: #fff;
+	font:
+		bold 11px/1 Arial,
+		sans-serif;
+	pointer-events: none;
+}
+.sc-at-bar {
+	top: -14px;
+	left: 0;
+}
+.sc-at-card {
+	top: 5px;
+	left: 54px;
+}
+/* The names offered while typing @, over the bottom of the messages. */
+.sc-suggest {
+	position: absolute;
+	left: 6px;
+	right: 6px;
+	bottom: 4px;
+	z-index: 3;
+	padding: 3px 0;
+	border-radius: 5px;
+	border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+	background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.sc-suggest-item {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	padding: 5px 10px;
+	color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #333);
+	font-size: 12px;
+	cursor: pointer;
+}
+.sc-suggest-on {
+	background: var(--chat-theme-dark, #1864ab) var(--chat-theme-light, #d0ebff);
+	color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #000);
+}
+.sc-suggest-on .sc-suggest-id {
+	color: var(--chat-theme-dark, #a5d8ff) var(--chat-theme-light, #1864ab);
+}
+.sc-suggest-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sc-suggest-name b {
+	color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #000);
+}
+.sc-suggest-id {
+	margin-left: auto;
+	color: var(--chat-theme-dark, #888) var(--chat-theme-light, #888);
+	font-size: 11px;
+}
+
+/* ------------------------------------------------------------------ GIFs */
+
+/* The GIF button sits inside Torn's composer, between the textarea and Send. */
+.sc-gif-btn {
+	height: 22px;
+	margin: 0 4px 0 2px;
+	padding: 0 6px;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 4px;
+	background: rgba(127, 127, 127, 0.14);
+	color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #444);
+	font:
+		bold 10px/20px Arial,
+		sans-serif;
+	letter-spacing: 0.4px;
+	cursor: pointer;
+}
+.sc-gif-btn:hover {
+	border-color: var(--chat-theme-dark, #888) var(--chat-theme-light, #aaa);
+	background: rgba(127, 127, 127, 0.26);
+}
+.sc-composer-wrap {
+	position: relative;
+}
+/* The chosen GIF, before sending. */
+.sc-gif-bar {
+	display: none;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 5px;
+	border-top: 1px solid var(--chat-theme-dark, #333)
+		var(--chat-theme-light, #ddd);
+	background: var(--chat-theme-dark, #1a1a1a) var(--chat-theme-light, #f5f5f5);
+	color: var(--chat-theme-dark, #bbb) var(--chat-theme-light, #555);
+	font-size: 11px;
+}
+.sc-gif-preview {
+	width: 42px;
+	height: 32px;
+	object-fit: cover;
+	border-radius: 3px;
+}
+.sc-gif-preview-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	margin: 0;
+	padding: 0;
+	color: inherit;
+	font: inherit;
+}
+.sc-gif-remove {
+	display: grid;
+	place-items: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+.sc-gif-remove svg {
+	width: 10px;
+	height: 10px;
+}
+.sc-gif-remove svg stop {
+	stop-color: currentColor;
+}
+/* A GIF in a message: never wider than the bubble, with its natural ratio. */
+.sc-panel .sc-gif-wrap {
+	display: block;
+	width: 100%;
+	margin-top: 3px;
+}
+.sc-panel .sc-gif {
+	display: block;
+	max-width: 240px;
+	max-height: 220px;
+	width: auto;
+	height: auto;
+	border-radius: 5px;
+	border: 1px solid rgba(0, 0, 0, 0.25);
+	background: rgba(0, 0, 0, 0.15);
+	cursor: zoom-in;
+}
+.sc_root___yvwp3 .sc-gif-wrap {
+	display: inline-block;
+	width: auto;
+}
+.sc_root___yvwp3 .sc-gif {
+	max-width: 220px;
+	max-height: 180px;
+	vertical-align: bottom;
+}
+/* Full-size view: click a GIF in a message. */
+.sc-gif-viewer {
+	position: absolute;
+	inset: 0;
+	z-index: 5;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: rgba(0, 0, 0, 0.78);
+	cursor: zoom-out;
+}
+.sc-gif-viewer img {
+	max-width: 100%;
+	max-height: 100%;
+	border-radius: 4px;
+	box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+}
+.sc-gif-viewer-close {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: 1px solid rgba(255, 255, 255, 0.3);
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.4);
+	cursor: pointer;
+}
+.sc-gif-viewer-close svg {
+	width: 12px;
+	height: 12px;
+}
+
+/* The picker floats above the composer, inside the panel. */
+.sc-gif-picker {
+	position: absolute;
+	left: 5px;
+	right: 5px;
+	bottom: 74px;
+	z-index: 4;
+	display: flex;
+	flex-direction: column;
+	max-height: 74%;
+	padding: 6px;
+	border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+	border-radius: 6px;
+	background: var(--chat-theme-dark, #181818) var(--chat-theme-light, #fff);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+	color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #333);
+}
+.sc-gif-head {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+}
+.sc-gif-head .sc-gif-search {
+	flex: 1;
+}
+.sc-gif-close {
+	flex: 0 0 auto;
+	display: grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+.sc-gif-close-icon {
+	width: 12px;
+	height: 12px;
+}
+.sc-gif-close-icon stop {
+	stop-color: currentColor;
+}
+.sc-gif-status {
+	flex: 0 0 auto;
+}
+.sc-gif-hint {
+	margin: 6px 2px;
+	padding: 0;
+	opacity: 0.8;
+	font:
+		11px/15px Arial,
+		sans-serif;
+	color: inherit;
+}
+.sc-gif-grid {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 3px;
+	margin-top: 4px;
+}
+.sc-gif-item {
+	display: block;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: rgba(127, 127, 127, 0.12);
+	overflow: hidden;
+	cursor: pointer;
+	aspect-ratio: 4 / 3;
+}
+.sc-gif-item:hover {
+	border-color: #4a90c8;
+}
+.sc-gif-item img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.sc-gif-attr {
+	flex: 0 0 auto;
+	margin-top: 4px;
+	text-align: right;
+	font:
+		10px/14px Arial,
+		sans-serif;
+	opacity: 0.65;
+}
+.sc-gif-attr a {
+	color: inherit;
+	text-decoration: underline;
+}

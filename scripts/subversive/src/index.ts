@@ -3,6 +3,7 @@ import {
 	initBounties,
 	renderBountyReadyTargets,
 } from "./bounties/bounties";
+import { initChat } from "./chat/main";
 import { SYNC_CONFIG } from "./constants";
 import { checkAttackPageOutcome, initAttackPageHud } from "./hud/attack-hud";
 import { state } from "./state";
@@ -68,6 +69,7 @@ function start(): void {
 	});
 
 	initSettings(root);
+	void initChat();
 
 	// Event wiring
 	root.getElementById("satf-btn-close")?.addEventListener("click", closePanel);

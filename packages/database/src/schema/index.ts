@@ -1,5 +1,6 @@
 export * from "./api-keys";
 export * from "./auth";
+export * from "./chat";
 export * from "./discord";
 export * from "./elims-requests";
 export * from "./elims-tournament";
