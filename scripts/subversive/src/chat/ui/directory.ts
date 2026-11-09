@@ -81,8 +81,11 @@ export class Directory {
 
 	/** Re-renders tabs and lists on every change; inputs and forms are rebuilt only when the view changes. */
 	render(): void {
-		if (!this.el.firstChild)
+		// Resize handles are appended before the first render, so an
+		// `el.firstChild` check would skip the entire directory UI.
+		if (this.header.parentElement !== this.el) {
 			this.el.append(this.header, this.tabSlot, this.body);
+		}
 		this.errorSlot.replaceChildren(state.error ? warning(state.error) : "");
 		if (!state.me) {
 			if (this.mode !== "connect") {
