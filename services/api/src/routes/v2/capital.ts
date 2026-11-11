@@ -340,7 +340,6 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				"drawdownDeriskPct",
 				"dailyLossHaltPct",
 				"stopCooldownDays",
-				"maxNewPositionsPerWeek",
 				"orderValidityMinutes",
 				"staleDataSeconds",
 				"saleFeeBps",

@@ -136,9 +136,6 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 		.notNull(),
 	dailyLossHaltPct: doublePrecision("daily_loss_halt_pct").default(5).notNull(),
 	stopCooldownDays: integer("stop_cooldown_days").default(3).notNull(),
-	maxNewPositionsPerWeek: integer("max_new_positions_per_week")
-		.default(4)
-		.notNull(),
 
 	orderValidityMinutes: integer("order_validity_minutes").default(60).notNull(),
 	staleDataSeconds: integer("stale_data_seconds").default(180).notNull(),

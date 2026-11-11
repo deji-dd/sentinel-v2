@@ -35,7 +35,15 @@ import {
 	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
-import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
+import {
+	apiFetch,
+	compactMoney,
+	isoDate,
+	money,
+	pct,
+	tctDate,
+	tctTime,
+} from "../lib/api";
 
 type Book = "live" | "paper";
 type PayoutMode = "cash" | "reinvest";
@@ -293,6 +301,95 @@ export function DeskPage({ book }: { book: Book }) {
 
 			<div className="mt-4">
 				<SectionCard
+					title="Current positions"
+					description={
+						book === "paper"
+							? "Simulated open positions and marked-to-market profit/loss."
+							: "Open fund positions and marked-to-market profit/loss."
+					}
+				>
+					{data?.positions.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Stock</TableHead>
+									<TableHead>Shares</TableHead>
+									<TableHead>Avg cost</TableHead>
+									<TableHead>Price</TableHead>
+									<TableHead>Value</TableHead>
+									<TableHead>Unrealized P/L</TableHead>
+									<TableHead>Realized P/L</TableHead>
+									<TableHead>Weight</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{data.positions.map((position) => (
+									<TableRow key={position.stockId}>
+										<TableCell>
+											<span className="font-mono text-xs text-muted-foreground">
+												{position.acronym}
+											</span>{" "}
+											{position.stockName}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{position.shares.toLocaleString()}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(position.averageCost)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(position.price)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(position.marketValue)}
+										</TableCell>
+										<TableCell
+											className={
+												Number(position.unrealizedPnl) >= 0
+													? "font-mono text-xs text-success"
+													: "font-mono text-xs text-destructive"
+											}
+										>
+											<span className="block">
+												{compactMoney(position.unrealizedPnl)}
+											</span>
+											{position.unrealizedPnlPct !== null ? (
+												<span className="block text-[11px]">
+													{pct(position.unrealizedPnlPct)}
+												</span>
+											) : null}
+										</TableCell>
+										<TableCell
+											className={
+												Number(position.realizedPnl) >= 0
+													? "font-mono text-xs text-success"
+													: "font-mono text-xs text-destructive"
+											}
+										>
+											{compactMoney(position.realizedPnl)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{pct(position.weightPct, 1)}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					) : (
+						<EmptyState
+							title="No open positions"
+							description={
+								book === "paper"
+									? "Paper positions appear after the engine auto-fills a recommendation."
+									: "Live positions appear after fills are booked from Torn logs."
+							}
+						/>
+					)}
+				</SectionCard>
+			</div>
+
+			<div className="mt-4">
+				<SectionCard
 					title={book === "paper" ? "Create paper investor" : "Create investor"}
 					description={
 						book === "paper"
@@ -316,7 +413,8 @@ export function DeskPage({ book }: { book: Book }) {
 								{book === "paper" ? "Torn ID (optional)" : "Torn ID (required)"}
 							</Label>
 							<NumberInput
-								placeholder="e.g. 1,934,909"
+								group={false}
+								placeholder="e.g. 1934909"
 								value={investorTornId}
 								onValueChange={setInvestorTornId}
 							/>
@@ -738,7 +836,12 @@ export function DeskPage({ book }: { book: Book }) {
 								{data.recentFills.map((fill) => (
 									<TableRow key={fill.id}>
 										<TableCell className="text-xs text-muted-foreground">
-											{isoDate(fill.occurredAtIso)}
+											<span className="block">
+												{tctDate(fill.occurredAtIso)}
+											</span>
+											<span className="block font-mono text-[11px]">
+												{tctTime(fill.occurredAtIso)}
+											</span>
 										</TableCell>
 										<TableCell className="truncate">{fill.stockName}</TableCell>
 										<TableCell>

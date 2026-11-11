@@ -102,3 +102,28 @@ export function isoDate(value: string | null | undefined): string {
 			})
 		: "—";
 }
+
+/** Date in Torn City Time (UTC), for timestamps shown next to a TCT clock. */
+export function tctDate(value: string | null | undefined): string {
+	if (!value) return "—";
+	const date = new Date(value);
+	return Number.isFinite(date.getTime())
+		? date.toLocaleString("en-US", {
+				month: "short",
+				day: "numeric",
+				year: "numeric",
+				timeZone: "UTC",
+			})
+		: "—";
+}
+
+/** Time in Torn City Time (UTC), e.g. `21:04:33 TCT`. */
+export function tctTime(value: string | null | undefined): string {
+	if (!value) return "—";
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return "—";
+	const hours = String(date.getUTCHours()).padStart(2, "0");
+	const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+	const seconds = String(date.getUTCSeconds()).padStart(2, "0");
+	return `${hours}:${minutes}:${seconds} TCT`;
+}

@@ -29,7 +29,15 @@ import {
 	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
-import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
+import {
+	apiFetch,
+	compactMoney,
+	isoDate,
+	money,
+	pct,
+	tctDate,
+	tctTime,
+} from "../lib/api";
 
 export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 	const [data, setData] = useState<CapitalPublicOverview | null>(null);
@@ -267,11 +275,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 						</SectionCard>
 					</div>
 
-					<div
-						className={
-							isPaper ? "mt-4" : "mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2"
-						}
-					>
+					<div className="mt-4">
 						<SectionCard
 							title="Recent trades"
 							description={
@@ -316,7 +320,12 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 													{compactMoney(trade.notional)}
 												</TableCell>
 												<TableCell className="text-xs text-muted-foreground">
-													{isoDate(trade.occurredAtIso)}
+													<span className="block">
+														{tctDate(trade.occurredAtIso)}
+													</span>
+													<span className="block font-mono text-[11px]">
+														{tctTime(trade.occurredAtIso)}
+													</span>
 												</TableCell>
 											</TableRow>
 										))}
@@ -328,44 +337,33 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 						</SectionCard>
 
 						{isPaper ? null : (
-							<SectionCard
-								title="How the fund works"
-								description="Fees reward patient capital and only apply to profit paid out."
-							>
-								<ul className="space-y-2 text-sm text-muted-foreground">
-									{data?.feeSchedule.map((fee) => (
-										<li
-											key={fee.frequency}
-											className="flex justify-between gap-3"
-										>
-											<span>{fee.label} payout</span>
-											<span className="font-mono text-foreground">
-												{(fee.feeBps / 100).toFixed(0)}% of profit
-											</span>
-										</li>
-									))}
-									<li className="flex justify-between gap-3 border-t border-border/60 pt-2">
-										<span>Principal</span>
-										<span className="text-foreground">Stays invested</span>
-									</li>
-									<li className="flex justify-between gap-3">
-										<span>NAV (Net Asset Value)</span>
-										<span className="text-right text-foreground">
-											Total assets ÷ units outstanding
-										</span>
-									</li>
-									<li className="flex justify-between gap-3">
-										<span>Withdrawals</span>
-										<span className="text-foreground">
-											Quoted before approval
-										</span>
-									</li>
-								</ul>
-								<p className="mt-4 text-xs text-muted-foreground">
-									Torn City is a game. This page is informational, not financial
-									advice; capital is held in-game and payouts are made manually.
-								</p>
-							</SectionCard>
+							<div className="mt-4">
+								<SectionCard
+									title="How the fund works"
+									description="Only profit that is paid out attracts a fee."
+								>
+									<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+										{data?.feeSchedule.map((fee) => (
+											<div
+												key={fee.frequency}
+												className="rounded-lg border border-border/60 px-3 py-2"
+											>
+												<p className="text-xs text-muted-foreground">
+													{fee.label} payout
+												</p>
+												<p className="font-mono text-sm font-semibold">
+													{(fee.feeBps / 100).toFixed(0)}% of profit
+												</p>
+											</div>
+										))}
+									</div>
+									<p className="mt-3 text-xs text-muted-foreground">
+										Principal stays invested and withdrawals are quoted before
+										approval. Torn City is a game; this page is informational,
+										not financial advice.
+									</p>
+								</SectionCard>
+							</div>
 						)}
 					</div>
 				</>

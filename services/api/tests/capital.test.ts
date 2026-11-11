@@ -124,9 +124,11 @@ describe("capital API", () => {
 		const body = (await allowed.json()) as {
 			success: boolean;
 			summary: { book: string };
+			positions: unknown[];
 		};
 		expect(body.success).toBe(true);
 		expect(body.summary.book).toBe("paper");
+		expect(Array.isArray(body.positions)).toBe(true);
 	});
 
 	test("settings update accepts a partial typed patch", async () => {

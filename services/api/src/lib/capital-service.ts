@@ -43,6 +43,7 @@ import type {
 	CapitalPaymentIntentView,
 	CapitalPayoutView,
 	CapitalPerformancePoint,
+	CapitalPositionView,
 	CapitalPublicHolding,
 	CapitalPublicOverview,
 	CapitalPublicTrade,
@@ -263,6 +264,64 @@ async function loadHoldings(
 				price: position.price,
 				value: formatMoney(position.value),
 				weightPct: total > 0 ? (Number(position.value) / total) * 100 : 0,
+			};
+		})
+		.sort((a, b) => b.weightPct - a.weightPct);
+}
+
+async function loadPositions(
+	book: CapitalBook,
+	stockMap: Map<number, { name: string; acronym: string }>,
+	navTotalValue: bigint,
+): Promise<CapitalPositionView[]> {
+	const rows = await db
+		.select({
+			stockId: capitalPositions.stockId,
+			shares: capitalPositions.shares,
+			costBasis: capitalPositions.costBasis,
+			realized: capitalPositions.realized,
+			openedAt: capitalPositions.openedAt,
+			price: capitalMarketLatest.price,
+		})
+		.from(capitalPositions)
+		.leftJoin(
+			capitalMarketLatest,
+			eq(capitalMarketLatest.stockId, capitalPositions.stockId),
+		)
+		.where(eq(capitalPositions.book, book));
+
+	return rows
+		.filter((row) => row.shares > 0)
+		.map((row) => {
+			const stock = stockMap.get(row.stockId);
+			const price = parseMoney(asString(row.price));
+			const marketValue = price * BigInt(row.shares);
+			const costBasis = parseMoney(asString(row.costBasis));
+			const realized = parseMoney(asString(row.realized));
+			const unrealized = marketValue - costBasis;
+			const averageCost =
+				BigInt(row.shares) > 0n ? costBasis / BigInt(row.shares) : 0n;
+			return {
+				book,
+				stockId: row.stockId,
+				stockName: stock?.name ?? `Stock #${row.stockId}`,
+				acronym: stock?.acronym ?? `#${row.stockId}`,
+				shares: row.shares,
+				averageCost: formatMoney(averageCost),
+				price: formatMoney(price),
+				costBasis: formatMoney(costBasis),
+				marketValue: formatMoney(marketValue),
+				unrealizedPnl: formatMoney(unrealized),
+				unrealizedPnlPct:
+					costBasis > 0n
+						? (moneyToNumber(unrealized) / moneyToNumber(costBasis)) * 100
+						: null,
+				realizedPnl: formatMoney(realized),
+				weightPct:
+					navTotalValue > 0n
+						? (moneyToNumber(marketValue) / moneyToNumber(navTotalValue)) * 100
+						: 0,
+				openedAtIso: iso(row.openedAt),
 			};
 		})
 		.sort((a, b) => b.weightPct - a.weightPct);
@@ -1377,7 +1436,6 @@ export function toCapitalSettings(
 		drawdownDeriskPct: config.drawdownDeriskPct,
 		dailyLossHaltPct: config.dailyLossHaltPct,
 		stopCooldownDays: config.stopCooldownDays,
-		maxNewPositionsPerWeek: config.maxNewPositionsPerWeek,
 		orderValidityMinutes: config.orderValidityMinutes,
 		staleDataSeconds: config.staleDataSeconds,
 		saleFeeBps: config.saleFeeBps,
@@ -1783,6 +1841,7 @@ export async function getCapitalAdminOverview(
 		recentFills: fillViews,
 		performance: await loadPerformance(book),
 		holdings: await loadHoldings(book, stockMap),
+		positions: await loadPositions(book, stockMap, nav.totalValue),
 		notifications: {
 			unfundedPayouts: payoutViews.filter(
 				(payout) => payout.status === "unfunded",

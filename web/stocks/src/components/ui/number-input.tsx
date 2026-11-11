@@ -22,14 +22,18 @@ function sanitize(raw: string, decimals: number): string {
 	return negative ? `-${value}` : value;
 }
 
-function groupInteger(value: string): string {
+function formatValue(value: string, group: boolean): string {
 	if (!value) return "";
 	const negative = value.startsWith("-");
 	const unsigned = negative ? value.slice(1) : value;
 	const [integer = "", fraction] = unsigned.split(".");
-	const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+	const formatted = group
+		? integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+		: integer;
 	const body =
-		fraction === undefined ? grouped || "0" : `${grouped || "0"}.${fraction}`;
+		fraction === undefined
+			? formatted || "0"
+			: `${formatted || "0"}.${fraction}`;
 	return negative ? `-${body}` : body;
 }
 
@@ -55,6 +59,11 @@ export interface NumberInputProps extends Omit<
 	onValueChange: (value: string) => void;
 	/** Fraction digits accepted. `0` disables the decimal point entirely. */
 	decimals?: number;
+	/**
+	 * Render thousands separators. Disable for identifiers such as Torn IDs,
+	 * where `1,934,909` reads like an amount rather than an ID.
+	 */
+	group?: boolean;
 }
 
 /**
@@ -66,6 +75,7 @@ export function NumberInput({
 	value,
 	onValueChange,
 	decimals = 0,
+	group = true,
 	className,
 	onFocus,
 	onBlur,
@@ -73,14 +83,14 @@ export function NumberInput({
 }: NumberInputProps) {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState<string | null>(null);
-	const display = groupInteger(draft ?? value);
+	const display = formatValue(draft ?? value, group);
 
 	const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const raw = event.target.value;
 		const caret = event.target.selectionStart ?? raw.length;
 		const wanted = significantCount(raw.slice(0, caret));
 		const clean = sanitize(raw, decimals);
-		const formatted = groupInteger(clean);
+		const formatted = formatValue(clean, group);
 		setDraft(clean);
 		onValueChange(clean);
 		requestAnimationFrame(() => {

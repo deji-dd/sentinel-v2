@@ -393,6 +393,24 @@ export interface CapitalWithdrawalQuote {
 
 // ─── Admin-facing ───────────────────────────────────────────────────────────
 
+/** An open fund position, including cost basis and live P/L. */
+export interface CapitalPositionView {
+	book: CapitalBook;
+	stockId: number;
+	stockName: string;
+	acronym: string;
+	shares: number;
+	averageCost: CapitalDecimal;
+	price: CapitalDecimal;
+	costBasis: CapitalDecimal;
+	marketValue: CapitalDecimal;
+	unrealizedPnl: CapitalDecimal;
+	unrealizedPnlPct: number | null;
+	realizedPnl: CapitalDecimal;
+	weightPct: number;
+	openedAtIso: string | null;
+}
+
 export interface CapitalInvestorAdminRow {
 	investor: CapitalInvestorView;
 	principal: CapitalDecimal;
@@ -560,7 +578,6 @@ export interface CapitalSettings {
 	drawdownDeriskPct: number;
 	dailyLossHaltPct: number;
 	stopCooldownDays: number;
-	maxNewPositionsPerWeek: number;
 	orderValidityMinutes: number;
 	staleDataSeconds: number;
 	saleFeeBps: number;
@@ -593,6 +610,7 @@ export interface CapitalAdminOverview {
 	recentFills: CapitalFillView[];
 	performance: CapitalPerformancePoint[];
 	holdings: CapitalPublicHolding[];
+	positions: CapitalPositionView[];
 	notifications: {
 		unfundedPayouts: number;
 		openIssues: number;

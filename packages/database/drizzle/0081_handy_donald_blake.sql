@@ -1,0 +1,1 @@
+ALTER TABLE "capital_book_configs" DROP COLUMN "max_new_positions_per_week";
