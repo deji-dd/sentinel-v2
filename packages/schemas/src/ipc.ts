@@ -3,6 +3,11 @@
  * Worker/Scheduler V2, Bot, and API applications.
  */
 
+import type {
+	CapitalAlertPayload,
+	CapitalPaperAlertPayload,
+	CapitalSmokeReport,
+} from "./capital";
 import type { SubversiveChainAlertPayload } from "./chain-alerts";
 import type {
 	IpcSubversiveRwDisplaysUpdateMessage,
@@ -536,6 +541,37 @@ export type IpcUserStockAlertsMessage = {
 };
 
 /**
+ * A live Sentinel Capital alert: recommendation, payout due, withdrawal,
+ * risk, reconciliation, payment, or key failure.
+ *
+ * Kept as its own action (rather than one generic capital message) so the bot
+ * can render it with the live channel/DM destination and live embed styling.
+ */
+export type IpcCapitalAlertMessage = {
+	action: "capital_alert";
+	data: CapitalAlertPayload;
+};
+
+/**
+ * A paper/smoke-test report alert.
+ *
+ * Deliberately a separate action from {@link IpcCapitalAlertMessage}: paper
+ * results must never be mistaken for live results, and the bot routes this to
+ * the paper channel with a distinct `[PAPER]` presentation.
+ */
+export type IpcCapitalPaperAlertMessage = {
+	action: "capital_paper_alert";
+	data: CapitalPaperAlertPayload;
+};
+
+/** Response body for a scheduler-run paper smoke test. */
+export type IpcCapitalSmokeResultMessage = {
+	action: "capital_smoke_result";
+	requestId?: string;
+	data: CapitalSmokeReport;
+};
+
+/**
  * One batched delivery of *personal* shoplifting alerts.
  *
  * Delivered exactly like the personal stock alerts: one DM per user, and one
@@ -633,6 +669,9 @@ export type IpcMessage =
 	| IpcSubversiveRecruitmentAlertMessage
 	| IpcSubversiveStockAlertsMessage
 	| IpcUserStockAlertsMessage
+	| IpcCapitalAlertMessage
+	| IpcCapitalPaperAlertMessage
+	| IpcCapitalSmokeResultMessage
 	| IpcUserShopliftingAlertsMessage
 	| IpcSubversiveChainAlertMessage
 	| IpcResetSubversiveRecruitmentMessage

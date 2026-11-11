@@ -28,6 +28,7 @@ COPY services/bot/package.json ./services/bot/
 COPY services/scheduler/package.json ./services/scheduler/
 COPY web/dashboard/package.json ./web/dashboard/
 COPY web/tt-selector/package.json ./web/tt-selector/
+COPY web/stocks/package.json ./web/stocks/
 
 RUN bun install --frozen-lockfile || bun install
 

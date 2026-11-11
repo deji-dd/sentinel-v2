@@ -1,3 +1,4 @@
+export * from "./capital";
 export * from "./chain-alerts";
 export * from "./company";
 export * from "./dibs";

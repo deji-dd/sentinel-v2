@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 
 import { authRoutes } from "./auth";
+import { capitalRoutes } from "./capital";
 import { chatRoutes } from "./chat";
 import { elimsRoutes } from "./elims";
 import { giveawayRoutes } from "./giveaways";
@@ -15,6 +16,7 @@ import { ttRoutes } from "./tt";
 
 export {
 	authRoutes,
+	capitalRoutes,
 	chatRoutes,
 	elimsRoutes,
 	giveawayRoutes,
@@ -30,6 +32,7 @@ export {
 
 export const v2Routes = new Elysia({ prefix: "/v2" })
 	.use(authRoutes)
+	.use(capitalRoutes)
 	.use(chatRoutes)
 	.use(elimsRoutes)
 	.use(giveawayRoutes)

@@ -1,0 +1,1 @@
+ALTER TABLE "capital_book_configs" ALTER COLUMN "public_show_holdings" SET DEFAULT true;

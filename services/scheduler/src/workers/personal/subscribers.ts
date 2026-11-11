@@ -1,3 +1,5 @@
+import { startCapitalFills } from "../capital/fills";
+import { startCapitalPayments } from "../capital/payments";
 import { startBattlestatsLedger } from "./battlestats";
 import { startCompanySync } from "./company";
 import { startCrimesLedger } from "./crimes";
@@ -14,4 +16,6 @@ export function registerPersonalLogSubscribers(): void {
 	startStocksLedger();
 	startCompanySync();
 	startOilRigCollector();
+	startCapitalPayments();
+	startCapitalFills();
 }

@@ -1,0 +1,29 @@
+{
+	"name": "@sentinel/stocks",
+	"module": "src/main.tsx",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "vite",
+		"build": "bun check && vite build"
+	},
+	"dependencies": {
+		"@elysiajs/eden": "latest",
+		"@sentinel/api": "workspace:*",
+		"@sentinel/schemas": "workspace:*",
+		"clsx": "latest",
+		"lucide-react": "latest",
+		"react": "latest",
+		"react-dom": "latest",
+		"recharts": "latest",
+		"tailwind-merge": "latest"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "latest",
+		"@types/react": "latest",
+		"@types/react-dom": "latest",
+		"@vitejs/plugin-react": "latest",
+		"tailwindcss": "latest",
+		"vite": "latest"
+	}
+}

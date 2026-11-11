@@ -1,0 +1,1 @@
+ALTER TABLE "capital_ml_predictions" ADD COLUMN "entry_price" double precision;

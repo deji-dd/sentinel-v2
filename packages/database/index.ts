@@ -98,6 +98,8 @@ export type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 // Export schema for queries and types
 export * from "./src/lib/alerts";
 export * from "./src/lib/bounty-state";
+export * from "./src/lib/capital";
+export * from "./src/lib/capital-ml";
 export * from "./src/lib/elims-stock";
 export * from "./src/lib/ffscouter-cache";
 export * from "./src/lib/guilds";

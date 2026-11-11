@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" class="dark">
+	<head>
+		<meta charset="UTF-8" />
+		<base href="/" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+		/>
+		<meta name="color-scheme" content="dark light" />
+		<meta
+			name="description"
+			content="Sentinel Capital — a managed, transparent Torn City stock trading fund."
+		/>
+		<title>Sentinel Capital</title>
+		<script>
+			(() => {
+				try {
+					const stored = localStorage.getItem("sentinel-theme");
+					const theme = stored === "light" ? "light" : "dark";
+					document.documentElement.classList.toggle("dark", theme === "dark");
+					document.documentElement.setAttribute("data-theme", theme);
+				} catch (_e) {
+					document.documentElement.classList.add("dark");
+				}
+			})();
+		</script>
+		<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./src/main.tsx"></script>
+	</body>
+</html>

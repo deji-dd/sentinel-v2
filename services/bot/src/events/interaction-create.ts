@@ -48,6 +48,10 @@ import {
 	TEAM_BREAKDOWN_SELECT_ID,
 } from "../commands/team-breakdown";
 import {
+	handleCapitalPaymentButton,
+	handleCapitalTradeButton,
+} from "../lib/capital-alert-distributor";
+import {
 	handleDibsClaimButton,
 	handleDibsReleaseButton,
 } from "../lib/dibs-alert-distributor";
@@ -168,6 +172,10 @@ export const interactionCreateEvent = {
 					await handleContractCreationButtonClick(interaction);
 				} else if (interaction.customId.startsWith("merc_archive_channel:")) {
 					await handleArchiveChannelButtonClick(interaction);
+				} else if (interaction.customId.startsWith("capital_trade:")) {
+					await handleCapitalTradeButton(interaction);
+				} else if (interaction.customId.startsWith("capital_payment:")) {
+					await handleCapitalPaymentButton(interaction);
 				} else if (interaction.customId === STOCK_ALERT_CLEAR_CONFIRM_ID) {
 					await handleStockAlertClearConfirm(interaction);
 				} else if (interaction.customId === STOCK_ALERT_CLEAR_CANCEL_ID) {

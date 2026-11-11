@@ -11,6 +11,10 @@ import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 
 import { deployGuildCommands } from "../../scripts/deploy-commands";
+import {
+	handleCapitalAlert,
+	handleCapitalPaperAlert,
+} from "../capital-alert-distributor";
 import { handleSubversiveChainAlert } from "../chain-alert-distributor";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
 import {
@@ -384,6 +388,10 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleSubversiveChainAlert(client, message.data);
 		} else if (message.action === "user_stock_alerts" && message.data) {
 			void handleUserStockAlerts(client, message.data);
+		} else if (message.action === "capital_alert" && message.data) {
+			void handleCapitalAlert(client, message.data);
+		} else if (message.action === "capital_paper_alert" && message.data) {
+			void handleCapitalPaperAlert(client, message.data);
 		} else if (message.action === "user_shoplifting_alerts" && message.data) {
 			void handleUserShopliftingAlerts(client, message.data);
 		} else if (

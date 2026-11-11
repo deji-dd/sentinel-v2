@@ -40,6 +40,18 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 			path.startsWith("/v2/auth"),
 	},
 
+	// Sentinel Capital
+	"stocks.blasted-labs.tech": {
+		title: "Sentinel V2 — Capital API",
+		description:
+			"Sentinel Capital public, investor and admin endpoints for the managed stock fund.",
+		isPathAllowed: (path: string) =>
+			path.startsWith("/health") ||
+			path.startsWith("/api/health") ||
+			path.startsWith("/v2/capital") ||
+			path.startsWith("/v2/auth"),
+	},
+
 	// Bot Configuration Dashboard
 	"dashboard.blasted-labs.tech": {
 		title: "Sentinel V2 — Bot Configuration API",

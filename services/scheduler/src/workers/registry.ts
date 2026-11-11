@@ -2,6 +2,12 @@ import { Logger } from "@sentinel/utils";
 
 import { startFactionMonitoring } from "./bot/monitoring";
 import { startVerification } from "./bot/verification";
+import { startCapitalAccounting } from "./capital/accounting";
+import { startCapitalEngine } from "./capital/engine";
+import { startCapitalHistory } from "./capital/history";
+import { startCapitalMl } from "./capital/ml";
+import { startCapitalMlTrain } from "./capital/ml-train";
+import { startCapitalReconcile } from "./capital/reconcile";
 import {
 	startElimsMemberStatsWorker,
 	startElimsTeamTracker,
@@ -163,6 +169,42 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Daily Torn active players snapshot CSV ingestion and filtering engine",
 		start: startSubversiveSnapshotIngestionWorker,
+	},
+	{
+		id: "capital:engine",
+		description:
+			"60-second Sentinel Capital market poll, share-level signal engine, paper auto-fill and owner recommendations",
+		start: startCapitalEngine,
+	},
+	{
+		id: "capital:history",
+		description:
+			"Hourly check that seeds missing stock history once on a fresh deploy (daily/hourly full, one week of minutes), then idles",
+		start: startCapitalHistory,
+	},
+	{
+		id: "capital:ml",
+		description:
+			"Hourly outcome scoring for shadow ML predictions (fills realized return and barrier outcome; never trades)",
+		start: startCapitalMl,
+	},
+	{
+		id: "capital:ml:train",
+		description:
+			"Daily check that retrains and shadow-activates the ML meta-label when the active model is older than 30 days",
+		start: startCapitalMlTrain,
+	},
+	{
+		id: "capital:accounting",
+		description:
+			"5-minute Sentinel Capital NAV snapshots, payout obligations and reserve checks",
+		start: startCapitalAccounting,
+	},
+	{
+		id: "capital:reconcile",
+		description:
+			"5-minute Sentinel Capital live account position and cash reconciliation",
+		start: startCapitalReconcile,
 	},
 	{
 		id: "subversive:stock_alerts",

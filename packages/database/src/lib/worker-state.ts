@@ -43,6 +43,12 @@ export const WORKER_STATE_IDS = {
 	warLedgerInit: "war_ledger_init_state",
 	/** Whether the initial territory-state load has completed. */
 	territoryInit: "tt_init_state",
+	/** Sentinel Capital market/engine cycle status and last-run counters. */
+	capitalEngine: "capital:engine",
+	/** Live account reconciliation status and last positions check. */
+	capitalReconciliation: "capital:reconciliation",
+	/** Money-log payment matching status and last processed log. */
+	capitalPayments: "capital:payments",
 } as const;
 
 export type WorkerStateId =

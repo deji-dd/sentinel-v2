@@ -1,0 +1,1 @@
+ALTER TABLE "capital_payment_intents" ADD COLUMN "frequency" text;

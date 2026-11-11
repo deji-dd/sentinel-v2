@@ -498,6 +498,62 @@
 			"when": 1794241131033,
 			"tag": "0070_sweet_doorman",
 			"breakpoints": true
+		},
+		{
+			"idx": 71,
+			"version": "7",
+			"when": 1794420235429,
+			"tag": "0071_hard_the_hood",
+			"breakpoints": true
+		},
+		{
+			"idx": 72,
+			"version": "7",
+			"when": 1794420915985,
+			"tag": "0072_chemical_nitro",
+			"breakpoints": true
+		},
+		{
+			"idx": 73,
+			"version": "7",
+			"when": 1794421770400,
+			"tag": "0073_harsh_eternity",
+			"breakpoints": true
+		},
+		{
+			"idx": 74,
+			"version": "7",
+			"when": 1794422401622,
+			"tag": "0074_numerous_sentry",
+			"breakpoints": true
+		},
+		{
+			"idx": 75,
+			"version": "7",
+			"when": 1794422649799,
+			"tag": "0075_tidy_proudstar",
+			"breakpoints": true
+		},
+		{
+			"idx": 76,
+			"version": "7",
+			"when": 1794424855268,
+			"tag": "0076_chief_grey_gargoyle",
+			"breakpoints": true
+		},
+		{
+			"idx": 77,
+			"version": "7",
+			"when": 1794425924003,
+			"tag": "0077_serious_landau",
+			"breakpoints": true
+		},
+		{
+			"idx": 78,
+			"version": "7",
+			"when": 1794426106258,
+			"tag": "0078_unusual_firebrand",
+			"breakpoints": true
 		}
 	]
 }
