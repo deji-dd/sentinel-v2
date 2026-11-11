@@ -2,10 +2,10 @@ import { DEFAULTS, STORAGE } from "./constants";
 import type { AppState, BountyTarget, WarTarget } from "./types";
 import { safeJsonParse } from "./utils/formatters";
 
-const rawCachedBounties = safeJsonParse<{ readyTargets?: BountyTarget[] }>(
-	GM_getValue(STORAGE.cachedBounties, "{}"),
-	{},
-);
+const rawCachedBounties = safeJsonParse<{
+	readyTargets?: BountyTarget[];
+	lastSyncTimestamp?: number;
+}>(GM_getValue(STORAGE.cachedBounties, "{}"), {});
 
 function getStoredBool(key: string, fallback: boolean): boolean {
 	const val = GM_getValue<unknown>(key, fallback);
@@ -81,6 +81,11 @@ export const state: AppState = {
 	bountiesReady: Array.isArray(rawCachedBounties.readyTargets)
 		? rawCachedBounties.readyTargets
 		: [],
+	bountiesLastSyncAt:
+		typeof rawCachedBounties.lastSyncTimestamp === "number" &&
+		rawCachedBounties.lastSyncTimestamp > 0
+			? rawCachedBounties.lastSyncTimestamp
+			: 0,
 	bountyMinReward: Number(GM_getValue(STORAGE.bountyMinReward, 0)) || 0,
 	bountyMaxReward: Number(GM_getValue(STORAGE.bountyMaxReward, 0)) || 0,
 };

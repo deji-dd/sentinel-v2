@@ -32,7 +32,11 @@ import {
 const logger = new Logger("Scheduler", "SubversiveBountyFinder");
 
 export const WORKER_NAME = "subversive:bounty_finder";
-const CADENCE_SEC = 30;
+/**
+ * Torn caches `torn/bounties` globally for 5 minutes. A shorter cycle would
+ * keep returning the same cached pages, so the finder runs on that cadence.
+ */
+const CADENCE_SEC = 300;
 
 // Hardcoded thresholds
 const MIN_BOUNTY_PREFILTER = 100_000;
@@ -1003,7 +1007,7 @@ export function startSubversiveBountyFinder(
 		worker: WORKER_NAME,
 		schedule: {
 			type: "cron",
-			pattern: "1,31 * * * * *", // Ticks at :01 and :31 UTC (1s buffer after Torn's 30s cache flips)
+			pattern: "1 */5 * * * *", // Ticks at :01 of every 5th minute (1s buffer after Torn's 5-minute cache flips)
 			timezone: "Etc/UTC",
 		},
 		defaultCadenceSeconds: CADENCE_SEC,

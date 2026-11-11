@@ -299,6 +299,7 @@ export function handleBountyTargetDefeated(
 			STORAGE.cachedBounties,
 			JSON.stringify({
 				readyTargets: state.bountiesReady,
+				lastSyncTimestamp: state.bountiesLastSyncAt,
 			}),
 		);
 	} catch {}

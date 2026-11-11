@@ -2,7 +2,12 @@ import { apiRequest } from "../api/client";
 import { STORAGE } from "../constants";
 import { getFilteredBountyList, state } from "../state";
 import type { BountyTarget } from "../types";
-import { formatMoney, getBountyFF, getFFColor } from "../utils/formatters";
+import {
+	formatMoney,
+	formatTimeAgo,
+	getBountyFF,
+	getFFColor,
+} from "../utils/formatters";
 
 let rootElement: ShadowRoot | Document | null = null;
 let setBountiesStatusFn: ((msg: string, type: "ok" | "error") => void) | null =
@@ -36,8 +41,23 @@ export function updateBountyBadges(): void {
 	}
 }
 
+export function updateBountyUpdatedLabel(): void {
+	if (!rootElement) return;
+	const label = rootElement.getElementById("satf-bounties-updated");
+	if (!label) return;
+	const syncedAt = state.bountiesLastSyncAt;
+	if (syncedAt > 0) {
+		label.textContent = `Updated ${formatTimeAgo(syncedAt)}`;
+		label.title = `Bounty board last synced ${new Date(syncedAt * 1000).toLocaleString()}`;
+	} else {
+		label.textContent = "Not updated yet";
+		label.removeAttribute("title");
+	}
+}
+
 export function renderBountyReadyTargets(targets?: BountyTarget[]): void {
 	if (!rootElement) return;
+	updateBountyUpdatedLabel();
 	const pane = rootElement.getElementById("satf-bounties-pane-ready");
 	if (!pane) return;
 	const rawList = Array.isArray(targets) ? targets : state.bountiesReady;
@@ -96,15 +116,23 @@ export function renderBountyReadyTargets(targets?: BountyTarget[]): void {
 }
 
 export function applyBountyData(
-	res: { readyTargets?: BountyTarget[] } | null,
+	res: { readyTargets?: BountyTarget[]; lastSyncTimestamp?: number } | null,
 ): void {
 	if (!res) return;
 	state.bountiesReady = Array.isArray(res.readyTargets) ? res.readyTargets : [];
+	if (
+		typeof res.lastSyncTimestamp === "number" &&
+		Number.isFinite(res.lastSyncTimestamp) &&
+		res.lastSyncTimestamp > 0
+	) {
+		state.bountiesLastSyncAt = res.lastSyncTimestamp;
+	}
 	try {
 		GM_setValue(
 			STORAGE.cachedBounties,
 			JSON.stringify({
 				readyTargets: state.bountiesReady,
+				lastSyncTimestamp: state.bountiesLastSyncAt,
 			}),
 		);
 	} catch {}
@@ -119,9 +147,10 @@ export async function fetchBounties(): Promise<void> {
 	if (!state.token) return;
 	lastFetchAt = Date.now();
 	try {
-		const res = await apiRequest<{ readyTargets?: BountyTarget[] }>(
-			"/v2/personal/bounties",
-		);
+		const res = await apiRequest<{
+			readyTargets?: BountyTarget[];
+			lastSyncTimestamp?: number;
+		}>("/v2/personal/bounties");
 		applyBountyData(res);
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);

@@ -1053,9 +1053,15 @@ export function getPanelHtml(): string {
 
 			<!-- BOUNTIES VIEW -->
 			<div id="satf-view-bounties" class="satf-view" style="display: none;">
-				<div class="satf-bounty-controls" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+				<div class="satf-bounty-controls" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px;">
 					<span style="font-size: 11px; font-weight: 700; color: #fff;">Available Bounties (<span id="satf-bounty-ready-count">0</span>)</span>
-					<span id="satf-bounties-status" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
+					<span style="display: flex; align-items: center; gap: 8px;">
+						<span id="satf-bounties-updated" style="font-size: 11px; color: var(--muted);">Not updated yet</span>
+						<span style="display: flex; align-items: center; gap: 4px;">
+							<span id="satf-bounties-status-dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block;"></span>
+							<span id="satf-bounties-status-text" style="font-size: 11px; color: var(--muted); font-weight: 600;">Ready</span>
+						</span>
+					</span>
 				</div>
 
 				<!-- Bounties list -->

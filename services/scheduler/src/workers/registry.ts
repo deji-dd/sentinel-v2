@@ -131,7 +131,7 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 	{
 		id: "subversive:bounty_finder",
 		description:
-			"30-second Subversive Alliance bounty target finder with FF filtering and hospital monitor",
+			"5-minute Subversive Alliance bounty target finder with FF filtering and hospital monitor",
 		start: startSubversiveBountyFinder,
 	},
 	{

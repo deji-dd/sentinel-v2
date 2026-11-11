@@ -92,6 +92,16 @@ export function formatSeconds(totalSeconds: number): string {
 	return `${s}s`;
 }
 
+/** Relative label for an epoch-seconds timestamp, e.g. "4m 12s ago". */
+export function formatTimeAgo(epochSeconds: number | undefined | null): string {
+	if (!epochSeconds || !Number.isFinite(epochSeconds) || epochSeconds <= 0) {
+		return "never";
+	}
+	const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+	if (diff < 5) return "just now";
+	return `${formatSeconds(diff)} ago`;
+}
+
 export function getFFTier(ff: number | undefined | null): string {
 	if (typeof ff !== "number" || Number.isNaN(ff)) return "white";
 	if (ff > 4.0) return "red";

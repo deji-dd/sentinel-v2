@@ -59,9 +59,9 @@ const recheckRateLimiter = new UserRateLimiter(50, 60_000);
 /**
  * How long the assembled bounty board is served from RAM.
  *
- * The userscript polls this endpoint every second while its panel is open, and
- * the scheduler only republishes the pool every 30s. Rebuilding the board from
- * two database queries on every poll therefore bought no freshness: it just
+ * The userscript polls this endpoint while its panel is open, and the scheduler
+ * only republishes the pool every 5 minutes. Rebuilding the board from two
+ * database queries on every poll therefore bought no freshness: it just
  * multiplied one row read (plus the personal-key lookup in the auth check) by
  * every open panel. A few seconds bounds staleness well inside the scheduler
  * cadence while collapsing a burst of polls into one read. Set to 0 to disable.

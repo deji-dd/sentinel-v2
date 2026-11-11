@@ -32,9 +32,11 @@ export const STORAGE = {
 export const SYNC_CONFIG = {
 	FAST_INTERVAL_MS: 1000,
 	SLOW_INTERVAL_MS: 120000,
-	// Bounty lists change slowly; don't refetch them on every 1s fast tick even
-	// while the tab is visible. Tab switches/auth still trigger an immediate fetch.
-	BOUNTY_REFRESH_MS: 15000,
+	// Torn caches the bounty selections for 5 minutes, and the scheduler refreshes
+	// the board on that cadence. Polling the API faster only picks up defeats and
+	// hospital updates, so don't do it on every 1s fast tick while the tab is
+	// visible. Tab switches/auth still trigger an immediate fetch.
+	BOUNTY_REFRESH_MS: 60000,
 	HUD_ACTIVITY_TIMEOUT_MS: 60000,
 	STORAGE_HUD_CYCLE: "sentinel_last_hud_cycle",
 } as const;

@@ -170,6 +170,8 @@ export interface AppState {
 	warSubTab: string;
 	excludeIds: number[];
 	bountiesReady: BountyTarget[];
+	/** Epoch seconds of the last successful board sync from the server. */
+	bountiesLastSyncAt: number;
 	bountyMinReward: number;
 	bountyMaxReward: number;
 }
