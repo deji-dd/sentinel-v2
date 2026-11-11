@@ -35,6 +35,7 @@ import {
 	type CapitalBook as CapitalBookSchema,
 	type CapitalPayoutView,
 	type CapitalWithdrawalView,
+	isCapitalPayoutFrequency,
 	isCapitalSignalMode,
 } from "@sentinel/schemas";
 import {
@@ -62,6 +63,7 @@ import {
 	recordManualFill,
 	resetPaperBook,
 	toCapitalSettings,
+	updateInvestor,
 } from "../../lib/capital-service";
 import {
 	notifySchedulerForceRun,
@@ -139,7 +141,12 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 			};
 		}
 	})
-	.get("/public", async () => getCapitalPublicOverview())
+	.get(
+		"/public",
+		async ({ query }) =>
+			getCapitalPublicOverview(query.book === "paper" ? "paper" : "live"),
+		{ query: t.Object({ book: t.Optional(t.String()) }) },
+	)
 	.get("/me", async ({ user, set }) => {
 		if (!user) {
 			set.status = 401;
@@ -342,12 +349,7 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				"paymentMatchTolerancePct",
 				"paperSlippageBps",
 			];
-			const stringFields = [
-				"liveAlertChannelId",
-				"paperAlertChannelId",
-				"withdrawalMinAmount",
-				"paperStartingCash",
-			];
+			const stringFields = ["withdrawalMinAmount", "paperStartingCash"];
 			for (const field of booleanFields) {
 				const value = body[field];
 				if (typeof value === "boolean") patch[field] = value;
@@ -408,12 +410,43 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 			}
 			const book = parseBook(params.book, set);
 			if (!book) return { success: false, error: "Invalid book." };
+			const kind = book === "paper" ? "test" : (body.kind ?? "user");
+			if (book === "live") {
+				if (kind !== "user" && kind !== "faction" && kind !== "operator") {
+					set.status = 400;
+					return {
+						success: false,
+						error:
+							"Live investors must be users, factions or operators. Test investors belong on the paper desk.",
+					};
+				}
+				if (!Number.isInteger(body.tornId) || (body.tornId ?? 0) <= 0) {
+					set.status = 400;
+					return { success: false, error: "A valid Torn ID is required." };
+				}
+			} else if (
+				body.tornId !== undefined &&
+				(!Number.isInteger(body.tornId) || body.tornId <= 0)
+			) {
+				set.status = 400;
+				return { success: false, error: "Invalid Torn ID." };
+			}
+			const tornId =
+				Number.isInteger(body.tornId) && (body.tornId ?? 0) > 0
+					? body.tornId
+					: null;
+			const frequency = isCapitalPayoutFrequency(body.frequency)
+				? body.frequency
+				: "weekly";
+			const payoutMode = body.payoutMode === "reinvest" ? "reinvest" : "cash";
 			const investor = await createInvestor({
 				book,
-				kind: body.kind,
-				tornId: body.tornId ?? null,
+				kind,
+				tornId,
 				factionId: body.factionId ?? null,
 				displayName: body.displayName,
+				frequency,
+				payoutMode,
 				actor: user?.discordId ?? null,
 			});
 			for (const contact of body.contacts ?? []) {
@@ -463,10 +496,12 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		},
 		{
 			body: t.Object({
-				kind: t.String(),
+				kind: t.Optional(t.String()),
 				tornId: t.Optional(t.Number()),
 				factionId: t.Optional(t.Number()),
 				displayName: t.String(),
+				frequency: t.Optional(t.String()),
+				payoutMode: t.Optional(t.String()),
 				contacts: t.Optional(
 					t.Array(
 						t.Object({
@@ -477,6 +512,62 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 						}),
 					),
 				),
+			}),
+		},
+	)
+	.patch(
+		"/admin/:book/investors/:id",
+		async ({ params, body, user, set }) => {
+			if (!isOwner(user)) {
+				set.status = 403;
+				return { success: false, error: "Admin access required." };
+			}
+			const book = parseBook(params.book, set);
+			if (!book) return { success: false, error: "Invalid book." };
+			if (
+				body.frequency !== undefined &&
+				!isCapitalPayoutFrequency(body.frequency)
+			) {
+				set.status = 400;
+				return { success: false, error: "Invalid payout frequency." };
+			}
+			if (
+				body.payoutMode !== undefined &&
+				body.payoutMode !== "cash" &&
+				body.payoutMode !== "reinvest"
+			) {
+				set.status = 400;
+				return { success: false, error: "Invalid payout mode." };
+			}
+			const investor = await updateInvestor({
+				book,
+				investorId: params.id,
+				displayName: body.displayName?.trim() || undefined,
+				frequency: isCapitalPayoutFrequency(body.frequency)
+					? body.frequency
+					: undefined,
+				payoutMode:
+					body.payoutMode === "cash" || body.payoutMode === "reinvest"
+						? body.payoutMode
+						: undefined,
+				status: body.status === undefined ? undefined : body.status,
+			});
+			await recordCapitalAudit({
+				book,
+				actorDiscordId: user?.discordId ?? null,
+				action: "investor.update",
+				entityType: "capital_investor",
+				entityId: investor.id,
+				after: investor as unknown as Record<string, unknown>,
+			});
+			return { success: true, investor };
+		},
+		{
+			body: t.Object({
+				displayName: t.Optional(t.String()),
+				frequency: t.Optional(t.String()),
+				payoutMode: t.Optional(t.String()),
+				status: t.Optional(t.String()),
 			}),
 		},
 	)
@@ -547,20 +638,10 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 			}
 			const book = parseBook(params.book, set);
 			if (!book) return { success: false, error: "Invalid book." };
-			if (
-				body.frequency !== "daily" &&
-				body.frequency !== "weekly" &&
-				body.frequency !== "monthly"
-			) {
-				set.status = 400;
-				return { success: false, error: "Invalid frequency." };
-			}
 			const result = await createDepositLot({
 				book,
 				investorId: params.id,
 				amount: body.amount,
-				frequency: body.frequency,
-				payoutMode: body.payoutMode === "reinvest" ? "reinvest" : "cash",
 				occurredAt: asDate(body.occurredAt),
 				actor: user?.discordId ?? null,
 				note: body.note ?? null,
@@ -578,8 +659,6 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		{
 			body: t.Object({
 				amount: t.String(),
-				frequency: t.String(),
-				payoutMode: t.Optional(t.String()),
 				occurredAt: t.Optional(t.String()),
 				note: t.Optional(t.String()),
 			}),
@@ -829,6 +908,36 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 					: body.kind === "withdrawal"
 						? "WDR"
 						: "DEP";
+			let frequency = isCapitalPayoutFrequency(body.frequency)
+				? body.frequency
+				: null;
+			let payoutMode =
+				body.payoutMode === "cash" || body.payoutMode === "reinvest"
+					? body.payoutMode
+					: null;
+			if (body.investorId && (frequency === null || payoutMode === null)) {
+				const [investor] = await db
+					.select()
+					.from(capitalInvestors)
+					.where(
+						and(
+							eq(capitalInvestors.book, book),
+							eq(capitalInvestors.id, body.investorId),
+						),
+					)
+					.limit(1);
+				if (investor) {
+					if (frequency === null) {
+						frequency = isCapitalPayoutFrequency(investor.frequency)
+							? investor.frequency
+							: "weekly";
+					}
+					if (payoutMode === null) {
+						payoutMode =
+							investor.payoutMode === "reinvest" ? "reinvest" : "cash";
+					}
+				}
+			}
 			const [intent] = await db
 				.insert(capitalPaymentIntents)
 				.values({
@@ -836,8 +945,8 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 					kind: body.kind,
 					investorId: body.investorId ?? null,
 					investmentId: body.investmentId ?? null,
-					frequency: body.frequency ?? null,
-					payoutMode: body.payoutMode === "reinvest" ? "reinvest" : "cash",
+					frequency,
+					payoutMode: payoutMode ?? "cash",
 					payoutIds: body.payoutIds ?? [],
 					counterpartyTornId: body.counterpartyTornId ?? null,
 					expectedAmount: formatMoney(parseMoney(body.expectedAmount)),

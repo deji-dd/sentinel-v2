@@ -1,0 +1,3 @@
+ALTER TABLE "capital_investors" ADD CONSTRAINT "capital_investors_frequency_check" CHECK ("capital_investors"."frequency" IN ('daily', 'weekly', 'monthly'));--> statement-breakpoint
+ALTER TABLE "capital_investors" ADD CONSTRAINT "capital_investors_payout_mode_check" CHECK ("capital_investors"."payout_mode" IN ('cash', 'reinvest'));--> statement-breakpoint
+UPDATE "capital_books" SET "display_name" = 'Blasted Stocks' WHERE "book" = 'live' AND "display_name" = 'Sentinel Capital';

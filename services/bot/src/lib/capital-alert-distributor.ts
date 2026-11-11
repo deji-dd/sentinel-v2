@@ -4,7 +4,6 @@ import {
 	capitalReconciliationIssues,
 	db,
 	eq,
-	getCapitalConfig,
 	resolveCapitalIssue,
 	withCapitalTransaction,
 } from "@sentinel/database";
@@ -80,34 +79,22 @@ function buildDecisionRow(
 
 async function sendToDestination(
 	client: Client,
-	payload: CapitalAlertPayload,
+	_payload: CapitalAlertPayload,
 	embed: ReturnType<typeof createBaseEmbed>,
 	components: ActionRowBuilder<ButtonBuilder>[],
 ): Promise<{ channelId: string | null; messageId: string | null }> {
-	const config = await getCapitalConfig(payload.book).catch(() => null);
-	const channelId =
-		payload.book === "paper"
-			? config?.paperAlertChannelId
-			: config?.liveAlertChannelId;
-
-	if (channelId) {
-		try {
-			const channel = await client.channels.fetch(channelId);
-			if (channel && channel.isTextBased() && "send" in channel) {
-				const message = await channel.send({ embeds: [embed], components });
-				return { channelId, messageId: message.id };
-			}
-		} catch (error) {
-			logger.warn(
-				`Capital alert channel ${channelId} failed; falling back to owner DM: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-
+	// Capital alerts are owner DMs by design. There is no per-book channel
+	// setting: a channel shared by live and paper used to double-notify.
 	const ownerId = process.env.DISCORD_USER_ID?.trim();
-	if (!ownerId) return { channelId: null, messageId: null };
+	if (!ownerId) {
+		logger.warn("DISCORD_USER_ID is not set; capital alert was not delivered.");
+		return { channelId: null, messageId: null };
+	}
 	const owner = await client.users.fetch(ownerId).catch(() => null);
-	if (!owner) return { channelId: null, messageId: null };
+	if (!owner) {
+		logger.warn(`Could not fetch capital alert DM recipient ${ownerId}.`);
+		return { channelId: null, messageId: null };
+	}
 	const message = await owner.send({ embeds: [embed], components });
 	return { channelId: null, messageId: message.id };
 }

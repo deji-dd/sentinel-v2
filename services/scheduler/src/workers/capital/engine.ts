@@ -731,7 +731,9 @@ async function runBook(
 				price: features.price,
 			});
 			paperFills += 1;
-		} else {
+		} else if (book === "live") {
+			// Paper recommendations stay on the paper desk. Sending them to the
+			// same owner DM as the live book produced two alerts per cycle.
 			broadcastAlert({
 				kind: "recommendation",
 				book,
@@ -898,7 +900,7 @@ async function runBook(
 				price: features.price,
 			});
 			paperFills += 1;
-		} else {
+		} else if (book === "live") {
 			broadcastAlert({
 				kind: "recommendation",
 				book,

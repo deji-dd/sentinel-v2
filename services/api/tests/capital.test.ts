@@ -71,6 +71,27 @@ describe("capital API", () => {
 		expect(body.summary.book).toBe("live");
 	});
 
+	test("paper public overview is readable without a session", async () => {
+		const response = await app.handle(
+			new Request("http://localhost/v2/capital/public?book=paper"),
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			success: boolean;
+			summary: { book: string };
+			warnings: string[];
+			trades: unknown[];
+			holdings: unknown[];
+		};
+		expect(body.success).toBe(true);
+		expect(body.summary.book).toBe("paper");
+		expect(body.warnings.some((warning) => warning.includes("Simulated"))).toBe(
+			true,
+		);
+		expect(Array.isArray(body.trades)).toBe(true);
+		expect(Array.isArray(body.holdings)).toBe(true);
+	});
+
 	test("capital rejects another dashboard origin", async () => {
 		const blocked = await app.handle(
 			new Request("http://localhost/v2/capital/public", {
@@ -174,6 +195,41 @@ describe("capital API", () => {
 		expect(body.intent.referenceCode.startsWith("DEP-")).toBe(true);
 	});
 
+	test("live investors require a Torn ID and cannot be test investors", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+
+		const testKind = await app.handle(
+			new Request("http://localhost/v2/capital/admin/live/investors", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					kind: "test",
+					displayName: "Not A Live Test Investor",
+					tornId: 1934909,
+				}),
+			}),
+		);
+		expect(testKind.status).toBe(400);
+
+		const missingTornId = await app.handle(
+			new Request("http://localhost/v2/capital/admin/live/investors", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					kind: "user",
+					displayName: "Missing Torn ID",
+				}),
+			}),
+		);
+		expect(missingTornId.status).toBe(400);
+	});
+
 	test("a deposit creates a lot and appears in the desk", async () => {
 		if (!sessionId) throw new Error("No session fixture.");
 
@@ -185,15 +241,18 @@ describe("capital API", () => {
 					"content-type": "application/json",
 				},
 				body: JSON.stringify({
-					kind: "test",
 					displayName: "API Test Investor",
+					frequency: "weekly",
+					payoutMode: "cash",
 				}),
 			}),
 		);
 		expect(created.status).toBe(200);
 		const createdBody = (await created.json()) as {
-			investor: { id: string };
+			investor: { id: string; kind: string; tornId: number | null };
 		};
+		expect(createdBody.investor.kind).toBe("test");
+		expect(createdBody.investor.tornId).toBeNull();
 
 		const deposit = await app.handle(
 			new Request(
@@ -206,7 +265,6 @@ describe("capital API", () => {
 					},
 					body: JSON.stringify({
 						amount: "1000000",
-						frequency: "weekly",
 					}),
 				},
 			),
@@ -217,6 +275,21 @@ describe("capital API", () => {
 			investmentId: string;
 		};
 		expect(depositBody.success).toBe(true);
+
+		const preferences = await app.handle(
+			new Request(
+				`http://localhost/v2/capital/admin/paper/investors/${createdBody.investor.id}`,
+				{
+					method: "PATCH",
+					headers: {
+						...cookieFor(sessionId),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ payoutMode: "reinvest" }),
+				},
+			),
+		);
+		expect(preferences.status).toBe(200);
 
 		const secondDeposit = await app.handle(
 			new Request(
@@ -229,8 +302,6 @@ describe("capital API", () => {
 					},
 					body: JSON.stringify({
 						amount: "2000000",
-						frequency: "weekly",
-						payoutMode: "reinvest",
 					}),
 				},
 			),

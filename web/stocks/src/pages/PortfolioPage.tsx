@@ -10,17 +10,28 @@ import {
 	Button,
 	EmptyState,
 	ErrorBanner,
-	Input,
+	Label,
+	NumberInput,
 	PageHeader,
 	PageShell,
 	SectionCard,
 	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
 	Spinner,
 	StatCard,
 	StatusBadge,
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
-import { apiFetch, isoDate, money, pct } from "../lib/api";
+import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
 
 export function PortfolioPage() {
 	const { authenticated, loading: authLoading, loginWithDiscord } = useAuth();
@@ -126,8 +137,7 @@ export function PortfolioPage() {
 		<PageShell>
 			<PageHeader
 				title="Your portfolio"
-				description="Every deposit is its own lot, priced at NAV when it was recorded."
-				badge={<StatusBadge tone="primary">Private</StatusBadge>}
+				description="Every deposit is its own lot, priced at NAV (Net Asset Value) when it was recorded."
 			/>
 
 			{error ? <ErrorBanner message={error} /> : null}
@@ -184,7 +194,19 @@ export function PortfolioPage() {
 						{activeLots.length === 0 ? (
 							<EmptyState
 								title="No active investment"
-								description="Contact the fund manager to open a lot. Deposits are recorded manually after the in-game transfer."
+								description={
+									<>
+										Contact{" "}
+										<a
+											href="https://www.torn.com/profiles.php?XID=1934909"
+											className="text-primary underline"
+										>
+											Blasted
+										</a>{" "}
+										to open a lot. Deposits are recorded manually after the
+										in-game transfer.
+									</>
+								}
 							/>
 						) : (
 							<div className="space-y-3">
@@ -236,50 +258,48 @@ export function PortfolioPage() {
 
 					<SectionCard title="Payout history">
 						{portfolio?.payouts.length ? (
-							<div className="overflow-x-auto">
-								<table className="w-full min-w-[600px] text-left text-sm">
-									<thead className="text-xs uppercase tracking-wide text-muted-foreground">
-										<tr>
-											<th className="pb-2">Due</th>
-											<th className="pb-2">Gross</th>
-											<th className="pb-2">Fee</th>
-											<th className="pb-2">Net</th>
-											<th className="pb-2">Status</th>
-										</tr>
-									</thead>
-									<tbody className="divide-y divide-border/60">
-										{portfolio.payouts.map((payout) => (
-											<tr key={payout.id}>
-												<td className="py-2 text-xs text-muted-foreground">
-													{isoDate(payout.dueAtIso)}
-												</td>
-												<td className="py-2 font-mono text-xs">
-													{money(payout.grossAmount)}
-												</td>
-												<td className="py-2 font-mono text-xs">
-													{money(payout.feeAmount)}
-												</td>
-												<td className="py-2 font-mono text-xs">
-													{money(payout.netAmount)}
-												</td>
-												<td className="py-2">
-													<StatusBadge
-														tone={
-															payout.status === "paid"
-																? "success"
-																: payout.status === "unfunded"
-																	? "danger"
-																	: "warning"
-														}
-													>
-														{payout.status}
-													</StatusBadge>
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
+							<Table>
+								<TableHeader>
+									<TableRow>
+										<TableHead>Due</TableHead>
+										<TableHead>Gross</TableHead>
+										<TableHead>Fee</TableHead>
+										<TableHead>Net</TableHead>
+										<TableHead>Status</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{portfolio.payouts.map((payout) => (
+										<TableRow key={payout.id}>
+											<TableCell className="text-xs text-muted-foreground">
+												{isoDate(payout.dueAtIso)}
+											</TableCell>
+											<TableCell className="font-mono text-xs">
+												{compactMoney(payout.grossAmount)}
+											</TableCell>
+											<TableCell className="font-mono text-xs">
+												{compactMoney(payout.feeAmount)}
+											</TableCell>
+											<TableCell className="font-mono text-xs">
+												{compactMoney(payout.netAmount)}
+											</TableCell>
+											<TableCell>
+												<StatusBadge
+													tone={
+														payout.status === "paid"
+															? "success"
+															: payout.status === "unfunded"
+																? "danger"
+																: "warning"
+													}
+												>
+													{payout.status}
+												</StatusBadge>
+											</TableCell>
+										</TableRow>
+									))}
+								</TableBody>
+							</Table>
 						) : (
 							<EmptyState title="No payouts yet" />
 						)}
@@ -292,36 +312,42 @@ export function PortfolioPage() {
 						description="A quote shows the performance fee and any loss before anything is paid."
 					>
 						<div className="space-y-3">
-							<label className="block text-xs font-medium text-muted-foreground">
-								Lot
+							<div className="space-y-1">
+								<Label className="text-xs text-muted-foreground">Lot</Label>
 								<Select
-									className="mt-1"
 									value={lotId}
-									onChange={(event) => {
-										setLotId(event.target.value);
+									onValueChange={(value) => {
+										setLotId(value);
 										setQuote(null);
 									}}
 								>
-									{activeLots.map((lot) => (
-										<option key={lot.id} value={lot.id}>
-											{lot.frequency} · {money(lot.principal)} principal
-										</option>
-									))}
+									<SelectTrigger className="w-full">
+										<SelectValue placeholder="Select a lot" />
+									</SelectTrigger>
+									<SelectContent>
+										{activeLots.map((lot) => (
+											<SelectItem key={lot.id} value={lot.id}>
+												{lot.frequency} · {compactMoney(lot.principal)}{" "}
+												principal
+											</SelectItem>
+										))}
+									</SelectContent>
 								</Select>
-							</label>
-							<label className="block text-xs font-medium text-muted-foreground">
-								Amount (USD)
-								<Input
-									className="mt-1"
-									inputMode="decimal"
-									placeholder="1000000"
+							</div>
+							<div className="space-y-1">
+								<Label className="text-xs text-muted-foreground">
+									Amount (USD)
+								</Label>
+								<NumberInput
+									decimals={2}
+									placeholder="1,000,000"
 									value={amount}
-									onChange={(event) => {
-										setAmount(event.target.value);
+									onValueChange={(value) => {
+										setAmount(value);
 										setQuote(null);
 									}}
 								/>
-							</label>
+							</div>
 							<div className="flex flex-col gap-2 sm:flex-row">
 								<Button
 									variant="secondary"
@@ -386,7 +412,7 @@ export function PortfolioPage() {
 									>
 										<span className="min-w-0 truncate text-xs text-muted-foreground">
 											{isoDate(request.requestedAtIso)} ·{" "}
-											{money(request.netAmount)}
+											{compactMoney(request.netAmount)}
 										</span>
 										<StatusBadge
 											tone={

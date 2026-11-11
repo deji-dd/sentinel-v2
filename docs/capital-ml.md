@@ -1,4 +1,4 @@
-# Sentinel Capital — ML research assessment
+# Blasted Stocks — ML research assessment
 
 Status: research / pre-data. No ML model is wired into the live engine.
 

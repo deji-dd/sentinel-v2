@@ -23,6 +23,52 @@ const WORKER_NAME = "capital:history";
 const logger = new Logger("Scheduler", "CapitalHistoryWorker");
 const SEED_BUDGET_MS = 8 * 60_000;
 const M1_SEED_DAYS = 7;
+const BOOT_DELAY_MS = 15_000;
+
+let seeding = false;
+
+/** One readiness check and, if something is missing, one bounded seed. */
+export async function runCapitalHistorySeed(): Promise<void> {
+	if (seeding) return;
+	if (process.env.CAPITAL_AUTO_BACKFILL === "false") return;
+	const apiKey = process.env.TORN_API_KEY?.trim();
+	if (!apiKey) {
+		logger.warn(
+			"No TORN_API_KEY; skipping the automatic history seed. Set the key or run stocks:backfill manually.",
+		);
+		return;
+	}
+
+	seeding = true;
+	try {
+		const readiness = await capitalHistoryReadiness();
+		if (readiness.ready && readiness.minute.ready) return;
+
+		const intervals: Array<"d1" | "h1" | "m1"> = [];
+		if (!readiness.daily.ready) intervals.push("d1");
+		if (!readiness.hourly.ready) intervals.push("h1");
+		if (!readiness.minute.ready) intervals.push("m1");
+		if (intervals.length === 0) return;
+
+		logger.info(
+			`Seeding ${intervals.join(",")} (${describeReadiness(readiness)}).`,
+		);
+		const result = await seedCapitalHistory({
+			intervals,
+			m1Days: M1_SEED_DAYS,
+			tornApiKey: apiKey,
+			deadlineMs: Date.now() + SEED_BUDGET_MS,
+			onProgress: (line) => logger.info(line),
+		});
+		logger.info(
+			`History seed wrote ${result.inserted.toLocaleString()} rows in ${Math.round(
+				result.elapsedMs / 1000,
+			)}s${result.partial ? " (partial; resumes next run)" : ""}.`,
+		);
+	} finally {
+		seeding = false;
+	}
+}
 
 export function startCapitalHistory(options?: WorkerStartOptions): void {
 	startEventDrivenRunner({
@@ -31,42 +77,19 @@ export function startCapitalHistory(options?: WorkerStartOptions): void {
 		// runs while something is missing. 17 past the hour avoids the top-of-hour
 		// burst the other capital workers use.
 		schedule: { type: "cron", pattern: "17 * * * *", timezone: "Etc/UTC" },
-		initialDelayMs: options?.initialDelayMs ?? 20_000,
+		initialDelayMs: options?.initialDelayMs ?? BOOT_DELAY_MS,
 		timeoutMs: SEED_BUDGET_MS + 120_000,
-		handler: async () => {
-			if (process.env.CAPITAL_AUTO_BACKFILL === "false") return;
-			const apiKey = process.env.TORN_API_KEY?.trim();
-			if (!apiKey) {
-				logger.warn(
-					"No TORN_API_KEY; skipping the automatic history seed. Set the key or run stocks:backfill manually.",
-				);
-				return;
-			}
-
-			const readiness = await capitalHistoryReadiness();
-			if (readiness.ready && readiness.minute.ready) return;
-
-			const intervals: Array<"d1" | "h1" | "m1"> = [];
-			if (!readiness.daily.ready) intervals.push("d1");
-			if (!readiness.hourly.ready) intervals.push("h1");
-			if (!readiness.minute.ready) intervals.push("m1");
-			if (intervals.length === 0) return;
-
-			logger.info(
-				`Seeding ${intervals.join(",")} (${describeReadiness(readiness)}).`,
-			);
-			const result = await seedCapitalHistory({
-				intervals,
-				m1Days: M1_SEED_DAYS,
-				tornApiKey: apiKey,
-				deadlineMs: Date.now() + SEED_BUDGET_MS,
-				onProgress: (line) => logger.info(line),
-			});
-			logger.info(
-				`History seed wrote ${result.inserted.toLocaleString()} rows in ${Math.round(
-					result.elapsedMs / 1000,
-				)}s${result.partial ? " (partial; resumes next run)" : ""}.`,
-			);
-		},
+		handler: runCapitalHistorySeed,
 	});
+	// The persisted cron schedule wins at boot (a fresh deploy can otherwise wait
+	// up to an hour for the next :17), so seed once shortly after start as well.
+	// The guard makes the overlap with the cron tick harmless.
+	const boot = setTimeout(() => {
+		void runCapitalHistorySeed().catch((error: unknown) => {
+			logger.warn(
+				`Boot history seed failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
+	}, BOOT_DELAY_MS);
+	boot.unref?.();
 }

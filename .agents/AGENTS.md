@@ -34,6 +34,9 @@
   - **Exponentiation**: Use `a ** b` instead of `Math.pow(a, b)`.
   - **No Side-Effect Assignments**: Do not assign variables inside conditional statements or loop headers (`while ((x = getNext()) !== -1)` is prohibited).
   - **Exact Matching**: Use pre-compiled word-boundary regular expressions (`\bkeyword\b`) instead of `String.prototype.includes()` when mapping action strings to IDs to prevent sub-word collisions.
+- **Web UI Components**
+  - **Use shadcn/ui by default.** In any `web/*` app, buttons, inputs, selects, checkboxes, labels, tables, dialogs, badges and tooltips must come from the shadcn primitives in `@/components/ui/*`. Never hand-roll a native form control when a shadcn primitive exists.
+  - Custom components are reserved for app-level composition (page shell, section card, stat tile), formatting, or behaviour shadcn does not provide. See `.agents/UI-CONVENTIONS.md`.
 - **Database Migrations (`drizzle-kit`)**
   - **Never Manually Create Migration SQL Files**: Never manually create, write, or scaffold migration `.sql` files in `packages/database/drizzle/`.
   - **Always Run `bun run db:generate`**: Always update schema definitions in `packages/database/src/schema/` first and run `bun run db:generate` to let Drizzle Kit generate migration SQL files, snapshots, and `_journal.json` entries.

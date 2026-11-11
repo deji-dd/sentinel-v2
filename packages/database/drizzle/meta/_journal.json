@@ -554,6 +554,20 @@
 			"when": 1794426106258,
 			"tag": "0078_unusual_firebrand",
 			"breakpoints": true
+		},
+		{
+			"idx": 79,
+			"version": "7",
+			"when": 1794430492136,
+			"tag": "0079_groovy_angel",
+			"breakpoints": true
+		},
+		{
+			"idx": 80,
+			"version": "7",
+			"when": 1794430833585,
+			"tag": "0080_plain_nekra",
+			"breakpoints": true
 		}
 	]
 }

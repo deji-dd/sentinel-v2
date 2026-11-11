@@ -11,12 +11,15 @@
 		"@elysiajs/eden": "latest",
 		"@sentinel/api": "workspace:*",
 		"@sentinel/schemas": "workspace:*",
+		"class-variance-authority": "latest",
 		"clsx": "latest",
 		"lucide-react": "latest",
 		"react": "latest",
 		"react-dom": "latest",
 		"recharts": "latest",
-		"tailwind-merge": "latest"
+		"radix-ui": "latest",
+		"tailwind-merge": "latest",
+		"tw-animate-css": "latest"
 	},
 	"devDependencies": {
 		"@tailwindcss/vite": "latest",

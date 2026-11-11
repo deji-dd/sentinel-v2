@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { EmptyState, PageShell, Spinner } from "./components/ui";
+import { Button } from "./components/ui/button";
 import { useAuth } from "./contexts/AuthContext";
 import { DeskPage } from "./pages/DeskPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -30,7 +32,7 @@ export function LoginPage() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center px-4 text-center">
 			<p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-				Sentinel Capital
+				Blasted Stocks
 			</p>
 			<h1 className="mt-2 font-display text-3xl font-bold">
 				Sign in to your portfolio
@@ -39,13 +41,9 @@ export function LoginPage() {
 				Discord is used only to identify your account. The public fund page
 				never requires login.
 			</p>
-			<button
-				type="button"
-				onClick={() => loginWithDiscord("/portfolio")}
-				className="mt-5 inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-			>
+			<Button className="mt-5" onClick={() => loginWithDiscord("/portfolio")}>
 				{authenticated ? "Open portfolio" : "Continue with Discord"}
-			</button>
+			</Button>
 			<a
 				href="#/"
 				className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:underline"
@@ -56,10 +54,33 @@ export function LoginPage() {
 	);
 }
 
-export function Router({ path }: { path: string }) {
+function PrivatePage() {
+	return (
+		<PageShell>
+			<EmptyState
+				title="This page is private"
+				description="The desk is only available to the fund owner."
+			/>
+			<div className="mt-4 flex justify-center">
+				<Button variant="outline" asChild>
+					<a href="#/">Back to the fund</a>
+				</Button>
+			</div>
+		</PageShell>
+	);
+}
+
+export function Router({ path, isOwner }: { path: string; isOwner: boolean }) {
+	const { loading } = useAuth();
+	const isDesk = path === "/desk" || path.startsWith("/desk/");
+
+	if (isDesk && loading) return <Spinner label="Checking access…" />;
+	if (isDesk && !isOwner) return <PrivatePage />;
+
 	if (path === "/portfolio") return <PortfolioPage />;
+	if (path === "/paper") return <PublicPage book="paper" />;
 	if (path === "/desk" || path === "/desk/") return <DeskPage book="live" />;
 	if (path === "/desk/paper") return <DeskPage book="paper" />;
 	if (path === "/login") return <LoginPage />;
-	return <PublicPage />;
+	return <PublicPage book="live" />;
 }

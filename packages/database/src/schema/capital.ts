@@ -158,9 +158,6 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 		.notNull(),
 	notifyUnmatchedBuys: boolean("notify_unmatched_buys").default(true).notNull(),
 
-	liveAlertChannelId: text("live_alert_channel_id"),
-	paperAlertChannelId: text("paper_alert_channel_id"),
-
 	paperStartingCash: money("paper_starting_cash")
 		.default("150000000000")
 		.notNull(),
@@ -187,6 +184,10 @@ export const capitalInvestors = pgTable(
 		book: text("book").notNull(),
 		/** `user`, `faction`, `operator`, or `test`. */
 		kind: text("kind").notNull(),
+		/** Default cadence for this investor's deposits and payouts. */
+		frequency: text("frequency").default("weekly").notNull(),
+		/** Default profit handling: `cash` pays out, `reinvest` compounds. */
+		payoutMode: text("payout_mode").default("cash").notNull(),
 		tornId: integer("torn_id"),
 		factionId: integer("faction_id"),
 		displayName: text("display_name").notNull(),
@@ -203,6 +204,14 @@ export const capitalInvestors = pgTable(
 			.on(table.book, table.factionId)
 			.where(sql`${table.factionId} IS NOT NULL`),
 		index("capital_investors_book_status_idx").on(table.book, table.status),
+		check(
+			"capital_investors_frequency_check",
+			sql`${table.frequency} IN ('daily', 'weekly', 'monthly')`,
+		),
+		check(
+			"capital_investors_payout_mode_check",
+			sql`${table.payoutMode} IN ('cash', 'reinvest')`,
+		),
 	],
 );
 

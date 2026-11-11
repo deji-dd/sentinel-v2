@@ -1,7 +1,36 @@
-# Sentinel Dashboard — UI Conventions
+# Web App UI Conventions
 
-Applies to `web/dashboard`. Every page and component must follow these rules so
-the dashboard reads as one product on both desktop and mobile.
+Applies to every browser app under `web/` (`web/dashboard`, `web/stocks`,
+`web/tt-selector`). Every page and component must follow these rules so the
+products read as one family on both desktop and mobile.
+
+## Component policy — shadcn/ui first
+
+**Use shadcn/ui primitives unless a custom component is genuinely required.**
+Every interactive control must come from `@/components/ui/*`:
+
+| Need                    | Use                                                      |
+| ----------------------- | -------------------------------------------------------- |
+| Button or icon button   | `Button`                                                 |
+| Text / numeric field    | `Input` (use the shared `NumberInput` for commas)        |
+| Dropdown                | `Select`, `SelectTrigger`, `SelectContent`, `SelectItem` |
+| Checkbox / toggle       | `Checkbox`, `Switch`, `Toggle`                           |
+| Label                   | `Label`                                                  |
+| Table                   | `Table`, `TableHeader`, `TableBody`, `TableRow`, …       |
+| Dialog / confirm        | `Dialog`, `AlertDialog`                                  |
+| Status pill             | `Badge` through the shared `StatusBadge`                 |
+| Empty / loading / error | `Empty*`, `Spinner`, `Alert`                             |
+| Tooltip / help text     | `Tooltip` through the shared `HelpTip`                   |
+
+Do **not** hand-roll a `<button>`, `<input>`, `<select>`, `<textarea>`,
+`<label>`, `<table>` or a bespoke dropdown when a shadcn primitive exists.
+A custom component is justified only for app-level composition (page shell,
+section card, stat tile), data formatting, or behaviour shadcn does not cover.
+
+New shadcn primitives should be copied from `web/dashboard/src/components/ui`
+(or generated with the shadcn CLI) into the app that needs them. If a third app
+needs the same primitive, extract a shared UI package rather than re-implementing
+it a third time.
 
 ## Design tokens (never bypass them)
 

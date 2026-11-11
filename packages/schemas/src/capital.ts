@@ -272,6 +272,10 @@ export interface CapitalInvestorView {
 	book: CapitalBook;
 	kind: CapitalInvestorKind;
 	displayName: string;
+	/** Default cadence inherited by every new deposit. */
+	frequency: CapitalPayoutFrequency;
+	/** Default profit handling inherited by every new deposit. */
+	payoutMode: "cash" | "reinvest";
 	tornId: number | null;
 	factionId: number | null;
 	status: string;
@@ -566,8 +570,6 @@ export interface CapitalSettings {
 	withdrawalNoticeDays: number;
 	paymentMatchTolerancePct: number;
 	notifyUnmatchedBuys: boolean;
-	liveAlertChannelId: string | null;
-	paperAlertChannelId: string | null;
 	paperStartingCash: CapitalDecimal;
 	paperSlippageBps: number;
 	paperAutoFill: boolean;

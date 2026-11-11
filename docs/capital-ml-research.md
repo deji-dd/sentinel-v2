@@ -1,4 +1,4 @@
-# Sentinel Capital — ML feasibility research
+# Blasted Stocks — ML feasibility research
 
 Status: research. No model is wired in. Companion to [capital-ml.md](capital-ml.md);
 this document supersedes its "not enough data" verdict with measured results and a

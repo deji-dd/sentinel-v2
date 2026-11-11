@@ -1,20 +1,21 @@
-# Sentinel Capital
+# Blasted Stocks
 
 Managed Torn City stock trading fund. Code prefix: `capital`. Host: `stocks.blasted-labs.tech`. The existing `/stocks` dashboard page is unrelated (market alerts).
 
 ## Surfaces
 
 - `/` — public fund page: NAV, allocation, recent live fills, fee schedule. No investor names.
+- `/paper` — public paper results: simulated NAV, allocation and fills. No investor names, deposits or admin controls.
 - `/portfolio` — Discord-authenticated investor view: lots, payouts, withdrawals.
 - `/desk` — owner/admin live desk.
-- `/desk/paper` — simulation desk with a permanent `SIMULATION` banner.
+- `/desk/paper` — owner/admin simulation desk with a permanent `SIMULATION` banner.
 
 The app lives in `web/stocks`. The API serves it by `Host` header from `services/api/src/middleware/static-spa.ts`; DNS/TLS for the subdomain is an external deployment prerequisite.
 
 ## Data and accounting
 
 - `capital_books` + `capital_book_configs`: live/paper books and typed settings.
-- `capital_investors`, `capital_investor_contacts`, `capital_investments`: one **lot per deposit**; multiple deposits are expected. Each lot has `payout_mode` (`cash` or `reinvest`).
+- `capital_investors`, `capital_investor_contacts`, `capital_investments`: one **lot per deposit**; multiple deposits are expected. Cadence (`frequency`) and profit handling (`payout_mode`, `cash` or `reinvest`) are investor-level settings; every new lot inherits them, and changing them updates the investor's active lots. Live investors are `user`/`faction`/`operator` and require a Torn ID; paper investors are `test` only and may omit the Torn ID.
 - `capital_transactions`: append-only signed cash ledger; `capital_positions` is a rebuildable materialized view.
 - `capital_orders`, `capital_fills`, `capital_order_outcomes`: recommendations, execution, and variance.
 - `capital_payout_obligations`, `capital_withdrawal_requests`: profit distributions and capital exits.
@@ -45,8 +46,9 @@ Market data uses the Subversive key pool in parallel (`pool-key-request.ts`); ac
 
 The scheduler owns collection: every 60s poll records a 1-minute tick plus the 5m/60m aggregates, and the rotating detail call also feeds its one-minute history. Torn itself exposes only the last 60 one-minute points, so a fresh install starts empty.
 
-The `capital:history` worker seeds it automatically on the first boot: daily and
-hourly full history plus one week of minutes, from the public tornsy.com mirror
+The `capital:history` worker seeds it automatically on boot, 15 seconds after
+start (it does not wait for the next `:17` tick): daily and hourly full history
+plus one week of minutes, from the public tornsy.com mirror
 (minute OHLC back to the 2021 launch). It validates every stock against Torn's
 own `chart.performance` all-time high/low, writes in resumable chunks, and goes
 quiet once coverage is ready. After the init the mirror is not used at runtime;
@@ -81,8 +83,8 @@ The `capital:ml:train` worker builds a meta-label dataset from the stored daily
 candles (candidates with z <= -entry sigma, triple barrier +2%/-2% over 20 days),
 fits an L2 logistic regression with a time-ordered split and embargo, and
 activates the result for shadow logging when it clears the ranking gates. It runs
-on boot once history is ready and retrains when the active model is older than
-30 days — no command needed. `bun run capital:ml:train` remains for an immediate
+on boot once history is ready (checked 10 minutes after start) and retrains when
+the active model is older than 30 days — no command needed. `bun run capital:ml:train` remains for an immediate
 run or an experiment (`--activate` to store it). Disable with
 `CAPITAL_AUTO_ML_TRAIN=false`.
 
@@ -100,13 +102,13 @@ and calibration improve.
 
 ## Bot
 
-No new slash commands. The bot receives `capital_alert` and `capital_paper_alert` IPC messages. Live and paper deliveries are distinct: paper is prefixed `[PAPER]`, uses the paper channel when configured, and never mixes with a live message. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
+No new slash commands. The bot receives `capital_alert` and `capital_paper_alert` IPC messages. Every capital alert is delivered to the owner's Discord DMs — there is no channel-ID setting. Paper recommendation alerts are not sent at all; paper activity stays visible on `/desk/paper`, so live and paper cannot double-notify. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
 
 ## Enabling live
 
 1. Apply migrations (`bun run db:migrate`).
-2. Run the paper smoke test from `/desk/paper` until NAV, fills, and accounting behave.
-3. Set `capital_book_configs.live_enabled = true` from the desk.
+2. Exercise the paper book until NAV, fills, and accounting behave. The paper desk is simulation-only and hides live settings; the `POST /v2/capital/admin/paper/smoke-test` endpoint remains available for scripted checks.
+3. Set `capital_book_configs.live_enabled = true` from the live desk settings.
 4. Seed operator cash (recorded deposit/seed) and onboard investors.
 5. Keep `/desk` open for unfunded payouts, reconciliation issues, and withdrawal quotes.
 

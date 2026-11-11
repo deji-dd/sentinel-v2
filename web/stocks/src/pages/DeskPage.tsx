@@ -1,29 +1,55 @@
 import type {
 	CapitalAdminOverview,
-	CapitalSmokeReport,
+	CapitalPayoutFrequency,
+	CapitalSettings,
 } from "@sentinel/schemas";
-import { FlaskConical, RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { PerformanceChart } from "../components/PerformanceChart";
 import {
 	Button,
-	Checkbox,
+	CheckboxField,
 	EmptyState,
 	ErrorBanner,
+	HelpTip,
 	Input,
+	Label,
+	NumberInput,
 	PageHeader,
 	PageShell,
 	SectionCard,
 	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
 	Spinner,
 	StatCard,
 	StatusBadge,
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
 import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
 
 type Book = "live" | "paper";
+type PayoutMode = "cash" | "reinvest";
+
+const FREQUENCIES: Array<{ value: CapitalPayoutFrequency; label: string }> = [
+	{ value: "daily", label: "Daily" },
+	{ value: "weekly", label: "Weekly" },
+	{ value: "monthly", label: "Monthly" },
+];
+
+const PAYOUT_MODES: Array<{ value: PayoutMode; label: string }> = [
+	{ value: "cash", label: "Pay profit out" },
+	{ value: "reinvest", label: "Reinvest profit" },
+];
 
 export function DeskPage({ book }: { book: Book }) {
 	const { authenticated, loading: authLoading, loginWithDiscord } = useAuth();
@@ -31,23 +57,23 @@ export function DeskPage({ book }: { book: Book }) {
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [busy, setBusy] = useState(false);
-	const [smoke, setSmoke] = useState<CapitalSmokeReport | null>(null);
 	const [settingsDraft, setSettingsDraft] = useState<CapitalSettings | null>(
 		null,
 	);
 
 	const [investorName, setInvestorName] = useState("");
 	const [investorTornId, setInvestorTornId] = useState("");
-	const [investorKind, setInvestorKind] = useState("user");
+	const [investorKind, setInvestorKind] = useState(
+		book === "paper" ? "test" : "user",
+	);
+	const [investorFrequency, setInvestorFrequency] =
+		useState<CapitalPayoutFrequency>("weekly");
+	const [investorPayoutMode, setInvestorPayoutMode] =
+		useState<PayoutMode>("cash");
 	const [depositInvestor, setDepositInvestor] = useState("");
 	const [depositAmount, setDepositAmount] = useState("");
-	const [depositFrequency, setDepositFrequency] = useState("weekly");
-	const [depositPayoutMode, setDepositPayoutMode] = useState("cash");
-	const [startingCash, setStartingCash] = useState("150000000000");
 	const [intentInvestor, setIntentInvestor] = useState("");
 	const [intentAmount, setIntentAmount] = useState("");
-	const [intentFrequency, setIntentFrequency] = useState("weekly");
-	const [intentPayoutMode, setIntentPayoutMode] = useState("cash");
 
 	const load = useCallback(async () => {
 		setLoading(true);
@@ -72,6 +98,10 @@ export function DeskPage({ book }: { book: Book }) {
 		if (!authLoading && !authenticated) setLoading(false);
 	}, [authLoading, authenticated, load]);
 
+	useEffect(() => {
+		setInvestorKind(book === "paper" ? "test" : "user");
+	}, [book]);
+
 	const runAction = async (fn: () => Promise<unknown>) => {
 		setBusy(true);
 		setError(null);
@@ -83,6 +113,12 @@ export function DeskPage({ book }: { book: Book }) {
 		} finally {
 			setBusy(false);
 		}
+	};
+
+	const patchSettings = (patch: Partial<CapitalSettings>) => {
+		setSettingsDraft((current) =>
+			current ? { ...current, ...patch } : current,
+		);
 	};
 
 	if (authLoading || loading) return <Spinner label="Loading the desk…" />;
@@ -109,19 +145,59 @@ export function DeskPage({ book }: { book: Book }) {
 	}
 
 	const createInvestor = async () => {
-		if (!investorName.trim()) return;
+		const tornId = Number(investorTornId);
+		const tornIdRequired = book === "live";
+		if (
+			!investorName.trim() ||
+			(tornIdRequired && (!Number.isInteger(tornId) || tornId <= 0))
+		) {
+			setError(
+				tornIdRequired
+					? "Display name and a valid Torn ID are required."
+					: "Display name is required.",
+			);
+			return;
+		}
 		await runAction(() =>
 			apiFetch(`/v2/capital/admin/${book}/investors`, {
 				method: "POST",
 				body: JSON.stringify({
-					kind: investorKind,
+					kind: book === "paper" ? "test" : investorKind,
 					displayName: investorName.trim(),
-					tornId: investorTornId ? Number(investorTornId) : undefined,
+					...(tornId > 0 ? { tornId } : {}),
+					frequency: investorFrequency,
+					payoutMode: investorPayoutMode,
 				}),
 			}),
 		);
 		setInvestorName("");
 		setInvestorTornId("");
+	};
+
+	const updateInvestorSettings = async (
+		investorId: string,
+		patch: Partial<{
+			frequency: CapitalPayoutFrequency;
+			payoutMode: PayoutMode;
+		}>,
+	) => {
+		setBusy(true);
+		setError(null);
+		try {
+			await apiFetch(`/v2/capital/admin/${book}/investors/${investorId}`, {
+				method: "PATCH",
+				body: JSON.stringify(patch),
+			});
+			await load();
+		} catch (err) {
+			setError(
+				err instanceof Error
+					? err.message
+					: "Failed to update investor settings.",
+			);
+		} finally {
+			setBusy(false);
+		}
 	};
 
 	const createDeposit = async () => {
@@ -131,11 +207,7 @@ export function DeskPage({ book }: { book: Book }) {
 				`/v2/capital/admin/${book}/investors/${depositInvestor}/deposits`,
 				{
 					method: "POST",
-					body: JSON.stringify({
-						amount: depositAmount,
-						frequency: depositFrequency,
-						payoutMode: depositPayoutMode,
-					}),
+					body: JSON.stringify({ amount: depositAmount }),
 				},
 			),
 		);
@@ -153,8 +225,6 @@ export function DeskPage({ book }: { book: Book }) {
 				body: JSON.stringify({
 					kind: "deposit",
 					investorId: investor.id,
-					frequency: intentFrequency,
-					payoutMode: intentPayoutMode,
 					expectedAmount: intentAmount,
 					counterpartyTornId: investor.tornId ?? undefined,
 				}),
@@ -163,37 +233,8 @@ export function DeskPage({ book }: { book: Book }) {
 		setIntentAmount("");
 	};
 
-	const resetPaper = async () => {
-		await runAction(() =>
-			apiFetch("/v2/capital/admin/paper/reset", {
-				method: "POST",
-				body: JSON.stringify({ startingCash }),
-			}),
-		);
-	};
-
-	const runSmoke = async () => {
-		setBusy(true);
-		setError(null);
-		try {
-			const result = await apiFetch<{
-				success: boolean;
-				report: CapitalSmokeReport;
-			}>("/v2/capital/admin/paper/smoke-test", {
-				method: "POST",
-				body: JSON.stringify({ startingCash }),
-			});
-			setSmoke(result.report);
-			await load();
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Smoke test failed.");
-		} finally {
-			setBusy(false);
-		}
-	};
-
 	const summary = data?.summary;
-	const engine = data?.engine;
+	const investors = data?.investors ?? [];
 
 	return (
 		<PageShell>
@@ -204,17 +245,8 @@ export function DeskPage({ book }: { book: Book }) {
 						? "Simulation only. Every write is isolated from the live book."
 						: "Live recommendations, investors, payouts and reconciliation."
 				}
-				badge={
-					<StatusBadge tone={book === "paper" ? "warning" : "success"}>
-						{book === "paper" ? "SIMULATION" : "LIVE"}
-					</StatusBadge>
-				}
 				actions={
-					<Button
-						variant="secondary"
-						onClick={() => void load()}
-						disabled={busy}
-					>
+					<Button variant="outline" onClick={() => void load()} disabled={busy}>
 						<RefreshCw className="size-4" /> Refresh
 					</Button>
 				}
@@ -223,27 +255,29 @@ export function DeskPage({ book }: { book: Book }) {
 			{book === "paper" ? (
 				<div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
 					SIMULATION — no real funds. Paper rows never appear on the public
-					page.
+					page. Alerts for the paper book are not duplicated to Discord; inspect
+					the transactions below.
 				</div>
 			) : null}
 
 			{error ? <ErrorBanner message={error} /> : null}
 
 			{summary ? (
-				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-					<StatCard label="AUM" value={compactMoney(summary.aum)} />
-					<StatCard label="NAV / unit" value={money(summary.navPerUnit)} />
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					<StatCard
+						label="AUM"
+						value={compactMoney(summary.aum)}
+						help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
+					/>
+					<StatCard
+						label="NAV / unit"
+						value={money(summary.navPerUnit)}
+						help="Net Asset Value: total fund assets divided by units outstanding. Deposits buy units at this price."
+					/>
 					<StatCard
 						label="Cash"
 						value={compactMoney(summary.cash)}
-						hint={`${data?.investors.length ?? 0} investors`}
-					/>
-					<StatCard
-						label="Open issues"
-						value={String(data?.notifications.openIssues ?? 0)}
-						tone={
-							(data?.notifications.openIssues ?? 0) > 0 ? "warning" : "default"
-						}
+						hint={`${investors.length} investors`}
 					/>
 				</div>
 			) : null}
@@ -251,78 +285,112 @@ export function DeskPage({ book }: { book: Book }) {
 			<div className="mt-4">
 				<SectionCard
 					title="NAV per unit"
-					description="Daily snapshots recorded by the accounting worker."
+					description="Net Asset Value per unit — total assets divided by units outstanding — recorded by the accounting worker."
 				>
 					<PerformanceChart points={data?.performance ?? []} />
 				</SectionCard>
 			</div>
 
-			<div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+			<div className="mt-4">
 				<SectionCard
-					title="Engine"
-					description="The 60-second price/signal cycle."
-					actions={
-						<StatusBadge tone={engine?.enabled ? "success" : "neutral"}>
-							{engine?.enabled ? "enabled" : "paused"}
-						</StatusBadge>
+					title={book === "paper" ? "Create paper investor" : "Create investor"}
+					description={
+						book === "paper"
+							? "Paper investors are test-only and do not require a Torn ID. Cadence and profit handling are investor settings; every later deposit inherits them."
+							: "Live investors require a Torn ID. Test investors can only be created on the paper desk. Cadence and profit handling are investor settings; every later deposit inherits them."
 					}
 				>
-					<div className="grid grid-cols-2 gap-2 text-sm">
-						<div>
-							<p className="text-xs text-muted-foreground">Status</p>
-							<p>{engine?.status ?? "—"}</p>
+					<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+						<div className="space-y-1">
+							<Label className="text-xs text-muted-foreground">
+								Display name
+							</Label>
+							<Input
+								placeholder="Display name"
+								value={investorName}
+								onChange={(event) => setInvestorName(event.target.value)}
+							/>
 						</div>
-						<div>
-							<p className="text-xs text-muted-foreground">Last run</p>
-							<p className="text-xs">{isoDate(engine?.lastRunAtIso)}</p>
+						<div className="space-y-1">
+							<Label className="text-xs text-muted-foreground">
+								{book === "paper" ? "Torn ID (optional)" : "Torn ID (required)"}
+							</Label>
+							<NumberInput
+								placeholder="e.g. 1,934,909"
+								value={investorTornId}
+								onValueChange={setInvestorTornId}
+							/>
 						</div>
-						<div>
-							<p className="text-xs text-muted-foreground">Data age</p>
-							<p className="font-mono text-xs">
-								{engine?.dataAgeSeconds !== null &&
-								engine?.dataAgeSeconds !== undefined
-									? `${engine.dataAgeSeconds}s`
-									: "—"}
-							</p>
+						<div className="space-y-1">
+							<Label className="text-xs text-muted-foreground">Kind</Label>
+							{book === "paper" ? (
+								<div className="flex h-9 items-center">
+									<StatusBadge tone="warning">Test investor</StatusBadge>
+								</div>
+							) : (
+								<Select value={investorKind} onValueChange={setInvestorKind}>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="user">User</SelectItem>
+										<SelectItem value="faction">Faction</SelectItem>
+									</SelectContent>
+								</Select>
+							)}
 						</div>
-						<div>
-							<p className="text-xs text-muted-foreground">Scored / orders</p>
-							<p className="font-mono text-xs">
-								{engine?.stocksScored ?? 0} / {engine?.recommendations ?? 0}
-							</p>
+						<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+							<div className="space-y-1">
+								<Label className="text-xs text-muted-foreground">Cadence</Label>
+								<Select
+									value={investorFrequency}
+									onValueChange={(value) =>
+										setInvestorFrequency(value as CapitalPayoutFrequency)
+									}
+								>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{FREQUENCIES.map((frequency) => (
+											<SelectItem key={frequency.value} value={frequency.value}>
+												{frequency.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-1">
+								<Label className="text-xs text-muted-foreground">Profit</Label>
+								<Select
+									value={investorPayoutMode}
+									onValueChange={(value) =>
+										setInvestorPayoutMode(value as PayoutMode)
+									}
+								>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{PAYOUT_MODES.map((mode) => (
+											<SelectItem key={mode.value} value={mode.value}>
+												{mode.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
 						</div>
 					</div>
-					{engine?.lastError ? (
-						<p className="mt-2 text-xs text-destructive">{engine.lastError}</p>
-					) : null}
-				</SectionCard>
-
-				<SectionCard
-					title="Create investor"
-					description="Users and factions. Contacts are added separately via the API."
-				>
-					<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-						<Input
-							placeholder="Display name"
-							value={investorName}
-							onChange={(event) => setInvestorName(event.target.value)}
-						/>
-						<Input
-							placeholder="Torn ID (optional)"
-							inputMode="numeric"
-							value={investorTornId}
-							onChange={(event) => setInvestorTornId(event.target.value)}
-						/>
-						<Select
-							value={investorKind}
-							onChange={(event) => setInvestorKind(event.target.value)}
-						>
-							<option value="user">User</option>
-							<option value="faction">Faction</option>
-							<option value="test">Test</option>
-						</Select>
-					</div>
-					<Button className="mt-2" onClick={createInvestor} disabled={busy}>
+					<Button
+						className="mt-2"
+						onClick={createInvestor}
+						disabled={
+							busy ||
+							!investorName.trim() ||
+							(book === "live" && Number(investorTornId) <= 0)
+						}
+					>
 						<Save className="size-4" /> Create
 					</Button>
 				</SectionCard>
@@ -331,44 +399,34 @@ export function DeskPage({ book }: { book: Book }) {
 			<div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
 				<SectionCard
 					title="Record a deposit"
-					description="Every deposit creates a new lot at the current NAV."
+					description="Only the amount is entered here. Cadence and profit handling come from the investor's settings below."
 				>
 					<div className="space-y-2">
 						<Select
-							value={depositInvestor}
-							onChange={(event) => setDepositInvestor(event.target.value)}
+							value={depositInvestor || undefined}
+							onValueChange={setDepositInvestor}
 						>
-							<option value="">Select investor…</option>
-							{(data?.investors ?? []).map((row) => (
-								<option key={row.investor.id} value={row.investor.id}>
-									{row.investor.displayName} · {compactMoney(row.principal)}
-								</option>
-							))}
+							<SelectTrigger className="w-full">
+								<SelectValue placeholder="Select investor…" />
+							</SelectTrigger>
+							<SelectContent>
+								{investors.map((row) => (
+									<SelectItem key={row.investor.id} value={row.investor.id}>
+										{row.investor.displayName} · {compactMoney(row.principal)}
+									</SelectItem>
+								))}
+							</SelectContent>
 						</Select>
-						<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-							<Input
-								placeholder="Amount"
-								inputMode="decimal"
-								value={depositAmount}
-								onChange={(event) => setDepositAmount(event.target.value)}
-							/>
-							<Select
-								value={depositFrequency}
-								onChange={(event) => setDepositFrequency(event.target.value)}
-							>
-								<option value="daily">Daily</option>
-								<option value="weekly">Weekly</option>
-								<option value="monthly">Monthly</option>
-							</Select>
-							<Select
-								value={depositPayoutMode}
-								onChange={(event) => setDepositPayoutMode(event.target.value)}
-							>
-								<option value="cash">Pay profit out</option>
-								<option value="reinvest">Reinvest profit</option>
-							</Select>
-						</div>
-						<Button onClick={createDeposit} disabled={busy || !depositInvestor}>
+						<NumberInput
+							decimals={2}
+							placeholder="Amount"
+							value={depositAmount}
+							onValueChange={setDepositAmount}
+						/>
+						<Button
+							onClick={createDeposit}
+							disabled={busy || !depositInvestor || !depositAmount}
+						>
 							Record deposit
 						</Button>
 					</div>
@@ -390,12 +448,12 @@ export function DeskPage({ book }: { book: Book }) {
 											{payout.investorName}
 										</p>
 										<p className="text-xs text-muted-foreground">
-											{money(payout.netAmount)} net · {payout.frequency} ·{" "}
-											{payout.status}
+											{compactMoney(payout.netAmount)} net · {payout.frequency}{" "}
+											· {payout.status}
 										</p>
 									</div>
 									<Button
-										variant="secondary"
+										variant="outline"
 										disabled={busy}
 										onClick={() =>
 											void runAction(() =>
@@ -436,11 +494,12 @@ export function DeskPage({ book }: { book: Book }) {
 										<StatusBadge tone="warning">{request.status}</StatusBadge>
 									</div>
 									<p className="mt-1 text-xs text-muted-foreground">
-										Gross {money(request.grossValue)} · fee{" "}
-										{money(request.performanceFee)} · exit{" "}
-										{money(request.exitFee)} · net {money(request.netAmount)}
+										Gross {compactMoney(request.grossValue)} · fee{" "}
+										{compactMoney(request.performanceFee)} · exit{" "}
+										{compactMoney(request.exitFee)} · net{" "}
+										{compactMoney(request.netAmount)}
 										{Number(request.lossAmount) > 0
-											? ` · loss ${money(request.lossAmount)}`
+											? ` · loss ${compactMoney(request.lossAmount)}`
 											: ""}
 									</p>
 									{request.liquidityWarning ? (
@@ -450,7 +509,7 @@ export function DeskPage({ book }: { book: Book }) {
 									) : null}
 									<div className="mt-2 flex flex-wrap gap-2">
 										<Button
-											variant="secondary"
+											variant="outline"
 											disabled={busy || request.status === "approved"}
 											onClick={() =>
 												void runAction(() =>
@@ -486,48 +545,95 @@ export function DeskPage({ book }: { book: Book }) {
 				</SectionCard>
 
 				<SectionCard title="Investors">
-					{data?.investors.length ? (
-						<div className="overflow-x-auto">
-							<table className="w-full min-w-[560px] text-left text-sm">
-								<thead className="text-xs uppercase tracking-wide text-muted-foreground">
-									<tr>
-										<th className="pb-2">Investor</th>
-										<th className="pb-2">Principal</th>
-										<th className="pb-2">Value</th>
-										<th className="pb-2">Profit</th>
-										<th className="pb-2">APR</th>
-									</tr>
-								</thead>
-								<tbody className="divide-y divide-border/60">
-									{data.investors.map((row) => (
-										<tr key={row.investor.id}>
-											<td className="py-2">
-												<div className="flex items-center gap-2">
-													<span className="truncate">
-														{row.investor.displayName}
-													</span>
-													<StatusBadge tone="neutral">
-														{row.investor.kind}
-													</StatusBadge>
-												</div>
-											</td>
-											<td className="py-2 font-mono text-xs">
-												{money(row.principal)}
-											</td>
-											<td className="py-2 font-mono text-xs">
-												{money(row.currentValue)}
-											</td>
-											<td className="py-2 font-mono text-xs">
-												{money(row.totalProfit)}
-											</td>
-											<td className="py-2 font-mono text-xs">
-												{pct(row.aprPct)}
-											</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						</div>
+					{investors.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Investor</TableHead>
+									<TableHead>Cadence</TableHead>
+									<TableHead>Payout</TableHead>
+									<TableHead>Principal</TableHead>
+									<TableHead>Value</TableHead>
+									<TableHead>Profit</TableHead>
+									<TableHead>APR</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{investors.map((row) => (
+									<TableRow key={row.investor.id}>
+										<TableCell>
+											<div className="flex items-center gap-2">
+												<span className="truncate">
+													{row.investor.displayName}
+												</span>
+												<StatusBadge tone="neutral">
+													{row.investor.kind}
+												</StatusBadge>
+											</div>
+										</TableCell>
+										<TableCell>
+											<Select
+												value={row.investor.frequency}
+												onValueChange={(value) =>
+													void updateInvestorSettings(row.investor.id, {
+														frequency: value as CapitalPayoutFrequency,
+													})
+												}
+												disabled={busy}
+											>
+												<SelectTrigger size="sm" className="w-[104px]">
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													{FREQUENCIES.map((frequency) => (
+														<SelectItem
+															key={frequency.value}
+															value={frequency.value}
+														>
+															{frequency.label}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</TableCell>
+										<TableCell>
+											<Select
+												value={row.investor.payoutMode}
+												onValueChange={(value) =>
+													void updateInvestorSettings(row.investor.id, {
+														payoutMode: value as PayoutMode,
+													})
+												}
+												disabled={busy}
+											>
+												<SelectTrigger size="sm" className="w-[116px]">
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													{PAYOUT_MODES.map((mode) => (
+														<SelectItem key={mode.value} value={mode.value}>
+															{mode.label}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(row.principal)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(row.currentValue)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(row.totalProfit)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{pct(row.aprPct)}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
 					) : (
 						<EmptyState title="No investors yet" />
 					)}
@@ -537,77 +643,66 @@ export function DeskPage({ book }: { book: Book }) {
 			<div className="mt-4">
 				<SectionCard
 					title="Payment intents"
-					description="Give the investor a DEP code to include in their Torn transfer; a matching 4810 log books the deposit automatically. Payout/withdrawal codes are created from the desk."
+					description="Give the investor a DEP code to include in their Torn transfer; a matching 4810 log books the deposit automatically using the investor's cadence and profit setting."
 				>
-					<div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+					<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
 						<Select
-							value={intentInvestor}
-							onChange={(event) => setIntentInvestor(event.target.value)}
+							value={intentInvestor || undefined}
+							onValueChange={setIntentInvestor}
 						>
-							<option value="">Investor…</option>
-							{(data?.investors ?? []).map((row) => (
-								<option key={row.investor.id} value={row.investor.id}>
-									{row.investor.displayName}
-								</option>
-							))}
+							<SelectTrigger className="w-full">
+								<SelectValue placeholder="Investor…" />
+							</SelectTrigger>
+							<SelectContent>
+								{investors.map((row) => (
+									<SelectItem key={row.investor.id} value={row.investor.id}>
+										{row.investor.displayName}
+									</SelectItem>
+								))}
+							</SelectContent>
 						</Select>
-						<Input
+						<NumberInput
+							decimals={2}
 							placeholder="Expected amount"
-							inputMode="decimal"
 							value={intentAmount}
-							onChange={(event) => setIntentAmount(event.target.value)}
+							onValueChange={setIntentAmount}
 						/>
-						<Select
-							value={intentFrequency}
-							onChange={(event) => setIntentFrequency(event.target.value)}
-						>
-							<option value="daily">Daily</option>
-							<option value="weekly">Weekly</option>
-							<option value="monthly">Monthly</option>
-						</Select>
-						<Select
-							value={intentPayoutMode}
-							onChange={(event) => setIntentPayoutMode(event.target.value)}
-						>
-							<option value="cash">Pay profit out</option>
-							<option value="reinvest">Reinvest profit</option>
-						</Select>
 						<Button onClick={createIntent} disabled={busy || !intentInvestor}>
 							Create deposit intent
 						</Button>
 					</div>
 					{data?.paymentIntentsPending.length ? (
-						<div className="mt-3 overflow-x-auto">
-							<table className="w-full min-w-[520px] text-left text-sm">
-								<thead className="text-xs uppercase tracking-wide text-muted-foreground">
-									<tr>
-										<th className="pb-2">Reference</th>
-										<th className="pb-2">Kind</th>
-										<th className="pb-2">Investor</th>
-										<th className="pb-2">Expected</th>
-										<th className="pb-2">Expires</th>
-									</tr>
-								</thead>
-								<tbody className="divide-y divide-border/60">
+						<div className="mt-3">
+							<Table>
+								<TableHeader>
+									<TableRow>
+										<TableHead>Reference</TableHead>
+										<TableHead>Kind</TableHead>
+										<TableHead>Investor</TableHead>
+										<TableHead>Expected</TableHead>
+										<TableHead>Expires</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
 									{data.paymentIntentsPending.map((intent) => (
-										<tr key={intent.id}>
-											<td className="py-2 font-mono text-xs">
+										<TableRow key={intent.id}>
+											<TableCell className="font-mono text-xs">
 												{intent.referenceCode}
-											</td>
-											<td className="py-2">{intent.kind}</td>
-											<td className="py-2 truncate">
+											</TableCell>
+											<TableCell>{intent.kind}</TableCell>
+											<TableCell className="truncate">
 												{intent.investorName ?? "—"}
-											</td>
-											<td className="py-2 font-mono text-xs">
-												{money(intent.expectedAmount)}
-											</td>
-											<td className="py-2 text-xs text-muted-foreground">
+											</TableCell>
+											<TableCell className="font-mono text-xs">
+												{compactMoney(intent.expectedAmount)}
+											</TableCell>
+											<TableCell className="text-xs text-muted-foreground">
 												{isoDate(intent.expiresAtIso)}
-											</td>
-										</tr>
+											</TableCell>
+										</TableRow>
 									))}
-								</tbody>
-							</table>
+								</TableBody>
+							</Table>
 						</div>
 					) : (
 						<EmptyState title="No pending payment intents" />
@@ -615,14 +710,81 @@ export function DeskPage({ book }: { book: Book }) {
 				</SectionCard>
 			</div>
 
-			{settingsDraft ? (
+			<div className="mt-4">
+				<SectionCard
+					title={
+						book === "paper" ? "Paper transactions" : "Recent transactions"
+					}
+					description={
+						book === "paper"
+							? "Every simulated fill recorded by the paper engine and reset history."
+							: "Fills booked from Torn logs, manual entries and owner decisions."
+					}
+				>
+					{data?.recentFills.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Date</TableHead>
+									<TableHead>Stock</TableHead>
+									<TableHead>Side</TableHead>
+									<TableHead>Shares</TableHead>
+									<TableHead>Price</TableHead>
+									<TableHead>Value</TableHead>
+									<TableHead>Source</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{data.recentFills.map((fill) => (
+									<TableRow key={fill.id}>
+										<TableCell className="text-xs text-muted-foreground">
+											{isoDate(fill.occurredAtIso)}
+										</TableCell>
+										<TableCell className="truncate">{fill.stockName}</TableCell>
+										<TableCell>
+											<StatusBadge
+												tone={fill.side === "buy" ? "success" : "danger"}
+											>
+												{fill.side}
+											</StatusBadge>
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{fill.shares.toLocaleString()}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(fill.price)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(fill.notional)}
+										</TableCell>
+										<TableCell className="text-xs text-muted-foreground">
+											{fill.source}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					) : (
+						<EmptyState
+							title="No transactions yet"
+							description={
+								book === "paper"
+									? "Paper fills appear here when the engine auto-fills a recommendation."
+									: "Fills appear here once Torn logs are ingested or a trade is recorded manually."
+							}
+						/>
+					)}
+				</SectionCard>
+			</div>
+
+			{settingsDraft && book === "live" ? (
 				<div className="mt-4">
 					<SectionCard
 						title="Settings"
-						description="Fee, risk, public visibility and alert routing. Saved through the same admin API the dashboard reads."
+						description="Fee, risk, public visibility and engine switches. Alerts are always sent to your Discord DMs."
 						actions={
 							<Button
-								variant="secondary"
+								variant="outline"
 								disabled={busy}
 								onClick={() =>
 									void runAction(() =>
@@ -642,8 +804,6 @@ export function DeskPage({ book }: { book: Book }) {
 												riskPerTradePct: settingsDraft.riskPerTradePct,
 												withdrawalExitFeeBps:
 													settingsDraft.withdrawalExitFeeBps,
-												liveAlertChannelId: settingsDraft.liveAlertChannelId,
-												paperAlertChannelId: settingsDraft.paperAlertChannelId,
 												engineEnabled: settingsDraft.engineEnabled,
 												liveEnabled: settingsDraft.liveEnabled,
 											}),
@@ -661,109 +821,61 @@ export function DeskPage({ book }: { book: Book }) {
 									Fees (basis points of distributed profit)
 								</p>
 								<div className="grid grid-cols-3 gap-2">
-									<label className="text-xs text-muted-foreground">
-										Daily
-										<Input
-											className="mt-1"
-											inputMode="numeric"
-											value={String(settingsDraft.feeRateDailyBps)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													feeRateDailyBps: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
-									<label className="text-xs text-muted-foreground">
-										Weekly
-										<Input
-											className="mt-1"
-											inputMode="numeric"
-											value={String(settingsDraft.feeRateWeeklyBps)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													feeRateWeeklyBps: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
-									<label className="text-xs text-muted-foreground">
-										Monthly
-										<Input
-											className="mt-1"
-											inputMode="numeric"
-											value={String(settingsDraft.feeRateMonthlyBps)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													feeRateMonthlyBps: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
+									<SettingsNumber
+										label="Daily"
+										value={settingsDraft.feeRateDailyBps}
+										onChange={(value) =>
+											patchSettings({ feeRateDailyBps: value })
+										}
+									/>
+									<SettingsNumber
+										label="Weekly"
+										value={settingsDraft.feeRateWeeklyBps}
+										onChange={(value) =>
+											patchSettings({ feeRateWeeklyBps: value })
+										}
+									/>
+									<SettingsNumber
+										label="Monthly"
+										value={settingsDraft.feeRateMonthlyBps}
+										onChange={(value) =>
+											patchSettings({ feeRateMonthlyBps: value })
+										}
+									/>
 								</div>
 								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 									Risk
 								</p>
 								<div className="grid grid-cols-2 gap-2">
-									<label className="text-xs text-muted-foreground">
-										Risk / trade %
-										<Input
-											className="mt-1"
-											inputMode="decimal"
-											value={String(settingsDraft.riskPerTradePct)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													riskPerTradePct: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
-									<label className="text-xs text-muted-foreground">
-										Max stock weight %
-										<Input
-											className="mt-1"
-											inputMode="decimal"
-											value={String(settingsDraft.maxStockWeightPct)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													maxStockWeightPct: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
-									<label className="text-xs text-muted-foreground">
-										Max positions
-										<Input
-											className="mt-1"
-											inputMode="numeric"
-											value={String(settingsDraft.maxPositions)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													maxPositions: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
-									<label className="text-xs text-muted-foreground">
-										Cash reserve %
-										<Input
-											className="mt-1"
-											inputMode="decimal"
-											value={String(settingsDraft.minCashReservePct)}
-											onChange={(event) =>
-												setSettingsDraft({
-													...settingsDraft,
-													minCashReservePct: Number(event.target.value),
-												})
-											}
-										/>
-									</label>
+									<SettingsNumber
+										label="Risk / trade %"
+										value={settingsDraft.riskPerTradePct}
+										decimals={2}
+										onChange={(value) =>
+											patchSettings({ riskPerTradePct: value })
+										}
+									/>
+									<SettingsNumber
+										label="Max stock weight %"
+										value={settingsDraft.maxStockWeightPct}
+										decimals={2}
+										onChange={(value) =>
+											patchSettings({ maxStockWeightPct: value })
+										}
+									/>
+									<SettingsNumber
+										label="Max positions"
+										value={settingsDraft.maxPositions}
+										onChange={(value) => patchSettings({ maxPositions: value })}
+									/>
+									<SettingsNumber
+										label="Cash reserve %"
+										value={settingsDraft.minCashReservePct}
+										decimals={2}
+										onChange={(value) =>
+											patchSettings({ minCashReservePct: value })
+										}
+									/>
 								</div>
 							</div>
 							<div className="space-y-2">
@@ -771,137 +883,93 @@ export function DeskPage({ book }: { book: Book }) {
 									Public visibility
 								</p>
 								<div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-									<Checkbox
+									<CheckboxField
 										label="AUM"
 										checked={settingsDraft.publicShowAum}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												publicShowAum: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ publicShowAum: checked })
 										}
 									/>
-									<Checkbox
+									<CheckboxField
 										label="Trades"
 										checked={settingsDraft.publicShowTrades}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												publicShowTrades: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ publicShowTrades: checked })
 										}
 									/>
-									<Checkbox
+									<CheckboxField
 										label="Holdings"
 										checked={settingsDraft.publicShowHoldings}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												publicShowHoldings: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ publicShowHoldings: checked })
 										}
 									/>
-									<Checkbox
+									<CheckboxField
 										label="Fees"
 										checked={settingsDraft.publicShowFees}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												publicShowFees: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ publicShowFees: checked })
 										}
 									/>
 								</div>
-								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Routing
+								<p className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+									Engine
+									<HelpTip>
+										“Live recommendations enabled” makes the engine score and
+										create recommendations for the live book. It never places
+										orders automatically — fills are still booked from your Torn
+										logs or recorded manually.
+									</HelpTip>
 								</p>
-								<label className="block text-xs text-muted-foreground">
-									Live alert channel ID
-									<Input
-										className="mt-1"
-										value={settingsDraft.liveAlertChannelId ?? ""}
-										onChange={(event) =>
-											setSettingsDraft({
-												...settingsDraft,
-												liveAlertChannelId: event.target.value || null,
-											})
-										}
-									/>
-								</label>
-								<label className="block text-xs text-muted-foreground">
-									Paper alert channel ID
-									<Input
-										className="mt-1"
-										value={settingsDraft.paperAlertChannelId ?? ""}
-										onChange={(event) =>
-											setSettingsDraft({
-												...settingsDraft,
-												paperAlertChannelId: event.target.value || null,
-											})
-										}
-									/>
-								</label>
 								<div className="flex flex-wrap gap-3 pt-1">
-									<Checkbox
+									<CheckboxField
 										label="Engine enabled"
 										checked={settingsDraft.engineEnabled}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												engineEnabled: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ engineEnabled: checked })
 										}
 									/>
-									<Checkbox
-										label="Live trading enabled"
+									<CheckboxField
+										label="Live recommendations enabled"
 										checked={settingsDraft.liveEnabled}
-										onChange={(checked) =>
-											setSettingsDraft({
-												...settingsDraft,
-												liveEnabled: checked,
-											})
+										onCheckedChange={(checked) =>
+											patchSettings({ liveEnabled: checked })
 										}
 									/>
 								</div>
+								<p className="text-xs text-muted-foreground">
+									All alerts go to your Discord DMs. There are no channel
+									settings; paper actions stay on the paper desk so live and
+									paper never double-notify.
+								</p>
 							</div>
 						</div>
 					</SectionCard>
 				</div>
 			) : null}
-
-			{book === "paper" ? (
-				<SectionCard
-					title="Smoke test"
-					description="Resets the paper book, runs one engine cycle and returns a persisted report."
-					actions={
-						<StatusBadge tone="warning">
-							<FlaskConical className="mr-1 inline size-3" /> paper only
-						</StatusBadge>
-					}
-				>
-					<div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-						<label className="block flex-1 text-xs font-medium text-muted-foreground">
-							Starting cash
-							<Input
-								className="mt-1"
-								value={startingCash}
-								onChange={(event) => setStartingCash(event.target.value)}
-							/>
-						</label>
-						<Button variant="secondary" onClick={resetPaper} disabled={busy}>
-							Reset
-						</Button>
-						<Button onClick={runSmoke} disabled={busy}>
-							Run smoke test
-						</Button>
-					</div>
-					{smoke ? (
-						<pre className="mt-3 max-h-64 overflow-auto rounded-lg border border-border/60 bg-background p-3 text-xs">
-							{JSON.stringify(smoke, null, 2)}
-						</pre>
-					) : null}
-				</SectionCard>
-			) : null}
 		</PageShell>
+	);
+}
+
+function SettingsNumber({
+	label,
+	value,
+	decimals = 0,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	decimals?: number;
+	onChange: (value: number) => void;
+}) {
+	return (
+		<div className="space-y-1">
+			<Label className="text-xs text-muted-foreground">{label}</Label>
+			<NumberInput
+				decimals={decimals}
+				value={String(value)}
+				onValueChange={(next) => onChange(Number(next || 0))}
+			/>
+		</div>
 	);
 }

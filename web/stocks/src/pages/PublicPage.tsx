@@ -12,6 +12,7 @@ import {
 } from "recharts";
 
 import {
+	Button,
 	EmptyState,
 	ErrorBanner,
 	PageHeader,
@@ -20,24 +21,29 @@ import {
 	Spinner,
 	StatCard,
 	StatusBadge,
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
-import { api, compactMoney, isoDate, money, pct } from "../lib/api";
+import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
 
-export function PublicPage() {
+export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 	const [data, setData] = useState<CapitalPublicOverview | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const { loginWithDiscord } = useAuth();
+	const isPaper = book === "paper";
 
 	useEffect(() => {
 		let cancelled = false;
-		api.v2.capital
-			.public!.get()
-			.then((res) => {
+		apiFetch<CapitalPublicOverview>(`/v2/capital/public?book=${book}`)
+			.then((overview) => {
 				if (cancelled) return;
-				if (res.data) setData(res.data as CapitalPublicOverview);
-				else setError("The fund is not available yet.");
+				setData(overview);
 			})
 			.catch((err: unknown) => {
 				if (!cancelled) {
@@ -50,9 +56,14 @@ export function PublicPage() {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [book]);
 
-	if (loading) return <Spinner label="Loading the fund…" />;
+	if (loading)
+		return (
+			<Spinner
+				label={isPaper ? "Loading paper results…" : "Loading the fund…"}
+			/>
+		);
 
 	const summary = data?.summary;
 	const chartData =
@@ -65,21 +76,35 @@ export function PublicPage() {
 	return (
 		<PageShell>
 			<PageHeader
-				title="Sentinel Capital"
-				description="A managed, transparent Torn City stock trading fund. Share-level recommendations, a public ledger, and clear risk."
-				badge={<StatusBadge tone="success">Live</StatusBadge>}
+				title={isPaper ? "Paper results" : "Blasted Stocks"}
+				description={
+					isPaper
+						? "Simulated Blasted Stocks results — no real funds. See how the strategy would have performed."
+						: "A managed, transparent Torn City stock trading fund."
+				}
+				badge={
+					isPaper ? <StatusBadge tone="warning">Simulated</StatusBadge> : null
+				}
 				actions={
-					<button
-						type="button"
-						onClick={() => loginWithDiscord("/portfolio")}
-						className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-					>
-						View my portfolio <ArrowUpRight className="size-4" />
-					</button>
+					isPaper ? (
+						<Button variant="outline" asChild>
+							<a href="#/">View live fund</a>
+						</Button>
+					) : (
+						<Button onClick={() => loginWithDiscord("/portfolio")}>
+							View my portfolio <ArrowUpRight className="size-4" />
+						</Button>
+					)
 				}
 			/>
 
 			{error ? <ErrorBanner message={error} /> : null}
+
+			{data?.warnings.length ? (
+				<div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+					{data.warnings.join(" ")}
+				</div>
+			) : null}
 
 			{summary ? (
 				<>
@@ -87,16 +112,24 @@ export function PublicPage() {
 						<StatCard
 							label={
 								data?.flags.showAum
-									? "Assets under management"
+									? isPaper
+										? "Simulated AUM"
+										: "Assets under management"
 									: "AUM (private)"
 							}
 							value={data?.flags.showAum ? compactMoney(summary.aum) : "—"}
-							hint={`${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`}
+							hint={
+								isPaper
+									? "Paper test book — no real capital"
+									: `${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`
+							}
+							help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
 						/>
 						<StatCard
 							label="NAV / unit"
 							value={money(summary.navPerUnit)}
 							hint={`${summary.daysRunning ?? "—"} days running`}
+							help="Net Asset Value: the fund's total assets divided by the units outstanding. Each deposit buys units at the NAV on that day."
 						/>
 						<StatCard
 							label="Since inception"
@@ -108,7 +141,9 @@ export function PublicPage() {
 							}
 						/>
 						<StatCard
-							label="Distributed to investors"
+							label={
+								isPaper ? "Simulated distributions" : "Distributed to investors"
+							}
 							value={compactMoney(summary.cumulativePayouts)}
 							hint={
 								data?.flags.showFees
@@ -122,7 +157,11 @@ export function PublicPage() {
 						<div className="lg:col-span-2">
 							<SectionCard
 								title="NAV per unit"
-								description="The public performance line, indexed from the fund's daily snapshots."
+								description={
+									isPaper
+										? "Simulated Net Asset Value per unit — no real funds — indexed from the paper book's daily snapshots."
+										: "Net Asset Value per unit — total assets divided by units outstanding — indexed from the fund's daily snapshots."
+								}
 							>
 								{chartData.length < 2 ? (
 									<EmptyState
@@ -197,7 +236,11 @@ export function PublicPage() {
 
 						<SectionCard
 							title="Holdings"
-							description="Allocation is shown without investor names."
+							description={
+								isPaper
+									? "Simulated allocation — no investor names."
+									: "Allocation is shown without investor names."
+							}
 						>
 							{data?.holdings.length ? (
 								<ul className="space-y-2">
@@ -224,98 +267,136 @@ export function PublicPage() {
 						</SectionCard>
 					</div>
 
-					<div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+					<div
+						className={
+							isPaper ? "mt-4" : "mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2"
+						}
+					>
 						<SectionCard
 							title="Recent trades"
-							description="Confirmed live fills."
+							description={
+								isPaper ? "Simulated paper fills." : "Confirmed live fills."
+							}
 						>
 							{data?.trades.length ? (
-								<div className="overflow-x-auto">
-									<table className="w-full min-w-[520px] text-left text-sm">
-										<thead className="text-xs uppercase tracking-wide text-muted-foreground">
-											<tr>
-												<th className="pb-2">Stock</th>
-												<th className="pb-2">Side</th>
-												<th className="pb-2">Shares</th>
-												<th className="pb-2">Price</th>
-												<th className="pb-2">Date</th>
-											</tr>
-										</thead>
-										<tbody className="divide-y divide-border/60">
-											{data.trades.map((trade) => (
-												<tr key={trade.id}>
-													<td className="py-2">
-														<span className="font-mono text-xs text-muted-foreground">
-															{trade.acronym}
-														</span>{" "}
-														{trade.name}
-													</td>
-													<td className="py-2">
-														<StatusBadge
-															tone={trade.side === "buy" ? "success" : "danger"}
-														>
-															{trade.side}
-														</StatusBadge>
-													</td>
-													<td className="py-2 font-mono text-xs">
-														{trade.shares.toLocaleString()}
-													</td>
-													<td className="py-2 font-mono text-xs">
-														{money(trade.price)}
-													</td>
-													<td className="py-2 text-xs text-muted-foreground">
-														{isoDate(trade.occurredAtIso)}
-													</td>
-												</tr>
-											))}
-										</tbody>
-									</table>
-								</div>
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead>Stock</TableHead>
+											<TableHead>Side</TableHead>
+											<TableHead>Shares</TableHead>
+											<TableHead>Price</TableHead>
+											<TableHead>Value</TableHead>
+											<TableHead>Date</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{data.trades.map((trade) => (
+											<TableRow key={trade.id}>
+												<TableCell>
+													<span className="font-mono text-xs text-muted-foreground">
+														{trade.acronym}
+													</span>{" "}
+													{trade.name}
+												</TableCell>
+												<TableCell>
+													<StatusBadge
+														tone={trade.side === "buy" ? "success" : "danger"}
+													>
+														{trade.side}
+													</StatusBadge>
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{trade.shares.toLocaleString()}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{money(trade.price)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{compactMoney(trade.notional)}
+												</TableCell>
+												<TableCell className="text-xs text-muted-foreground">
+													{isoDate(trade.occurredAtIso)}
+												</TableCell>
+											</TableRow>
+										))}
+									</TableBody>
+								</Table>
 							) : (
 								<EmptyState title="No public trades yet" />
 							)}
 						</SectionCard>
 
-						<SectionCard
-							title="How the fund works"
-							description="Fees reward patient capital and only apply to profit paid out."
-						>
-							<ul className="space-y-2 text-sm text-muted-foreground">
-								{data?.feeSchedule.map((fee) => (
-									<li
-										key={fee.frequency}
-										className="flex justify-between gap-3"
-									>
-										<span>{fee.label} payout</span>
-										<span className="font-mono text-foreground">
-											{(fee.feeBps / 100).toFixed(2)}% of profit
+						{isPaper ? null : (
+							<SectionCard
+								title="How the fund works"
+								description="Fees reward patient capital and only apply to profit paid out."
+							>
+								<ul className="space-y-2 text-sm text-muted-foreground">
+									{data?.feeSchedule.map((fee) => (
+										<li
+											key={fee.frequency}
+											className="flex justify-between gap-3"
+										>
+											<span>{fee.label} payout</span>
+											<span className="font-mono text-foreground">
+												{(fee.feeBps / 100).toFixed(0)}% of profit
+											</span>
+										</li>
+									))}
+									<li className="flex justify-between gap-3 border-t border-border/60 pt-2">
+										<span>Principal</span>
+										<span className="text-foreground">Stays invested</span>
+									</li>
+									<li className="flex justify-between gap-3">
+										<span>NAV (Net Asset Value)</span>
+										<span className="text-right text-foreground">
+											Total assets ÷ units outstanding
 										</span>
 									</li>
-								))}
-								<li className="flex justify-between gap-3 border-t border-border/60 pt-2">
-									<span>Principal</span>
-									<span className="text-foreground">Stays invested</span>
-								</li>
-								<li className="flex justify-between gap-3">
-									<span>Withdrawals</span>
-									<span className="text-foreground">
-										Quoted before approval
-									</span>
-								</li>
-							</ul>
-							<p className="mt-4 text-xs text-muted-foreground">
-								Torn City is a game. This page is informational, not financial
-								advice; capital is held in-game and payouts are made manually.
-							</p>
-						</SectionCard>
+									<li className="flex justify-between gap-3">
+										<span>Withdrawals</span>
+										<span className="text-foreground">
+											Quoted before approval
+										</span>
+									</li>
+								</ul>
+								<p className="mt-4 text-xs text-muted-foreground">
+									Torn City is a game. This page is informational, not financial
+									advice; capital is held in-game and payouts are made manually.
+								</p>
+							</SectionCard>
+						)}
 					</div>
 				</>
 			) : null}
 
 			<div className="mt-6 rounded-xl border border-border/60 bg-card p-4 text-xs text-muted-foreground">
 				<TrendingUp className="mr-1 inline size-3.5" />
-				Want to invest? Open your portfolio, or contact the fund manager on
-				Discord. Public figures are aggregate and never include investor names.
+				{isPaper ? (
+					<>
+						These are simulated results. Want to invest in the live fund?
+						Contact{" "}
+						<a
+							href="https://www.torn.com/profiles.php?XID=1934909"
+							className="text-primary underline"
+						>
+							Blasted
+						</a>{" "}
+						for details.
+					</>
+				) : (
+					<>
+						Want to invest? Contact{" "}
+						<a
+							href="https://www.torn.com/profiles.php?XID=1934909"
+							className="text-primary underline"
+						>
+							Blasted
+						</a>{" "}
+						for details.
+					</>
+				)}
 			</div>
 		</PageShell>
 	);

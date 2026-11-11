@@ -90,7 +90,7 @@ export async function ensureCapitalBooks(): Promise<void> {
 	await db
 		.insert(capitalBooks)
 		.values([
-			{ book: "live", displayName: "Sentinel Capital" },
+			{ book: "live", displayName: "Blasted Stocks" },
 			{ book: "paper", displayName: "Paper Book" },
 		])
 		.onConflictDoNothing();

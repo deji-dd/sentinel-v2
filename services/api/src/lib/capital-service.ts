@@ -338,7 +338,7 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 	return {
 		summary: {
 			book,
-			displayName: bookRow[0]?.displayName ?? "Sentinel Capital",
+			displayName: bookRow[0]?.displayName ?? "Blasted Stocks",
 			asOfIso: new Date().toISOString(),
 			inceptionIso: iso(start),
 			daysRunning: days,
@@ -358,16 +358,18 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 	};
 }
 
-export async function getCapitalPublicOverview(): Promise<CapitalPublicOverview> {
-	const config = await getCapitalConfig("live");
-	const { summary, stockMap } = await getCapitalSummary("live");
+export async function getCapitalPublicOverview(
+	book: CapitalBook = "live",
+): Promise<CapitalPublicOverview> {
+	const config = await getCapitalConfig(book);
+	const { summary, stockMap } = await getCapitalSummary(book);
 	const [performance, holdings, trades] = await Promise.all([
-		loadPerformance("live"),
+		loadPerformance(book),
 		config.publicShowHoldings
-			? loadHoldings("live", stockMap)
+			? loadHoldings(book, stockMap)
 			: Promise.resolve([] as CapitalPublicHolding[]),
 		config.publicShowTrades
-			? loadPublicTrades("live", stockMap)
+			? loadPublicTrades(book, stockMap)
 			: Promise.resolve([] as CapitalPublicTrade[]),
 	]);
 
@@ -396,7 +398,12 @@ export async function getCapitalPublicOverview(): Promise<CapitalPublicOverview>
 				feeBps: config.feeRateMonthlyBps,
 			},
 		],
-		warnings: config.liveEnabled ? [] : ["The live book is not enabled yet."],
+		warnings:
+			book === "paper"
+				? ["Simulated paper results — no real funds are managed in this book."]
+				: config.liveEnabled
+					? []
+					: ["The live book is not enabled yet."],
 	};
 }
 
@@ -426,6 +433,13 @@ function toInvestorView(
 				? investor.kind
 				: "user",
 		displayName: investor.displayName,
+		frequency:
+			investor.frequency === "daily" ||
+			investor.frequency === "weekly" ||
+			investor.frequency === "monthly"
+				? investor.frequency
+				: "weekly",
+		payoutMode: investor.payoutMode === "reinvest" ? "reinvest" : "cash",
 		tornId: investor.tornId,
 		factionId: investor.factionId,
 		status: investor.status,
@@ -677,9 +691,12 @@ export async function findInvestorByTornId(
 export async function createInvestor(input: {
 	book: CapitalBook;
 	kind: string;
+	/** Required for live investors; optional for paper test investors. */
 	tornId?: number | null;
 	factionId?: number | null;
 	displayName: string;
+	frequency: "daily" | "weekly" | "monthly";
+	payoutMode: "cash" | "reinvest";
 	actor: string | null;
 }): Promise<CapitalInvestorView> {
 	const [investor] = await db
@@ -690,11 +707,81 @@ export async function createInvestor(input: {
 			tornId: input.tornId ?? null,
 			factionId: input.factionId ?? null,
 			displayName: input.displayName,
+			frequency: input.frequency,
+			payoutMode: input.payoutMode,
 			createdBy: input.actor,
 		})
 		.returning();
 	if (!investor) throw new Error("Failed to create investor.");
 	return toInvestorView(investor, []);
+}
+
+export async function updateInvestor(input: {
+	book: CapitalBook;
+	investorId: string;
+	displayName?: string;
+	frequency?: "daily" | "weekly" | "monthly";
+	payoutMode?: "cash" | "reinvest";
+	status?: string;
+}): Promise<CapitalInvestorView> {
+	return db.transaction(async (tx) => {
+		const [investor] = await tx
+			.update(capitalInvestors)
+			.set({
+				...(input.displayName === undefined
+					? {}
+					: { displayName: input.displayName }),
+				...(input.frequency === undefined
+					? {}
+					: { frequency: input.frequency }),
+				...(input.payoutMode === undefined
+					? {}
+					: { payoutMode: input.payoutMode }),
+				...(input.status === undefined ? {} : { status: input.status }),
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(capitalInvestors.book, input.book),
+					eq(capitalInvestors.id, input.investorId),
+				),
+			)
+			.returning();
+		if (!investor) throw new Error("Investor not found.");
+
+		// An investor-level cadence or payout setting is the source of truth for
+		// their whole book, so apply it to every active lot as well. A cadence
+		// change also realigns the next payout to the new schedule.
+		if (input.frequency !== undefined || input.payoutMode !== undefined) {
+			await tx
+				.update(capitalInvestments)
+				.set({
+					...(input.frequency === undefined
+						? {}
+						: {
+								frequency: input.frequency,
+								nextPayoutAt: nextAlignedPayoutAt(new Date(), input.frequency),
+							}),
+					...(input.payoutMode === undefined
+						? {}
+						: { payoutMode: input.payoutMode }),
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(capitalInvestments.book, input.book),
+						eq(capitalInvestments.investorId, input.investorId),
+						eq(capitalInvestments.status, "active"),
+					),
+				);
+		}
+
+		const contacts = await tx
+			.select()
+			.from(capitalInvestorContacts)
+			.where(eq(capitalInvestorContacts.investorId, investor.id));
+		return toInvestorView(investor, contacts);
+	});
 }
 
 export async function addInvestorContact(input: {
@@ -724,7 +811,9 @@ export async function createDepositLot(input: {
 	book: CapitalBook;
 	investorId: string;
 	amount: string;
-	frequency: "daily" | "weekly" | "monthly";
+	/** Omit to inherit the investor's saved cadence. */
+	frequency?: "daily" | "weekly" | "monthly";
+	/** Omit to inherit the investor's saved profit handling. */
 	payoutMode?: "cash" | "reinvest";
 	occurredAt: Date;
 	actor: string | null;
@@ -734,6 +823,28 @@ export async function createDepositLot(input: {
 	if (amount <= 0n) throw new Error("Deposit amount must be positive.");
 
 	return withCapitalTransaction(input.book, async (tx, state) => {
+		const [investor] = await tx
+			.select()
+			.from(capitalInvestors)
+			.where(
+				and(
+					eq(capitalInvestors.book, input.book),
+					eq(capitalInvestors.id, input.investorId),
+				),
+			)
+			.limit(1);
+		if (!investor) throw new Error("Investor not found.");
+		const frequency =
+			input.frequency ??
+			(investor.frequency === "daily" ||
+			investor.frequency === "weekly" ||
+			investor.frequency === "monthly"
+				? investor.frequency
+				: "weekly");
+		const payoutMode =
+			input.payoutMode ??
+			(investor.payoutMode === "reinvest" ? "reinvest" : "cash");
+
 		const nav = computeNav({
 			cash: state.cash,
 			units: state.units,
@@ -743,14 +854,14 @@ export async function createDepositLot(input: {
 			})),
 		});
 		const deposit = computeDeposit(amount, nav.navPerUnit);
-		const nextPayout = nextAlignedPayoutAt(new Date(), input.frequency);
+		const nextPayout = nextAlignedPayoutAt(new Date(), frequency);
 		const [investment] = await tx
 			.insert(capitalInvestments)
 			.values({
 				book: input.book,
 				investorId: input.investorId,
-				frequency: input.frequency,
-				payoutMode: input.payoutMode ?? "cash",
+				frequency,
+				payoutMode,
 				principal: formatMoney(deposit.principal),
 				units: formatUnits(deposit.unitsIssued),
 				navAtDeposit: formatMoney(deposit.navPerUnit),
@@ -1276,8 +1387,6 @@ export function toCapitalSettings(
 		withdrawalNoticeDays: config.withdrawalNoticeDays,
 		paymentMatchTolerancePct: config.paymentMatchTolerancePct,
 		notifyUnmatchedBuys: config.notifyUnmatchedBuys,
-		liveAlertChannelId: config.liveAlertChannelId,
-		paperAlertChannelId: config.paperAlertChannelId,
 		paperStartingCash: config.paperStartingCash,
 		paperSlippageBps: config.paperSlippageBps,
 		paperAutoFill: config.paperAutoFill,

@@ -1,13 +1,54 @@
-import type {
-	ButtonHTMLAttributes,
-	InputHTMLAttributes,
-	ReactNode,
-	SelectHTMLAttributes,
-} from "react";
+import { Info } from "lucide-react";
+import { type ReactNode, useId } from "react";
 
-function cx(...classes: Array<string | false | null | undefined>): string {
-	return classes.filter(Boolean).join(" ");
-}
+import { cn } from "@/lib/utils";
+
+import { Alert, AlertDescription } from "./ui/alert";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "./ui/card";
+import { Checkbox } from "./ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
+import { Label } from "./ui/label";
+import { Spinner as SpinnerIcon } from "./ui/spinner";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "./ui/tooltip";
+
+// Every interactive primitive is a shadcn/ui component. Re-exported here so
+// pages import from one place; do not hand-roll buttons, inputs or selects.
+export { Button } from "./ui/button";
+export { Checkbox } from "./ui/checkbox";
+export { Input } from "./ui/input";
+export { Label } from "./ui/label";
+export { NumberInput } from "./ui/number-input";
+export {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectLabel,
+	SelectTrigger,
+	SelectValue,
+} from "./ui/select";
+export {
+	Table,
+	TableBody,
+	TableCaption,
+	TableCell,
+	TableFooter,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "./ui/table";
 
 export function PageShell({ children }: { children: ReactNode }) {
 	return (
@@ -56,26 +97,30 @@ export function SectionCard({
 	actions,
 	children,
 }: {
-	title: string;
-	description?: string;
+	title: ReactNode;
+	description?: ReactNode;
 	actions?: ReactNode;
 	children: ReactNode;
 }) {
 	return (
-		<section className="rounded-xl border border-border/60 bg-card p-4 sm:p-5">
-			<div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+		<Card className="gap-3 py-4 sm:py-5">
+			<CardHeader className="flex flex-col gap-2 px-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
 				<div className="min-w-0">
-					<h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+					<CardTitle className="text-sm font-semibold tracking-tight">
+						{title}
+					</CardTitle>
 					{description ? (
-						<p className="mt-0.5 text-xs text-muted-foreground">
+						<CardDescription className="mt-0.5 text-xs">
 							{description}
-						</p>
+						</CardDescription>
 					) : null}
 				</div>
-				{actions}
-			</div>
-			{children}
-		</section>
+				{actions ? (
+					<div className="flex flex-wrap items-center gap-2">{actions}</div>
+				) : null}
+			</CardHeader>
+			<CardContent className="px-4 sm:px-5">{children}</CardContent>
+		</Card>
 	);
 }
 
@@ -84,11 +129,13 @@ export function StatCard({
 	value,
 	hint,
 	tone = "default",
+	help,
 }: {
 	label: string;
 	value: string;
 	hint?: string;
 	tone?: "default" | "success" | "warning" | "danger" | "info";
+	help?: ReactNode;
 }) {
 	const toneClass =
 		tone === "success"
@@ -101,27 +148,30 @@ export function StatCard({
 						? "text-info"
 						: "text-foreground";
 	return (
-		<div className="rounded-xl border border-border/60 bg-card p-4">
-			<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{label}
-			</p>
-			<p className={cx("mt-1 font-mono text-xl font-semibold", toneClass)}>
-				{value}
-			</p>
-			{hint ? (
-				<p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-			) : null}
-		</div>
+		<Card className="gap-1.5 py-4">
+			<CardContent className="px-4">
+				<p className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+					{label}
+					{help ? <HelpTip>{help}</HelpTip> : null}
+				</p>
+				<p className={cn("mt-1 font-mono text-xl font-semibold", toneClass)}>
+					{value}
+				</p>
+				{hint ? (
+					<p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+				) : null}
+			</CardContent>
+		</Card>
 	);
 }
 
 const BADGE_TONES = {
-	neutral: "bg-muted text-muted-foreground border-border",
-	primary: "bg-primary/10 text-primary border-primary/30",
-	success: "bg-success/10 text-success border-success/30",
-	warning: "bg-warning/10 text-warning border-warning/30",
-	danger: "bg-destructive/10 text-destructive border-destructive/30",
-	info: "bg-info/10 text-info border-info/30",
+	neutral: "border-border bg-muted text-muted-foreground",
+	primary: "border-primary/30 bg-primary/10 text-primary",
+	success: "border-success/30 bg-success/10 text-success",
+	warning: "border-warning/30 bg-warning/10 text-warning",
+	danger: "border-destructive/30 bg-destructive/10 text-destructive",
+	info: "border-info/30 bg-info/10 text-info",
 } as const;
 
 export function StatusBadge({
@@ -132,74 +182,15 @@ export function StatusBadge({
 	children: ReactNode;
 }) {
 	return (
-		<span
-			className={cx(
-				"inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide",
+		<Badge
+			variant="outline"
+			className={cn(
+				"text-[11px] font-semibold uppercase tracking-wide",
 				BADGE_TONES[tone],
 			)}
 		>
 			{children}
-		</span>
-	);
-}
-
-export function Button({
-	variant = "primary",
-	className = "",
-	...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-	variant?: "primary" | "secondary" | "ghost" | "danger";
-}) {
-	const variants = {
-		primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-		secondary:
-			"bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border/60",
-		ghost: "bg-transparent text-foreground hover:bg-accent",
-		danger:
-			"bg-destructive text-destructive-foreground hover:bg-destructive/90",
-	};
-	return (
-		<button
-			className={cx(
-				"inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition disabled:opacity-50",
-				variants[variant],
-				className,
-			)}
-			{...props}
-		/>
-	);
-}
-
-export function Input({
-	className = "",
-	...props
-}: InputHTMLAttributes<HTMLInputElement>) {
-	return (
-		<input
-			className={cx(
-				"h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-ring",
-				className,
-			)}
-			{...props}
-		/>
-	);
-}
-
-export function Select({
-	className = "",
-	children,
-	...props
-}: SelectHTMLAttributes<HTMLSelectElement>) {
-	return (
-		<select
-			className={cx(
-				"h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring",
-				className,
-			)}
-			{...props}
-		>
-			{children}
-		</select>
+		</Badge>
 	);
 }
 
@@ -208,24 +199,24 @@ export function EmptyState({
 	description,
 }: {
 	title: string;
-	description?: string;
+	description?: ReactNode;
 }) {
 	return (
-		<div className="rounded-xl border border-dashed border-border/70 px-4 py-8 text-center">
-			<p className="text-sm font-semibold">{title}</p>
-			{description ? (
-				<p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-					{description}
-				</p>
-			) : null}
-		</div>
+		<Empty className="p-6 md:p-8">
+			<EmptyHeader>
+				<EmptyTitle className="text-sm font-semibold">{title}</EmptyTitle>
+				{description ? (
+					<EmptyDescription className="text-xs">{description}</EmptyDescription>
+				) : null}
+			</EmptyHeader>
+		</Empty>
 	);
 }
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
 	return (
 		<div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-			<span className="size-4 animate-spin rounded-full border-2 border-border border-t-primary" />
+			<SpinnerIcon />
 			{label}
 		</div>
 	);
@@ -233,30 +224,53 @@ export function Spinner({ label = "Loading…" }: { label?: string }) {
 
 export function ErrorBanner({ message }: { message: string }) {
 	return (
-		<div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-			{message}
-		</div>
+		<Alert variant="destructive" className="mb-4">
+			<AlertDescription>{message}</AlertDescription>
+		</Alert>
 	);
 }
 
-export function Checkbox({
+export function CheckboxField({
 	label,
 	checked,
-	onChange,
+	onCheckedChange,
 }: {
 	label: string;
 	checked: boolean;
-	onChange: (checked: boolean) => void;
+	onCheckedChange: (checked: boolean) => void;
 }) {
+	const id = useId();
 	return (
-		<label className="flex items-center gap-2 text-sm">
-			<input
-				type="checkbox"
+		<Label htmlFor={id} className="flex items-center gap-2 text-sm font-normal">
+			<Checkbox
+				id={id}
 				checked={checked}
-				onChange={(event) => onChange(event.target.checked)}
-				className="size-4 rounded border-border bg-background accent-primary"
+				onCheckedChange={(value) => onCheckedChange(value === true)}
 			/>
 			<span className="text-muted-foreground">{label}</span>
-		</label>
+		</Label>
+	);
+}
+
+export function HelpTip({ children }: { children: ReactNode }) {
+	return (
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						className="text-muted-foreground"
+						aria-label="More information"
+					>
+						<Info />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-72 text-xs leading-relaxed">
+					{children}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 }
