@@ -161,8 +161,8 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 						/>
 					</div>
 
-					<div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-						<div className="lg:col-span-2">
+					<div className="mt-4">
+						<div>
 							<SectionCard
 								title="NAV per unit"
 								description={
@@ -241,39 +241,141 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 								)}
 							</SectionCard>
 						</div>
+					</div>
 
+					<div className="mt-4">
 						<SectionCard
-							title="Holdings"
+							title="Current positions"
 							description={
 								isPaper
-									? "Simulated allocation — no investor names."
-									: "Allocation is shown without investor names."
+									? "Simulated open positions and marked-to-market profit/loss."
+									: "Open fund positions and marked-to-market profit/loss."
 							}
 						>
-							{data?.holdings.length ? (
-								<ul className="space-y-2">
-									{data.holdings.map((holding) => (
-										<li
-											key={holding.stockId}
-											className="flex items-center justify-between gap-2 text-sm"
-										>
-											<span className="min-w-0 truncate">
-												<span className="font-mono text-xs text-muted-foreground">
-													{holding.acronym}
-												</span>{" "}
-												{holding.name}
-											</span>
-											<span className="font-mono text-xs">
-												{holding.weightPct.toFixed(1)}%
-											</span>
-										</li>
-									))}
-								</ul>
+							{data?.positions.length ? (
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead>Stock</TableHead>
+											<TableHead>Shares</TableHead>
+											<TableHead>Avg cost</TableHead>
+											<TableHead>Price</TableHead>
+											<TableHead>Value</TableHead>
+											<TableHead>Unrealized P/L</TableHead>
+											<TableHead>Realized P/L</TableHead>
+											<TableHead>Weight</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{data.positions.map((position) => (
+											<TableRow key={position.stockId}>
+												<TableCell>
+													<span className="font-mono text-xs text-muted-foreground">
+														{position.acronym}
+													</span>{" "}
+													{position.stockName}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{position.shares.toLocaleString()}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{money(position.averageCost)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{money(position.price)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{compactMoney(position.marketValue)}
+												</TableCell>
+												<TableCell
+													className={
+														Number(position.unrealizedPnl) >= 0
+															? "font-mono text-xs text-success"
+															: "font-mono text-xs text-destructive"
+													}
+												>
+													<span className="block">
+														{compactMoney(position.unrealizedPnl)}
+													</span>
+													{position.unrealizedPnlPct !== null ? (
+														<span className="block text-[11px]">
+															{pct(position.unrealizedPnlPct)}
+														</span>
+													) : null}
+												</TableCell>
+												<TableCell
+													className={
+														Number(position.realizedPnl) >= 0
+															? "font-mono text-xs text-success"
+															: "font-mono text-xs text-destructive"
+													}
+												>
+													{compactMoney(position.realizedPnl)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{pct(position.weightPct, 1)}
+												</TableCell>
+											</TableRow>
+										))}
+									</TableBody>
+								</Table>
 							) : (
-								<EmptyState title="No positions yet" />
+								<EmptyState title="No open positions" />
 							)}
 						</SectionCard>
 					</div>
+
+					{isPaper ? (
+						<div className="mt-4">
+							<SectionCard
+								title="Investors"
+								description="Simulated investor results. Cadence and payout settings are not shown."
+							>
+								{data?.investors.length ? (
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead>Investor</TableHead>
+												<TableHead>Principal</TableHead>
+												<TableHead>Value</TableHead>
+												<TableHead>Profit</TableHead>
+												<TableHead>APR</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{data.investors.map((investor, index) => (
+												<TableRow key={index}>
+													<TableCell className="truncate">
+														Test Investor {index + 1}
+													</TableCell>
+													<TableCell className="font-mono text-xs">
+														{compactMoney(investor.principal)}
+													</TableCell>
+													<TableCell className="font-mono text-xs">
+														{compactMoney(investor.currentValue)}
+													</TableCell>
+													<TableCell
+														className={
+															Number(investor.totalProfit) >= 0
+																? "font-mono text-xs text-success"
+																: "font-mono text-xs text-destructive"
+														}
+													>
+														{compactMoney(investor.totalProfit)}
+													</TableCell>
+													<TableCell className="font-mono text-xs">
+														{pct(investor.aprPct)}
+													</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+								) : (
+									<EmptyState title="No paper investors yet" />
+								)}
+							</SectionCard>
+						</div>
+					) : null}
 
 					<div className="mt-4">
 						<SectionCard

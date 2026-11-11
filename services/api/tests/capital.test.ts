@@ -82,6 +82,8 @@ describe("capital API", () => {
 			warnings: string[];
 			trades: unknown[];
 			holdings: unknown[];
+			positions: unknown[];
+			investors: unknown[];
 		};
 		expect(body.success).toBe(true);
 		expect(body.summary.book).toBe("paper");
@@ -90,6 +92,11 @@ describe("capital API", () => {
 		);
 		expect(Array.isArray(body.trades)).toBe(true);
 		expect(Array.isArray(body.holdings)).toBe(true);
+		expect(Array.isArray(body.positions)).toBe(true);
+		expect(Array.isArray(body.investors)).toBe(true);
+		for (const investor of body.investors) {
+			expect((investor as Record<string, unknown>).displayName).toBeUndefined();
+		}
 	});
 
 	test("capital rejects another dashboard origin", async () => {

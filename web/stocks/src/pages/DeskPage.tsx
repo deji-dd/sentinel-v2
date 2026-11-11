@@ -6,7 +6,6 @@ import type {
 import { RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { PerformanceChart } from "../components/PerformanceChart";
 import {
 	Button,
 	CheckboxField,
@@ -25,7 +24,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Spinner,
-	StatCard,
 	StatusBadge,
 	Table,
 	TableBody,
@@ -35,15 +33,7 @@ import {
 	TableRow,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
-import {
-	apiFetch,
-	compactMoney,
-	isoDate,
-	money,
-	pct,
-	tctDate,
-	tctTime,
-} from "../lib/api";
+import { apiFetch, compactMoney, isoDate } from "../lib/api";
 
 type Book = "live" | "paper";
 type PayoutMode = "cash" | "reinvest";
@@ -241,7 +231,6 @@ export function DeskPage({ book }: { book: Book }) {
 		setIntentAmount("");
 	};
 
-	const summary = data?.summary;
 	const investors = data?.investors ?? [];
 
 	return (
@@ -262,131 +251,12 @@ export function DeskPage({ book }: { book: Book }) {
 
 			{book === "paper" ? (
 				<div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-					SIMULATION — no real funds. Paper rows never appear on the public
-					page. Alerts for the paper book are not duplicated to Discord; inspect
-					the transactions below.
+					SIMULATION — no real funds. Results are public on the Paper page;
+					admin actions stay here. Paper alerts are not duplicated to Discord.
 				</div>
 			) : null}
 
 			{error ? <ErrorBanner message={error} /> : null}
-
-			{summary ? (
-				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					<StatCard
-						label="AUM"
-						value={compactMoney(summary.aum)}
-						help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
-					/>
-					<StatCard
-						label="NAV / unit"
-						value={money(summary.navPerUnit)}
-						help="Net Asset Value: total fund assets divided by units outstanding. Deposits buy units at this price."
-					/>
-					<StatCard
-						label="Cash"
-						value={compactMoney(summary.cash)}
-						hint={`${investors.length} investors`}
-					/>
-				</div>
-			) : null}
-
-			<div className="mt-4">
-				<SectionCard
-					title="NAV per unit"
-					description="Net Asset Value per unit — total assets divided by units outstanding — recorded by the accounting worker."
-				>
-					<PerformanceChart points={data?.performance ?? []} />
-				</SectionCard>
-			</div>
-
-			<div className="mt-4">
-				<SectionCard
-					title="Current positions"
-					description={
-						book === "paper"
-							? "Simulated open positions and marked-to-market profit/loss."
-							: "Open fund positions and marked-to-market profit/loss."
-					}
-				>
-					{data?.positions.length ? (
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>Stock</TableHead>
-									<TableHead>Shares</TableHead>
-									<TableHead>Avg cost</TableHead>
-									<TableHead>Price</TableHead>
-									<TableHead>Value</TableHead>
-									<TableHead>Unrealized P/L</TableHead>
-									<TableHead>Realized P/L</TableHead>
-									<TableHead>Weight</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{data.positions.map((position) => (
-									<TableRow key={position.stockId}>
-										<TableCell>
-											<span className="font-mono text-xs text-muted-foreground">
-												{position.acronym}
-											</span>{" "}
-											{position.stockName}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{position.shares.toLocaleString()}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{money(position.averageCost)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{money(position.price)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{compactMoney(position.marketValue)}
-										</TableCell>
-										<TableCell
-											className={
-												Number(position.unrealizedPnl) >= 0
-													? "font-mono text-xs text-success"
-													: "font-mono text-xs text-destructive"
-											}
-										>
-											<span className="block">
-												{compactMoney(position.unrealizedPnl)}
-											</span>
-											{position.unrealizedPnlPct !== null ? (
-												<span className="block text-[11px]">
-													{pct(position.unrealizedPnlPct)}
-												</span>
-											) : null}
-										</TableCell>
-										<TableCell
-											className={
-												Number(position.realizedPnl) >= 0
-													? "font-mono text-xs text-success"
-													: "font-mono text-xs text-destructive"
-											}
-										>
-											{compactMoney(position.realizedPnl)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{pct(position.weightPct, 1)}
-										</TableCell>
-									</TableRow>
-								))}
-							</TableBody>
-						</Table>
-					) : (
-						<EmptyState
-							title="No open positions"
-							description={
-								book === "paper"
-									? "Paper positions appear after the engine auto-fills a recommendation."
-									: "Live positions appear after fills are booked from Torn logs."
-							}
-						/>
-					)}
-				</SectionCard>
-			</div>
 
 			<div className="mt-4">
 				<SectionCard
@@ -650,10 +520,6 @@ export function DeskPage({ book }: { book: Book }) {
 									<TableHead>Investor</TableHead>
 									<TableHead>Cadence</TableHead>
 									<TableHead>Payout</TableHead>
-									<TableHead>Principal</TableHead>
-									<TableHead>Value</TableHead>
-									<TableHead>Profit</TableHead>
-									<TableHead>APR</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -664,9 +530,6 @@ export function DeskPage({ book }: { book: Book }) {
 												<span className="truncate">
 													{row.investor.displayName}
 												</span>
-												<StatusBadge tone="neutral">
-													{row.investor.kind}
-												</StatusBadge>
 											</div>
 										</TableCell>
 										<TableCell>
@@ -715,18 +578,6 @@ export function DeskPage({ book }: { book: Book }) {
 													))}
 												</SelectContent>
 											</Select>
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{compactMoney(row.principal)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{compactMoney(row.currentValue)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{compactMoney(row.totalProfit)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{pct(row.aprPct)}
 										</TableCell>
 									</TableRow>
 								))}
@@ -804,78 +655,6 @@ export function DeskPage({ book }: { book: Book }) {
 						</div>
 					) : (
 						<EmptyState title="No pending payment intents" />
-					)}
-				</SectionCard>
-			</div>
-
-			<div className="mt-4">
-				<SectionCard
-					title={
-						book === "paper" ? "Paper transactions" : "Recent transactions"
-					}
-					description={
-						book === "paper"
-							? "Every simulated fill recorded by the paper engine and reset history."
-							: "Fills booked from Torn logs, manual entries and owner decisions."
-					}
-				>
-					{data?.recentFills.length ? (
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>Date</TableHead>
-									<TableHead>Stock</TableHead>
-									<TableHead>Side</TableHead>
-									<TableHead>Shares</TableHead>
-									<TableHead>Price</TableHead>
-									<TableHead>Value</TableHead>
-									<TableHead>Source</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{data.recentFills.map((fill) => (
-									<TableRow key={fill.id}>
-										<TableCell className="text-xs text-muted-foreground">
-											<span className="block">
-												{tctDate(fill.occurredAtIso)}
-											</span>
-											<span className="block font-mono text-[11px]">
-												{tctTime(fill.occurredAtIso)}
-											</span>
-										</TableCell>
-										<TableCell className="truncate">{fill.stockName}</TableCell>
-										<TableCell>
-											<StatusBadge
-												tone={fill.side === "buy" ? "success" : "danger"}
-											>
-												{fill.side}
-											</StatusBadge>
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{fill.shares.toLocaleString()}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{money(fill.price)}
-										</TableCell>
-										<TableCell className="font-mono text-xs">
-											{compactMoney(fill.notional)}
-										</TableCell>
-										<TableCell className="text-xs text-muted-foreground">
-											{fill.source}
-										</TableCell>
-									</TableRow>
-								))}
-							</TableBody>
-						</Table>
-					) : (
-						<EmptyState
-							title="No transactions yet"
-							description={
-								book === "paper"
-									? "Paper fills appear here when the engine auto-fills a recommendation."
-									: "Fills appear here once Torn logs are ingested or a trade is recorded manually."
-							}
-						/>
 					)}
 				</SectionCard>
 			</div>

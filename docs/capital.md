@@ -4,10 +4,10 @@ Managed Torn City stock trading fund. Code prefix: `capital`. Host: `stocks.blas
 
 ## Surfaces
 
-- `/` — public fund page: NAV, allocation, recent live fills, fee schedule. No investor names.
-- `/paper` — public paper results: simulated NAV, allocation and fills. No investor names, deposits or admin controls.
+- `/` — public fund page: NAV, current positions with marked-to-market P/L, recent live fills, fee schedule.
+- `/paper` — public paper results: simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills.
 - `/portfolio` — Discord-authenticated investor view: lots, payouts, withdrawals.
-- `/desk` — owner/admin live desk.
+- `/desk` — owner/admin live desk: investor, deposit, payout, withdrawal and settings controls.
 - `/desk/paper` — owner/admin simulation desk with a permanent `SIMULATION` banner.
 
 The app lives in `web/stocks`. The API serves it by `Host` header from `services/api/src/middleware/static-spa.ts`; DNS/TLS for the subdomain is an external deployment prerequisite.

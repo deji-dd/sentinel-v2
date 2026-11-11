@@ -45,6 +45,7 @@ import type {
 	CapitalPerformancePoint,
 	CapitalPositionView,
 	CapitalPublicHolding,
+	CapitalPublicInvestor,
 	CapitalPublicOverview,
 	CapitalPublicTrade,
 	CapitalReconciliationIssueView,
@@ -327,6 +328,76 @@ async function loadPositions(
 		.sort((a, b) => b.weightPct - a.weightPct);
 }
 
+async function loadPublicInvestors(
+	book: CapitalBook,
+	navPerUnit: bigint,
+): Promise<CapitalPublicInvestor[]> {
+	const [investors, lots] = await Promise.all([
+		db
+			.select()
+			.from(capitalInvestors)
+			.where(
+				and(
+					eq(capitalInvestors.book, book),
+					eq(capitalInvestors.kind, "test"),
+					eq(capitalInvestors.status, "active"),
+				),
+			),
+		db
+			.select()
+			.from(capitalInvestments)
+			.where(eq(capitalInvestments.book, book)),
+	]);
+
+	return investors
+		.map((investor) => {
+			const investorLots = lots.filter(
+				(lot) => lot.investorId === investor.id && lot.status === "active",
+			);
+			let principal = 0n;
+			let currentValue = 0n;
+			let payouts = 0n;
+			let earliest: Date | null = null;
+			for (const lot of investorLots) {
+				principal += parseMoney(lot.principal);
+				const metrics = computeInvestorMetrics({
+					principal: parseMoney(lot.principal),
+					units: parseUnits(lot.units),
+					navPerUnit,
+					cumulativePayouts: parseMoney(lot.cumulativePayouts),
+					cumulativeFees: parseMoney(lot.cumulativeFees),
+					openedAt: lot.openedAt,
+					now: new Date(),
+				});
+				currentValue += metrics.currentValue;
+				payouts += parseMoney(lot.cumulativePayouts);
+				if (!earliest || lot.openedAt < earliest) earliest = lot.openedAt;
+			}
+			const totalProfit = currentValue - principal + payouts;
+			const totalReturnPct =
+				principal > 0n
+					? (moneyToNumber(totalProfit) / moneyToNumber(principal)) * 100
+					: null;
+			const days = earliest ? daysBetween(earliest, new Date()) : null;
+			return {
+				principal: formatMoney(principal),
+				currentValue: formatMoney(currentValue),
+				totalProfit: formatMoney(totalProfit),
+				totalReturnPct,
+				aprPct:
+					totalReturnPct !== null && days && days >= 1
+						? totalReturnPct * (365 / days)
+						: null,
+			};
+		})
+		.filter((row) => parseMoney(row.principal) > 0n)
+		.sort(
+			(a, b) =>
+				moneyToNumber(parseMoney(b.currentValue)) -
+				moneyToNumber(parseMoney(a.currentValue)),
+		);
+}
+
 async function loadPublicTrades(
 	book: CapitalBook,
 	stockMap: Map<number, { name: string; acronym: string }>,
@@ -422,15 +493,21 @@ export async function getCapitalPublicOverview(
 ): Promise<CapitalPublicOverview> {
 	const config = await getCapitalConfig(book);
 	const { summary, stockMap } = await getCapitalSummary(book);
-	const [performance, holdings, trades] = await Promise.all([
-		loadPerformance(book),
-		config.publicShowHoldings
-			? loadHoldings(book, stockMap)
-			: Promise.resolve([] as CapitalPublicHolding[]),
-		config.publicShowTrades
-			? loadPublicTrades(book, stockMap)
-			: Promise.resolve([] as CapitalPublicTrade[]),
-	]);
+	const { nav } = await loadNav(book);
+	const [performance, holdings, trades, positions, investors] =
+		await Promise.all([
+			loadPerformance(book),
+			config.publicShowHoldings
+				? loadHoldings(book, stockMap)
+				: Promise.resolve([] as CapitalPublicHolding[]),
+			config.publicShowTrades
+				? loadPublicTrades(book, stockMap)
+				: Promise.resolve([] as CapitalPublicTrade[]),
+			loadPositions(book, stockMap, nav.totalValue),
+			book === "paper"
+				? loadPublicInvestors(book, nav.navPerUnit)
+				: Promise.resolve([] as CapitalPublicInvestor[]),
+		]);
 
 	return {
 		success: true,
@@ -447,6 +524,8 @@ export async function getCapitalPublicOverview(
 		},
 		performance,
 		holdings,
+		positions,
+		investors,
 		trades,
 		feeSchedule: [
 			{ frequency: "daily", label: "Daily", feeBps: config.feeRateDailyBps },

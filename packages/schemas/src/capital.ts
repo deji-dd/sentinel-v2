@@ -242,12 +242,23 @@ export interface CapitalPublicTrade {
 	occurredAtIso: string;
 }
 
+/** Investor-level result shown on a public book page. No contacts or IDs. */
+export interface CapitalPublicInvestor {
+	principal: CapitalDecimal;
+	currentValue: CapitalDecimal;
+	totalProfit: CapitalDecimal;
+	totalReturnPct: number | null;
+	aprPct: number | null;
+}
+
 export interface CapitalPublicOverview {
 	success: boolean;
 	summary: CapitalSummary;
 	flags: CapitalPublicFlags;
 	performance: CapitalPerformancePoint[];
 	holdings: CapitalPublicHolding[];
+	positions: CapitalPositionView[];
+	investors: CapitalPublicInvestor[];
 	trades: CapitalPublicTrade[];
 	feeSchedule: Array<{
 		frequency: CapitalPayoutFrequency;
