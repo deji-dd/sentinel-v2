@@ -50,6 +50,7 @@ import { env } from "../../config/env";
 import { canReadCapital, resolveCapitalAccess } from "../../lib/capital-access";
 import {
 	addInvestorContact,
+	CapitalServiceError,
 	createDepositLot,
 	createInvestor,
 	createWithdrawalQuote,
@@ -312,11 +313,6 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				"feeRateDailyBps",
 				"feeRateWeeklyBps",
 				"feeRateMonthlyBps",
-				"minCashReservePct",
-				"maxEquityPct",
-				"maxStockWeightPct",
-				"maxPositions",
-				"riskPerTradePct",
 				"stopAtrMultiplier",
 				"stopMinPct",
 				"trailingTriggerR",
@@ -1054,18 +1050,26 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				set.status = 400;
 				return { success: false, error: "Shares must be a positive integer." };
 			}
-			const fill = await recordManualFill({
-				book,
-				stockId: body.stockId,
-				side: body.side,
-				shares: body.shares,
-				price: body.price,
-				fees: body.fees ?? "0",
-				orderId: body.orderId ?? null,
-				actor: user?.discordId ?? null,
-				note: body.note ?? null,
-			});
-			return { success: true, fill };
+			try {
+				const fill = await recordManualFill({
+					book,
+					stockId: body.stockId,
+					side: body.side,
+					shares: body.shares,
+					price: body.price,
+					fees: body.fees ?? "0",
+					orderId: body.orderId ?? null,
+					actor: user?.discordId ?? null,
+					note: body.note ?? null,
+				});
+				return { success: true, fill };
+			} catch (error) {
+				if (error instanceof CapitalServiceError) {
+					set.status = error.status;
+					return { success: false, error: error.message };
+				}
+				throw error;
+			}
 		},
 		{
 			body: t.Object({
@@ -1174,29 +1178,37 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		);
 		return { success: delivered, book };
 	})
-	.post(
-		"/admin/:book/paper/reset",
-		async ({ params, body, user, set }) => {
-			if (!isOwner(user)) {
-				set.status = 403;
-				return { success: false, error: "Admin access required." };
-			}
-			const book = parseBook(params.book, set);
-			if (!book || book !== "paper") {
-				set.status = 400;
-				return { success: false, error: "Paper book only." };
-			}
-			const config = await getCapitalConfig("paper");
-			const startingCash = body.startingCash ?? config.paperStartingCash;
-			await resetPaperBook(startingCash, user?.discordId ?? null);
-			return { success: true };
-		},
-		{
-			body: t.Object({
-				startingCash: t.Optional(t.String()),
-			}),
-		},
-	)
+	.post("/admin/paper/test-alert", async ({ user, set }) => {
+		if (!isOwner(user)) {
+			set.status = 403;
+			return { success: false, error: "Admin access required." };
+		}
+		try {
+			const result = await sendSchedulerRequest(
+				"capital_test_alert",
+				{ book: "paper" },
+				10_000,
+			);
+			return { success: true, result };
+		} catch (error) {
+			set.status = 503;
+			return {
+				success: false,
+				error:
+					error instanceof Error ? error.message : "Scheduler is unreachable.",
+			};
+		}
+	})
+	.post("/admin/paper/reset", async ({ user, set }) => {
+		if (!isOwner(user)) {
+			set.status = 403;
+			return { success: false, error: "Admin access required." };
+		}
+		// Clears every paper row and seeds nothing. The owner adds investors and
+		// records their deposits on the desk. The live book is never touched.
+		await resetPaperBook(user?.discordId ?? null);
+		return { success: true };
+	})
 	.post(
 		"/admin/paper/smoke-test",
 		async ({ body, user, set }) => {

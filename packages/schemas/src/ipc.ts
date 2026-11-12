@@ -564,6 +564,20 @@ export type IpcCapitalPaperAlertMessage = {
 	data: CapitalPaperAlertPayload;
 };
 
+/** Request a labelled test alert through the real scheduler → bot path. */
+export type IpcCapitalTestAlertMessage = {
+	action: "capital_test_alert";
+	requestId?: string;
+	data: { book?: "live" | "paper" };
+};
+
+/** Response body for the test-alert request. */
+export type IpcCapitalTestAlertResultMessage = {
+	action: "capital_test_alert_result";
+	requestId?: string;
+	data: { success: boolean; book: "live" | "paper" };
+};
+
 /** Response body for a scheduler-run paper smoke test. */
 export type IpcCapitalSmokeResultMessage = {
 	action: "capital_smoke_result";
@@ -672,6 +686,8 @@ export type IpcMessage =
 	| IpcCapitalAlertMessage
 	| IpcCapitalPaperAlertMessage
 	| IpcCapitalSmokeResultMessage
+	| IpcCapitalTestAlertMessage
+	| IpcCapitalTestAlertResultMessage
 	| IpcUserShopliftingAlertsMessage
 	| IpcSubversiveChainAlertMessage
 	| IpcResetSubversiveRecruitmentMessage

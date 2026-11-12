@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
-import { db } from "../../index";
+import { db, sqlClient } from "../../index";
 import {
 	capitalAccess,
 	capitalAuditLog,
@@ -16,7 +16,9 @@ import {
 	capitalInvestorContacts,
 	type CapitalInvestorRow,
 	capitalInvestors,
+	capitalMarketCandles,
 	capitalMarketLatest,
+	capitalMlPredictions,
 	capitalNavSnapshots,
 	capitalOrders,
 	capitalPaymentIntents,
@@ -237,6 +239,78 @@ export async function getCapitalState(
 	return readCapitalState(db, book);
 }
 
+export interface CapitalRiskContext {
+	/** Highest NAV per unit ever snapshotted for the book. */
+	peakNavPerUnit: string | null;
+	/** NAV per unit at the last snapshot before the current UTC day started. */
+	dayStartNavPerUnit: string | null;
+	/** Stocks stopped out inside the cooldown window. */
+	stoppedOutStockIds: number[];
+}
+
+/**
+ * Loads the inputs the risk overlay needs.
+ *
+ * NAV per unit is used instead of total value because deposits and
+ * withdrawals change total value without changing performance; the per-unit
+ * number is flow-insensitive.
+ */
+export async function getCapitalRiskContext(
+	book: CapitalBook,
+	now: Date,
+	cooldownDays: number,
+): Promise<CapitalRiskContext> {
+	const [peakRow] = await db
+		.select({
+			peak: sql<string | null>`MAX(${capitalNavSnapshots.navPerUnit})`,
+		})
+		.from(capitalNavSnapshots)
+		.where(eq(capitalNavSnapshots.book, book));
+
+	const dayStart = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+	);
+	const [dayRow] = await db
+		.select({ navPerUnit: capitalNavSnapshots.navPerUnit })
+		.from(capitalNavSnapshots)
+		.where(
+			and(
+				eq(capitalNavSnapshots.book, book),
+				// Snapshots are upserted into their bucket all day, so the row at
+				// exactly 00:00 holds the *current* NAV, not the opening mark.
+				// The last row before midnight is the previous day's close.
+				lt(capitalNavSnapshots.capturedAt, dayStart),
+			),
+		)
+		.orderBy(desc(capitalNavSnapshots.capturedAt))
+		.limit(1);
+
+	let stoppedOutStockIds: number[] = [];
+	if (Number.isFinite(cooldownDays) && cooldownDays > 0) {
+		const cutoff = new Date(now.getTime() - cooldownDays * 86_400_000);
+		const rows = await db
+			.selectDistinct({ stockId: capitalFills.stockId })
+			.from(capitalFills)
+			.where(
+				and(
+					eq(capitalFills.book, book),
+					eq(capitalFills.side, "sell"),
+					eq(capitalFills.exitReason, "stop"),
+					gte(capitalFills.occurredAt, cutoff),
+				),
+			);
+		stoppedOutStockIds = rows
+			.map((row) => row.stockId)
+			.filter((stockId): stockId is number => Number.isFinite(stockId));
+	}
+
+	return {
+		peakNavPerUnit: peakRow?.peak ?? null,
+		dayStartNavPerUnit: dayRow?.navPerUnit ?? null,
+		stoppedOutStockIds,
+	};
+}
+
 export async function getCapitalInvestors(
 	book: CapitalBook,
 ): Promise<CapitalInvestorRow[]> {
@@ -309,6 +383,99 @@ export async function getCapitalPaymentIntents(book: CapitalBook) {
 		.from(capitalPaymentIntents)
 		.where(eq(capitalPaymentIntents.book, book))
 		.orderBy(desc(capitalPaymentIntents.createdAt));
+}
+
+/**
+ * Expires open orders past their `expires_at`.
+ *
+ * The status is what gates re-entry, so an order that is merely old is still
+ * treated as "open" by the engine. Without this sweep a recommendation that
+ * was never executed blocks that stock forever.
+ */
+export async function expireCapitalOrders(
+	book: CapitalBook,
+	now = new Date(),
+): Promise<number> {
+	const rows = await db
+		.update(capitalOrders)
+		.set({ status: "expired", updatedAt: now })
+		.where(
+			and(
+				eq(capitalOrders.book, book),
+				inArray(capitalOrders.status, [
+					"recommended",
+					"accepted",
+					"partially_filled",
+				]),
+				lt(capitalOrders.expiresAt, now),
+			),
+		)
+		.returning({ id: capitalOrders.id });
+	return rows.length;
+}
+
+/**
+ * Cross-process mutex for one capital engine cycle.
+ *
+ * The cron runner is non-reentrant inside its process, but the smoke-test IPC
+ * handler calls the cycle directly and can race a cron tick. The lock uses a
+ * dedicated reserved connection because PostgreSQL advisory locks are
+ * session-scoped, not transaction-scoped.
+ */
+export async function tryAcquireCapitalEngineLock(): Promise<{
+	release: () => Promise<void>;
+} | null> {
+	const reserved = await sqlClient.reserve();
+	try {
+		const [row] = await reserved<
+			Array<{ locked: boolean }>
+		>`SELECT pg_try_advisory_lock(hashtext('capital:engine:cycle')) AS locked`;
+		if (!row?.locked) {
+			reserved.release();
+			return null;
+		}
+	} catch (error) {
+		reserved.release();
+		throw error;
+	}
+
+	let released = false;
+	return {
+		release: async () => {
+			if (released) return;
+			released = true;
+			try {
+				await reserved`SELECT pg_advisory_unlock(hashtext('capital:engine:cycle'))`;
+			} finally {
+				reserved.release();
+			}
+		},
+	};
+}
+
+/**
+ * Deletes minute candles older than the retention window.
+ *
+ * Daily/hourly bars are kept (the signals and research need them); the 1m
+ * table is the one that grows by ~18M rows/year. Returns the number deleted.
+ */
+export async function pruneCapitalMarketCandles(input: {
+	intervalMinutes: number;
+	olderThanDays: number;
+	now?: Date;
+}): Promise<number> {
+	const now = input.now ?? new Date();
+	const cutoff = new Date(now.getTime() - input.olderThanDays * 86_400_000);
+	const rows = await db
+		.delete(capitalMarketCandles)
+		.where(
+			and(
+				eq(capitalMarketCandles.intervalMinutes, input.intervalMinutes),
+				lt(capitalMarketCandles.bucketStart, cutoff),
+			),
+		)
+		.returning({ stockId: capitalMarketCandles.stockId });
+	return rows.length;
 }
 
 export async function getCapitalOrders(book: CapitalBook, openOnly = false) {
@@ -508,9 +675,13 @@ export async function recordCapitalTransaction(
 /**
  * Applies a stock fill to the position and cash ledger.
  *
- * Buys add the notional plus fees to cost basis. Sells remove the average cost
- * of the shares sold and add realised P&L. The SQL does the arithmetic in
- * PostgreSQL numeric so no decimal is ever parsed as a float.
+ * Buys add the notional plus fees to cost basis and, on a *new* position,
+ * freeze the entry metadata (fill price, hard stop, target, high-water mark).
+ * Sells remove the average cost of the shares sold and add realised P&L; a full
+ * exit clears the entry metadata so the next entry starts clean. A scale-out
+ * marks `scaled_out_at` so the engine does not trim the same position twice.
+ * The SQL does the arithmetic in PostgreSQL numeric so no decimal is ever
+ * parsed as a float.
  */
 export async function applyCapitalFill(
 	tx: CapitalTx,
@@ -529,12 +700,23 @@ export async function applyCapitalFill(
 		source: string;
 		/** Owner recorded this as an off-recommendation fund error trade. */
 		unplanned?: boolean;
+		/** Entry plan copied onto a new position. Ignored when one is open. */
+		entry?: {
+			price: string;
+			stopPrice: string | null;
+			targetPrice: string | null;
+		};
+		/** Machine-readable reason for a sell fill. */
+		exitReason?: string | null;
 		occurredAt: Date;
 	},
 ): Promise<void> {
 	if (input.shares <= 0) return;
 
 	if (input.side === "buy") {
+		const entryPrice = input.entry?.price ?? input.price;
+		const stopPrice = input.entry?.stopPrice ?? null;
+		const targetPrice = input.entry?.targetPrice ?? null;
 		await tx
 			.insert(capitalPositions)
 			.values({
@@ -544,6 +726,10 @@ export async function applyCapitalFill(
 				costBasis: input.totalCost,
 				realized: "0",
 				isUnplanned: input.unplanned ?? false,
+				entryPrice,
+				stopPrice,
+				targetPrice,
+				peakPrice: entryPrice,
 				openedAt: input.occurredAt,
 				lastTradeAt: input.occurredAt,
 				updatedAt: new Date(),
@@ -556,6 +742,14 @@ export async function applyCapitalFill(
 					isUnplanned: input.unplanned
 						? true
 						: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN false ELSE ${capitalPositions.isUnplanned} END`,
+					// A re-entry after the position was fully closed must not
+					// inherit the previous trade's openedAt/stop/target/peak.
+					openedAt: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${input.occurredAt.toISOString()}::timestamptz ELSE ${capitalPositions.openedAt} END`,
+					entryPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${entryPrice}::numeric ELSE ${capitalPositions.entryPrice} END`,
+					stopPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${stopPrice}::numeric ELSE ${capitalPositions.stopPrice} END`,
+					targetPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${targetPrice}::numeric ELSE ${capitalPositions.targetPrice} END`,
+					peakPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${entryPrice}::numeric ELSE ${capitalPositions.peakPrice} END`,
+					scaledOutAt: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN NULL ELSE ${capitalPositions.scaledOutAt} END`,
 					lastTradeAt: input.occurredAt,
 					updatedAt: new Date(),
 				},
@@ -563,12 +757,25 @@ export async function applyCapitalFill(
 	} else {
 		const costRemoved = sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN 0 ELSE ${capitalPositions.costBasis} * ${input.shares}::numeric / ${capitalPositions.shares}::numeric END`;
 		const grossProceeds = sql`${input.notional}::numeric - ${input.fees}::numeric`;
+		const closesPosition = sql`${capitalPositions.shares} - ${input.shares} <= 0`;
+		const isScaleOut = input.exitReason === "scale_out";
+		// Build the scale-out flag in SQL: whether the position closes is only
+		// known to the database, so a JS ternary on the SQL expression would
+		// always be truthy.
+		const scaledOutSet = isScaleOut
+			? sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${input.occurredAt.toISOString()}::timestamptz END`
+			: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.scaledOutAt} END`;
 		await tx
 			.update(capitalPositions)
 			.set({
 				shares: sql`GREATEST(0, ${capitalPositions.shares} - ${input.shares})`,
-				costBasis: sql`CASE WHEN ${capitalPositions.shares} - ${input.shares} <= 0 THEN 0 ELSE ${capitalPositions.costBasis} - ${costRemoved} END`,
+				costBasis: sql`CASE WHEN ${closesPosition} THEN 0 ELSE ${capitalPositions.costBasis} - ${costRemoved} END`,
 				realized: sql`${capitalPositions.realized} + (${grossProceeds} - ${costRemoved})`,
+				entryPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.entryPrice} END`,
+				stopPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.stopPrice} END`,
+				targetPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.targetPrice} END`,
+				peakPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.peakPrice} END`,
+				scaledOutAt: scaledOutSet,
 				lastTradeAt: input.occurredAt,
 				updatedAt: new Date(),
 			})
@@ -590,16 +797,93 @@ export async function applyCapitalFill(
 		fees: input.fees,
 		source: input.source,
 		occurredAt: input.occurredAt,
+		metadata: input.exitReason ? { exitReason: input.exitReason } : {},
 	});
 }
 
 /**
- * Wipes and reseeds the paper book.
+ * Deletes every paper-book row, preserving the book's configuration.
  *
- * Used by the admin reset and the smoke-test handler. The book's configuration
- * is preserved; only paper rows are deleted. The seeded operator lot issues
- * `startingCash` units at $1, so the book starts with a well-defined NAV and a
- * payout path that can be exercised immediately.
+ * Shared by the blank reset (dashboard button) and the seeded reset (smoke
+ * test). The audit row is inserted *after* the wipe so the reset itself is
+ * still recorded even though the book is empty.
+ */
+async function wipePaperBook(
+	tx: CapitalTx,
+	actor: string | null,
+): Promise<void> {
+	const now = new Date();
+	await tx.delete(capitalFills).where(eq(capitalFills.book, "paper"));
+	await tx.delete(capitalOrders).where(eq(capitalOrders.book, "paper"));
+	await tx
+		.delete(capitalWithdrawalRequests)
+		.where(eq(capitalWithdrawalRequests.book, "paper"));
+	await tx
+		.delete(capitalPayoutObligations)
+		.where(eq(capitalPayoutObligations.book, "paper"));
+	await tx
+		.delete(capitalPaymentIntents)
+		.where(eq(capitalPaymentIntents.book, "paper"));
+	await tx
+		.delete(capitalReconciliationIssues)
+		.where(eq(capitalReconciliationIssues.book, "paper"));
+	await tx
+		.delete(capitalTransactions)
+		.where(eq(capitalTransactions.book, "paper"));
+	await tx.delete(capitalPositions).where(eq(capitalPositions.book, "paper"));
+	await tx
+		.delete(capitalInvestments)
+		.where(eq(capitalInvestments.book, "paper"));
+	await tx.delete(capitalInvestors).where(eq(capitalInvestors.book, "paper"));
+	await tx
+		.delete(capitalNavSnapshots)
+		.where(eq(capitalNavSnapshots.book, "paper"));
+	await tx
+		.delete(capitalSmokeReports)
+		.where(eq(capitalSmokeReports.book, "paper"));
+	await tx.delete(capitalAccess).where(eq(capitalAccess.book, "paper"));
+	await tx
+		.delete(capitalMlPredictions)
+		.where(eq(capitalMlPredictions.book, "paper"));
+	await tx.delete(capitalEngineRuns).where(eq(capitalEngineRuns.book, "paper"));
+	await tx.delete(capitalAuditLog).where(eq(capitalAuditLog.book, "paper"));
+	// The book keeps running, but its age starts over: the public page should
+	// not claim months of history for a simulation that was just cleared.
+	await tx
+		.update(capitalBooks)
+		.set({ startedAt: now, updatedAt: now })
+		.where(eq(capitalBooks.book, "paper"));
+	await tx.insert(capitalAuditLog).values({
+		book: "paper",
+		actorDiscordId: actor,
+		action: "paper.reset",
+		entityType: "capital_book",
+		entityId: "paper",
+		after: { resetAt: now.toISOString() },
+		note: "Paper simulation cleared.",
+	});
+}
+
+/**
+ * Clears the paper book. No operator/investor is seeded: the owner adds paper
+ * investors and records their deposits on the desk.
+ */
+export async function clearCapitalPaperBook(
+	actor: string | null,
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		await tx.execute(
+			sql`SELECT pg_advisory_xact_lock(hashtext('capital:paper'))`,
+		);
+		await wipePaperBook(tx, actor);
+	});
+}
+
+/**
+ * Wipes and reseeds the paper book with one operator lot.
+ *
+ * Used by the smoke test, which needs a funded book to exercise a full cycle.
+ * The dashboard reset uses `clearCapitalPaperBook` instead.
  */
 export async function resetCapitalPaperBook(
 	startingCash: string,
@@ -613,35 +897,7 @@ export async function resetCapitalPaperBook(
 		await tx.execute(
 			sql`SELECT pg_advisory_xact_lock(hashtext('capital:paper'))`,
 		);
-		await tx.delete(capitalFills).where(eq(capitalFills.book, "paper"));
-		await tx.delete(capitalOrders).where(eq(capitalOrders.book, "paper"));
-		await tx
-			.delete(capitalWithdrawalRequests)
-			.where(eq(capitalWithdrawalRequests.book, "paper"));
-		await tx
-			.delete(capitalPayoutObligations)
-			.where(eq(capitalPayoutObligations.book, "paper"));
-		await tx
-			.delete(capitalPaymentIntents)
-			.where(eq(capitalPaymentIntents.book, "paper"));
-		await tx
-			.delete(capitalReconciliationIssues)
-			.where(eq(capitalReconciliationIssues.book, "paper"));
-		await tx
-			.delete(capitalTransactions)
-			.where(eq(capitalTransactions.book, "paper"));
-		await tx.delete(capitalPositions).where(eq(capitalPositions.book, "paper"));
-		await tx
-			.delete(capitalInvestments)
-			.where(eq(capitalInvestments.book, "paper"));
-		await tx.delete(capitalInvestors).where(eq(capitalInvestors.book, "paper"));
-		await tx
-			.delete(capitalNavSnapshots)
-			.where(eq(capitalNavSnapshots.book, "paper"));
-		await tx
-			.delete(capitalSmokeReports)
-			.where(eq(capitalSmokeReports.book, "paper"));
-		await tx.delete(capitalAccess).where(eq(capitalAccess.book, "paper"));
+		await wipePaperBook(tx, actor);
 
 		const [operator] = await tx
 			.insert(capitalInvestors)

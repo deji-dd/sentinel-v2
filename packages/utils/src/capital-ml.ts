@@ -40,6 +40,11 @@ export interface LogisticModel {
 	targetPct: number;
 	stopPct: number;
 	horizonDays: number;
+	/**
+	 * Version of the live exit decision the barrier approximates.
+	 * `first_trim_r1_v1` = +1R trim vs the frozen entry stop.
+	 */
+	labelSpec?: string;
 	/** Optional Platt scaling fitted on the validation split. */
 	platt?: { a: number; b: number };
 }

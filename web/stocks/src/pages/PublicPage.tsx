@@ -32,6 +32,7 @@ import { useAuth } from "../contexts/AuthContext";
 import {
 	apiFetch,
 	compactMoney,
+	exitReasonLabel,
 	isoDate,
 	money,
 	pct,
@@ -116,7 +117,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 
 			{summary ? (
 				<>
-					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
 						<StatCard
 							label={
 								data?.flags.showAum
@@ -132,6 +133,20 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 									: `${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`
 							}
 							help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
+						/>
+						<StatCard
+							label="Capital deployed"
+							value={
+								data?.flags.showAum ? compactMoney(summary.positionsValue) : "—"
+							}
+							hint="Open positions at the last price"
+							help="Market value of the fund's open stock positions. AUM is this plus available cash."
+						/>
+						<StatCard
+							label="Available cash"
+							value={data?.flags.showAum ? compactMoney(summary.cash) : "—"}
+							hint="Liquid, not currently invested"
+							help="Cash held by the fund and available to fund new positions or withdrawals. The engine keeps a reserve instead of putting 100% to work."
 						/>
 						<StatCard
 							label="NAV / unit"
@@ -393,6 +408,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 											<TableHead>Shares</TableHead>
 											<TableHead>Price</TableHead>
 											<TableHead>Value</TableHead>
+											<TableHead>Reason</TableHead>
 											<TableHead>Date</TableHead>
 										</TableRow>
 									</TableHeader>
@@ -420,6 +436,11 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 												</TableCell>
 												<TableCell className="font-mono text-xs">
 													{compactMoney(trade.notional)}
+												</TableCell>
+												<TableCell className="text-xs">
+													{trade.side === "sell"
+														? exitReasonLabel(trade.exitReason)
+														: "—"}
 												</TableCell>
 												<TableCell className="text-xs text-muted-foreground">
 													<span className="block">

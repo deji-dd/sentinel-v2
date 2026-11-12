@@ -81,22 +81,22 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 		.notNull(),
 	maxEquityPct: doublePrecision("max_equity_pct").default(85).notNull(),
 	maxStockWeightPct: doublePrecision("max_stock_weight_pct")
-		.default(20)
+		.default(12)
 		.notNull(),
-	maxPositions: integer("max_positions").default(12).notNull(),
+	maxPositions: integer("max_positions").default(7).notNull(),
 
 	riskPerTradePct: doublePrecision("risk_per_trade_pct").default(0.5).notNull(),
 	stopAtrMultiplier: doublePrecision("stop_atr_multiplier")
-		.default(2)
+		.default(2.5)
 		.notNull(),
-	stopMinPct: doublePrecision("stop_min_pct").default(4).notNull(),
+	stopMinPct: doublePrecision("stop_min_pct").default(2).notNull(),
 	trailingTriggerR: doublePrecision("trailing_trigger_r").default(1).notNull(),
 	trailingAtrMultiplier: doublePrecision("trailing_atr_multiplier")
-		.default(1.5)
+		.default(2)
 		.notNull(),
-	trailingPct: doublePrecision("trailing_pct").default(6).notNull(),
-	tightenTrailPct: doublePrecision("tighten_trail_pct").default(4).notNull(),
-	scaleOutR: doublePrecision("scale_out_r").default(2).notNull(),
+	trailingPct: doublePrecision("trailing_pct").default(2).notNull(),
+	tightenTrailPct: doublePrecision("tighten_trail_pct").default(1.5).notNull(),
+	scaleOutR: doublePrecision("scale_out_r").default(1).notNull(),
 	scaleOutFraction: doublePrecision("scale_out_fraction")
 		.default(0.3333)
 		.notNull(),
@@ -117,7 +117,7 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 		.notNull(),
 	/** Exit once the 20-period z-score is at or above this level. */
 	reversalExitSigma: doublePrecision("reversal_exit_sigma")
-		.default(0)
+		.default(1)
 		.notNull(),
 	/** Reject a reversal candidate whose annualised volatility exceeds this. */
 	maxVolatilityPct: doublePrecision("max_volatility_pct").default(40).notNull(),
@@ -130,9 +130,9 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 
 	regimeSmaDays: integer("regime_sma_days").default(50).notNull(),
 
-	drawdownHaltPct: doublePrecision("drawdown_halt_pct").default(15).notNull(),
+	drawdownHaltPct: doublePrecision("drawdown_halt_pct").default(20).notNull(),
 	drawdownDeriskPct: doublePrecision("drawdown_derisk_pct")
-		.default(25)
+		.default(10)
 		.notNull(),
 	dailyLossHaltPct: doublePrecision("daily_loss_halt_pct").default(5).notNull(),
 	stopCooldownDays: integer("stop_cooldown_days").default(3).notNull(),
@@ -375,6 +375,27 @@ export const capitalPositions = pgTable(
 		realized: money("realized").default("0").notNull(),
 		/** True when the owner recorded an off-recommendation trade as a fund error. */
 		isUnplanned: boolean("is_unplanned").default(false).notNull(),
+		/**
+		 * Execution price of the opening fill, excluding fees. `costBasis /
+		 * shares` includes fees and drifts after a partial sell; the entry price
+		 * must stay put.
+		 */
+		entryPrice: price("entry_price"),
+		/**
+		 * Frozen hard stop from the entry order. The engine never recomputes it
+		 * from the current ATR: widening it would exceed the risk budget, and
+		 * tightening it would make R jump and fire the +1R/+2R exits early.
+		 */
+		stopPrice: price("stop_price"),
+		/** Frozen +2R take-profit from the entry order. */
+		targetPrice: price("target_price"),
+		/** High-water mark since entry, for the trailing stop only. */
+		peakPrice: price("peak_price"),
+		/** Set when the +1R partial trim has executed. */
+		scaledOutAt: timestamp("scaled_out_at", {
+			withTimezone: true,
+			mode: "date",
+		}),
 		openedAt: timestamp("opened_at", { withTimezone: true, mode: "date" }),
 		lastTradeAt: timestamp("last_trade_at", {
 			withTimezone: true,
@@ -424,6 +445,8 @@ export const capitalOrders = pgTable(
 		riskFlags: jsonb("risk_flags").$type<string[]>().default([]).notNull(),
 		stopPrice: price("stop_price"),
 		targetPrice: price("target_price"),
+		/** Machine-readable exit reason for a sell order (`stop`, `target`, ...). */
+		exitReason: text("exit_reason"),
 		expectedAnnualIncome: money("expected_annual_income"),
 		runId: text("run_id"),
 		generatedAt: timestamp("generated_at", {
@@ -492,6 +515,8 @@ export const capitalFills = pgTable(
 		delaySeconds: integer("delay_seconds"),
 		notionalDelta: money("notional_delta"),
 		decisionIssueId: text("decision_issue_id"),
+		/** Why the sell happened (`stop`, `target`, `reversal`, ...). */
+		exitReason: text("exit_reason"),
 		note: text("note"),
 		metadata: jsonb("metadata")
 			.$type<Record<string, unknown>>()

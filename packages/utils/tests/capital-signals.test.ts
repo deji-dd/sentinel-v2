@@ -338,3 +338,203 @@ describe("capital signals", () => {
 		expect(time.action).toBe("sell");
 	});
 });
+
+describe("frozen stop and exit ladder", () => {
+	const exitConfig = {
+		trailingTriggerR: 1,
+		trailingAtrMultiplier: 2,
+		trailingPct: 2,
+		tightenTrailPct: 1.5,
+		scaleOutR: 1,
+		scaleOutFraction: 0.3333,
+		timeStopDays: 20,
+	};
+
+	test("entry stop uses realistic Torn ATRs and clamps the geometry", () => {
+		// A 0.6% daily ATR on a $381 stock: 3 × ATR ≈ $6.86 (1.8%), inside the
+		// 1.5–3% band. The old 4% floor would have risked $15.24.
+		const plan = planEntry({
+			nav: "100000000000",
+			freeCash: "50000000000",
+			price: 381,
+			atr: 2.29,
+			existingWeightPct: 0,
+			config: {
+				riskPerTradePct: 0.5,
+				maxStockWeightPct: 12,
+				stopAtrMultiplier: 3,
+				stopMinPct: 1.5,
+				stopMaxPct: 3,
+				targetR: 2,
+				minNotional: "10000000",
+			},
+		});
+		const stopPct = ((381 - plan.stopPrice) / 381) * 100;
+		expect(stopPct).toBeGreaterThan(1.5);
+		expect(stopPct).toBeLessThan(3);
+		expect(plan.targetPrice).toBeCloseTo(381 + (381 - plan.stopPrice) * 2, 6);
+	});
+
+	test("R does not move when ATR changes after entry", () => {
+		const stopPrice = 98.2; // frozen entry stop
+		const atSlowAtr = evaluateExit({
+			entryPrice: 100,
+			price: 101.8,
+			peakPrice: 101.8,
+			stopPrice,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			scaledOut: false,
+			mode: "reversal",
+			zscore20: 0.2,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		});
+		const atFastAtr = evaluateExit({
+			entryPrice: 100,
+			price: 101.8,
+			peakPrice: 101.8,
+			stopPrice,
+			atr: 3,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			scaledOut: false,
+			mode: "reversal",
+			zscore20: 0.2,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		});
+		expect(atSlowAtr.rMultiple).toBeCloseTo(1, 6);
+		expect(atFastAtr.rMultiple).toBeCloseTo(1, 6);
+	});
+
+	test("trailing stop measures from the since-entry peak, not a pre-entry high", () => {
+		const base = {
+			entryPrice: 100,
+			price: 102,
+			stopPrice: 98,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			scaledOut: true,
+			// Disable the +1R trim so this test isolates the trail.
+			config: { ...exitConfig, scaleOutR: 5 },
+		};
+		// Never made a new high: the 30-day high (105) is irrelevant.
+		const noNewHigh = evaluateExit({
+			...base,
+			peakPrice: 102,
+			mode: "momentum",
+		});
+		expect(noNewHigh.action).toBe("hold");
+
+		// Peaked at 104.1 and has fallen more than the 2% trail.
+		const trailed = evaluateExit({
+			...base,
+			peakPrice: 104.1,
+			mode: "momentum",
+		});
+		expect(trailed.action).toBe("sell");
+		expect(trailed.reasonCode).toBe("trail");
+	});
+
+	test("trims a third at +1R and uses the +2R target for the rest", () => {
+		const base = {
+			entryPrice: 100,
+			stopPrice: 98,
+			targetPrice: 104,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			mode: "reversal" as const,
+			zscore20: 0.2,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		};
+		const trim = evaluateExit({
+			...base,
+			price: 102,
+			peakPrice: 102,
+			scaledOut: false,
+		});
+		expect(trim.action).toBe("scale_out");
+		expect(trim.reasonCode).toBe("scale_out");
+
+		const target = evaluateExit({
+			...base,
+			price: 104,
+			peakPrice: 104,
+			scaledOut: true,
+		});
+		expect(target.action).toBe("sell");
+		expect(target.reasonCode).toBe("target");
+	});
+
+	test("reversal exits at the upper band, not at the mean", () => {
+		const base = {
+			entryPrice: 100,
+			price: 100.5,
+			peakPrice: 100.5,
+			stopPrice: 98,
+			atr: 0.6,
+			ema20: 100.5,
+			ema50: 101,
+			score: 40,
+			daysHeld: 4,
+			scaledOut: true,
+			mode: "reversal" as const,
+			meanPrice: 100,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, scaleOutR: 5 },
+		};
+		const atMean = evaluateExit({ ...base, zscore20: 0.2 });
+		expect(atMean.action).toBe("hold");
+
+		const atUpperBand = evaluateExit({ ...base, zscore20: 1.1 });
+		expect(atUpperBand.action).toBe("sell");
+		expect(atUpperBand.reasonCode).toBe("reversal");
+	});
+
+	test("confidence sizing stays inside the per-name cap", () => {
+		const config = {
+			riskPerTradePct: 0.5,
+			maxStockWeightPct: 12,
+			stopAtrMultiplier: 3,
+			stopMinPct: 1.5,
+			stopMaxPct: 3,
+			targetR: 2,
+			minNotional: "10000000",
+		};
+		const low = planEntry({
+			nav: "100000000000",
+			freeCash: "100000000000",
+			price: 100,
+			atr: 0.6,
+			existingWeightPct: 0,
+			sizeMultiplier: 0.5,
+			maxSizeMultiplier: 1.5,
+			config,
+		});
+		const high = planEntry({
+			nav: "100000000000",
+			freeCash: "100000000000",
+			price: 100,
+			atr: 0.6,
+			existingWeightPct: 0,
+			sizeMultiplier: 1.5,
+			maxSizeMultiplier: 1.5,
+			config,
+		});
+		expect(low.positionPct).toBeCloseTo(4, 1);
+		expect(high.positionPct).toBeCloseTo(12, 1);
+	});
+});

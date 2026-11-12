@@ -7,7 +7,10 @@ import {
 	handleGuildMembersResponse,
 	requestGuildMembersFromBot,
 } from "./handlers/bot";
-import { handleCapitalSmokeTest } from "./handlers/capital";
+import {
+	handleCapitalSmokeTest,
+	handleCapitalTestAlert,
+} from "./handlers/capital";
 import {
 	handleElimsFetchMemberStats,
 	handleElimsResolveUser,
@@ -63,6 +66,7 @@ const ACTION_HANDLERS: Record<string, IpcActionHandler> = {
 
 	// Sentinel Capital
 	capital_smoke_test: handleCapitalSmokeTest,
+	capital_test_alert: handleCapitalTestAlert,
 
 	// Worker Controls & Historical Ledger Rebuilds
 	reset_log_manager: handleResetLogManager,

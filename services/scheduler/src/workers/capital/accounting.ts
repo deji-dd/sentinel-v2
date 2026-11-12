@@ -16,6 +16,7 @@ import {
 	eq,
 	inArray,
 	lt,
+	pruneCapitalMarketCandles,
 	sql,
 	withCapitalTransaction,
 } from "@sentinel/database";
@@ -40,6 +41,7 @@ import {
 import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
+import { evaluateCapitalOrderOutcomes } from "./outcomes";
 
 const WORKER_NAME = "capital:accounting";
 const logger = new Logger("Scheduler", "CapitalAccounting");
@@ -610,6 +612,10 @@ async function recordSnapshots(book: CapitalBook): Promise<void> {
 	}
 }
 
+let lastMinuteRetentionAt = 0;
+const MINUTE_RETENTION_DAYS = 180;
+const MINUTE_RETENTION_INTERVAL_MS = 24 * 60 * 60_000;
+
 export async function runCapitalAccountingCycle(): Promise<void> {
 	try {
 		await ensureCapitalBooks();
@@ -617,6 +623,33 @@ export async function runCapitalAccountingCycle(): Promise<void> {
 		await generatePayouts("paper");
 		await recordSnapshots("live");
 		await recordSnapshots("paper");
+		for (const book of ["live", "paper"] as const) {
+			try {
+				await evaluateCapitalOrderOutcomes(book);
+			} catch (error) {
+				logger.error(
+					`Capital order outcomes failed for ${book}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		if (Date.now() - lastMinuteRetentionAt >= MINUTE_RETENTION_INTERVAL_MS) {
+			lastMinuteRetentionAt = Date.now();
+			try {
+				const deleted = await pruneCapitalMarketCandles({
+					intervalMinutes: 1,
+					olderThanDays: MINUTE_RETENTION_DAYS,
+				});
+				if (deleted > 0) {
+					logger.info(
+						`Pruned ${deleted.toLocaleString()} minute candle(s) older than ${MINUTE_RETENTION_DAYS}d.`,
+					);
+				}
+			} catch (error) {
+				logger.error(
+					`Capital candle retention failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
 	} catch (error) {
 		logger.error("Capital accounting cycle failed:", error);
 	}

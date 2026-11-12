@@ -17,13 +17,13 @@ import {
 	capitalSmokeReports,
 	capitalTransactions,
 	capitalWithdrawalRequests,
+	clearCapitalPaperBook,
 	db,
 	desc,
 	eq,
 	getCapitalConfig,
 	getCapitalState,
 	inArray,
-	resetCapitalPaperBook,
 	sql,
 	tornStocks,
 	withCapitalTransaction,
@@ -56,6 +56,7 @@ import type {
 } from "@sentinel/schemas";
 import { isCapitalSignalMode } from "@sentinel/schemas";
 import {
+	CAPITAL_SIZING,
 	computeDeposit,
 	computeInvestorMetrics,
 	computeNav,
@@ -79,6 +80,17 @@ export interface InvestorResolution {
 	investorId: string | null;
 }
 
+/** A validation failure that should reach the client as a 4xx, not a 500. */
+export class CapitalServiceError extends Error {
+	readonly status: number;
+
+	constructor(message: string, status = 400) {
+		super(message);
+		this.name = "CapitalServiceError";
+		this.status = status;
+	}
+}
+
 function iso(value: Date | null | undefined): string | null {
 	return value ? value.toISOString() : null;
 }
@@ -97,6 +109,10 @@ function asString(value: unknown, fallback = "0"): string {
 	if (typeof value === "number" && Number.isFinite(value)) return String(value);
 	if (typeof value === "bigint") return value.toString();
 	return fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function safeDate(value: unknown, fallback = new Date()): Date {
@@ -281,6 +297,9 @@ async function loadPositions(
 			shares: capitalPositions.shares,
 			costBasis: capitalPositions.costBasis,
 			realized: capitalPositions.realized,
+			stopPrice: capitalPositions.stopPrice,
+			targetPrice: capitalPositions.targetPrice,
+			peakPrice: capitalPositions.peakPrice,
 			openedAt: capitalPositions.openedAt,
 			price: capitalMarketLatest.price,
 		})
@@ -322,6 +341,9 @@ async function loadPositions(
 					navTotalValue > 0n
 						? (moneyToNumber(marketValue) / moneyToNumber(navTotalValue)) * 100
 						: 0,
+				stopPrice: row.stopPrice,
+				targetPrice: row.targetPrice,
+				peakPrice: row.peakPrice,
 				openedAtIso: iso(row.openedAt),
 			};
 		})
@@ -420,6 +442,7 @@ async function loadPublicTrades(
 			shares: fill.shares,
 			price: fill.price,
 			notional: fill.notional,
+			exitReason: fill.exitReason,
 			fees: fill.fees,
 			occurredAtIso: fill.occurredAt.toISOString(),
 		};
@@ -473,6 +496,7 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 			inceptionIso: iso(start),
 			daysRunning: days,
 			aum: config.publicShowAum ? formatMoney(nav.totalValue) : "0",
+			positionsValue: formatMoney(nav.positionsValue),
 			navPerUnit: formatMoney(nav.navPerUnit),
 			unitsOutstanding: formatUnits(nav.units),
 			investedCapital: invested,
@@ -514,6 +538,9 @@ export async function getCapitalPublicOverview(
 		summary: {
 			...summary,
 			aum: config.publicShowAum ? summary.aum : "0",
+			// Cash and deployed capital are components of AUM; hide them with AUM.
+			positionsValue: config.publicShowAum ? summary.positionsValue : "0",
+			cash: config.publicShowAum ? summary.cash : "0",
 			cumulativeFees: config.publicShowFees ? summary.cumulativeFees : "0",
 		},
 		flags: {
@@ -1483,11 +1510,13 @@ export function toCapitalSettings(
 		feeRateDailyBps: config.feeRateDailyBps,
 		feeRateWeeklyBps: config.feeRateWeeklyBps,
 		feeRateMonthlyBps: config.feeRateMonthlyBps,
-		minCashReservePct: config.minCashReservePct,
-		maxEquityPct: config.maxEquityPct,
-		maxStockWeightPct: config.maxStockWeightPct,
-		maxPositions: config.maxPositions,
-		riskPerTradePct: config.riskPerTradePct,
+		// Sizing is code-level policy now (see `capital-policy.ts`); report the
+		// effective values rather than a stale database column.
+		minCashReservePct: CAPITAL_SIZING.minCashReservePct,
+		maxEquityPct: CAPITAL_SIZING.maxEquityPct,
+		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
+		maxPositions: CAPITAL_SIZING.maxPositions,
+		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
 		stopAtrMultiplier: config.stopAtrMultiplier,
 		stopMinPct: config.stopMinPct,
 		trailingTriggerR: config.trailingTriggerR,
@@ -1818,6 +1847,7 @@ export async function getCapitalAdminOverview(
 			rationale: order.rationale,
 			stopPrice: order.stopPrice,
 			targetPrice: order.targetPrice,
+			exitReason: order.exitReason,
 			expectedAnnualIncome: order.expectedAnnualIncome,
 			riskFlags: order.riskFlags,
 			generatedAtIso: order.generatedAt.toISOString(),
@@ -1845,6 +1875,7 @@ export async function getCapitalAdminOverview(
 				fill.source === "decision"
 					? fill.source
 					: "manual",
+			exitReason: fill.exitReason,
 			occurredAtIso: fill.occurredAt.toISOString(),
 			variance:
 				fill.varianceShares !== null ||
@@ -1861,6 +1892,35 @@ export async function getCapitalAdminOverview(
 			note: fill.note,
 		};
 	});
+
+	const riskByBook = isRecord(engineDetails.riskByBook)
+		? engineDetails.riskByBook
+		: null;
+	const rawRisk =
+		riskByBook && isRecord(riskByBook[book]) ? riskByBook[book] : null;
+	const risk: CapitalEngineStatus["risk"] = {
+		drawdownPct:
+			rawRisk && typeof rawRisk.drawdownPct === "number"
+				? rawRisk.drawdownPct
+				: null,
+		dailyReturnPct:
+			rawRisk && typeof rawRisk.dailyReturnPct === "number"
+				? rawRisk.dailyReturnPct
+				: null,
+		entriesPaused: rawRisk ? rawRisk.entriesPaused === true : false,
+		sizeScale:
+			rawRisk && typeof rawRisk.sizeScale === "number" ? rawRisk.sizeScale : 1,
+		cooldownStockCount:
+			rawRisk && Array.isArray(rawRisk.cooldownStockIds)
+				? rawRisk.cooldownStockIds.length
+				: 0,
+		pauseReasons:
+			rawRisk && Array.isArray(rawRisk.pauseReasons)
+				? rawRisk.pauseReasons.filter(
+						(reason): reason is string => typeof reason === "string",
+					)
+				: [],
+	};
 
 	const engine: CapitalEngineStatus = {
 		book,
@@ -1889,6 +1949,7 @@ export async function getCapitalAdminOverview(
 				? engineDetails.paperFills
 				: 0,
 		lastError: workerState?.lastError ?? null,
+		risk,
 	};
 
 	return {
@@ -1896,6 +1957,7 @@ export async function getCapitalAdminOverview(
 		summary: {
 			...summary,
 			aum: formatMoney(nav.totalValue),
+			positionsValue: formatMoney(nav.positionsValue),
 			cash: formatMoney(parseMoney(state.cash)),
 		},
 		settings: toCapitalSettings(config),
@@ -1939,11 +2001,14 @@ export async function getCapitalAdminOverview(
 	};
 }
 
-export async function resetPaperBook(
-	startingCash: string,
-	actor: string | null,
-): Promise<void> {
-	await resetCapitalPaperBook(startingCash, actor);
+/**
+ * Clears the paper book for the dashboard reset.
+ *
+ * No operator lot is seeded: the owner creates paper investors and records
+ * their deposits. The smoke test keeps using the seeded reset directly.
+ */
+export async function resetPaperBook(actor: string | null): Promise<void> {
+	await clearCapitalPaperBook(actor);
 }
 
 /** Records a fill the owner executed but whose Torn log has not arrived yet. */
@@ -1958,22 +2023,89 @@ export async function recordManualFill(input: {
 	actor: string | null;
 	note?: string | null;
 }): Promise<CapitalFillView> {
-	const notional = moneyFromPriceShares(input.price, input.shares);
+	const price = Number(input.price);
+	if (!Number.isFinite(price) || price <= 0) {
+		throw new CapitalServiceError("Price must be a positive number.");
+	}
 	const fees = parseMoney(input.fees);
-	const cashDelta = input.side === "buy" ? -(notional + fees) : notional - fees;
+	if (fees < 0n) {
+		throw new CapitalServiceError("Fees cannot be negative.");
+	}
 	const now = new Date();
+	let filledShares = input.shares;
 	const fill = await withCapitalTransaction(input.book, async (tx) => {
+		const [order] = input.orderId
+			? await tx
+					.select()
+					.from(capitalOrders)
+					.where(eq(capitalOrders.id, input.orderId))
+					.limit(1)
+			: [undefined];
+		if (input.orderId) {
+			if (!order) {
+				throw new CapitalServiceError("Order not found.");
+			}
+			if (order.book !== input.book) {
+				throw new CapitalServiceError("Order belongs to a different book.");
+			}
+			if (order.stockId !== input.stockId) {
+				throw new CapitalServiceError("Order is for a different stock.");
+			}
+			if (order.side !== input.side) {
+				throw new CapitalServiceError("Order side does not match the fill.");
+			}
+			if (
+				order.status !== "recommended" &&
+				order.status !== "accepted" &&
+				order.status !== "partially_filled"
+			) {
+				throw new CapitalServiceError(
+					`Order is ${order.status}; it cannot be filled again.`,
+				);
+			}
+		}
+		if (input.side === "sell") {
+			const [position] = await tx
+				.select({ shares: capitalPositions.shares })
+				.from(capitalPositions)
+				.where(
+					and(
+						eq(capitalPositions.book, input.book),
+						eq(capitalPositions.stockId, input.stockId),
+					),
+				)
+				.limit(1);
+			const held = position?.shares ?? 0;
+			if (held <= 0) {
+				throw new CapitalServiceError(
+					"No open position to sell for this stock.",
+				);
+			}
+			filledShares = Math.min(input.shares, held);
+		}
+		const notional = moneyFromPriceShares(input.price, filledShares);
+		const cashDelta =
+			input.side === "buy" ? -(notional + fees) : notional - fees;
 		await applyCapitalFill(tx, {
 			book: input.book,
 			stockId: input.stockId,
 			side: input.side,
-			shares: input.shares,
+			shares: filledShares,
 			price: input.price,
 			notional: formatMoney(notional),
 			fees: formatMoney(fees),
 			cashDelta: formatMoney(cashDelta),
 			totalCost: formatMoney(notional + fees),
 			source: "manual",
+			entry:
+				input.side === "buy" && order
+					? {
+							price: input.price,
+							stopPrice: order.stopPrice,
+							targetPrice: order.targetPrice,
+						}
+					: undefined,
+			exitReason: input.side === "sell" ? (order?.exitReason ?? null) : null,
 			occurredAt: now,
 		});
 		const [row] = await tx
@@ -1983,36 +2115,30 @@ export async function recordManualFill(input: {
 				orderId: input.orderId ?? null,
 				stockId: input.stockId,
 				side: input.side,
-				shares: input.shares,
+				shares: filledShares,
 				price: input.price,
 				notional: formatMoney(notional),
 				fees: formatMoney(fees),
 				source: "manual",
+				exitReason: input.side === "sell" ? (order?.exitReason ?? null) : null,
 				occurredAt: now,
 				note: input.note ?? null,
 			})
 			.returning();
 		if (!row) throw new Error("Failed to record manual fill.");
-		if (input.orderId) {
-			const [order] = await tx
-				.select()
-				.from(capitalOrders)
-				.where(eq(capitalOrders.id, input.orderId))
-				.limit(1);
-			if (order) {
-				const filled = order.filledShares + input.shares;
-				await tx
-					.update(capitalOrders)
-					.set({
-						filledShares: filled,
-						status:
-							filled >= order.recommendedShares ? "filled" : "partially_filled",
-						averageFillPrice: input.price,
-						acceptedAt: order.acceptedAt ?? now,
-						updatedAt: now,
-					})
-					.where(eq(capitalOrders.id, order.id));
-			}
+		if (order) {
+			const filled = order.filledShares + filledShares;
+			await tx
+				.update(capitalOrders)
+				.set({
+					filledShares: filled,
+					status:
+						filled >= order.recommendedShares ? "filled" : "partially_filled",
+					averageFillPrice: input.price,
+					acceptedAt: order.acceptedAt ?? now,
+					updatedAt: now,
+				})
+				.where(eq(capitalOrders.id, order.id));
 		}
 		return row;
 	});
@@ -2028,6 +2154,7 @@ export async function recordManualFill(input: {
 		notional: fill.notional,
 		fees: fill.fees,
 		source: "manual",
+		exitReason: fill.exitReason,
 		occurredAtIso: fill.occurredAt.toISOString(),
 		variance: null,
 		note: fill.note,

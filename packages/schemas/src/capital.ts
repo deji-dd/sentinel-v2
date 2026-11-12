@@ -199,6 +199,8 @@ export interface CapitalSummary {
 	inceptionIso: string | null;
 	daysRunning: number | null;
 	aum: CapitalDecimal;
+	/** Market value of open positions (AUM minus cash). */
+	positionsValue: CapitalDecimal;
 	navPerUnit: CapitalDecimal;
 	unitsOutstanding: CapitalDecimal;
 	investedCapital: CapitalDecimal;
@@ -238,6 +240,8 @@ export interface CapitalPublicTrade {
 	shares: number;
 	price: CapitalDecimal;
 	notional: CapitalDecimal;
+	/** Why this sell happened; null for buys and legacy fills. */
+	exitReason: string | null;
 	fees: CapitalDecimal;
 	occurredAtIso: string;
 }
@@ -419,6 +423,10 @@ export interface CapitalPositionView {
 	unrealizedPnlPct: number | null;
 	realizedPnl: CapitalDecimal;
 	weightPct: number;
+	/** Frozen entry stop, frozen target and since-entry high water mark. */
+	stopPrice: CapitalDecimal | null;
+	targetPrice: CapitalDecimal | null;
+	peakPrice: CapitalDecimal | null;
 	openedAtIso: string | null;
 }
 
@@ -446,6 +454,8 @@ export interface CapitalFillView {
 	shares: number;
 	price: CapitalDecimal;
 	notional: CapitalDecimal;
+	/** Why this sell happened; null for buys and legacy fills. */
+	exitReason: string | null;
 	fees: CapitalDecimal;
 	source: CapitalFillSource;
 	occurredAtIso: string;
@@ -477,6 +487,7 @@ export interface CapitalOrderView {
 	rationale: string;
 	stopPrice: CapitalDecimal | null;
 	targetPrice: CapitalDecimal | null;
+	exitReason: string | null;
 	expectedAnnualIncome: CapitalDecimal | null;
 	riskFlags: string[];
 	generatedAtIso: string;
@@ -538,6 +549,15 @@ export interface CapitalEngineStatus {
 	recommendations: number;
 	paperFills: number;
 	lastError: string | null;
+	/** Live drawdown/daily-loss/cooldown state from the last cycle. */
+	risk: {
+		drawdownPct: number | null;
+		dailyReturnPct: number | null;
+		entriesPaused: boolean;
+		sizeScale: number;
+		cooldownStockCount: number;
+		pauseReasons: string[];
+	};
 }
 
 /** Which alpha the capital desk trades. */

@@ -575,6 +575,20 @@
 			"when": 1794433422047,
 			"tag": "0081_handy_donald_blake",
 			"breakpoints": true
+		},
+		{
+			"idx": 82,
+			"version": "7",
+			"when": 1794462968229,
+			"tag": "0082_capital_risk_and_frozen_stops",
+			"breakpoints": true
+		},
+		{
+			"idx": 83,
+			"version": "7",
+			"when": 1794463859501,
+			"tag": "0083_capital_stop_recalibration",
+			"breakpoints": true
 		}
 	]
 }

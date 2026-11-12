@@ -517,7 +517,12 @@ export async function capitalHistoryReadiness(): Promise<Readiness> {
 		intervalCoverage(60),
 		intervalCoverage(1),
 	]);
-	const dailyReady = daily.stocks >= 30 && daily.days >= 365;
+	// Daily bars are written by every market poll now, so a stale high-water
+	// mark means the store stopped updating (a long outage, or the old engine
+	// that only wrote 1m/5m/60m). Treat it as not ready so the seed refills the
+	// gap instead of leaving the reversal SMA/z-score frozen at the last seed.
+	const dailyFresh = (daily.lastAgeHours ?? Infinity) <= 48;
+	const dailyReady = daily.stocks >= 30 && daily.days >= 365 && dailyFresh;
 	const hourlyReady = hourly.stocks >= 30 && hourly.days >= 60;
 	const minuteReady =
 		minute.stocks >= 30 &&

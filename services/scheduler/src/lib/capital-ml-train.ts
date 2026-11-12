@@ -31,6 +31,13 @@ import {
 export const TARGET_PCT = 2;
 export const STOP_PCT = 2;
 export const HORIZON_DAYS = 20;
+/**
+ * The label is a proxy for the live ladder's *first* decision: the +1R trim
+ * against the frozen entry stop. With a 2% stop, +1R is +2%, so the ±2%
+ * barrier below matches it closely. The remaining 2/3 is managed by the +2R
+ * target and the z-score exit, which a single barrier cannot express.
+ */
+export const LABEL_SPEC = "first_trim_r1_v1";
 export const EMBARGO_DAYS = 25;
 export const ENTRY_SIGMA = 1;
 const MIN_HISTORY_DAYS = 300;
@@ -365,6 +372,7 @@ export async function trainCapitalMlModel(
 			targetPct: TARGET_PCT,
 			stopPct: STOP_PCT,
 			horizonDays: HORIZON_DAYS,
+			labelSpec: LABEL_SPEC,
 		};
 		const val = evaluate(model, validation);
 		log(
@@ -498,7 +506,7 @@ export async function trainCapitalMlModel(
 			},
 			dataStart: firstDate,
 			dataEnd: lastDate,
-			notes: `target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; candidates z<=-${ENTRY_SIGMA}`,
+			notes: `label ${LABEL_SPEC}: first +1R trim vs entry stop, proxied by target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; candidates z<=-${ENTRY_SIGMA}`,
 		},
 		{ activate: true },
 	);

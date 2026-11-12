@@ -5,7 +5,11 @@ import {
 	getCapitalState,
 	resetCapitalPaperBook,
 } from "@sentinel/database";
-import type { CapitalSmokeReport, IpcMessage } from "@sentinel/schemas";
+import type {
+	CapitalAlertPayload,
+	CapitalSmokeReport,
+	IpcMessage,
+} from "@sentinel/schemas";
 import { computeNav, formatMoney, Logger } from "@sentinel/utils";
 
 import { runCapitalEngineCycle } from "../../../workers/capital/engine";
@@ -29,6 +33,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * still leaves an auditable record. The paper alert is emitted separately and
  * carries `[PAPER]` styling in the bot, never the live alert path.
  */
+/**
+ * Sends one labelled test alert through the same path a real trade alert uses.
+ *
+ * It never creates an order or touches the book: the point is to prove the
+ * scheduler → IPC → bot → owner DM wiring without waiting for a signal.
+ */
+export const handleCapitalTestAlert: IpcActionHandler = async (ctx) => {
+	const message = ctx.message as IpcMessage & { requestId?: string };
+	const rawData =
+		"data" in message && isRecord(message.data)
+			? (message.data as Record<string, unknown>)
+			: {};
+	const book = rawData.book === "live" ? "live" : "paper";
+	const link =
+		book === "paper"
+			? "https://stocks.blasted-labs.tech/desk/paper"
+			: "https://stocks.blasted-labs.tech/desk";
+	const payload: CapitalAlertPayload = {
+		kind: "recommendation",
+		book,
+		title: "TEST ALERT — routing works",
+		body: "This is a test alert from the desk. No order was created and no book was changed.",
+		fields: [
+			{
+				name: "Mode",
+				value: book === "paper" ? "SIMULATION — no real funds" : "LIVE",
+				inline: true,
+			},
+		],
+		link,
+	};
+	ctx.server.broadcast({ action: "capital_alert", data: payload });
+	ctx.server.broadcast({
+		action: "capital_test_alert_result",
+		requestId: message.requestId,
+		data: { success: true, book },
+	});
+};
+
 export const handleCapitalSmokeTest: IpcActionHandler = async (ctx) => {
 	const message = ctx.message as IpcMessage & { requestId?: string };
 	const rawData =

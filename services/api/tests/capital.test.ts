@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	and,
 	capitalInvestments,
+	capitalOrders,
 	db,
 	eq,
 	resetCapitalPaperBook,
@@ -50,7 +51,7 @@ afterAll(async () => {
 	}
 	await updateCapitalConfig(
 		"paper",
-		{ publicShowHoldings: true, maxPositions: 12 },
+		{ publicShowHoldings: true, minEntryScore: 65 },
 		null,
 	);
 	await resetCapitalPaperBook("150000000000", null);
@@ -149,16 +150,23 @@ describe("capital API", () => {
 				},
 				body: JSON.stringify({
 					publicShowHoldings: true,
+					minEntryScore: 70,
+					// Sizing is hardcoded policy now; the API must ignore this.
 					maxPositions: 8,
 				}),
 			}),
 		);
 		expect(response.status).toBe(200);
 		const body = (await response.json()) as {
-			settings: { publicShowHoldings: boolean; maxPositions: number };
+			settings: {
+				publicShowHoldings: boolean;
+				maxPositions: number;
+				minEntryScore: number;
+			};
 		};
 		expect(body.settings.publicShowHoldings).toBe(true);
-		expect(body.settings.maxPositions).toBe(8);
+		expect(body.settings.minEntryScore).toBe(70);
+		expect(body.settings.maxPositions).toBe(7);
 	});
 
 	test("payment intents carry the deposit cadence", async () => {
@@ -351,5 +359,109 @@ describe("capital API", () => {
 		);
 		expect(row?.principal).toBe("3000000");
 		expect(row?.activeLots).toBe(2);
+	});
+
+	test("manual fills clamp a sell to the held shares", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+		const buy = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/fills", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					stockId: 9_000_020,
+					side: "buy",
+					shares: 1000,
+					price: "10",
+				}),
+			}),
+		);
+		expect(buy.status).toBe(200);
+
+		const sell = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/fills", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					stockId: 9_000_020,
+					side: "sell",
+					shares: 5000,
+					price: "12",
+				}),
+			}),
+		);
+		expect(sell.status).toBe(200);
+		const body = (await sell.json()) as { fill: { shares: number } };
+		expect(body.fill.shares).toBe(1000);
+	});
+
+	test("manual fills reject an order from another book", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+		const [liveOrder] = await db
+			.insert(capitalOrders)
+			.values({
+				book: "live",
+				stockId: 9_000_021,
+				side: "buy",
+				status: "recommended",
+				recommendedShares: 10,
+				priceGuide: "10",
+				expiresAt: new Date(Date.now() + 3_600_000),
+			})
+			.returning();
+		const response = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/fills", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					stockId: 9_000_021,
+					side: "buy",
+					shares: 10,
+					price: "10",
+					orderId: liveOrder?.id,
+				}),
+			}),
+		);
+		expect(response.status).toBe(400);
+		if (liveOrder) {
+			await db.delete(capitalOrders).where(eq(capitalOrders.id, liveOrder.id));
+		}
+	});
+
+	test("paper reset clears everything and seeds no operator", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+		const reset = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/reset", {
+				method: "POST",
+				headers: cookieFor(sessionId),
+			}),
+		);
+		expect(reset.status).toBe(200);
+
+		const overview = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/overview", {
+				headers: cookieFor(sessionId),
+			}),
+		);
+		expect(overview.status).toBe(200);
+		const body = (await overview.json()) as {
+			summary: { cash: string; positionsValue: string };
+			investors: unknown[];
+			positions: unknown[];
+			recentFills: unknown[];
+		};
+		expect(body.investors).toHaveLength(0);
+		expect(body.positions).toHaveLength(0);
+		expect(body.recentFills).toHaveLength(0);
+		expect(Number(body.summary.cash)).toBe(0);
+		expect(Number(body.summary.positionsValue)).toBe(0);
 	});
 });

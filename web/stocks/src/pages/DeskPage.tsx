@@ -3,7 +3,7 @@ import type {
 	CapitalPayoutFrequency,
 	CapitalSettings,
 } from "@sentinel/schemas";
-import { RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -24,6 +24,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Spinner,
+	StatCard,
 	StatusBadge,
 	Table,
 	TableBody,
@@ -32,8 +33,23 @@ import {
 	TableHeader,
 	TableRow,
 } from "../components/ui";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { useAuth } from "../contexts/AuthContext";
-import { apiFetch, compactMoney, isoDate } from "../lib/api";
+import {
+	apiFetch,
+	compactMoney,
+	exitReasonLabel,
+	isoDate,
+	money,
+	pct,
+} from "../lib/api";
 
 type Book = "live" | "paper";
 type PayoutMode = "cash" | "reinvest";
@@ -58,6 +74,8 @@ export function DeskPage({ book }: { book: Book }) {
 	const [settingsDraft, setSettingsDraft] = useState<CapitalSettings | null>(
 		null,
 	);
+	const [resetOpen, setResetOpen] = useState(false);
+	const [resetConfirm, setResetConfirm] = useState("");
 
 	const [investorName, setInvestorName] = useState("");
 	const [investorTornId, setInvestorTornId] = useState("");
@@ -106,8 +124,10 @@ export function DeskPage({ book }: { book: Book }) {
 		try {
 			await fn();
 			await load();
+			return true;
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Action failed.");
+			return false;
 		} finally {
 			setBusy(false);
 		}
@@ -231,6 +251,49 @@ export function DeskPage({ book }: { book: Book }) {
 		setIntentAmount("");
 	};
 
+	const resetPaper = async () => {
+		const ok = await runAction(() =>
+			apiFetch("/v2/capital/admin/paper/reset", {
+				method: "POST",
+				body: "{}",
+			}),
+		);
+		if (!ok) return;
+		setResetOpen(false);
+		setResetConfirm("");
+		// The old ids are gone; clear the pickers so a stale selection cannot
+		// post a deposit against a deleted investor.
+		setDepositInvestor("");
+		setIntentInvestor("");
+		setDepositAmount("");
+		setIntentAmount("");
+	};
+
+	const saveRisk = async () => {
+		if (!settingsDraft) return;
+		await runAction(() =>
+			apiFetch(`/v2/capital/admin/${book}/settings`, {
+				method: "PUT",
+				body: JSON.stringify({
+					drawdownHaltPct: settingsDraft.drawdownHaltPct,
+					drawdownDeriskPct: settingsDraft.drawdownDeriskPct,
+					dailyLossHaltPct: settingsDraft.dailyLossHaltPct,
+					stopCooldownDays: settingsDraft.stopCooldownDays,
+					staleDataSeconds: settingsDraft.staleDataSeconds,
+					regimeSmaDays: settingsDraft.regimeSmaDays,
+				}),
+			}),
+		);
+	};
+
+	const openOrders =
+		data?.orders.filter(
+			(order) =>
+				order.status === "recommended" ||
+				order.status === "accepted" ||
+				order.status === "partially_filled",
+		) ?? [];
+
 	const investors = data?.investors ?? [];
 
 	return (
@@ -250,13 +313,75 @@ export function DeskPage({ book }: { book: Book }) {
 			/>
 
 			{book === "paper" ? (
-				<div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-					SIMULATION — no real funds. Results are public on the Paper page;
-					admin actions stay here. Paper alerts are not duplicated to Discord.
+				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+					<span>
+						SIMULATION — no real funds. Results are public on the Paper page;
+						trade and risk alerts are sent to your DMs labelled TEST.
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={busy}
+						onClick={() =>
+							void runAction(() =>
+								apiFetch("/v2/capital/admin/paper/test-alert", {
+									method: "POST",
+									body: "{}",
+								}),
+							)
+						}
+					>
+						Send test alert
+					</Button>
 				</div>
 			) : null}
 
 			{error ? <ErrorBanner message={error} /> : null}
+
+			{data?.summary ? (
+				<div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+					<StatCard
+						label="Available cash"
+						value={money(data.summary.cash)}
+						hint="Liquid and ready to deploy"
+						tone="info"
+						help="Cash in the book. The engine keeps a reserve of 15% of NAV plus any unpaid payouts; the rest can fund new positions."
+					/>
+					<StatCard
+						label="Capital deployed"
+						value={money(data.summary.positionsValue)}
+						hint={
+							Number(data.summary.aum) > 0
+								? `${pct((Number(data.summary.positionsValue) / Number(data.summary.aum)) * 100, 1)} of NAV at market`
+								: "No capital deployed yet"
+						}
+						help="Market value of the open stock positions at the last price. AUM is this plus available cash."
+					/>
+					<StatCard
+						label="Portfolio value"
+						value={money(data.summary.aum)}
+						hint="Cash + positions at market"
+					/>
+					<StatCard
+						label="Open positions"
+						value={String(data.positions.length)}
+						hint={`${data.settings.maxPositions} slots, 12% max each`}
+					/>
+				</div>
+			) : null}
+
+			{data?.engine.risk &&
+			(data.engine.risk.entriesPaused ||
+				data.engine.risk.sizeScale < 1 ||
+				data.engine.risk.cooldownStockCount > 0) ? (
+				<div className="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+					{data.engine.risk.entriesPaused
+						? `New entries paused: ${data.engine.risk.pauseReasons.join("; ")}. Exits and stops still run.`
+						: data.engine.risk.sizeScale < 1
+							? `Drawdown ${pct(data.engine.risk.drawdownPct)} — new entries are sized at ${pct(data.engine.risk.sizeScale * 100, 0)}.`
+							: `${data.engine.risk.cooldownStockCount} stock(s) in post-stop cooldown.`}
+				</div>
+			) : null}
 
 			<div className="mt-4">
 				<SectionCard
@@ -659,11 +784,370 @@ export function DeskPage({ book }: { book: Book }) {
 				</SectionCard>
 			</div>
 
+			<div className="mt-4">
+				<SectionCard
+					title="Open positions"
+					description="Frozen entry stop and target from the entry order, plus the since-entry high-water mark. The engine never recomputes the stop."
+				>
+					{data?.positions.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Stock</TableHead>
+									<TableHead>Shares</TableHead>
+									<TableHead>Avg cost</TableHead>
+									<TableHead>Price</TableHead>
+									<TableHead>Value</TableHead>
+									<TableHead>Unrealized</TableHead>
+									<TableHead>Weight</TableHead>
+									<TableHead>Stop</TableHead>
+									<TableHead>Target</TableHead>
+									<TableHead>Peak</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{data.positions.map((position) => (
+									<TableRow key={position.stockId}>
+										<TableCell className="truncate">
+											<span className="font-mono text-xs text-muted-foreground">
+												{position.acronym}
+											</span>{" "}
+											{position.stockName}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{position.shares.toLocaleString()}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(position.averageCost)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(position.price)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(position.marketValue)}
+										</TableCell>
+										<TableCell
+											className={
+												Number(position.unrealizedPnl) >= 0
+													? "font-mono text-xs text-success"
+													: "font-mono text-xs text-destructive"
+											}
+										>
+											<span className="block">
+												{compactMoney(position.unrealizedPnl)}
+											</span>
+											{position.unrealizedPnlPct !== null ? (
+												<span className="block text-[11px]">
+													{pct(position.unrealizedPnlPct)}
+												</span>
+											) : null}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{pct(position.weightPct, 1)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{position.stopPrice ? money(position.stopPrice) : "—"}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{position.targetPrice ? money(position.targetPrice) : "—"}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{position.peakPrice ? money(position.peakPrice) : "—"}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					) : (
+						<EmptyState title="No open positions" />
+					)}
+				</SectionCard>
+			</div>
+
+			<div className="mt-4">
+				<SectionCard
+					title="Open orders"
+					description="Pending recommendations. Accepting is advisory for live; paper auto-fills. Orders expire after the configured validity window."
+				>
+					{openOrders.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Generated</TableHead>
+									<TableHead>Stock</TableHead>
+									<TableHead>Side</TableHead>
+									<TableHead>Shares</TableHead>
+									<TableHead>Price</TableHead>
+									<TableHead>Stop</TableHead>
+									<TableHead>Target</TableHead>
+									<TableHead>Status</TableHead>
+									<TableHead>Expires</TableHead>
+									<TableHead>Actions</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{openOrders.map((order) => (
+									<TableRow key={order.id}>
+										<TableCell className="text-xs text-muted-foreground">
+											{isoDate(order.generatedAtIso)}
+										</TableCell>
+										<TableCell className="truncate">
+											{order.acronym} {order.stockName}
+										</TableCell>
+										<TableCell>
+											<StatusBadge
+												tone={order.side === "buy" ? "success" : "danger"}
+											>
+												{order.side}
+											</StatusBadge>
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{order.recommendedShares.toLocaleString()}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(order.priceGuide)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{order.stopPrice ? money(order.stopPrice) : "—"}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{order.targetPrice ? money(order.targetPrice) : "—"}
+										</TableCell>
+										<TableCell className="text-xs">{order.status}</TableCell>
+										<TableCell className="text-xs text-muted-foreground">
+											{isoDate(order.expiresAtIso)}
+										</TableCell>
+										<TableCell>
+											<div className="flex gap-1">
+												<Button
+													size="xs"
+													variant="outline"
+													disabled={busy}
+													onClick={() =>
+														void runAction(() =>
+															apiFetch(
+																`/v2/capital/admin/${book}/orders/${order.id}/accept`,
+																{ method: "POST", body: "{}" },
+															),
+														)
+													}
+												>
+													Accept
+												</Button>
+												<Button
+													size="xs"
+													variant="ghost"
+													disabled={busy}
+													onClick={() =>
+														void runAction(() =>
+															apiFetch(
+																`/v2/capital/admin/${book}/orders/${order.id}/cancel`,
+																{ method: "POST", body: "{}" },
+															),
+														)
+													}
+												>
+													Cancel
+												</Button>
+											</div>
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					) : (
+						<EmptyState title="No open orders" />
+					)}
+				</SectionCard>
+			</div>
+
+			<div className="mt-4">
+				<SectionCard
+					title="Recent fills"
+					description="Every fill with its exit reason. Paper fills are simulated; live fills are booked from Torn logs."
+				>
+					{data?.recentFills.length ? (
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>When</TableHead>
+									<TableHead>Stock</TableHead>
+									<TableHead>Side</TableHead>
+									<TableHead>Shares</TableHead>
+									<TableHead>Price</TableHead>
+									<TableHead>Value</TableHead>
+									<TableHead>Reason</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{data.recentFills.map((fill) => (
+									<TableRow key={fill.id}>
+										<TableCell className="text-xs text-muted-foreground">
+											{isoDate(fill.occurredAtIso)}
+										</TableCell>
+										<TableCell className="truncate">
+											<span className="font-mono text-xs text-muted-foreground">
+												{fill.stockId}
+											</span>{" "}
+											{fill.stockName}
+										</TableCell>
+										<TableCell>
+											<StatusBadge
+												tone={fill.side === "buy" ? "success" : "danger"}
+											>
+												{fill.side}
+											</StatusBadge>
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{fill.shares.toLocaleString()}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{money(fill.price)}
+										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(fill.notional)}
+										</TableCell>
+										<TableCell className="text-xs">
+											{fill.side === "sell"
+												? exitReasonLabel(fill.exitReason)
+												: "—"}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					) : (
+						<EmptyState title="No fills yet" />
+					)}
+				</SectionCard>
+			</div>
+
+			{book === "paper" ? (
+				<div className="mt-4">
+					<SectionCard
+						title="Reset simulation"
+						description="Deletes every paper investor, lot, position, order, fill, payout and snapshot. Nothing is seeded afterwards: add investors and deposits yourself. The live book is never touched."
+						actions={
+							<Button
+								variant="destructive"
+								disabled={busy}
+								onClick={() => setResetOpen(true)}
+							>
+								<Trash2 className="size-4" /> Reset paper book
+							</Button>
+						}
+					>
+						<p className="text-xs text-muted-foreground">
+							Current book: {money(data?.summary.cash ?? "0")} cash,{" "}
+							{data?.positions.length ?? 0} open positions,{" "}
+							{data?.investors.length ?? 0} investors. A reset cannot be undone.
+						</p>
+					</SectionCard>
+				</div>
+			) : null}
+
+			<Dialog open={resetOpen} onOpenChange={setResetOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Reset the paper simulation?</DialogTitle>
+						<DialogDescription>
+							This permanently deletes all paper investors, lots, positions,
+							orders, fills and NAV history. No operator or starting cash is
+							created; the paper book starts empty. Type <strong>RESET</strong>{" "}
+							to continue.
+						</DialogDescription>
+					</DialogHeader>
+					<Input
+						placeholder="RESET"
+						value={resetConfirm}
+						onChange={(event) => setResetConfirm(event.target.value)}
+					/>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							disabled={busy}
+							onClick={() => setResetOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							disabled={busy || resetConfirm !== "RESET"}
+							onClick={() => void resetPaper()}
+						>
+							{busy ? "Resetting…" : "Reset paper book"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{settingsDraft ? (
+				<div className="mt-4">
+					<SectionCard
+						title="Risk overlay"
+						description="Enforced by the engine every cycle. De-risk halves new entry size; halt pauses new entries. Exits and stops always run."
+						actions={
+							<Button
+								variant="outline"
+								disabled={busy}
+								onClick={() => void saveRisk()}
+							>
+								<Save className="size-4" /> Save risk
+							</Button>
+						}
+					>
+						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+							<SettingsNumber
+								label="Drawdown halt %"
+								value={settingsDraft.drawdownHaltPct}
+								decimals={1}
+								onChange={(value) => patchSettings({ drawdownHaltPct: value })}
+							/>
+							<SettingsNumber
+								label="Drawdown de-risk %"
+								value={settingsDraft.drawdownDeriskPct}
+								decimals={1}
+								onChange={(value) =>
+									patchSettings({ drawdownDeriskPct: value })
+								}
+							/>
+							<SettingsNumber
+								label="Daily loss halt %"
+								value={settingsDraft.dailyLossHaltPct}
+								decimals={1}
+								onChange={(value) => patchSettings({ dailyLossHaltPct: value })}
+							/>
+							<SettingsNumber
+								label="Stop cooldown days"
+								value={settingsDraft.stopCooldownDays}
+								onChange={(value) => patchSettings({ stopCooldownDays: value })}
+							/>
+							<SettingsNumber
+								label="Stale data seconds"
+								value={settingsDraft.staleDataSeconds}
+								onChange={(value) => patchSettings({ staleDataSeconds: value })}
+							/>
+							<SettingsNumber
+								label="Regime SMA days"
+								value={settingsDraft.regimeSmaDays}
+								onChange={(value) => patchSettings({ regimeSmaDays: value })}
+							/>
+						</div>
+						<p className="mt-2 text-xs text-muted-foreground">
+							Drawdown and daily loss use NAV per unit, so deposits and
+							withdrawals do not look like performance. A stopped-out name is
+							blocked for the cooldown window. Stale data pauses entries but
+							never exits.
+						</p>
+					</SectionCard>
+				</div>
+			) : null}
+
 			{settingsDraft && book === "live" ? (
 				<div className="mt-4">
 					<SectionCard
 						title="Settings"
-						description="Fee, risk, public visibility and engine switches. Alerts are always sent to your Discord DMs."
+						description="Fee, public visibility and engine switches. Position sizing is fixed policy and shown read-only. Alerts are always sent to your Discord DMs."
 						actions={
 							<Button
 								variant="outline"
@@ -680,10 +1164,6 @@ export function DeskPage({ book }: { book: Book }) {
 												feeRateDailyBps: settingsDraft.feeRateDailyBps,
 												feeRateWeeklyBps: settingsDraft.feeRateWeeklyBps,
 												feeRateMonthlyBps: settingsDraft.feeRateMonthlyBps,
-												minCashReservePct: settingsDraft.minCashReservePct,
-												maxStockWeightPct: settingsDraft.maxStockWeightPct,
-												maxPositions: settingsDraft.maxPositions,
-												riskPerTradePct: settingsDraft.riskPerTradePct,
 												withdrawalExitFeeBps:
 													settingsDraft.withdrawalExitFeeBps,
 												engineEnabled: settingsDraft.engineEnabled,
@@ -726,38 +1206,20 @@ export function DeskPage({ book }: { book: Book }) {
 									/>
 								</div>
 								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Risk
+									Position sizing (fixed policy)
 								</p>
-								<div className="grid grid-cols-2 gap-2">
-									<SettingsNumber
-										label="Risk / trade %"
-										value={settingsDraft.riskPerTradePct}
-										decimals={2}
-										onChange={(value) =>
-											patchSettings({ riskPerTradePct: value })
-										}
-									/>
-									<SettingsNumber
-										label="Max stock weight %"
-										value={settingsDraft.maxStockWeightPct}
-										decimals={2}
-										onChange={(value) =>
-											patchSettings({ maxStockWeightPct: value })
-										}
-									/>
-									<SettingsNumber
-										label="Max positions"
-										value={settingsDraft.maxPositions}
-										onChange={(value) => patchSettings({ maxPositions: value })}
-									/>
-									<SettingsNumber
-										label="Cash reserve %"
-										value={settingsDraft.minCashReservePct}
-										decimals={2}
-										onChange={(value) =>
-											patchSettings({ minCashReservePct: value })
-										}
-									/>
+								<div className="rounded-lg border border-border/60 p-2 text-xs text-muted-foreground">
+									<p>
+										{settingsDraft.maxPositions} slots ·{" "}
+										{settingsDraft.maxStockWeightPct}% max per name ·{" "}
+										{settingsDraft.riskPerTradePct}% risk per trade ·{" "}
+										{settingsDraft.minCashReservePct}% cash reserve.
+									</p>
+									<p className="mt-1">
+										These are code-level invariants so the slot count and
+										per-name weight cannot drift out of sync with the equity
+										cap. Change them in <code>capital-policy.ts</code>.
+									</p>
 								</div>
 							</div>
 							<div className="space-y-2">

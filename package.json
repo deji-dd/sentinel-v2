@@ -24,6 +24,7 @@
 		"tt-selector:dev": "bun --filter @sentinel/tt-selector dev",
 		"stocks:build": "bun --filter @sentinel/stocks build",
 		"stocks:dev": "bun --filter @sentinel/stocks dev",
+		"capital:backtest": "bun run scripts/capital-ladder-backtest.ts",
 		"capital:ml:audit": "bun run scripts/capital-ml-audit.ts",
 		"capital:ml:train": "bun run scripts/capital-ml-train.ts",
 		"stocks:backfill": "bun run scripts/capital-history-backfill.ts",

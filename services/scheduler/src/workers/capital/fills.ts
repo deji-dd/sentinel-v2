@@ -95,6 +95,14 @@ async function recordFill(input: {
 	orderId: string | null;
 	source: "torn_log" | "decision";
 	variance: ReturnType<typeof computeFillVariance> | null;
+	/** Entry plan from the matched buy order, frozen on the new position. */
+	entry?: {
+		price: string;
+		stopPrice: string | null;
+		targetPrice: string | null;
+	} | null;
+	/** Exit reason from the matched sell order, copied onto the fill. */
+	exitReason?: string | null;
 }): Promise<void> {
 	const notional = moneyFromPriceShares(input.price.toFixed(6), input.shares);
 	const fees =
@@ -114,6 +122,8 @@ async function recordFill(input: {
 			cashDelta: formatMoney(cashDelta),
 			totalCost: formatMoney(notional + fees),
 			source: input.source,
+			entry: input.entry ?? undefined,
+			exitReason: input.exitReason ?? null,
 			occurredAt: now,
 		});
 		await tx.insert(capitalFills).values({
@@ -133,6 +143,7 @@ async function recordFill(input: {
 			slippageBps: input.variance?.slippageBps,
 			delaySeconds: input.variance?.delaySeconds,
 			notionalDelta: input.variance?.notionalDelta,
+			exitReason: input.exitReason ?? null,
 		});
 	});
 }
@@ -231,6 +242,15 @@ async function processStockLog(log: {
 			orderId: order.id,
 			source: "torn_log",
 			variance,
+			entry:
+				event.side === "buy"
+					? {
+							price: event.price.toFixed(6),
+							stopPrice: order.stopPrice,
+							targetPrice: order.targetPrice,
+						}
+					: null,
+			exitReason: event.side === "sell" ? order.exitReason : null,
 		});
 		const nextFilled = order.filledShares + fillShares;
 		await db

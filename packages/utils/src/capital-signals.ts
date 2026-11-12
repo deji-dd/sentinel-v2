@@ -17,6 +17,7 @@ import {
 	moneyToNumber,
 	parseMoney,
 } from "./capital-money";
+import type { CapitalExitReason } from "./capital-policy";
 
 export interface CapitalCandle {
 	/** Unix seconds. */
@@ -380,7 +381,10 @@ export interface CapitalScoringConfig {
 	reversalExitSigma?: number;
 	/** Reject a reversal candidate whose annualised volatility exceeds this. */
 	maxVolatilityPct?: number;
-	/** Below this many days of history the engine halves size and reports low confidence. */
+	/**
+	 * Minimum history (days) for a candidate. Below this the engine rejects it
+	 * outright with a `low_history` flag; it does not halve the size.
+	 */
 	minHistoryDays?: number;
 }
 
@@ -520,13 +524,24 @@ function scoreReversalStock(
 		clamp100((-features.zscore20 / entrySigma) * 100) * 0.6 +
 			clamp100((-features.drawdown30Pct / 8) * 100) * 0.4,
 	);
-	// 0.5% of 30-day shares growth is a strong inflow, -0.5% a strong outflow.
-	const flow = clamp100(50 + (features.sharesChange30Pct ?? 0) * 100);
-	const risk = clamp100(100 - Math.max(0, features.volatilityPct - 12) * 3);
+	// 7-day shares growth is the study's strongest predictor (+0.116 IC vs
+	// +0.109 for 30-day). The term saturates at +1%: in the current Torn
+	// universe almost every candidate is above that, so flow acts as an
+	// outflow filter rather than a continuous rank. Deliberate: widening the
+	// band to ±5% in the exact-ladder backtest cut CAGR from 15.6% to 10.9%.
+	const flowChange =
+		features.sharesChange7Pct ?? features.sharesChange30Pct ?? 0;
+	const flow = clamp100(50 + flowChange * 50);
+	// 100 at <=10% annualised volatility, falling to 0 at 60%. Most Torn names
+	// sit under 10%, so this is effectively a low-vol gate; the stretch term
+	// does the ranking. An ATR-based alternative was tested and scored worse.
+	const risk = clamp100(
+		Math.max(0, 100 - Math.max(0, features.volatilityPct - 10) * 2),
+	);
 	const regime = features.regimeOn ? 100 : 0;
 
 	const score = clamp100(
-		stretch * 0.6 + flow * 0.2 + risk * 0.15 + regime * 0.05,
+		stretch * 0.5 + flow * 0.25 + risk * 0.2 + regime * 0.05,
 	);
 
 	const eligible =
@@ -550,6 +565,10 @@ export interface CapitalEntryConfig {
 	maxStockWeightPct: number;
 	stopAtrMultiplier: number;
 	stopMinPct: number;
+	/** Hard ceiling on the stop distance, as a percentage of price. */
+	stopMaxPct?: number;
+	/** Take-profit distance in initial-risk units. Defaults to 2R. */
+	targetR?: number;
 	minNotional: string;
 }
 
@@ -558,17 +577,59 @@ export interface CapitalEntryPlan {
 	notional: Money;
 	stopPrice: number;
 	targetPrice: number;
+	/** Entry stop distance per share, frozen on the position. */
+	stopDistance: number;
 	riskPerShare: number;
 	riskAmount: number;
 	positionPct: number;
+}
+
+function emptyEntryPlan(): CapitalEntryPlan {
+	return {
+		shares: 0,
+		notional: 0n,
+		stopPrice: 0,
+		targetPrice: 0,
+		stopDistance: 0,
+		riskPerShare: 0,
+		riskAmount: 0,
+		positionPct: 0,
+	};
+}
+
+/**
+ * The entry stop distance: `clamp(atr × multiplier, min%, max%)`.
+ *
+ * Exported so a position created outside the recommendation flow (a log fill,
+ * a manual entry) can be assigned the same stop the engine would have used,
+ * once, and then frozen. Never call this to *update* an existing position's
+ * stop.
+ */
+export function entryStopDistance(input: {
+	price: number;
+	atr: number;
+	atrMultiplier: number;
+	minPct: number;
+	maxPct?: number;
+}): number {
+	if (!Number.isFinite(input.price) || input.price <= 0) return 0;
+	const minDistance = input.price * (input.minPct / 100);
+	const maxDistance = Math.max(
+		minDistance,
+		input.price * ((input.maxPct ?? 3) / 100),
+	);
+	const raw = Number.isFinite(input.atr) ? input.atr * input.atrMultiplier : 0;
+	return Math.min(maxDistance, Math.max(minDistance, raw));
 }
 
 /**
  * Converts a signal into an integer share count.
  *
  * Sizing is risk-first: the stop distance sets the share count, then the
- * per-stock weight cap and free cash constrain it. There is no block/increment
- * arithmetic here — any integer share count is valid.
+ * per-stock weight cap and free cash constrain it. `sizeMultiplier` (derived
+ * from the signal score) scales the *weight target*, from half the base weight
+ * to the full per-name cap; it never overrides the risk cap. There is no
+ * block/increment arithmetic here — any integer share count is valid.
  */
 export function planEntry(input: {
 	nav: string;
@@ -576,6 +637,10 @@ export function planEntry(input: {
 	price: number;
 	atr: number;
 	existingWeightPct: number;
+	/** 0.5–1.5 confidence multiplier from the signal score. */
+	sizeMultiplier?: number;
+	/** Denominator used to derive the base weight. Defaults to 1.5. */
+	maxSizeMultiplier?: number;
 	config: CapitalEntryConfig;
 }): CapitalEntryPlan {
 	const nav = Number.parseFloat(input.nav);
@@ -587,41 +652,41 @@ export function planEntry(input: {
 		nav <= 0 ||
 		price <= 0
 	) {
-		return {
-			shares: 0,
-			notional: 0n,
-			stopPrice: 0,
-			targetPrice: 0,
-			riskPerShare: 0,
-			riskAmount: 0,
-			positionPct: 0,
-		};
+		return emptyEntryPlan();
 	}
 
-	const stopDistance = Math.max(
-		input.atr * input.config.stopAtrMultiplier,
-		price * (input.config.stopMinPct / 100),
-	);
+	const stopDistance = entryStopDistance({
+		price,
+		atr: input.atr,
+		atrMultiplier: input.config.stopAtrMultiplier,
+		minPct: input.config.stopMinPct,
+		maxPct: input.config.stopMaxPct ?? 3,
+	});
 	if (!Number.isFinite(stopDistance) || stopDistance <= 0) {
-		return {
-			shares: 0,
-			notional: 0n,
-			stopPrice: 0,
-			targetPrice: 0,
-			riskPerShare: 0,
-			riskAmount: 0,
-			positionPct: 0,
-		};
+		return emptyEntryPlan();
 	}
 
 	const riskBudget = nav * (input.config.riskPerTradePct / 100);
 	const sharesByRisk = Math.floor(riskBudget / stopDistance);
 
+	// Confidence sizing is expressed in weight, not risk: the base weight is
+	// the per-name cap divided by the maximum multiplier, so a 1.5× score
+	// reaches the cap and a 0.5× score uses a third of it.
+	const maxMultiplier = Math.max(1, input.maxSizeMultiplier ?? 1.5);
+	const multiplier = Math.min(
+		maxMultiplier,
+		Math.max(0.1, input.sizeMultiplier ?? 1),
+	);
+	const baseWeightPct = input.config.maxStockWeightPct / maxMultiplier;
 	const availableWeightPct = Math.max(
 		0,
 		input.config.maxStockWeightPct - input.existingWeightPct,
 	);
-	const maxNotional = nav * (availableWeightPct / 100);
+	const desiredWeightPct = Math.min(
+		availableWeightPct,
+		baseWeightPct * multiplier,
+	);
+	const maxNotional = nav * (desiredWeightPct / 100);
 	const sharesByWeight = Math.floor(maxNotional / price);
 	const sharesByCash = Math.floor(freeCash / price);
 
@@ -631,15 +696,7 @@ export function planEntry(input: {
 	const notional = moneyFromPriceShares(price, shares);
 	const minNotional = parseMoney(input.config.minNotional);
 	if (notional < minNotional) {
-		return {
-			shares: 0,
-			notional: 0n,
-			stopPrice: 0,
-			targetPrice: 0,
-			riskPerShare: 0,
-			riskAmount: 0,
-			positionPct: 0,
-		};
+		return emptyEntryPlan();
 	}
 
 	const stopPrice = Math.max(0.01, price - stopDistance);
@@ -647,7 +704,8 @@ export function planEntry(input: {
 		shares,
 		notional,
 		stopPrice,
-		targetPrice: price + stopDistance * 2,
+		targetPrice: price + stopDistance * (input.config.targetR ?? 2),
+		stopDistance,
 		riskPerShare: stopDistance,
 		riskAmount: shares * stopDistance,
 		positionPct: (moneyToNumber(notional) / nav) * 100,
@@ -668,15 +726,31 @@ export interface CapitalExitDecision {
 	action: "hold" | "sell" | "scale_out";
 	fraction: number;
 	reason: string;
+	/** Machine-readable reason persisted on orders/fills. */
+	reasonCode: CapitalExitReason;
 	rMultiple: number;
 }
 
-/** Evaluates stop, trail, scale-out, thesis and time exits in that order. */
+/**
+ * Evaluates the exit ladder in order:
+ * hard stop → trail → +1R trim → target → tightened trail → thesis → time.
+ *
+ * `stopPrice` must be the entry stop stored on the position, not a value
+ * recomputed from the current ATR. That is what keeps the R multiple stable:
+ * a position entered at 100 with a 98 stop is at +1R when price reaches 102,
+ * whether today's ATR is 0.5% or 2%. The trailing stop is deliberately
+ * separate and may use the current ATR; it is measured from `peakPrice`, the
+ * high-water mark since entry.
+ */
 export function evaluateExit(input: {
 	entryPrice: number;
 	price: number;
+	/** High-water mark since entry (not a 30-day window high). */
 	peakPrice: number;
+	/** Frozen entry stop. */
 	stopPrice: number;
+	/** Frozen +2R take-profit. Null/undefined disables the target exit. */
+	targetPrice?: number | null;
 	atr: number;
 	ema20: number;
 	ema50: number;
@@ -684,11 +758,12 @@ export function evaluateExit(input: {
 	daysHeld: number;
 	scaledOut: boolean;
 	config: CapitalExitConfig;
-	/** Defaults to `momentum`; `reversal` exits when the price mean-reverts. */
+	/** Defaults to `momentum`; `reversal` exits when the z-score recovers. */
 	mode?: CapitalSignalMode;
-	/** 20-period mean used as the reversal target. Falls back to `ema20`. */
+	/** 20-period mean used as a fallback when the z-score is unavailable. */
 	meanPrice?: number;
 	zscore20?: number;
+	/** Exit once the z-score is at or above this level. Defaults to +1. */
 	reversalExitSigma?: number;
 }): CapitalExitDecision {
 	const { entryPrice, price, peakPrice, stopPrice, config } = input;
@@ -700,6 +775,7 @@ export function evaluateExit(input: {
 			action: "sell",
 			fraction: 1,
 			reason: "Hard stop reached.",
+			reasonCode: "stop",
 			rMultiple,
 		};
 	}
@@ -714,6 +790,7 @@ export function evaluateExit(input: {
 				action: "sell",
 				fraction: 1,
 				reason: `Trailing stop hit after +${rMultiple.toFixed(2)}R.`,
+				reasonCode: "trail",
 				rMultiple,
 			};
 		}
@@ -724,6 +801,24 @@ export function evaluateExit(input: {
 			action: "scale_out",
 			fraction: Math.min(1, Math.max(0, config.scaleOutFraction)),
 			reason: `Take one-third off at +${rMultiple.toFixed(2)}R.`,
+			reasonCode: "scale_out",
+			rMultiple,
+		};
+	}
+
+	// The order stores a target; use it. Without this the desk implied a trade
+	// the engine would never take and the +2R level was decorative.
+	if (
+		input.targetPrice !== undefined &&
+		input.targetPrice !== null &&
+		input.targetPrice > 0 &&
+		price >= input.targetPrice
+	) {
+		return {
+			action: "sell",
+			fraction: 1,
+			reason: `Target reached at +${rMultiple.toFixed(2)}R.`,
+			reasonCode: "target",
 			rMultiple,
 		};
 	}
@@ -737,24 +832,28 @@ export function evaluateExit(input: {
 			action: "sell",
 			fraction: 1,
 			reason: "Tightened trail on the remaining position.",
+			reasonCode: "tighten_trail",
 			rMultiple,
 		};
 	}
 
 	if ((input.mode ?? "momentum") === "reversal") {
-		// The trade thesis is "the dip reverts". Once price is back at the
-		// 20-period mean (or the z-score has recovered), there is nothing left
-		// to harvest and the position should be recycled into a new dip.
+		// The trade thesis is "the dip reverts". Exit once the z-score has
+		// recovered to the upper band (+1σ by default), not merely back to the
+		// mean: stopping at the mean capped the win at ~0.3–1.4% against a 4%
+		// stop, which is the geometry this ladder exists to fix.
+		const exitSigma = input.reversalExitSigma ?? 1;
 		const meanPrice = input.meanPrice ?? input.ema20;
-		const exitSigma = input.reversalExitSigma ?? 0;
-		if (
-			meanPrice > 0 &&
-			(input.price >= meanPrice || (input.zscore20 ?? 0) >= exitSigma)
-		) {
+		const zRecovered =
+			input.zscore20 !== undefined
+				? input.zscore20 >= exitSigma
+				: meanPrice > 0 && price >= meanPrice;
+		if (zRecovered) {
 			return {
 				action: "sell",
 				fraction: 1,
-				reason: "Mean reversion complete: price is back at the 20-period mean.",
+				reason: `Mean reversion complete: z-score recovered to +${exitSigma.toFixed(2)}.`,
+				reasonCode: "reversal",
 				rMultiple,
 			};
 		}
@@ -763,6 +862,7 @@ export function evaluateExit(input: {
 			action: "sell",
 			fraction: 1,
 			reason: "Thesis broke: trend flipped and the score collapsed.",
+			reasonCode: "thesis",
 			rMultiple,
 		};
 	}
@@ -772,6 +872,7 @@ export function evaluateExit(input: {
 			action: "sell",
 			fraction: 1,
 			reason: "Time stop: no +1R within the holding window.",
+			reasonCode: "time",
 			rMultiple,
 		};
 	}
@@ -780,6 +881,7 @@ export function evaluateExit(input: {
 		action: "hold",
 		fraction: 0,
 		reason: "No exit condition met.",
+		reasonCode: "none",
 		rMultiple,
 	};
 }

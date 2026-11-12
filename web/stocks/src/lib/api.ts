@@ -127,3 +127,28 @@ export function tctTime(value: string | null | undefined): string {
 	const seconds = String(date.getUTCSeconds()).padStart(2, "0");
 	return `${hours}:${minutes}:${seconds} TCT`;
 }
+
+/**
+ * Human label for a persisted exit reason. Kept local because the web bundle
+ * does not depend on `@sentinel/utils`; the canonical map lives in
+ * `capital-policy.ts`.
+ */
+const EXIT_REASON_LABELS: Record<string, string> = {
+	stop: "Hard stop",
+	trail: "Trailing stop",
+	scale_out: "Scale out",
+	target: "Target hit",
+	tighten_trail: "Tightened trail",
+	reversal: "Mean reversion",
+	thesis: "Thesis broke",
+	time: "Time stop",
+	error_review: "Error-trade review",
+	manual: "Manual",
+	none: "—",
+	unknown: "Unknown",
+};
+
+export function exitReasonLabel(reason: string | null | undefined): string {
+	if (!reason) return "—";
+	return EXIT_REASON_LABELS[reason] ?? reason;
+}
