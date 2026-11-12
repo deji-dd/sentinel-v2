@@ -22,6 +22,7 @@ import {
 	insertCapitalMlPrediction,
 	setWorkerInitFlag,
 	sql,
+	tornStocks,
 	tryAcquireCapitalEngineLock,
 	upsertWorkerState,
 	withCapitalTransaction,
@@ -643,16 +644,42 @@ async function assessBookRisk(
 const DESK_URL = "https://stocks.blasted-labs.tech/desk";
 const PAPER_DESK_URL = "https://stocks.blasted-labs.tech/desk/paper";
 
+/** `[ACRONYM] Stock name`, falling back gracefully when either is missing. */
+function stockDisplayName(acronym: string, name: string): string {
+	const trimmedAcronym = acronym.trim();
+	const trimmedName = name.trim();
+	if (trimmedAcronym && trimmedName)
+		return `[${trimmedAcronym}] ${trimmedName}`;
+	if (trimmedAcronym) return `[${trimmedAcronym}]`;
+	return trimmedName || "Unknown stock";
+}
+
+/** Trade notional as a percentage of NAV, or null when NAV is unusable. */
+function sizePctOfNav(
+	navTotal: bigint,
+	price: number,
+	shares: number,
+): number | null {
+	const nav = moneyToNumber(navTotal);
+	if (!(nav > 0)) return null;
+	const notional = moneyToNumber(
+		moneyFromPriceShares(price.toFixed(6), shares),
+	);
+	return (notional / nav) * 100;
+}
+
 /**
  * One trade alert for both books.
  *
  * Paper alerts are intentional: they are the only way to see the strategy
- * working without risking capital. The title is prefixed `TEST` and the bot
- * additionally renders `[PAPER]` plus a `SIMULATION — no real funds` field.
+ * working without risking capital. The mode field distinguishes the two books;
+ * the title carries only the acronym, direction and size.
  */
 function broadcastTradeAlert(input: {
 	book: CapitalBook;
 	stockId: number;
+	stockAcronym: string;
+	stockName: string;
 	side: "buy" | "sell";
 	shares: number;
 	price: number;
@@ -664,14 +691,24 @@ function broadcastTradeAlert(input: {
 	sizePct?: number | null;
 }): void {
 	const isPaper = input.book === "paper";
-	const action = input.side === "buy" ? "BUY" : "SELL";
-	const title = `${isPaper ? "TEST " : ""}${action} ${input.shares.toLocaleString()} shares`;
-	const body = `${input.stockId} at market.${input.reason ? ` ${input.reason}` : ""}${
-		input.filled ? ` Filled at ${input.price.toFixed(2)}.` : ""
-	}`;
+	const action = input.side === "buy" ? "Buy" : "Sell";
+	const acronym =
+		input.stockAcronym.trim() || input.stockName.trim() || "Stock";
+	const title = `[${acronym}] ${action} ${input.shares.toLocaleString()} shares`;
+	const body = input.reason
+		? input.reason
+		: input.filled
+			? "Filled at market."
+			: "Order placed at market.";
 	const fields: CapitalAlertPayload["fields"] = [
+		{ name: "Mode", value: isPaper ? "Simulation" : "Live", inline: true },
 		{
-			name: input.filled ? "Fill" : "Price",
+			name: "Stock",
+			value: stockDisplayName(input.stockAcronym, input.stockName),
+			inline: true,
+		},
+		{
+			name: "Fill",
 			value: formatMoney(parseMoney(input.price.toFixed(6))),
 			inline: true,
 		},
@@ -902,6 +939,7 @@ async function runBook(
 	book: CapitalBook,
 	config: typeof capitalBookConfigs.$inferSelect,
 	featuresByStock: Map<number, CapitalStockFeatures>,
+	marketById: Map<number, MarketStock>,
 	regimeOn: boolean,
 	freshStockIds: Set<number>,
 	dataAgeSeconds: number | null,
@@ -948,6 +986,16 @@ async function runBook(
 			features.regimeOn === regimeOn ? features : { ...features, regimeOn },
 		);
 	}
+
+	const stockMeta = (
+		stockId: number,
+	): { stockAcronym: string; stockName: string } => {
+		const stock = marketById.get(stockId);
+		return {
+			stockAcronym: stock?.acronym ?? "",
+			stockName: stock?.name ?? "",
+		};
+	};
 
 	const state = await getCapitalState(book);
 	const nav = computeNav({
@@ -1147,6 +1195,7 @@ async function runBook(
 					)
 				: position.shares;
 		if (shares <= 0) continue;
+		const sizePct = sizePctOfNav(nav.totalValue, features.price, shares);
 
 		const order = await createOrder({
 			book,
@@ -1178,6 +1227,7 @@ async function runBook(
 			broadcastTradeAlert({
 				book,
 				stockId: order.stockId,
+				...stockMeta(order.stockId),
 				side: "sell",
 				shares,
 				price: fillPrice,
@@ -1186,11 +1236,13 @@ async function runBook(
 				targetPrice: null,
 				reason: decision.reason,
 				filled: true,
+				sizePct,
 			});
 		} else {
 			broadcastTradeAlert({
 				book,
 				stockId: order.stockId,
+				...stockMeta(order.stockId),
 				side: "sell",
 				shares,
 				price: features.price,
@@ -1199,6 +1251,7 @@ async function runBook(
 				targetPrice: null,
 				reason: decision.reason,
 				filled: false,
+				sizePct,
 			});
 		}
 	}
@@ -1383,6 +1436,7 @@ async function runBook(
 				broadcastTradeAlert({
 					book,
 					stockId: features.stockId,
+					...stockMeta(features.stockId),
 					side: "buy",
 					shares: plan.shares,
 					price: fillPrice,
@@ -1397,6 +1451,7 @@ async function runBook(
 				broadcastTradeAlert({
 					book,
 					stockId: features.stockId,
+					...stockMeta(features.stockId),
 					side: "buy",
 					shares: plan.shares,
 					price: features.price,
@@ -1479,6 +1534,19 @@ async function runCapitalEngineCycleLocked(options?: {
 	}
 
 	const latest = await db.select().from(capitalMarketLatest);
+	const stockReferences = await db
+		.select({
+			id: tornStocks.id,
+			name: tornStocks.name,
+			acronym: tornStocks.acronym,
+		})
+		.from(tornStocks);
+	const stockReferenceById = new Map(
+		stockReferences.map((row) => [
+			Number(row.id),
+			{ name: row.name, acronym: row.acronym },
+		]),
+	);
 	const hourly = await loadCandleMap(60, 120);
 	const fiveMinute = await loadCandleMap(5, 7);
 	const daily = await loadCandleMap(1_440, 400);
@@ -1492,10 +1560,11 @@ async function runCapitalEngineCycleLocked(options?: {
 		if (marketById.has(row.stockId)) continue;
 		const price = Number(row.price);
 		if (!Number.isFinite(price) || price <= 0) continue;
+		const reference = stockReferenceById.get(row.stockId);
 		marketById.set(row.stockId, {
 			id: row.stockId,
-			acronym: "",
-			name: "",
+			acronym: reference?.acronym ?? "",
+			name: reference?.name ?? "",
 			price,
 			cap: Number(row.cap),
 			shares: row.shares,
@@ -1612,6 +1681,7 @@ async function runCapitalEngineCycleLocked(options?: {
 				book,
 				config,
 				signalModeFor(config) === "reversal" ? dailyFeatures : hourlyFeatures,
+				marketById,
 				regimeFor(config.regimeSmaDays),
 				freshStockIds,
 				dataAgeSeconds,

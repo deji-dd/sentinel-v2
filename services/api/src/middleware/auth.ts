@@ -19,93 +19,106 @@ export interface AuthSession {
 	expiresAt: Date | number;
 }
 
+export interface ResolvedAuthSession {
+	user: AuthUser | null;
+	session: AuthSession | null;
+	expired: boolean;
+}
+
+/**
+ * Validates a session token against the database. Shared by the HTTP auth
+ * plugin and the WebSocket upgrade path, which does not run HTTP derive hooks.
+ */
+export async function resolveAuthSession(
+	sessionToken: string | undefined | null,
+): Promise<ResolvedAuthSession> {
+	if (typeof sessionToken !== "string" || !sessionToken) {
+		return { user: null, session: null, expired: false };
+	}
+
+	try {
+		const [result] = await db
+			.select({
+				user: {
+					id: users.id,
+					discordId: users.discordId,
+					tornId: users.tornId,
+					username: users.username,
+					avatar: users.avatar,
+					role: users.role,
+				},
+				session: {
+					id: userSessions.id,
+					userId: userSessions.userId,
+					expiresAt: userSessions.expiresAt,
+				},
+			})
+			.from(userSessions)
+			.innerJoin(users, eq(userSessions.userId, users.id))
+			.where(eq(userSessions.id, sessionToken));
+
+		if (!result) {
+			return { user: null, session: null, expired: false };
+		}
+
+		const expiresAt = result.session.expiresAt;
+		const expiresAtMs =
+			expiresAt instanceof Date
+				? expiresAt.getTime()
+				: typeof expiresAt === "number"
+					? expiresAt < 1e11
+						? expiresAt * 1000
+						: expiresAt
+					: 0;
+
+		if (expiresAtMs < Date.now()) {
+			// Expired session cleanup
+			await db.delete(userSessions).where(eq(userSessions.id, sessionToken));
+			return { user: null, session: null, expired: true };
+		}
+
+		if (
+			result.user.discordId &&
+			env.DISCORD_USER_ID &&
+			result.user.discordId === env.DISCORD_USER_ID &&
+			result.user.role !== "owner"
+		) {
+			await db
+				.update(users)
+				.set({ role: "owner" })
+				.where(eq(users.id, result.user.id));
+			result.user.role = "owner";
+		}
+
+		return {
+			user: result.user as AuthUser,
+			session: result.session as AuthSession,
+			expired: false,
+		};
+	} catch (error) {
+		logger.error("Error retrieving session from database:", error);
+		return { user: null, session: null, expired: false };
+	}
+}
+
 /**
  * Auth plugin for session cookie extraction & database validation.
  */
 export const authPlugin = new Elysia({ name: "authPlugin" })
 	.derive({ as: "scoped" }, async ({ cookie }) => {
 		const sessionToken = cookie.session?.value;
+		const resolved = await resolveAuthSession(
+			typeof sessionToken === "string" ? sessionToken : undefined,
+		);
 
-		if (typeof sessionToken !== "string" || !sessionToken) {
-			return {
-				user: null as AuthUser | null,
-				session: null as AuthSession | null,
-			};
+		if (resolved.expired) {
+			cookie.session?.remove();
 		}
 
-		try {
-			const [result] = await db
-				.select({
-					user: {
-						id: users.id,
-						discordId: users.discordId,
-						tornId: users.tornId,
-						username: users.username,
-						avatar: users.avatar,
-						role: users.role,
-					},
-					session: {
-						id: userSessions.id,
-						userId: userSessions.userId,
-						expiresAt: userSessions.expiresAt,
-					},
-				})
-				.from(userSessions)
-				.innerJoin(users, eq(userSessions.userId, users.id))
-				.where(eq(userSessions.id, sessionToken));
-
-			if (!result) {
-				return {
-					user: null as AuthUser | null,
-					session: null as AuthSession | null,
-				};
-			}
-
-			const expiresAt = result.session.expiresAt;
-			const expiresAtMs =
-				expiresAt instanceof Date
-					? expiresAt.getTime()
-					: typeof expiresAt === "number"
-						? expiresAt < 1e11
-							? expiresAt * 1000
-							: expiresAt
-						: 0;
-
-			if (expiresAtMs < Date.now()) {
-				// Expired session cleanup
-				await db.delete(userSessions).where(eq(userSessions.id, sessionToken));
-				cookie.session?.remove();
-
-				return {
-					user: null as AuthUser | null,
-					session: null as AuthSession | null,
-				};
-			}
-
-			if (
-				result.user.discordId &&
-				env.DISCORD_USER_ID &&
-				result.user.discordId === env.DISCORD_USER_ID &&
-				result.user.role !== "owner"
-			) {
-				await db
-					.update(users)
-					.set({ role: "owner" })
-					.where(eq(users.id, result.user.id));
-				result.user.role = "owner";
-			}
-
-			return {
-				user: result.user as AuthUser,
-				session: result.session as AuthSession,
-			};
-		} catch (error) {
-			logger.error("Error retrieving session from database:", error);
-			return {
-				user: null as AuthUser | null,
-				session: null as AuthSession | null,
-			};
-		}
+		return {
+			user: resolved.user,
+			session: resolved.session,
+		};
 	})
 	.macro(({ onBeforeHandle }) => ({
 		requireAuth(role?: string) {

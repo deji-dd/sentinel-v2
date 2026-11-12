@@ -59,6 +59,7 @@ export {
 	SheetTitle,
 	SheetTrigger,
 } from "./ui/sheet";
+export { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 export function PageShell({ children }: { children: ReactNode }) {
 	return (

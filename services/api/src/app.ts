@@ -11,6 +11,7 @@ import { pondRoutes } from "./routes/pond";
 import { v1Routes } from "./routes/v1";
 import { v2Routes } from "./routes/v2";
 import { fetchElimsUsers } from "./routes/v2/elims";
+import { wsCapitalRoutes } from "./routes/ws-capital";
 import { wsElimsTournamentRoutes } from "./routes/ws-elims-tournament";
 import { wsSubversiveWarRoutes } from "./routes/ws-subversive-war";
 
@@ -32,6 +33,7 @@ export const app = new Elysia()
 		}),
 	)
 	.use(healthRoutes)
+	.use(wsCapitalRoutes)
 	.use(wsElimsTournamentRoutes)
 	.use(wsSubversiveWarRoutes)
 	.use(pondRoutes)

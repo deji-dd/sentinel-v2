@@ -16,9 +16,7 @@ import { Router, usePath } from "./router";
 const LINKS = [
 	{ href: "/", label: "Fund", ownerOnly: false },
 	{ href: "/portfolio", label: "Portfolio", ownerOnly: false },
-	{ href: "/paper", label: "Paper", ownerOnly: false },
 	{ href: "/desk", label: "Desk", ownerOnly: true },
-	{ href: "/desk/paper", label: "Paper desk", ownerOnly: true },
 ];
 
 export function isOwnerRole(role: string | null | undefined): boolean {
@@ -63,12 +61,16 @@ export function App() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const owner = isOwnerRole(user?.role);
 	const links = LINKS.filter((link) => !link.ownerOnly || owner);
+	// `/paper` and `/desk/paper` were merged into tabs; keep old links on their
+	// parent nav entry.
+	const navPath =
+		path === "/paper" ? "/" : path === "/desk/paper" ? "/desk" : path;
 	// Longest matching prefix wins: `/desk/paper` must not also light up `/desk`.
 	const activeHref = links
 		.filter((link) =>
 			link.href === "/"
-				? path === "/"
-				: path === link.href || path.startsWith(`${link.href}/`),
+				? navPath === "/"
+				: navPath === link.href || navPath.startsWith(`${link.href}/`),
 		)
 		.sort((a, b) => b.href.length - a.href.length)[0]?.href;
 

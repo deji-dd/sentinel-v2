@@ -3,7 +3,7 @@ import type {
 	CapitalPayoutFrequency,
 	CapitalSettings,
 } from "@sentinel/schemas";
-import { RefreshCw, Save, Trash2 } from "lucide-react";
+import { Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -32,6 +32,10 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
+	Tabs,
+	TabsContent,
+	TabsList,
+	TabsTrigger,
 } from "../components/ui";
 import {
 	Dialog,
@@ -50,6 +54,7 @@ import {
 	money,
 	pct,
 } from "../lib/api";
+import { useCapitalLive } from "../lib/live";
 
 type Book = "live" | "paper";
 type PayoutMode = "cash" | "reinvest";
@@ -65,7 +70,38 @@ const PAYOUT_MODES: Array<{ value: PayoutMode; label: string }> = [
 	{ value: "reinvest", label: "Reinvest profit" },
 ];
 
-export function DeskPage({ book }: { book: Book }) {
+export function DeskPage({ book: initialBook = "live" }: { book?: Book }) {
+	const [book, setBook] = useState<Book>(initialBook);
+	const isPaper = book === "paper";
+
+	return (
+		<PageShell>
+			<PageHeader
+				title="Desk"
+				description={
+					isPaper
+						? "Simulation only. Every write is isolated from the live book."
+						: "Live recommendations, investors, payouts and reconciliation."
+				}
+			/>
+			<Tabs value={book} onValueChange={(value) => setBook(value as Book)}>
+				<TabsList className="mb-4">
+					<TabsTrigger value="live">Live</TabsTrigger>
+					<TabsTrigger value="paper">Simulation</TabsTrigger>
+				</TabsList>
+				<TabsContent value="live">
+					<DeskBook book="live" />
+				</TabsContent>
+				<TabsContent value="paper">
+					<DeskBook book="paper" />
+				</TabsContent>
+			</Tabs>
+		</PageShell>
+	);
+}
+
+function DeskBook({ book }: { book: Book }) {
+	const isPaper = book === "paper";
 	const { authenticated, loading: authLoading, loginWithDiscord } = useAuth();
 	const [data, setData] = useState<CapitalAdminOverview | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -88,8 +124,17 @@ export function DeskPage({ book }: { book: Book }) {
 		useState<PayoutMode>("cash");
 	const [depositInvestor, setDepositInvestor] = useState("");
 	const [depositAmount, setDepositAmount] = useState("");
-	const [intentInvestor, setIntentInvestor] = useState("");
-	const [intentAmount, setIntentAmount] = useState("");
+
+	const { markUpdated } = useCapitalLive<CapitalAdminOverview>({
+		view: "admin",
+		book,
+		enabled: authenticated && !authLoading,
+		onSnapshot: (overview) => {
+			setData(overview);
+			setSettingsDraft((current) => current ?? overview.settings);
+			setLoading(false);
+		},
+	});
 
 	const load = useCallback(async () => {
 		setLoading(true);
@@ -102,12 +147,13 @@ export function DeskPage({ book }: { book: Book }) {
 			setSettingsDraft(overview.settings);
 			const first = overview.investors[0]?.investor.id;
 			if (first) setDepositInvestor((current) => current || first);
+			markUpdated();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load the desk.");
 		} finally {
 			setLoading(false);
 		}
-	}, [book]);
+	}, [book, markUpdated]);
 
 	useEffect(() => {
 		if (!authLoading && authenticated) void load();
@@ -143,22 +189,21 @@ export function DeskPage({ book }: { book: Book }) {
 
 	if (!authenticated) {
 		return (
-			<PageShell>
-				<PageHeader
-					title="Capital desk"
+			<div className="space-y-4">
+				<EmptyState
+					title="Sign-in required"
 					description="Owner-only control surface."
-					actions={
-						<Button
-							onClick={() =>
-								loginWithDiscord(`/desk${book === "paper" ? "/paper" : ""}`)
-							}
-						>
-							Sign in with Discord
-						</Button>
-					}
 				/>
-				<EmptyState title="Sign-in required" />
-			</PageShell>
+				<div className="flex justify-center">
+					<Button
+						onClick={() =>
+							loginWithDiscord(`/desk${book === "paper" ? "/paper" : ""}`)
+						}
+					>
+						Sign in with Discord
+					</Button>
+				</div>
+			</div>
 		);
 	}
 
@@ -232,25 +277,6 @@ export function DeskPage({ book }: { book: Book }) {
 		setDepositAmount("");
 	};
 
-	const createIntent = async () => {
-		const investor = data?.investors.find(
-			(row) => row.investor.id === intentInvestor,
-		)?.investor;
-		if (!investor || !intentAmount) return;
-		await runAction(() =>
-			apiFetch(`/v2/capital/admin/${book}/payment-intents`, {
-				method: "POST",
-				body: JSON.stringify({
-					kind: "deposit",
-					investorId: investor.id,
-					expectedAmount: intentAmount,
-					counterpartyTornId: investor.tornId ?? undefined,
-				}),
-			}),
-		);
-		setIntentAmount("");
-	};
-
 	const resetPaper = async () => {
 		const ok = await runAction(() =>
 			apiFetch("/v2/capital/admin/paper/reset", {
@@ -261,26 +287,22 @@ export function DeskPage({ book }: { book: Book }) {
 		if (!ok) return;
 		setResetOpen(false);
 		setResetConfirm("");
-		// The old ids are gone; clear the pickers so a stale selection cannot
-		// post a deposit against a deleted investor.
 		setDepositInvestor("");
-		setIntentInvestor("");
 		setDepositAmount("");
-		setIntentAmount("");
 	};
 
-	const saveRisk = async () => {
+	const saveSettings = async () => {
 		if (!settingsDraft) return;
 		await runAction(() =>
 			apiFetch(`/v2/capital/admin/${book}/settings`, {
 				method: "PUT",
 				body: JSON.stringify({
-					drawdownHaltPct: settingsDraft.drawdownHaltPct,
-					drawdownDeriskPct: settingsDraft.drawdownDeriskPct,
-					dailyLossHaltPct: settingsDraft.dailyLossHaltPct,
-					stopCooldownDays: settingsDraft.stopCooldownDays,
-					staleDataSeconds: settingsDraft.staleDataSeconds,
-					regimeSmaDays: settingsDraft.regimeSmaDays,
+					feeRateDailyBps: settingsDraft.feeRateDailyBps,
+					feeRateWeeklyBps: settingsDraft.feeRateWeeklyBps,
+					feeRateMonthlyBps: settingsDraft.feeRateMonthlyBps,
+					withdrawalExitFeeBps: settingsDraft.withdrawalExitFeeBps,
+					engineEnabled: settingsDraft.engineEnabled,
+					liveEnabled: settingsDraft.liveEnabled,
 				}),
 			}),
 		);
@@ -296,27 +318,16 @@ export function DeskPage({ book }: { book: Book }) {
 
 	const investors = data?.investors ?? [];
 
-	return (
-		<PageShell>
-			<PageHeader
-				title={book === "paper" ? "Paper desk" : "Capital desk"}
-				description={
-					book === "paper"
-						? "Simulation only. Every write is isolated from the live book."
-						: "Live recommendations, investors, payouts and reconciliation."
-				}
-				actions={
-					<Button variant="outline" onClick={() => void load()} disabled={busy}>
-						<RefreshCw className="size-4" /> Refresh
-					</Button>
-				}
-			/>
+	// Recent trades: combine recent fills and open order actions for a unified view
+	const recentTrades = data?.recentFills ?? [];
 
+	return (
+		<>
 			{book === "paper" ? (
 				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
 					<span>
-						SIMULATION — no real funds. Results are public on the Paper page;
-						trade and risk alerts are sent to your DMs labelled TEST.
+						SIMULATION — no real funds. Results are public on the Simulation
+						tab; trade and risk alerts are sent to your DMs labelled TEST.
 					</span>
 					<Button
 						size="sm"
@@ -339,7 +350,7 @@ export function DeskPage({ book }: { book: Book }) {
 			{error ? <ErrorBanner message={error} /> : null}
 
 			{data?.summary ? (
-				<div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
 					<StatCard
 						label="Available cash"
 						value={money(data.summary.cash)}
@@ -362,34 +373,18 @@ export function DeskPage({ book }: { book: Book }) {
 						value={money(data.summary.aum)}
 						hint="Cash + positions at market"
 					/>
-					<StatCard
-						label="Open positions"
-						value={String(data.positions.length)}
-						hint={`${data.settings.maxPositions} slots, 12% max each`}
-					/>
-				</div>
-			) : null}
-
-			{data?.engine.risk &&
-			(data.engine.risk.entriesPaused ||
-				data.engine.risk.sizeScale < 1 ||
-				data.engine.risk.cooldownStockCount > 0) ? (
-				<div className="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-					{data.engine.risk.entriesPaused
-						? `New entries paused: ${data.engine.risk.pauseReasons.join("; ")}. Exits and stops still run.`
-						: data.engine.risk.sizeScale < 1
-							? `Drawdown ${pct(data.engine.risk.drawdownPct)} — new entries are sized at ${pct(data.engine.risk.sizeScale * 100, 0)}.`
-							: `${data.engine.risk.cooldownStockCount} stock(s) in post-stop cooldown.`}
 				</div>
 			) : null}
 
 			<div className="mt-4">
 				<SectionCard
-					title={book === "paper" ? "Create paper investor" : "Create investor"}
+					title={
+						book === "paper" ? "Create simulation investor" : "Create investor"
+					}
 					description={
 						book === "paper"
-							? "Paper investors are test-only and do not require a Torn ID. Cadence and profit handling are investor settings; every later deposit inherits them."
-							: "Live investors require a Torn ID. Test investors can only be created on the paper desk. Cadence and profit handling are investor settings; every later deposit inherits them."
+							? "Simulation investors are test-only and do not require a Torn ID. Cadence and profit handling are investor settings; every later deposit inherits them."
+							: "Live investors require a Torn ID. Test investors can only be created on the Simulation tab. Cadence and profit handling are investor settings; every later deposit inherits them."
 					}
 				>
 					<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -570,79 +565,14 @@ export function DeskPage({ book }: { book: Book }) {
 				</SectionCard>
 			</div>
 
-			<div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-				<SectionCard
-					title="Withdrawals"
-					description="Approve the quote, then record the payment."
-				>
-					{data?.withdrawalsPending.length ? (
-						<div className="space-y-2">
-							{data.withdrawalsPending.map((request) => (
-								<div
-									key={request.id}
-									className="rounded-lg border border-border/60 p-2 text-sm"
-								>
-									<div className="flex flex-wrap items-center justify-between gap-2">
-										<span className="font-medium">{request.investorName}</span>
-										<StatusBadge tone="warning">{request.status}</StatusBadge>
-									</div>
-									<p className="mt-1 text-xs text-muted-foreground">
-										Gross {compactMoney(request.grossValue)} · fee{" "}
-										{compactMoney(request.performanceFee)} · exit{" "}
-										{compactMoney(request.exitFee)} · net{" "}
-										{compactMoney(request.netAmount)}
-										{Number(request.lossAmount) > 0
-											? ` · loss ${compactMoney(request.lossAmount)}`
-											: ""}
-									</p>
-									{request.liquidityWarning ? (
-										<p className="text-xs text-warning">
-											{request.liquidityWarning}
-										</p>
-									) : null}
-									<div className="mt-2 flex flex-wrap gap-2">
-										<Button
-											variant="outline"
-											disabled={busy || request.status === "approved"}
-											onClick={() =>
-												void runAction(() =>
-													apiFetch(
-														`/v2/capital/admin/${book}/withdrawals/${request.id}/approve`,
-														{ method: "POST", body: "{}" },
-													),
-												)
-											}
-										>
-											Approve
-										</Button>
-										<Button
-											disabled={busy}
-											onClick={() =>
-												void runAction(() =>
-													apiFetch(
-														`/v2/capital/admin/${book}/withdrawals/${request.id}/pay`,
-														{ method: "POST", body: "{}" },
-													),
-												)
-											}
-										>
-											Record payment
-										</Button>
-									</div>
-								</div>
-							))}
-						</div>
-					) : (
-						<EmptyState title="No pending withdrawals" />
-					)}
-				</SectionCard>
-
+			<div className="mt-4">
 				<SectionCard title="Investors">
 					{investors.length ? (
 						<Table>
 							<TableHeader>
 								<TableRow>
 									<TableHead>Investor</TableHead>
+									<TableHead>Amount invested</TableHead>
 									<TableHead>Cadence</TableHead>
 									<TableHead>Payout</TableHead>
 								</TableRow>
@@ -657,6 +587,9 @@ export function DeskPage({ book }: { book: Book }) {
 												</span>
 											</div>
 										</TableCell>
+										<TableCell className="font-mono text-xs">
+											{compactMoney(row.principal)}
+										</TableCell>
 										<TableCell>
 											<Select
 												value={row.investor.frequency}
@@ -667,7 +600,7 @@ export function DeskPage({ book }: { book: Book }) {
 												}
 												disabled={busy}
 											>
-												<SelectTrigger size="sm" className="w-[104px]">
+												<SelectTrigger size="sm" className="w-26">
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
@@ -692,7 +625,7 @@ export function DeskPage({ book }: { book: Book }) {
 												}
 												disabled={busy}
 											>
-												<SelectTrigger size="sm" className="w-[116px]">
+												<SelectTrigger size="sm" className="w-29">
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
@@ -710,76 +643,6 @@ export function DeskPage({ book }: { book: Book }) {
 						</Table>
 					) : (
 						<EmptyState title="No investors yet" />
-					)}
-				</SectionCard>
-			</div>
-
-			<div className="mt-4">
-				<SectionCard
-					title="Payment intents"
-					description="Give the investor a DEP code to include in their Torn transfer; a matching 4810 log books the deposit automatically using the investor's cadence and profit setting."
-				>
-					<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-						<Select
-							value={intentInvestor || undefined}
-							onValueChange={setIntentInvestor}
-						>
-							<SelectTrigger className="w-full">
-								<SelectValue placeholder="Investor…" />
-							</SelectTrigger>
-							<SelectContent>
-								{investors.map((row) => (
-									<SelectItem key={row.investor.id} value={row.investor.id}>
-										{row.investor.displayName}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-						<NumberInput
-							decimals={2}
-							placeholder="Expected amount"
-							value={intentAmount}
-							onValueChange={setIntentAmount}
-						/>
-						<Button onClick={createIntent} disabled={busy || !intentInvestor}>
-							Create deposit intent
-						</Button>
-					</div>
-					{data?.paymentIntentsPending.length ? (
-						<div className="mt-3">
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>Reference</TableHead>
-										<TableHead>Kind</TableHead>
-										<TableHead>Investor</TableHead>
-										<TableHead>Expected</TableHead>
-										<TableHead>Expires</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{data.paymentIntentsPending.map((intent) => (
-										<TableRow key={intent.id}>
-											<TableCell className="font-mono text-xs">
-												{intent.referenceCode}
-											</TableCell>
-											<TableCell>{intent.kind}</TableCell>
-											<TableCell className="truncate">
-												{intent.investorName ?? "—"}
-											</TableCell>
-											<TableCell className="font-mono text-xs">
-												{compactMoney(intent.expectedAmount)}
-											</TableCell>
-											<TableCell className="text-xs text-muted-foreground">
-												{isoDate(intent.expiresAtIso)}
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</div>
-					) : (
-						<EmptyState title="No pending payment intents" />
 					)}
 				</SectionCard>
 			</div>
@@ -867,7 +730,7 @@ export function DeskPage({ book }: { book: Book }) {
 			<div className="mt-4">
 				<SectionCard
 					title="Open orders"
-					description="Pending recommendations. Accepting is advisory for live; paper auto-fills. Orders expire after the configured validity window."
+					description="Pending recommendations. Accepting is advisory for live; simulation auto-fills. Orders expire after the configured validity window."
 				>
 					{openOrders.length ? (
 						<Table>
@@ -963,61 +826,52 @@ export function DeskPage({ book }: { book: Book }) {
 
 			<div className="mt-4">
 				<SectionCard
-					title="Recent fills"
-					description="Every fill with its exit reason. Paper fills are simulated; live fills are booked from Torn logs."
+					title="Recent trades"
+					description={isPaper ? "Simulated fills." : "Confirmed live fills."}
 				>
-					{data?.recentFills.length ? (
+					{recentTrades.length ? (
 						<Table>
 							<TableHeader>
 								<TableRow>
-									<TableHead>When</TableHead>
 									<TableHead>Stock</TableHead>
 									<TableHead>Side</TableHead>
 									<TableHead>Shares</TableHead>
 									<TableHead>Price</TableHead>
 									<TableHead>Value</TableHead>
-									<TableHead>Reason</TableHead>
+									<TableHead>Date</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
-								{data.recentFills.map((fill) => (
-									<TableRow key={fill.id}>
-										<TableCell className="text-xs text-muted-foreground">
-											{isoDate(fill.occurredAtIso)}
-										</TableCell>
-										<TableCell className="truncate">
-											<span className="font-mono text-xs text-muted-foreground">
-												{fill.stockId}
-											</span>{" "}
-											{fill.stockName}
-										</TableCell>
+								{recentTrades.map((trade) => (
+									<TableRow key={trade.id}>
+										<TableCell>{trade.stockName}</TableCell>
 										<TableCell>
 											<StatusBadge
-												tone={fill.side === "buy" ? "success" : "danger"}
+												tone={trade.side === "buy" ? "success" : "danger"}
 											>
-												{fill.side}
+												{trade.side}
 											</StatusBadge>
 										</TableCell>
 										<TableCell className="font-mono text-xs">
-											{fill.shares.toLocaleString()}
+											{trade.shares.toLocaleString()}
 										</TableCell>
 										<TableCell className="font-mono text-xs">
-											{money(fill.price)}
+											{money(trade.price)}
 										</TableCell>
 										<TableCell className="font-mono text-xs">
-											{compactMoney(fill.notional)}
+											{compactMoney(trade.notional)}
 										</TableCell>
-										<TableCell className="text-xs">
-											{fill.side === "sell"
-												? exitReasonLabel(fill.exitReason)
-												: "—"}
+										<TableCell className="text-xs text-muted-foreground">
+											<span className="block">
+												{isoDate(trade.occurredAtIso)}
+											</span>
 										</TableCell>
 									</TableRow>
 								))}
 							</TableBody>
 						</Table>
 					) : (
-						<EmptyState title="No fills yet" />
+						<EmptyState title="No trades yet" />
 					)}
 				</SectionCard>
 			</div>
@@ -1026,21 +880,21 @@ export function DeskPage({ book }: { book: Book }) {
 				<div className="mt-4">
 					<SectionCard
 						title="Reset simulation"
-						description="Deletes every paper investor, lot, position, order, fill, payout and snapshot. Nothing is seeded afterwards: add investors and deposits yourself. The live book is never touched."
+						description="Deletes all simulation data — investors, lots, positions, orders, fills, payouts, snapshots. The live book is never touched. Nothing is seeded afterwards; add investors and deposits yourself."
 						actions={
 							<Button
 								variant="destructive"
 								disabled={busy}
 								onClick={() => setResetOpen(true)}
 							>
-								<Trash2 className="size-4" /> Reset paper book
+								<Trash2 className="size-4" /> Reset simulation
 							</Button>
 						}
 					>
 						<p className="text-xs text-muted-foreground">
-							Current book: {money(data?.summary.cash ?? "0")} cash,{" "}
-							{data?.positions.length ?? 0} open positions,{" "}
-							{data?.investors.length ?? 0} investors. A reset cannot be undone.
+							Current: {money(data?.summary.cash ?? "0")} cash,{" "}
+							{data?.positions.length ?? 0} positions,{" "}
+							{data?.investors.length ?? 0} investors. Cannot be undone.
 						</p>
 					</SectionCard>
 				</div>
@@ -1049,12 +903,12 @@ export function DeskPage({ book }: { book: Book }) {
 			<Dialog open={resetOpen} onOpenChange={setResetOpen}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Reset the paper simulation?</DialogTitle>
+						<DialogTitle>Reset the simulation?</DialogTitle>
 						<DialogDescription>
-							This permanently deletes all paper investors, lots, positions,
-							orders, fills and NAV history. No operator or starting cash is
-							created; the paper book starts empty. Type <strong>RESET</strong>{" "}
-							to continue.
+							This permanently deletes all simulation investors, lots,
+							positions, orders, fills and NAV history. No operator or starting
+							cash is created; the simulation book starts empty. Type{" "}
+							<strong>RESET</strong> to continue.
 						</DialogDescription>
 					</DialogHeader>
 					<Input
@@ -1075,103 +929,22 @@ export function DeskPage({ book }: { book: Book }) {
 							disabled={busy || resetConfirm !== "RESET"}
 							onClick={() => void resetPaper()}
 						>
-							{busy ? "Resetting…" : "Reset paper book"}
+							{busy ? "Resetting…" : "Reset simulation"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 
-			{settingsDraft ? (
-				<div className="mt-4">
-					<SectionCard
-						title="Risk overlay"
-						description="Enforced by the engine every cycle. De-risk halves new entry size; halt pauses new entries. Exits and stops always run."
-						actions={
-							<Button
-								variant="outline"
-								disabled={busy}
-								onClick={() => void saveRisk()}
-							>
-								<Save className="size-4" /> Save risk
-							</Button>
-						}
-					>
-						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-							<SettingsNumber
-								label="Drawdown halt %"
-								value={settingsDraft.drawdownHaltPct}
-								decimals={1}
-								onChange={(value) => patchSettings({ drawdownHaltPct: value })}
-							/>
-							<SettingsNumber
-								label="Drawdown de-risk %"
-								value={settingsDraft.drawdownDeriskPct}
-								decimals={1}
-								onChange={(value) =>
-									patchSettings({ drawdownDeriskPct: value })
-								}
-							/>
-							<SettingsNumber
-								label="Daily loss halt %"
-								value={settingsDraft.dailyLossHaltPct}
-								decimals={1}
-								onChange={(value) => patchSettings({ dailyLossHaltPct: value })}
-							/>
-							<SettingsNumber
-								label="Stop cooldown days"
-								value={settingsDraft.stopCooldownDays}
-								onChange={(value) => patchSettings({ stopCooldownDays: value })}
-							/>
-							<SettingsNumber
-								label="Stale data seconds"
-								value={settingsDraft.staleDataSeconds}
-								onChange={(value) => patchSettings({ staleDataSeconds: value })}
-							/>
-							<SettingsNumber
-								label="Regime SMA days"
-								value={settingsDraft.regimeSmaDays}
-								onChange={(value) => patchSettings({ regimeSmaDays: value })}
-							/>
-						</div>
-						<p className="mt-2 text-xs text-muted-foreground">
-							Drawdown and daily loss use NAV per unit, so deposits and
-							withdrawals do not look like performance. A stopped-out name is
-							blocked for the cooldown window. Stale data pauses entries but
-							never exits.
-						</p>
-					</SectionCard>
-				</div>
-			) : null}
-
 			{settingsDraft && book === "live" ? (
 				<div className="mt-4">
 					<SectionCard
 						title="Settings"
-						description="Fee, public visibility and engine switches. Position sizing is fixed policy and shown read-only. Alerts are always sent to your Discord DMs."
+						description="Fees and engine switches. Alerts are always sent to your Discord DMs."
 						actions={
 							<Button
 								variant="outline"
 								disabled={busy}
-								onClick={() =>
-									void runAction(() =>
-										apiFetch(`/v2/capital/admin/${book}/settings`, {
-											method: "PUT",
-											body: JSON.stringify({
-												publicShowAum: settingsDraft.publicShowAum,
-												publicShowTrades: settingsDraft.publicShowTrades,
-												publicShowHoldings: settingsDraft.publicShowHoldings,
-												publicShowFees: settingsDraft.publicShowFees,
-												feeRateDailyBps: settingsDraft.feeRateDailyBps,
-												feeRateWeeklyBps: settingsDraft.feeRateWeeklyBps,
-												feeRateMonthlyBps: settingsDraft.feeRateMonthlyBps,
-												withdrawalExitFeeBps:
-													settingsDraft.withdrawalExitFeeBps,
-												engineEnabled: settingsDraft.engineEnabled,
-												liveEnabled: settingsDraft.liveEnabled,
-											}),
-										}),
-									)
-								}
+								onClick={() => void saveSettings()}
 							>
 								<Save className="size-4" /> Save settings
 							</Button>
@@ -1180,86 +953,50 @@ export function DeskPage({ book }: { book: Book }) {
 						<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
 							<div className="space-y-2">
 								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Fees (basis points of distributed profit)
+									Fees (% of distributed profit)
 								</p>
 								<div className="grid grid-cols-3 gap-2">
 									<SettingsNumber
 										label="Daily"
-										value={settingsDraft.feeRateDailyBps}
+										value={settingsDraft.feeRateDailyBps / 100}
+										decimals={2}
 										onChange={(value) =>
-											patchSettings({ feeRateDailyBps: value })
+											patchSettings({
+												feeRateDailyBps: Math.round(value * 100),
+											})
 										}
 									/>
 									<SettingsNumber
 										label="Weekly"
-										value={settingsDraft.feeRateWeeklyBps}
+										value={settingsDraft.feeRateWeeklyBps / 100}
+										decimals={2}
 										onChange={(value) =>
-											patchSettings({ feeRateWeeklyBps: value })
+											patchSettings({
+												feeRateWeeklyBps: Math.round(value * 100),
+											})
 										}
 									/>
 									<SettingsNumber
 										label="Monthly"
-										value={settingsDraft.feeRateMonthlyBps}
+										value={settingsDraft.feeRateMonthlyBps / 100}
+										decimals={2}
 										onChange={(value) =>
-											patchSettings({ feeRateMonthlyBps: value })
+											patchSettings({
+												feeRateMonthlyBps: Math.round(value * 100),
+											})
 										}
 									/>
 								</div>
-								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Position sizing (fixed policy)
+								<p className="text-xs text-muted-foreground">
+									Withdrawal exit fee:{" "}
+									{pct(settingsDraft.withdrawalExitFeeBps / 100, 2)} (fixed)
 								</p>
-								<div className="rounded-lg border border-border/60 p-2 text-xs text-muted-foreground">
-									<p>
-										{settingsDraft.maxPositions} slots ·{" "}
-										{settingsDraft.maxStockWeightPct}% max per name ·{" "}
-										{settingsDraft.riskPerTradePct}% risk per trade ·{" "}
-										{settingsDraft.minCashReservePct}% cash reserve.
-									</p>
-									<p className="mt-1">
-										These are code-level invariants so the slot count and
-										per-name weight cannot drift out of sync with the equity
-										cap. Change them in <code>capital-policy.ts</code>.
-									</p>
-								</div>
 							</div>
 							<div className="space-y-2">
-								<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Public visibility
-								</p>
-								<div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-									<CheckboxField
-										label="AUM"
-										checked={settingsDraft.publicShowAum}
-										onCheckedChange={(checked) =>
-											patchSettings({ publicShowAum: checked })
-										}
-									/>
-									<CheckboxField
-										label="Trades"
-										checked={settingsDraft.publicShowTrades}
-										onCheckedChange={(checked) =>
-											patchSettings({ publicShowTrades: checked })
-										}
-									/>
-									<CheckboxField
-										label="Holdings"
-										checked={settingsDraft.publicShowHoldings}
-										onCheckedChange={(checked) =>
-											patchSettings({ publicShowHoldings: checked })
-										}
-									/>
-									<CheckboxField
-										label="Fees"
-										checked={settingsDraft.publicShowFees}
-										onCheckedChange={(checked) =>
-											patchSettings({ publicShowFees: checked })
-										}
-									/>
-								</div>
 								<p className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 									Engine
 									<HelpTip>
-										“Live recommendations enabled” makes the engine score and
+										"Live recommendations enabled" makes the engine score and
 										create recommendations for the live book. It never places
 										orders automatically — fills are still booked from your Torn
 										logs or recorded manually.
@@ -1283,15 +1020,15 @@ export function DeskPage({ book }: { book: Book }) {
 								</div>
 								<p className="text-xs text-muted-foreground">
 									All alerts go to your Discord DMs. There are no channel
-									settings; paper actions stay on the paper desk so live and
-									paper never double-notify.
+									settings; simulation actions stay on the Simulation tab so
+									simulation never double-notify.
 								</p>
 							</div>
 						</div>
 					</SectionCard>
 				</div>
 			) : null}
-		</PageShell>
+		</>
 	);
 }
 

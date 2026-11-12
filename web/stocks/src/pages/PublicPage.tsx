@@ -27,32 +27,87 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
+	Tabs,
+	TabsContent,
+	TabsList,
+	TabsTrigger,
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
 import {
 	apiFetch,
 	compactMoney,
-	exitReasonLabel,
 	isoDate,
 	money,
 	pct,
 	tctDate,
 	tctTime,
 } from "../lib/api";
+import { useCapitalLive } from "../lib/live";
 
-export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
-	const [data, setData] = useState<CapitalPublicOverview | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [loading, setLoading] = useState(true);
+type Book = "live" | "paper";
+
+export function PublicPage({ book: initialBook = "live" }: { book?: Book }) {
+	const [book, setBook] = useState<Book>(initialBook);
 	const { loginWithDiscord } = useAuth();
 	const isPaper = book === "paper";
 
+	return (
+		<PageShell>
+			<PageHeader
+				title="Fund"
+				description={
+					isPaper
+						? "Simulated, transparent Torn City stock trading fund."
+						: "A managed, transparent Torn City stock trading fund."
+				}
+				actions={
+					<Button onClick={() => loginWithDiscord("/portfolio")}>
+						View my portfolio <ArrowUpRight className="size-4" />
+					</Button>
+				}
+			/>
+
+			<Tabs value={book} onValueChange={(value) => setBook(value as Book)}>
+				<TabsList className="mb-4">
+					<TabsTrigger value="live">Live</TabsTrigger>
+					<TabsTrigger value="paper">Simulation</TabsTrigger>
+				</TabsList>
+				<TabsContent value="live">
+					<BookOverview book="live" />
+				</TabsContent>
+				<TabsContent value="paper">
+					<BookOverview book="paper" />
+				</TabsContent>
+			</Tabs>
+		</PageShell>
+	);
+}
+
+function BookOverview({ book }: { book: Book }) {
+	const [data, setData] = useState<CapitalPublicOverview | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [loading, setLoading] = useState(true);
+	const isPaper = book === "paper";
+
+	const { markUpdated } = useCapitalLive<CapitalPublicOverview>({
+		view: "public",
+		book,
+		onSnapshot: (overview) => {
+			setData(overview);
+			setError(null);
+			setLoading(false);
+		},
+	});
+
 	useEffect(() => {
 		let cancelled = false;
+		setLoading(true);
+		setError(null);
 		apiFetch<CapitalPublicOverview>(`/v2/capital/public?book=${book}`)
 			.then((overview) => {
 				if (cancelled) return;
 				setData(overview);
+				markUpdated();
 			})
 			.catch((err: unknown) => {
 				if (!cancelled) {
@@ -65,13 +120,11 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [book]);
+	}, [book, markUpdated]);
 
 	if (loading)
 		return (
-			<Spinner
-				label={isPaper ? "Loading paper results…" : "Loading the fund…"}
-			/>
+			<Spinner label={isPaper ? "Loading simulation…" : "Loading the fund…"} />
 		);
 
 	const summary = data?.summary;
@@ -83,30 +136,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 		})) ?? [];
 
 	return (
-		<PageShell>
-			<PageHeader
-				title={isPaper ? "Paper results" : "Blasted Stocks"}
-				description={
-					isPaper
-						? "Simulated Blasted Stocks results — no real funds. See how the strategy would have performed."
-						: "A managed, transparent Torn City stock trading fund."
-				}
-				badge={
-					isPaper ? <StatusBadge tone="warning">Simulated</StatusBadge> : null
-				}
-				actions={
-					isPaper ? (
-						<Button variant="outline" asChild>
-							<a href="#/">View live fund</a>
-						</Button>
-					) : (
-						<Button onClick={() => loginWithDiscord("/portfolio")}>
-							View my portfolio <ArrowUpRight className="size-4" />
-						</Button>
-					)
-				}
-			/>
-
+		<>
 			{error ? <ErrorBanner message={error} /> : null}
 
 			{data?.warnings.length ? (
@@ -117,7 +147,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 
 			{summary ? (
 				<>
-					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
 						<StatCard
 							label={
 								data?.flags.showAum
@@ -129,24 +159,10 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 							value={data?.flags.showAum ? compactMoney(summary.aum) : "—"}
 							hint={
 								isPaper
-									? "Paper test book — no real capital"
+									? "Simulation book — no real capital"
 									: `${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`
 							}
 							help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
-						/>
-						<StatCard
-							label="Capital deployed"
-							value={
-								data?.flags.showAum ? compactMoney(summary.positionsValue) : "—"
-							}
-							hint="Open positions at the last price"
-							help="Market value of the fund's open stock positions. AUM is this plus available cash."
-						/>
-						<StatCard
-							label="Available cash"
-							value={data?.flags.showAum ? compactMoney(summary.cash) : "—"}
-							hint="Liquid, not currently invested"
-							help="Cash held by the fund and available to fund new positions or withdrawals. The engine keeps a reserve instead of putting 100% to work."
 						/>
 						<StatCard
 							label="NAV / unit"
@@ -182,7 +198,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 								title="NAV per unit"
 								description={
 									isPaper
-										? "Simulated Net Asset Value per unit — no real funds — indexed from the paper book's daily snapshots."
+										? "Simulated Net Asset Value per unit — no real funds — indexed from the simulation book's daily snapshots."
 										: "Net Asset Value per unit — total assets divided by units outstanding — indexed from the fund's daily snapshots."
 								}
 							>
@@ -278,7 +294,6 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 											<TableHead>Value</TableHead>
 											<TableHead>Unrealized P/L</TableHead>
 											<TableHead>Realized P/L</TableHead>
-											<TableHead>Weight</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -327,9 +342,6 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 												>
 													{compactMoney(position.realizedPnl)}
 												</TableCell>
-												<TableCell className="font-mono text-xs">
-													{pct(position.weightPct, 1)}
-												</TableCell>
 											</TableRow>
 										))}
 									</TableBody>
@@ -340,54 +352,50 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 						</SectionCard>
 					</div>
 
-					{isPaper ? (
+					{data?.investors.length ? (
 						<div className="mt-4">
 							<SectionCard
 								title="Investors"
-								description="Simulated investor results. Cadence and payout settings are not shown."
+								description="Investor results. Cadence and payout settings are not shown."
 							>
-								{data?.investors.length ? (
-									<Table>
-										<TableHeader>
-											<TableRow>
-												<TableHead>Investor</TableHead>
-												<TableHead>Principal</TableHead>
-												<TableHead>Value</TableHead>
-												<TableHead>Profit</TableHead>
-												<TableHead>APR</TableHead>
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead>Investor</TableHead>
+											<TableHead>Principal</TableHead>
+											<TableHead>Value</TableHead>
+											<TableHead>Profit</TableHead>
+											<TableHead>APR</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{data.investors.map((investor, index) => (
+											<TableRow key={index}>
+												<TableCell className="truncate">
+													Investor {index + 1}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{compactMoney(investor.principal)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{compactMoney(investor.currentValue)}
+												</TableCell>
+												<TableCell
+													className={
+														Number(investor.totalProfit) >= 0
+															? "font-mono text-xs text-success"
+															: "font-mono text-xs text-destructive"
+													}
+												>
+													{compactMoney(investor.totalProfit)}
+												</TableCell>
+												<TableCell className="font-mono text-xs">
+													{pct(investor.aprPct)}
+												</TableCell>
 											</TableRow>
-										</TableHeader>
-										<TableBody>
-											{data.investors.map((investor, index) => (
-												<TableRow key={index}>
-													<TableCell className="truncate">
-														Test Investor {index + 1}
-													</TableCell>
-													<TableCell className="font-mono text-xs">
-														{compactMoney(investor.principal)}
-													</TableCell>
-													<TableCell className="font-mono text-xs">
-														{compactMoney(investor.currentValue)}
-													</TableCell>
-													<TableCell
-														className={
-															Number(investor.totalProfit) >= 0
-																? "font-mono text-xs text-success"
-																: "font-mono text-xs text-destructive"
-														}
-													>
-														{compactMoney(investor.totalProfit)}
-													</TableCell>
-													<TableCell className="font-mono text-xs">
-														{pct(investor.aprPct)}
-													</TableCell>
-												</TableRow>
-											))}
-										</TableBody>
-									</Table>
-								) : (
-									<EmptyState title="No paper investors yet" />
-								)}
+										))}
+									</TableBody>
+								</Table>
 							</SectionCard>
 						</div>
 					) : null}
@@ -396,7 +404,7 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 						<SectionCard
 							title="Recent trades"
 							description={
-								isPaper ? "Simulated paper fills." : "Confirmed live fills."
+								isPaper ? "Simulated fills." : "Confirmed live fills."
 							}
 						>
 							{data?.trades.length ? (
@@ -408,7 +416,6 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 											<TableHead>Shares</TableHead>
 											<TableHead>Price</TableHead>
 											<TableHead>Value</TableHead>
-											<TableHead>Reason</TableHead>
 											<TableHead>Date</TableHead>
 										</TableRow>
 									</TableHeader>
@@ -436,11 +443,6 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 												</TableCell>
 												<TableCell className="font-mono text-xs">
 													{compactMoney(trade.notional)}
-												</TableCell>
-												<TableCell className="text-xs">
-													{trade.side === "sell"
-														? exitReasonLabel(trade.exitReason)
-														: "—"}
 												</TableCell>
 												<TableCell className="text-xs text-muted-foreground">
 													<span className="block">
@@ -519,6 +521,6 @@ export function PublicPage({ book = "live" }: { book?: "live" | "paper" }) {
 					</>
 				)}
 			</div>
-		</PageShell>
+		</>
 	);
 }

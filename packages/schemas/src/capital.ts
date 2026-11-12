@@ -713,6 +713,19 @@ export interface CapitalAuditRow {
 	createdAtIso: string;
 }
 
+// ─── Live WebSocket stream ──────────────────────────────────────────────────
+
+export type CapitalLiveView = "public" | "portfolio" | "admin";
+
+export interface CapitalLiveSnapshot<T = unknown> {
+	type: "capital_snapshot";
+	view: CapitalLiveView;
+	book: CapitalBook;
+	data: T;
+	/** Server time when the snapshot was generated. */
+	updatedAtIso: string;
+}
+
 // ─── Discord alert payloads ─────────────────────────────────────────────────
 
 export type CapitalAlertKind =

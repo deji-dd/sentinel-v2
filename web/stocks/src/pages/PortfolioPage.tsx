@@ -32,6 +32,7 @@ import {
 } from "../components/ui";
 import { useAuth } from "../contexts/AuthContext";
 import { apiFetch, compactMoney, isoDate, money, pct } from "../lib/api";
+import { useCapitalLive } from "../lib/live";
 
 export function PortfolioPage() {
 	const { authenticated, loading: authLoading, loginWithDiscord } = useAuth();
@@ -45,6 +46,15 @@ export function PortfolioPage() {
 	const [quote, setQuote] = useState<CapitalWithdrawalQuote | null>(null);
 	const [busy, setBusy] = useState(false);
 
+	const { markUpdated } = useCapitalLive<CapitalInvestorPortfolio>({
+		view: "portfolio",
+		enabled: authenticated && !authLoading,
+		onSnapshot: (data) => {
+			setPortfolio(data);
+			setLoading(false);
+		},
+	});
+
 	const load = useCallback(async () => {
 		setLoading(true);
 		setError(null);
@@ -53,6 +63,7 @@ export function PortfolioPage() {
 			setPortfolio(data);
 			const firstActive = data.lots.find((lot) => lot.status === "active");
 			if (firstActive) setLotId((current) => current || firstActive.id);
+			markUpdated();
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : "Failed to load portfolio.",
@@ -60,7 +71,7 @@ export function PortfolioPage() {
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [markUpdated]);
 
 	useEffect(() => {
 		if (!authLoading && authenticated) void load();

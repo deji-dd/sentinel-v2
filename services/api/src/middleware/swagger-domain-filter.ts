@@ -49,6 +49,7 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 			path.startsWith("/health") ||
 			path.startsWith("/api/health") ||
 			path.startsWith("/v2/capital") ||
+			path.startsWith("/api/ws/capital") ||
 			path.startsWith("/v2/auth"),
 	},
 

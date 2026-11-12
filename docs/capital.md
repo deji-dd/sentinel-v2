@@ -4,13 +4,13 @@ Managed Torn City stock trading fund. Code prefix: `capital`. Host: `stocks.blas
 
 ## Surfaces
 
-- `/` — public fund page: NAV, current positions with marked-to-market P/L, recent live fills, fee schedule.
-- `/paper` — public paper results: simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills.
+- `/` — public fund page: **Live** and **Simulation** tabs. Live shows NAV, current positions with marked-to-market P/L, recent live fills and the fee schedule; Simulation shows simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills. The legacy `/paper` link still opens the Simulation tab.
 - `/portfolio` — Discord-authenticated investor view: lots, payouts, withdrawals.
-- `/desk` — owner/admin live desk: cash/deployed cards, open positions with frozen stops/targets, open orders (accept/cancel), investor, deposit, payout, withdrawal, risk-overlay and settings controls.
-- `/desk/paper` — owner/admin simulation desk with a permanent `SIMULATION` banner, the same positions/orders/risk cards, a **Send test alert** button and the reset control.
+- `/desk` — owner/admin desk with **Live** and **Simulation** tabs. Live has cash/deployed cards, open positions with frozen stops/targets, open orders (accept/cancel), investor, deposit, payout, withdrawal, risk-overlay and settings controls. Simulation has a permanent `SIMULATION` banner, the same positions/orders/risk cards, a **Send test alert** button and the reset control. The legacy `/desk/paper` link still opens the Simulation tab.
 
 The app lives in `web/stocks`. The API serves it by `Host` header from `services/api/src/middleware/static-spa.ts`; DNS/TLS for the subdomain is an external deployment prerequisite.
+
+All three surfaces stay live over `/api/ws/capital` (`view=public|portfolio|admin`, `book=live|paper`). The socket pushes a fresh snapshot every 10 seconds and on connect; the page header shows the connection state and last-updated time, so there is no refresh button. The initial REST load remains the fallback when the socket is reconnecting.
 
 ## Data and accounting
 
@@ -177,14 +177,14 @@ and calibration improve.
 
 No new slash commands. The bot receives `capital_alert` and `capital_paper_alert` IPC messages. Every capital alert is delivered to the owner's Discord DMs — there is no channel-ID setting.
 
-Paper trade and risk alerts **are** sent, deliberately: they are the only way to watch the strategy work without risking capital. The **Send test alert** button on `/desk/paper` exercises the full scheduler → IPC → bot → DM path without creating an order or touching the book. The engine prefixes paper trade titles with `TEST`, and the bot additionally renders `[PAPER]` plus a `SIMULATION — no real funds` field. Live alerts are unprefixed. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
+Paper trade and risk alerts **are** sent, deliberately: they are the only way to watch the strategy work without risking capital. The **Send test alert** button on the Simulation tab of `/desk` exercises the full scheduler → IPC → bot → DM path without creating an order or touching the book. Trade alerts are titled `[ACRONYM] Buy/Sell N shares` and carry Mode (`Simulation`/`Live`), Stock, Fill, Score, Size, Stop and Target fields; neither the title nor the fields include a numeric stock id. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
 
-## Resetting the paper book
+## Resetting the simulation book
 
-`POST /v2/capital/admin/paper/reset` (the **Reset paper book** button on
-`/desk/paper`) deletes every paper investor, lot, position, order, fill, payout,
+`POST /v2/capital/admin/paper/reset` (the **Reset simulation** button on the
+Simulation tab of `/desk`) deletes every simulation investor, lot, position, order, fill, payout,
 snapshot, engine run, ML prediction and audit row. It seeds **nothing** — no
-operator, no starting cash — and resets the book's `started_at`. Add paper
+operator, no starting cash — and resets the book's `started_at`. Add simulation
 investors and record their deposits on the desk to fund it. The live book is
 never touched.
 
@@ -194,7 +194,7 @@ a funded book to exercise a full cycle.
 ## Enabling live
 
 1. Apply migrations (`bun run db:migrate`).
-2. Exercise the paper book until NAV, fills, and accounting behave. The paper desk is simulation-only and hides live settings; the `POST /v2/capital/admin/paper/smoke-test` endpoint remains available for scripted checks.
+2. Exercise the simulation book until NAV, fills, and accounting behave. The Simulation tab is simulation-only and hides live settings; the `POST /v2/capital/admin/paper/smoke-test` endpoint remains available for scripted checks.
 3. Set `capital_book_configs.live_enabled = true` from the live desk settings.
 4. Seed operator cash (recorded deposit/seed) and onboard investors.
 5. Keep `/desk` open for unfunded payouts, reconciliation issues, and withdrawal quotes.

@@ -105,17 +105,10 @@ export async function handleCapitalAlert(
 	payload: CapitalAlertPayload,
 ): Promise<void> {
 	const embed = createBaseEmbed(
-		payload.book === "paper" ? `[PAPER] ${payload.title}` : payload.title,
+		payload.title,
 		payload.body,
 		alertColor(payload),
 	);
-	if (payload.book === "paper") {
-		embed.addFields({
-			name: "Mode",
-			value: "SIMULATION — no real funds",
-			inline: true,
-		});
-	}
 	for (const field of payload.fields ?? []) {
 		embed.addFields({
 			name: field.name,
