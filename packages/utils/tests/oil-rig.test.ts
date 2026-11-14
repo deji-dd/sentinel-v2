@@ -1910,20 +1910,23 @@ describe("The single analysis pipeline", () => {
 	});
 
 	it("steers toward a measured top-rig baseline when one exists", () => {
-		const baseline = deriveRosterBaseline({
-			capturedAt: new Date(FIXED_NOW * 1000),
-			rating: 10,
-			fieldSize: 80,
-			sampleSize: 8,
-			roleShares: {
-				Driller: 0.3,
-				"Sales Executive": 0.3,
-				Roughneck: 0.15,
-				"Derrick Hand": 0.1,
-				"Motor Hand": 0.1,
-				Secretary: 0.05,
+		const baseline = deriveRosterBaseline(
+			{
+				capturedAt: new Date(FIXED_NOW * 1000),
+				rating: 10,
+				fieldSize: 80,
+				sampleSize: 8,
+				roleShares: {
+					Driller: 0.3,
+					"Sales Executive": 0.3,
+					Roughneck: 0.15,
+					"Derrick Hand": 0.1,
+					"Motor Hand": 0.1,
+					Secretary: 0.05,
+				},
 			},
-		});
+			{ asOfSeconds: FIXED_NOW },
+		);
 		expect(baseline).toBeDefined();
 
 		const analysis = analyzeOilRig({

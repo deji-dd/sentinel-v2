@@ -53,166 +53,140 @@ interface Variant {
 	tightenTrailPct: number;
 	timeStopDays: number;
 	reversalExitSigma: number;
+	/** Minimum R before the z-score thesis exit may fire (0 = legacy). */
+	zExitMinR: number;
+	/** Entry requires z <= -entrySigma. */
+	entrySigma: number;
+	minEntryScore: number;
 	confidence: boolean;
+	/** Rescale confidence over minEntryScore..100 instead of 0..100. */
+	confidenceRescale: boolean;
 	maxPositions: number;
 	maxStockWeightPct: number;
 	riskPerTradePct: number;
 }
 
+const BASE: Omit<Variant, "name"> = {
+	stopAtrMultiplier: CAPITAL_ENTRY_STOP.atrMultiplier,
+	stopMinPct: CAPITAL_ENTRY_STOP.minPct,
+	stopMaxPct: CAPITAL_ENTRY_STOP.maxPct,
+	targetR: CAPITAL_ENTRY_STOP.targetR,
+	scaleOutR: CAPITAL_EXIT.scaleOutR,
+	scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
+	trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
+	trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
+	trailingPct: CAPITAL_EXIT.trailingPct,
+	tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
+	timeStopDays: CAPITAL_EXIT.timeStopDays,
+	reversalExitSigma: 1,
+	zExitMinR: 0,
+	entrySigma: 1,
+	minEntryScore: 65,
+	confidence: true,
+	confidenceRescale: false,
+	maxPositions: CAPITAL_SIZING.maxPositions,
+	maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
+	riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+};
+
 const VARIANTS: Variant[] = [
 	{
-		name: "legacy (4% stop, z>=0, +2R trim)",
+		...BASE,
+		name: "legacy (4% stop, z>=0)",
 		stopAtrMultiplier: 2,
 		stopMinPct: 4,
 		stopMaxPct: 100,
 		targetR: 2,
 		scaleOutR: 2,
-		scaleOutFraction: 0.3333,
-		trailingTriggerR: 1,
 		trailingAtrMultiplier: 1.5,
 		trailingPct: 6,
 		tightenTrailPct: 4,
-		timeStopDays: 20,
 		reversalExitSigma: 0,
 		confidence: false,
 		maxPositions: 12,
 		maxStockWeightPct: 20,
-		riskPerTradePct: 0.5,
+	},
+	{ ...BASE, name: "current (entry -1.0, z-exit +1.0)" },
+	{ ...BASE, name: "current + z-exit only at +1R", zExitMinR: 1 },
+	{ ...BASE, name: "entry -1.25", entrySigma: 1.25 },
+	{
+		...BASE,
+		name: "entry -1.25 + score 72",
+		entrySigma: 1.25,
+		minEntryScore: 72,
 	},
 	{
-		name: "proposed (2-2.5% stop, z>=+1, +1R trim)",
-		stopAtrMultiplier: CAPITAL_ENTRY_STOP.atrMultiplier,
-		stopMinPct: CAPITAL_ENTRY_STOP.minPct,
-		stopMaxPct: CAPITAL_ENTRY_STOP.maxPct,
-		targetR: CAPITAL_ENTRY_STOP.targetR,
-		scaleOutR: CAPITAL_EXIT.scaleOutR,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+		...BASE,
+		name: "entry -1.25 + z-exit +1.5σ",
+		entrySigma: 1.25,
+		reversalExitSigma: 1.5,
 	},
 	{
-		name: "proposed, no +1R trim",
-		stopAtrMultiplier: CAPITAL_ENTRY_STOP.atrMultiplier,
-		stopMinPct: CAPITAL_ENTRY_STOP.minPct,
-		stopMaxPct: CAPITAL_ENTRY_STOP.maxPct,
-		targetR: CAPITAL_ENTRY_STOP.targetR,
-		scaleOutR: 5,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+		...BASE,
+		name: "entry -1.25 + z-exit at +1R",
+		entrySigma: 1.25,
+		zExitMinR: 1,
 	},
 	{
-		name: "2% stop, +2R target, +1R trim",
-		stopAtrMultiplier: 0,
-		stopMinPct: 2,
-		stopMaxPct: 2,
-		targetR: 2,
-		scaleOutR: 1,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+		...BASE,
+		name: "entry -1.25 + z-exit +1R + score 72",
+		entrySigma: 1.25,
+		zExitMinR: 1,
+		minEntryScore: 72,
 	},
 	{
-		name: "2.5x ATR, 2-2.5% band, +2R",
-		stopAtrMultiplier: 2.5,
-		stopMinPct: 2,
-		stopMaxPct: 2.5,
-		targetR: 2,
-		scaleOutR: 1,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+		...BASE,
+		name: "entry -1.25 + z-exit +1R + rescale",
+		entrySigma: 1.25,
+		zExitMinR: 1,
+		confidenceRescale: true,
+	},
+	{ ...BASE, name: "entry -1.5", entrySigma: 1.5 },
+	{
+		...BASE,
+		name: "entry -1.5 + z-exit at +1R",
+		entrySigma: 1.5,
+		zExitMinR: 1,
 	},
 	{
-		name: "1.5% fixed, +2R target, +1R trim",
-		stopAtrMultiplier: 0,
-		stopMinPct: 1.5,
-		stopMaxPct: 1.5,
-		targetR: 2,
-		scaleOutR: 1,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
+		...BASE,
+		name: "entry -1.5 + z-exit +1.5σ",
+		entrySigma: 1.5,
+		reversalExitSigma: 1.5,
 	},
 	{
-		name: "2.5% fixed, +2R target, +1R trim",
+		...BASE,
+		name: "entry -1.5 + z-exit +1R + rescale",
+		entrySigma: 1.5,
+		zExitMinR: 1,
+		confidenceRescale: true,
+	},
+	{
+		...BASE,
+		name: "entry -1.5 + z-exit +1R + 2.5% stop",
+		entrySigma: 1.5,
+		zExitMinR: 1,
 		stopAtrMultiplier: 0,
 		stopMinPct: 2.5,
 		stopMaxPct: 2.5,
-		targetR: 2,
-		scaleOutR: 1,
-		scaleOutFraction: CAPITAL_EXIT.scaleOutFraction,
-		trailingTriggerR: CAPITAL_EXIT.trailingTriggerR,
-		trailingAtrMultiplier: CAPITAL_EXIT.trailingAtrMultiplier,
-		trailingPct: CAPITAL_EXIT.trailingPct,
-		tightenTrailPct: CAPITAL_EXIT.tightenTrailPct,
-		timeStopDays: CAPITAL_EXIT.timeStopDays,
-		reversalExitSigma: 1,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
-	},
-	{
-		name: "research barrier (2% stop, 1R target)",
-		stopAtrMultiplier: 0,
-		stopMinPct: 2,
-		stopMaxPct: 2,
-		targetR: 1,
-		scaleOutR: 5,
-		scaleOutFraction: 0.3333,
-		trailingTriggerR: 5,
-		trailingAtrMultiplier: 2,
-		trailingPct: 2,
-		tightenTrailPct: 1.5,
-		timeStopDays: 20,
-		reversalExitSigma: 2,
-		confidence: true,
-		maxPositions: CAPITAL_SIZING.maxPositions,
-		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
-		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
 	},
 ];
+
+/**
+ * Confidence multiplier, optionally rescaled over the *eligible* score range.
+ *
+ * `confidenceMultiplier` maps 0..100 to 0.5..1.5, but the entry floor is 65, so
+ * the live book can never size below 1.15x (9.2% of NAV). The rescaled version
+ * maps the floor to 0.5x so a marginal name gets half the weight of a strong
+ * one, which is what the 4-12% range in the docs actually implies.
+ */
+function sizeMultiplier(score: number, variant: Variant): number {
+	if (!variant.confidence) return 1;
+	if (!variant.confidenceRescale) return confidenceMultiplier(score);
+	const span = Math.max(1, 100 - variant.minEntryScore);
+	const t = Math.min(1, Math.max(0, (score - variant.minEntryScore) / span));
+	return 0.5 + t;
+}
 
 interface CandleRow {
 	stock_id: number;
@@ -242,6 +216,7 @@ interface TradeExit {
 	rMultiple: number;
 	pnl: number;
 	reason: string;
+	holdDays: number;
 }
 
 interface Metrics {
@@ -252,6 +227,8 @@ interface Metrics {
 	trades: number;
 	winRatePct: number;
 	avgRPct: number;
+	avgHoldDays: number;
+	avgDeployedPct: number;
 	stops: number;
 	targets: number;
 	reversals: number;
@@ -378,6 +355,7 @@ function simulate(
 	let reversalCount = 0;
 	let timeCount = 0;
 	let trailCount = 0;
+	const deployedPct: number[] = [];
 
 	const priceAt = (stockId: number, day: number) =>
 		candleByDay.get(stockId)?.get(day) ?? null;
@@ -388,6 +366,7 @@ function simulate(
 		exitPrice: number,
 		reason: string,
 		feeRate: number,
+		holdDays: number,
 	) => {
 		const gross = exitPrice * shares;
 		const fee = gross * feeRate;
@@ -395,7 +374,13 @@ function simulate(
 		const pnl = (exitPrice - position.entryPrice) * shares - fee;
 		const rMultiple =
 			(exitPrice - position.entryPrice) / Math.max(0.01, position.riskPerShare);
-		exits.push({ stockId: position.stockId, rMultiple, pnl, reason });
+		exits.push({
+			stockId: position.stockId,
+			rMultiple,
+			pnl,
+			reason,
+			holdDays,
+		});
 		position.shares -= shares;
 		if (position.shares <= 0) positions.delete(position.stockId);
 		if (reason === "stop") stopCount += 1;
@@ -411,20 +396,45 @@ function simulate(
 		const regimeOn = regime.get(day) ?? true;
 
 		// Exits first, exactly like the engine.
+		//
+		// Live evaluates the whole ladder on the same 60-second path, so the
+		// cheapest triggered level wins. The old replay booked the +2R target
+		// against the daily high but the z-exit against the close, which handed
+		// the target wins the engine would have taken at the (always lower)
+		// thesis level. This keeps every level on one path: the open, then the
+		// stop (adverse first), then each upside level in ascending price order,
+		// then the close for trail/time.
 		for (const position of [...positions.values()]) {
 			const candle = priceAt(position.stockId, day);
 			if (!candle) continue;
+			const index = indexByStock.get(position.stockId)?.get(day);
+			if (index === undefined) continue;
+			const series = byStock.get(position.stockId) ?? [];
+			// Features known at the start of the day: closes through yesterday.
+			// The old code passed the last 120 candles of the *whole* series,
+			// leaking the final 20-day mean and sigma into every historical bar.
+			const known = series.slice(Math.max(0, index - FEATURE_WINDOW), index);
 			const features = computeFeatures({
 				stockId: position.stockId,
 				price: candle.close,
-				candles: (byStock.get(position.stockId) ?? []).slice(-FEATURE_WINDOW),
+				candles: known,
 				regimeOn,
 			});
 			if (!features) continue;
-			position.peakPrice = Math.max(position.peakPrice, candle.high);
 			const daysHeld = Math.floor(
 				(day - (allDays[position.openedIndex] ?? day)) / DAY,
 			);
+			const feeRate = (SALE_FEE_BPS + SLIPPAGE_BPS) / 10_000;
+			const risk = Math.max(0.01, position.riskPerShare);
+			const score = scoreStock(features, {
+				mode: "reversal",
+				minEntryScore: variant.minEntryScore,
+				maxRsi: 75,
+				overboughtSigma: 2,
+				reversalEntrySigma: variant.entrySigma,
+				reversalExitSigma: variant.reversalExitSigma,
+				maxVolatilityPct: 40,
+			}).score;
 			const config = {
 				trailingTriggerR: variant.trailingTriggerR,
 				trailingAtrMultiplier: variant.trailingAtrMultiplier,
@@ -433,80 +443,148 @@ function simulate(
 				scaleOutR: variant.scaleOutR,
 				scaleOutFraction: variant.scaleOutFraction,
 				timeStopDays: variant.timeStopDays,
+				zExitMinR: variant.zExitMinR,
 			};
-			const decision = evaluateExit({
-				entryPrice: position.entryPrice,
-				price: candle.close,
-				peakPrice: position.peakPrice,
-				stopPrice: position.stopPrice,
-				targetPrice: position.targetPrice,
-				atr: features.atr,
-				ema20: features.ema20,
-				ema50: features.ema50,
-				score: scoreStock(features, {
+			const zAt = (value: number) =>
+				features.sd20 > 0 ? (value - features.sma20) / features.sd20 : 0;
+			const decide = (price: number, peak: number) =>
+				evaluateExit({
+					entryPrice: position.entryPrice,
+					price,
+					peakPrice: peak,
+					stopPrice: position.stopPrice,
+					targetPrice: position.targetPrice,
+					atr: features.atr,
+					ema20: features.ema20,
+					ema50: features.ema50,
+					score,
+					daysHeld,
+					scaledOut: position.scaledOut,
 					mode: "reversal",
-					minEntryScore: 65,
-					maxRsi: 75,
-					overboughtSigma: 2,
-					reversalEntrySigma: 1,
+					meanPrice: features.sma20,
+					zscore20: zAt(price),
 					reversalExitSigma: variant.reversalExitSigma,
-					maxVolatilityPct: 40,
-				}).score,
-				daysHeld,
-				scaledOut: position.scaledOut,
-				mode: "reversal",
-				meanPrice: features.sma20,
-				zscore20: features.zscore20,
-				reversalExitSigma: variant.reversalExitSigma,
-				config,
-			});
+					config,
+				});
 
-			// Intraday barrier checks are more honest than a close-only exit.
-			if (candle.low <= position.stopPrice) {
-				const gapDown = candle.open < position.stopPrice;
+			// 1. The open. Gaps fill beyond the stop or the target.
+			const openPeak = Math.max(position.peakPrice, candle.open);
+			const openDecision = decide(candle.open, openPeak);
+			if (openDecision.action === "sell") {
 				recordExit(
 					position,
 					position.shares,
-					gapDown ? candle.open : position.stopPrice,
-					"stop",
-					(SALE_FEE_BPS + SLIPPAGE_BPS) / 10_000,
+					candle.open,
+					openDecision.reasonCode,
+					feeRate,
+					daysHeld,
 				);
 				continue;
 			}
-			if (decision.action === "scale_out") {
-				const shares = Math.max(
-					1,
-					Math.floor(position.shares * decision.fraction),
-				);
+			if (openDecision.action === "scale_out") {
 				recordExit(
 					position,
-					shares,
-					candle.close,
+					Math.max(1, Math.floor(position.shares * openDecision.fraction)),
+					candle.open,
 					"scale_out",
-					(SALE_FEE_BPS + SLIPPAGE_BPS) / 10_000,
+					feeRate,
+					daysHeld,
 				);
 				position.scaledOut = true;
-				continue;
 			}
-			if (position.targetPrice > 0 && candle.high >= position.targetPrice) {
-				const gapUp = candle.open > position.targetPrice;
+
+			// 2. Adverse excursion first. When the low and an upside level are
+			// both inside one bar, assume the stop was reached first.
+			if (candle.low <= position.stopPrice) {
 				recordExit(
 					position,
 					position.shares,
-					gapUp ? candle.open : position.targetPrice,
-					"target",
-					(SALE_FEE_BPS + SLIPPAGE_BPS) / 10_000,
+					position.stopPrice,
+					"stop",
+					feeRate,
+					daysHeld,
 				);
 				continue;
 			}
-			if (decision.action === "sell") {
+
+			// 3. Upside levels, cheapest first. The thesis exit is a price level
+			// (`sma20 + sd20 * sigma`, gated by `zExitMinR`), so it can be ranked
+			// against the trim and the target on the same path.
+			const zLevel =
+				features.sd20 > 0
+					? features.sma20 + features.sd20 * variant.reversalExitSigma
+					: features.sma20;
+			const zGate = position.entryPrice + variant.zExitMinR * risk;
+			const levels: Array<{
+				price: number;
+				kind: "scale_out" | "target" | "reversal";
+			}> = [];
+			if (!position.scaledOut && variant.scaleOutFraction > 0) {
+				levels.push({
+					price: position.entryPrice + variant.scaleOutR * risk,
+					kind: "scale_out",
+				});
+			}
+			if (position.targetPrice > 0) {
+				levels.push({ price: position.targetPrice, kind: "target" });
+			}
+			levels.push({ price: Math.max(zLevel, zGate), kind: "reversal" });
+			// Same priority as `evaluateExit` when two levels share a price:
+			// trim, then target, then thesis.
+			const rank = { scale_out: 0, target: 1, reversal: 2 } as const;
+			levels.sort((a, b) => a.price - b.price || rank[a.kind] - rank[b.kind]);
+			let exited = false;
+			for (const level of levels) {
+				if (candle.high < level.price) continue;
+				if (level.kind === "scale_out") {
+					recordExit(
+						position,
+						Math.max(1, Math.floor(position.shares * variant.scaleOutFraction)),
+						level.price,
+						"scale_out",
+						feeRate,
+						daysHeld,
+					);
+					position.scaledOut = true;
+					continue;
+				}
+				recordExit(
+					position,
+					position.shares,
+					level.price,
+					level.kind,
+					feeRate,
+					daysHeld,
+				);
+				exited = true;
+				break;
+			}
+			if (exited) continue;
+
+			// 4. The close carries the trail, the tightened trail and the time
+			// stop, with the bar high as the since-entry peak.
+			const peak = Math.max(position.peakPrice, candle.open, candle.high);
+			position.peakPrice = peak;
+			const closeDecision = decide(candle.close, peak);
+			if (closeDecision.action === "sell") {
 				recordExit(
 					position,
 					position.shares,
 					candle.close,
-					decision.reasonCode,
-					(SALE_FEE_BPS + SLIPPAGE_BPS) / 10_000,
+					closeDecision.reasonCode,
+					feeRate,
+					daysHeld,
 				);
+			} else if (closeDecision.action === "scale_out") {
+				recordExit(
+					position,
+					Math.max(1, Math.floor(position.shares * closeDecision.fraction)),
+					candle.close,
+					"scale_out",
+					feeRate,
+					daysHeld,
+				);
+				position.scaledOut = true;
 			}
 		}
 
@@ -528,6 +606,7 @@ function simulate(
 		// Entries: respect the 15% cash reserve and the 85% equity cap, as the
 		// live book does.
 		const equityPct = nav > 0 ? (positionsValue / nav) * 100 : 0;
+		deployedPct.push(equityPct);
 		const freeCash = Math.max(0, cash - nav * 0.15);
 		const candidates: Array<{
 			stockId: number;
@@ -553,10 +632,10 @@ function simulate(
 			if (!features) continue;
 			const scored = scoreStock(features, {
 				mode: "reversal",
-				minEntryScore: 65,
+				minEntryScore: variant.minEntryScore,
 				maxRsi: 75,
 				overboughtSigma: 2,
-				reversalEntrySigma: 1,
+				reversalEntrySigma: variant.entrySigma,
 				reversalExitSigma: variant.reversalExitSigma,
 				maxVolatilityPct: 40,
 			});
@@ -570,9 +649,7 @@ function simulate(
 				if (positions.size >= variant.maxPositions) break;
 				const features = candidate.features;
 				if (!features) continue;
-				const multiplier = variant.confidence
-					? confidenceMultiplier(candidate.score)
-					: 1;
+				const multiplier = sizeMultiplier(candidate.score, variant);
 				const plan = planEntry({
 					nav: formatMoney(BigInt(Math.round(nav * 10_000))),
 					freeCash: formatMoney(BigInt(Math.round(freeCash * 10_000))),
@@ -637,6 +714,14 @@ function simulate(
 	const sharpe =
 		variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(365) : 0;
 	const wins = exits.filter((exit) => exit.pnl > 0).length;
+	const avgHoldDays =
+		exits.length > 0
+			? exits.reduce((sum, exit) => sum + exit.holdDays, 0) / exits.length
+			: 0;
+	const avgDeployedPct =
+		deployedPct.length > 0
+			? deployedPct.reduce((sum, value) => sum + value, 0) / deployedPct.length
+			: 0;
 	return {
 		metrics: {
 			label: variant.name,
@@ -649,6 +734,8 @@ function simulate(
 				exits.length > 0
 					? exits.reduce((sum, exit) => sum + exit.rMultiple, 0) / exits.length
 					: 0,
+			avgHoldDays,
+			avgDeployedPct,
 			stops: stopCount,
 			targets: targetCount,
 			reversals: reversalCount,
@@ -674,6 +761,8 @@ async function main() {
 		"Trades".padStart(7),
 		"Win%".padStart(7),
 		"AvgR".padStart(7),
+		"Hold".padStart(6),
+		"Deploy".padStart(7),
 	);
 	for (const result of results) {
 		const metrics = result.metrics;
@@ -685,6 +774,8 @@ async function main() {
 			String(metrics.trades).padStart(7),
 			pct(metrics.winRatePct).padStart(7),
 			metrics.avgRPct.toFixed(2).padStart(7),
+			`${metrics.avgHoldDays.toFixed(0)}d`.padStart(6),
+			pct(metrics.avgDeployedPct).padStart(7),
 		);
 	}
 	console.log("");

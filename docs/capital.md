@@ -72,7 +72,7 @@ for the data audit.
 
 `capital_book_configs.signal_mode` selects the alpha:
 
-- `reversal` (default) — buys names stretched below their 20-period daily mean, weighted by shares-outstanding inflow. The thesis exit is the z-score recovering to **+1σ** (upper band), not merely back to the mean: stopping at the mean capped the win at ~0.3–1.4% against a 4% stop. This is the mode the 5.5-year study supports (docs/capital-ml-research.md).
+- `reversal` (default) — buys names stretched **1.25σ or more** below their 20-period daily mean, weighted by shares-outstanding inflow. The 1.25σ floor was set on 14 Nov from the path-consistent backtest: 18.3% CAGR / Sharpe 5.6 / 1.05% max DD, versus 17.9% / 5.5 / 1.17% at −1σ, and it excludes the marginal names that sat exactly on the old boundary. The thesis exit is the z-score recovering to **+1σ** (upper band), not merely back to the mean: stopping at the mean capped the win at ~0.3–1.4% against a 4% stop. This is the mode the 5.5-year study supports (docs/capital-ml-research.md).
 - `momentum` — the original trend-following score (EMA20/50, RSI, relative strength). Kept so the two can be compared on the paper book.
 
 Both use the same risk overlay; only the entry score and the thesis exit differ.
@@ -88,11 +88,14 @@ The reversal score is `0.50 × stretch + 0.25 × flow + 0.20 × risk + 0.05 × r
   names sit under 10%, so this is a low-vol gate.
 
 The stretch term therefore dominates the ranking. That was measured, not
-assumed: widening flow to ±5% or switching risk to ATR% (both tried) cut the
-exact-ladder backtest from 15.6% to 10.9% CAGR and Sharpe from 4.9 to 4.3. The
-saturation is deliberate until a genuinely different component (not a rescaled
-linear one) is validated. Confidence sizing still uses the score, so the six
-buy candidates that used to receive an identical 12.5% now receive 10.5–11.1%.
+assumed: widening flow to ±5% or switching risk to ATR% (both tried on the older
+close-only replay) cut that replay from 15.6% to 10.9% CAGR and Sharpe from 4.9
+to 4.3. Those two component experiments predate the path-consistent rebuild, so
+treat the absolute numbers as indicative and re-measure before relying on them.
+The saturation is deliberate until a genuinely different component (not a
+rescaled linear one) is validated. Confidence sizing still uses the score, so
+the six buy candidates that used to receive an identical 12.5% now receive
+10.5–11.1%.
 
 ### Sizing and the exit ladder
 
@@ -114,14 +117,28 @@ settings (`packages/utils/src/capital-policy.ts`):
   "peak" from the 30-day high, which could be a pre-entry price and trigger a
   trail on a position that never made a new high.
 - Time stop after 20 days without +1R.
-- Confidence sizing: `0.5 + score/100` → 0.5–1.5× on an 8% base weight (4–12%
-  of NAV). It is applied only because the R:R is now positive; the score range
-  that used to produce identical 12.5% positions now produces 10.5–11.1%.
+- Confidence sizing: `0.5 + score/100` → 0.5–1.5× on an 8% base weight. The entry
+  floor is 65, so the _effective_ range is 1.15–1.5× (9.2–12% of NAV), not the
+  4–12% the multiplier implies at score 0. Rescaling over 65–100 was tested and
+  rejected: it cuts deployment to ~40% of NAV and CAGR from 18.3% to 10.5%
+  because the low-score names it halves are still profitable.
+- The thesis (z-score) exit is **not** gated behind +1R. Gating it was tested:
+  average R rises from +0.49 to +0.63, but CAGR falls from 18.3% to 16.0% and
+  the 20-day time stops go from 121 to 372. The early z-exit is where the
+  mean-reversion edge is realised. `CAPITAL_EXIT.zExitMinR` remains as a knob
+  for future testing; production keeps it at 0.
 
 The exact ladder is replayed by `bun run scripts/capital-ladder-backtest.ts`
-(read-only, local daily candles). On 2021-2026 data the current ladder returns
-15.6% CAGR / Sharpe 4.9 / max drawdown 1.1% / 70% wins / +0.59R average, versus
-14.9% / 3.7 / 1.9% / 58% / +0.21R for the legacy 4%-stop, mean-exit ladder.
+(read-only, local daily candles). The replay is **path-consistent**: every exit
+level is compared on the same bar (open → stop → each upside level in ascending
+price order → close for trail/time), because the engine checks the whole ladder
+on the same 60-second path. The earlier version checked the +2R target against
+the daily high but the z-exit only against the close, and it leaked the final
+20-day mean/σ into every historical bar. On 2021-2026 data the current ladder
+(entry −1.25σ) returns **18.3% CAGR / Sharpe 5.6 / max drawdown 1.05% / 79.5%
+wins / +0.50R average / 10-day hold**, versus 18.9% / 4.9 / 1.6% / 79.2% /
++0.13R for the legacy 4%-stop, mean-exit ladder. The legacy configuration
+deploys more (72% vs 60%) but earns a quarter of the R per trade.
 
 ### Risk overlay (enforced, not cosmetic)
 
@@ -193,6 +210,11 @@ a funded book to exercise a full cycle.
 
 ## Enabling live
 
+The live book is **disabled** (`capital_book_configs.live_enabled = false`) as of
+14 Nov 2026. Do not re-enable it until the simulation book has 30–50 closed
+trades and the realized R distribution, `exit_reason` mix and the share of
+winners that stop out first have been reviewed.
+
 1. Apply migrations (`bun run db:migrate`).
 2. Exercise the simulation book until NAV, fills, and accounting behave. The Simulation tab is simulation-only and hides live settings; the `POST /v2/capital/admin/paper/smoke-test` endpoint remains available for scripted checks.
 3. Set `capital_book_configs.live_enabled = true` from the live desk settings.
@@ -207,6 +229,9 @@ a funded book to exercise a full cycle.
 - Rule thresholds are configured defaults; the position count, per-name weight,
   max equity and risk-per-trade are fixed policy and are not editable on the
   desk. Re-run `scripts/capital-ladder-backtest.ts` before changing them.
+- `risk_per_trade_pct = 0.5` never binds: 12% weight × a ~2.05% stop is
+  0.20–0.23% of NAV per name, so portfolio heat is ~1.5%, not 3.5%. The weight
+  cap, not the risk budget, is the real sizing constraint.
 - Sells persist an `exit_reason` (`stop`, `trail`, `scale_out`, `target`,
   `tighten_trail`, `reversal`, `time`, `error_review`) on the order and the fill;
   the desk and the public fills table display it.

@@ -504,6 +504,40 @@ describe("frozen stop and exit ladder", () => {
 		expect(atUpperBand.reasonCode).toBe("reversal");
 	});
 
+	test("the z-exit can be gated behind a minimum R multiple", () => {
+		const base = {
+			entryPrice: 100,
+			stopPrice: 98,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 101,
+			score: 40,
+			daysHeld: 4,
+			scaledOut: true,
+			mode: "reversal" as const,
+			meanPrice: 100,
+			zscore20: 1.1,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, scaleOutR: 5, zExitMinR: 1 },
+		};
+		// z has recovered (+1.1σ) but the trade is only +0.25R: hold.
+		const tooSmall = evaluateExit({
+			...base,
+			price: 100.5,
+			peakPrice: 100.5,
+		});
+		expect(tooSmall.action).toBe("hold");
+
+		// Same z, now at +1R: the thesis exit is allowed.
+		const atOneR = evaluateExit({
+			...base,
+			price: 102,
+			peakPrice: 102,
+		});
+		expect(atOneR.action).toBe("sell");
+		expect(atOneR.reasonCode).toBe("reversal");
+	});
+
 	test("confidence sizing stays inside the per-name cap", () => {
 		const config = {
 			riskPerTradePct: 0.5,

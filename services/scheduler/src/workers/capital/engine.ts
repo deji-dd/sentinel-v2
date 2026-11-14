@@ -1180,6 +1180,7 @@ async function runBook(
 						scaleOutR: config.scaleOutR,
 						scaleOutFraction: config.scaleOutFraction,
 						timeStopDays: config.timeStopDays,
+						zExitMinR: CAPITAL_EXIT.zExitMinR,
 					},
 				});
 		if (decision.action === "hold") continue;
@@ -1374,7 +1375,7 @@ async function runBook(
 					: "";
 			const sizingNote =
 				` Size ${plan.positionPct.toFixed(1)}% NAV (${sizeMultiplier.toFixed(2)}x confidence), ` +
-				`risk ${(plan.riskAmount / 100).toFixed(2)}% NAV.`;
+				`risk ${((plan.riskAmount / moneyToNumber(nav.totalValue)) * 100).toFixed(2)}% NAV.`;
 			const rationale =
 				mode === "reversal"
 					? `Reversal score ${score.score.toFixed(1)} (stretch ${score.components.trend.toFixed(0)}, flow ${score.components.timing.toFixed(0)}, risk ${score.components.risk.toFixed(0)}). z ${features.zscore20.toFixed(2)} vs the 20-period mean ${features.sma20.toFixed(2)}; 7d shares ${(features.sharesChange7Pct ?? 0).toFixed(2)}%.${mlNote} Stop ${plan.stopPrice.toFixed(2)}, target ${plan.targetPrice.toFixed(2)}.${sizingNote}`

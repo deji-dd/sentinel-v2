@@ -55,6 +55,8 @@ export interface CapitalStockFeatures {
 	ema50: number;
 	/** Simple 20-period mean of closes. The reversal target. */
 	sma20: number;
+	/** Standard deviation of the 20 closes. z score = (price - sma20) / sd20. */
+	sd20: number;
 	rsi14: number;
 	zscore20: number;
 	/** Negative numbers are drawdowns from the window high. */
@@ -355,6 +357,7 @@ export function computeFeatures(
 		ema20: ema(closes, 20),
 		ema50: ema(closes, 50),
 		sma20,
+		sd20,
 		rsi14: rsi(closes, 14),
 		zscore20,
 		drawdown30Pct,
@@ -720,6 +723,17 @@ export interface CapitalExitConfig {
 	scaleOutR: number;
 	scaleOutFraction: number;
 	timeStopDays: number;
+	/**
+	 * Minimum R multiple required before the z-score thesis exit may fire.
+	 *
+	 * The thesis exit is volatility-scaled (+1σ by default) while the stop is a
+	 * fixed 2% floor, so in a quiet market the +1σ level can sit at +0.3R.
+	 * Setting this to 1 sounds prudent but was tested and rejected: it raises
+	 * the average trade from +0.49R to +0.63R and lowers CAGR from 18.3% to
+	 * 16.0%, because the early z-exit is where the edge is realised. 0 keeps
+	 * the legacy "exit whenever z recovers" behaviour.
+	 */
+	zExitMinR?: number;
 }
 
 export interface CapitalExitDecision {
@@ -848,7 +862,12 @@ export function evaluateExit(input: {
 			input.zscore20 !== undefined
 				? input.zscore20 >= exitSigma
 				: meanPrice > 0 && price >= meanPrice;
-		if (zRecovered) {
+		// In a quiet market the +1σ exit is closer than +1R while the stop is a
+		// fixed 2% floor, so exiting on the z-score alone caps the win below the
+		// entry risk. `zExitMinR` keeps the thesis exit from paying less than the
+		// first profit target; 0 is the legacy behaviour.
+		const zExitMinR = input.config.zExitMinR ?? 0;
+		if (zRecovered && rMultiple >= zExitMinR) {
 			return {
 				action: "sell",
 				fraction: 1,

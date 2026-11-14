@@ -16,10 +16,11 @@
  * - stop = clamp(2.5 × ATR, 2%, 2.5%). Torn daily ATR is ~0.55%, so the 2%
  *   floor binds for most names and volatility only widens it slightly. The old
  *   4% floor risked 4% to chase a 0.3–1.4% reversion.
- * - backtest (2021-2026 daily bars, exact ladder): 15.6% CAGR, Sharpe 4.9,
- *   max drawdown 1.1%, 70% win rate, +0.59R average, versus 14.9% / 3.7 /
- *   1.9% / 58% / +0.21R for the old 4%-stop/mean-exit ladder. See
- *   `scripts/capital-ladder-backtest.ts`.
+ * - backtest (2021-2026 daily bars, path-consistent ladder, entry −1.25σ):
+ *   18.3% CAGR, Sharpe 5.6, max drawdown 1.05%, 79.5% win rate, +0.50R
+ *   average, 10-day hold. The old 4%-stop/mean-exit ladder is 18.9% / 4.9 /
+ *   1.6% / 79% / +0.13R, so it deploys more but earns a quarter of the R per
+ *   trade. See `scripts/capital-ladder-backtest.ts`.
  * - 1/3 off at +1R, full exit at +2R: a 1:1 trim and a 2:1 rest, instead of a
  *   stored +2R target the ladder never used.
  * - 7 positions × 12% max = 84% ≤ 85% max equity, so every slot can fill.
@@ -54,6 +55,17 @@ export const CAPITAL_EXIT = {
 	scaleOutR: 1,
 	scaleOutFraction: 0.3333,
 	timeStopDays: 20,
+	/**
+	 * Minimum R before the z-score thesis exit may fire.
+	 *
+	 * The thesis exit is volatility-scaled (+1σ) but the stop is a fixed 2%
+	 * floor, so in a quiet market the +1σ level can sit at +0.3R. Gating it at
+	 * +1R was tested and **rejected**: it raises the average trade from +0.49R
+	 * to +0.63R but lowers CAGR from 18.3% to 16.0% and lifts the 20-day time
+	 * stops from 121 to 372, because the early z-exit is where the mean-reversion
+	 * edge is realised. 0 keeps the thesis exit unconstrained.
+	 */
+	zExitMinR: 0,
 } as const;
 
 export const CAPITAL_CONFIDENCE = {
