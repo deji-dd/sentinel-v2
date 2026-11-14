@@ -70,7 +70,7 @@ import {
 	MONEY_SCALE,
 	moneyFromPriceShares,
 	moneyToNumber,
-	nextAlignedPayoutAt,
+	nextEligiblePayoutAt,
 	parseMoney,
 	parseUnits,
 	unitsForRedemption,
@@ -925,7 +925,7 @@ export async function updateInvestor(input: {
 						? {}
 						: {
 								frequency: input.frequency,
-								nextPayoutAt: nextAlignedPayoutAt(new Date(), input.frequency),
+								nextPayoutAt: nextEligiblePayoutAt(new Date(), input.frequency),
 							}),
 					...(input.payoutMode === undefined
 						? {}
@@ -1019,7 +1019,11 @@ export async function createDepositLot(input: {
 			})),
 		});
 		const deposit = computeDeposit(amount, nav.navPerUnit);
-		const nextPayout = nextAlignedPayoutAt(new Date(), frequency);
+		const nextPayout = nextEligiblePayoutAt(
+			input.occurredAt,
+			frequency,
+			new Date(),
+		);
 		const [investment] = await tx
 			.insert(capitalInvestments)
 			.values({
@@ -1143,7 +1147,7 @@ export async function payPayout(input: {
 					: investment.highWaterNav,
 				lastPayoutAt: fullyPaid ? now : investment.lastPayoutAt,
 				nextPayoutAt: fullyPaid
-					? nextAlignedPayoutAt(
+					? nextEligiblePayoutAt(
 							now,
 							investment.frequency as "daily" | "weekly" | "monthly",
 						)

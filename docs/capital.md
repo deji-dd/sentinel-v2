@@ -26,7 +26,7 @@ All three surfaces stay live over `/api/ws/capital` (`view=public|portfolio|admi
 
 NAV is `(cash + positions at last price) / units`. A deposit issues units at the pre-deposit NAV. Payouts distribute NAV gains above a lot's high-water mark and charge the lot's cadence fee. A `cash` lot redeems units for the net cash paid; a `reinvest` lot compounds the net payout back into the lot (principal rises, the fee is booked to the owner, and no in-game transfer is needed).
 
-Payout dates are shared per cadence: daily at 00:00 UTC, weekly Monday 00:00 UTC, monthly on the 1st at 00:00 UTC. New deposits and post-payout rescheduling use the same aligned calendar; migration `0074` backfilled existing active lots.
+Payout dates are shared per cadence: daily at 00:00 UTC, weekly Monday 00:00 UTC, monthly on the 1st at 00:00 UTC. New deposits and post-payout rescheduling use the same aligned calendar; migration `0074` backfilled existing active lots. A period must accrue at least half a cadence before it can settle (`MIN_PAYOUT_ACCRUAL_FRACTION`), so a deposit made just before a boundary rolls to the following boundary instead of paying a stub period — the batch itself is unchanged. Set the fraction to `1` for a strict one-full-period rule.
 
 Withdrawals are quoted first; the performance fee applies only to a positive profit portion and is waived on a loss, with an optional exit fee (default 0).
 

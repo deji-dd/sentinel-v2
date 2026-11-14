@@ -104,3 +104,45 @@ export function nextAlignedPayoutAt(
 
 	return new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
 }
+
+/**
+ * Fraction of a cadence a period must accrue before its payout is eligible.
+ *
+ * Alignment alone would let a lot opened moments before a boundary pay a stub
+ * period: a monthly deposit on the 31st would settle on the 1st, a daily
+ * deposit at 23:59 would settle one minute later. Requiring half a cadence
+ * fixes that while keeping the payout calendar shared across investors.
+ * Raise to `1` for a strict "one full period" rule.
+ */
+export const MIN_PAYOUT_ACCRUAL_FRACTION = 0.5;
+
+/**
+ * The first aligned payout a period may settle on.
+ *
+ * `accrualStart` is when value began accruing (a lot's `openedAt`, or the
+ * moment a prior payout reset its high-water mark). The returned boundary is
+ * still a shared cadence boundary, so batching is unchanged; it simply skips
+ * boundaries that arrive before the period has accrued the minimum fraction.
+ *
+ * `now` lets a backdated lot keep its *next* boundary in the future: the
+ * minimum is measured from `accrualStart`, but the first candidate is the next
+ * boundary at or after `now`.
+ */
+export function nextEligiblePayoutAt(
+	accrualStart: Date,
+	frequency: CapitalPayoutFrequency,
+	now: Date = accrualStart,
+): Date {
+	const cadenceMs =
+		addPayoutInterval(accrualStart, frequency).getTime() -
+		accrualStart.getTime();
+	const minimumMs = cadenceMs * MIN_PAYOUT_ACCRUAL_FRACTION;
+	const base = now.getTime() > accrualStart.getTime() ? now : accrualStart;
+	let next = nextAlignedPayoutAt(base, frequency);
+
+	while (next.getTime() - accrualStart.getTime() < minimumMs) {
+		next = nextAlignedPayoutAt(next, frequency);
+	}
+
+	return next;
+}

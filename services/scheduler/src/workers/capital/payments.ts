@@ -26,7 +26,7 @@ import {
 	formatUnits,
 	Logger,
 	matchPaymentIntent,
-	nextAlignedPayoutAt,
+	nextEligiblePayoutAt,
 	parseMoney,
 	readCapitalMoneyLog,
 	readCapitalTradeCompleted,
@@ -82,7 +82,11 @@ async function depositFromIntent(input: {
 				navAtDeposit: formatMoney(deposit.navPerUnit),
 				highWaterNav: formatMoney(deposit.highWaterNav),
 				openedAt: input.occurredAt,
-				nextPayoutAt: nextAlignedPayoutAt(new Date(), input.frequency),
+				nextPayoutAt: nextEligiblePayoutAt(
+					input.occurredAt,
+					input.frequency,
+					new Date(),
+				),
 			})
 			.returning();
 		if (!investment) throw new Error("Failed to create deposit lot.");

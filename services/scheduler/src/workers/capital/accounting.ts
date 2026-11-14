@@ -31,7 +31,7 @@ import {
 	Logger,
 	makeReferenceCode,
 	moneyToNumber,
-	nextAlignedPayoutAt,
+	nextEligiblePayoutAt,
 	parseMoney,
 	parseUnits,
 	unitsForAmount,
@@ -154,7 +154,7 @@ async function payPaperObligation(
 				),
 				highWaterNav: obligation.navAtCreation,
 				lastPayoutAt: now,
-				nextPayoutAt: nextAlignedPayoutAt(
+				nextPayoutAt: nextEligiblePayoutAt(
 					now,
 					investment.frequency as "daily" | "weekly" | "monthly",
 				),
@@ -242,7 +242,7 @@ async function reinvestPayout(input: {
 		const unitsIssued = unitsForAmount(payout.net, nav.navPerUnit);
 		const newUnits = units - payout.unitsRedeemed + unitsIssued;
 		const now = new Date();
-		const next = nextAlignedPayoutAt(
+		const next = nextEligiblePayoutAt(
 			now,
 			lot.frequency as "daily" | "weekly" | "monthly",
 		);
@@ -379,7 +379,7 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 			feeBps: feeBpsFor(cfg, lot.frequency),
 		});
 		const now = new Date();
-		const next = nextAlignedPayoutAt(
+		const next = nextEligiblePayoutAt(
 			now,
 			lot.frequency as "daily" | "weekly" | "monthly",
 		);
