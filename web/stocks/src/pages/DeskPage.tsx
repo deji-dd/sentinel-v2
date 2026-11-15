@@ -350,7 +350,7 @@ function DeskBook({ book }: { book: Book }) {
 			{error ? <ErrorBanner message={error} /> : null}
 
 			{data?.summary ? (
-				<div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+				<div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
 					<StatCard
 						label="Available cash"
 						value={money(data.summary.cash)}
@@ -372,6 +372,13 @@ function DeskBook({ book }: { book: Book }) {
 						label="Portfolio value"
 						value={money(data.summary.aum)}
 						hint="Cash + positions at market"
+					/>
+					<StatCard
+						label="Retained fees"
+						value={money(data.summary.cumulativeFees)}
+						hint="Performance + exit fees kept by the owner"
+						tone="success"
+						help="Every performance and exit fee booked out of the fund. The cash stays with the owner and is not reinvested automatically; record a deposit under your own investor lot to put it back into the fund."
 					/>
 				</div>
 			) : null}

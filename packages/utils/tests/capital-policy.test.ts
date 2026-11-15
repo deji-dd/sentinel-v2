@@ -4,6 +4,7 @@ import {
 	CAPITAL_BASE_WEIGHT_PCT,
 	CAPITAL_SIZING,
 	capitalExitReasonLabel,
+	capitalSlotPolicy,
 	confidenceMultiplier,
 	dailyReturnPct,
 	drawdownPctFromPeak,
@@ -14,9 +15,52 @@ import {
 describe("capital policy", () => {
 	test("position count and weight fit under the equity cap", () => {
 		expect(
-			CAPITAL_SIZING.maxPositions * CAPITAL_SIZING.maxStockWeightPct,
+			CAPITAL_SIZING.minPositions * CAPITAL_SIZING.maxStockWeightPct,
 		).toBeLessThanOrEqual(CAPITAL_SIZING.maxEquityPct);
 		expect(CAPITAL_BASE_WEIGHT_PCT).toBeCloseTo(8, 6);
+	});
+
+	test("slot policy holds 7 slots at inception and grows with NAV", () => {
+		const atInception = capitalSlotPolicy({ nav: 1_000, referenceNav: 1_000 });
+		expect(atInception.maxPositions).toBe(7);
+		expect(atInception.maxStockWeightPct).toBeCloseTo(12, 6);
+
+		const doubled = capitalSlotPolicy({ nav: 2_000, referenceNav: 1_000 });
+		expect(doubled.maxPositions).toBe(12);
+		expect(doubled.maxStockWeightPct).toBeCloseTo(85 / 12, 6);
+
+		const halfAgain = capitalSlotPolicy({ nav: 1_500, referenceNav: 1_000 });
+		expect(halfAgain.maxPositions).toBe(10);
+		expect(halfAgain.maxStockWeightPct).toBeCloseTo(8.5, 6);
+
+		const belowInception = capitalSlotPolicy({
+			nav: 800,
+			referenceNav: 1_000,
+		});
+		expect(belowInception.maxPositions).toBe(7);
+		expect(belowInception.maxStockWeightPct).toBeCloseTo(12, 6);
+
+		const noReference = capitalSlotPolicy({ nav: 1_000, referenceNav: null });
+		expect(noReference.maxPositions).toBe(7);
+		expect(noReference.maxStockWeightPct).toBeCloseTo(12, 6);
+	});
+
+	test("every slot count fits the equity budget", () => {
+		for (
+			let slots = CAPITAL_SIZING.minPositions;
+			slots <= CAPITAL_SIZING.maxPositions;
+			slots++
+		) {
+			const growth = slots / CAPITAL_SIZING.minPositions;
+			const policy = capitalSlotPolicy({
+				nav: growth,
+				referenceNav: 1,
+			});
+			expect(policy.maxPositions).toBe(slots);
+			expect(
+				policy.maxPositions * policy.maxStockWeightPct,
+			).toBeLessThanOrEqual(CAPITAL_SIZING.maxEquityPct + 1e-9);
+		}
 	});
 
 	test("confidence multiplier is bounded to 0.5–1.5", () => {

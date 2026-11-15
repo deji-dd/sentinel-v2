@@ -23,18 +23,66 @@
  *   trade. See `scripts/capital-ladder-backtest.ts`.
  * - 1/3 off at +1R, full exit at +2R: a 1:1 trim and a 2:1 rest, instead of a
  *   stored +2R target the ladder never used.
- * - 7 positions × 12% max = 84% ≤ 85% max equity, so every slot can fill.
- * - Confidence sizing uses an 8% base and a 0.5–1.5× multiplier, i.e. 4–12%,
- *   so it never breaches the per-name cap.
+ * - 7 positions × 12% max = 84% ≤ 85% max equity, so every floor slot can
+ *   fill. The slot count then grows with NAV (see `capitalSlotPolicy`) up to
+ *   12, and the per-name cap shrinks so the book still fits under 85%.
+ * - Confidence sizing uses a base of cap/1.5 and a 0.5–1.5× multiplier, so the
+ *   strongest signal reaches the cap without ever breaching it.
  */
 export const CAPITAL_SIZING = {
-	maxPositions: 7,
+	/** Minimum slots, used at the book's inception NAV. */
+	minPositions: 7,
+	/** Hard ceiling as the book grows. */
+	maxPositions: 12,
 	maxEquityPct: 85,
+	/** Hard per-name cap. The effective cap falls as slots grow. */
 	maxStockWeightPct: 12,
 	minCashReservePct: 15,
 	riskPerTradePct: 0.5,
 	minNotional: "10000000",
 } as const;
+
+export interface CapitalSlotPolicy {
+	/** Slots allowed at the current NAV. */
+	maxPositions: number;
+	/** Per-name weight cap after spreading the equity budget across slots. */
+	maxStockWeightPct: number;
+}
+
+function finite(value: string | number | null | undefined): number {
+	if (value === null || value === undefined) return 0;
+	const parsed = typeof value === "number" ? value : Number.parseFloat(value);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Scales the slot count with NAV relative to the book's first funded snapshot.
+ *
+ * A fixed 7-slot cap could not absorb a later deposit: existing weights were
+ * diluted and the new cash had nowhere to go. Here the fund starts at
+ * `minPositions` and adds a slot for every ~1/7th growth in NAV, up to
+ * `maxPositions`. The per-name cap becomes `min(12%, 85% / slots)` so the
+ * whole book still fits under the equity cap as slots are added.
+ *
+ * The reference is the book's first non-zero snapshot, not a hard-coded dollar
+ * amount, so the rule works at any fund scale and resets with the paper book.
+ */
+export function capitalSlotPolicy(input: {
+	nav: string | number;
+	referenceNav: string | number | null | undefined;
+}): CapitalSlotPolicy {
+	const nav = finite(input.nav);
+	const referenceNav = finite(input.referenceNav);
+	const min = CAPITAL_SIZING.minPositions;
+	const max = CAPITAL_SIZING.maxPositions;
+	const growth = nav > 0 && referenceNav > 0 ? nav / referenceNav : 1;
+	const positions = Math.min(max, Math.max(min, Math.floor(min * growth)));
+	const weight = Math.min(
+		CAPITAL_SIZING.maxStockWeightPct,
+		CAPITAL_SIZING.maxEquityPct / positions,
+	);
+	return { maxPositions: positions, maxStockWeightPct: weight };
+}
 
 export const CAPITAL_ENTRY_STOP = {
 	/** Stop distance in ATRs at entry. */

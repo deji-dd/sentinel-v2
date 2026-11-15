@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 
 import { db, sqlClient } from "../../index";
 import {
@@ -503,6 +503,36 @@ export async function getCapitalFills(book: CapitalBook, limit = 100) {
 		.where(eq(capitalFills.book, book))
 		.orderBy(desc(capitalFills.occurredAt))
 		.limit(limit);
+}
+
+/**
+ * Total value of the book's first funded hourly snapshot.
+ *
+ * The capital engine anchors dynamic slot sizing on this instead of a fixed
+ * dollar target, so a later deposit adds slots proportionally and the rule
+ * works at any fund scale. Empty snapshots are skipped: a book can be created
+ * (or reset) before its first deposit.
+ *
+ * Hourly rather than daily: the daily bucket is upserted all day, so its
+ * 00:00 row would silently become the latest total and overstate the opening
+ * capital. An hourly bucket only merges deposits inside the same hour.
+ */
+export async function getCapitalReferenceNav(
+	book: CapitalBook,
+): Promise<string | null> {
+	const [row] = await db
+		.select({ totalValue: capitalNavSnapshots.totalValue })
+		.from(capitalNavSnapshots)
+		.where(
+			and(
+				eq(capitalNavSnapshots.book, book),
+				eq(capitalNavSnapshots.granularity, "hourly"),
+				gt(capitalNavSnapshots.totalValue, "0"),
+			),
+		)
+		.orderBy(asc(capitalNavSnapshots.capturedAt))
+		.limit(1);
+	return row?.totalValue ?? null;
 }
 
 export async function getCapitalSnapshots(

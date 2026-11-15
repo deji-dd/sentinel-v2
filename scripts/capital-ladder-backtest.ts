@@ -84,7 +84,7 @@ const BASE: Omit<Variant, "name"> = {
 	minEntryScore: 65,
 	confidence: true,
 	confidenceRescale: false,
-	maxPositions: CAPITAL_SIZING.maxPositions,
+	maxPositions: CAPITAL_SIZING.minPositions,
 	maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
 	riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
 };
@@ -107,6 +107,19 @@ const VARIANTS: Variant[] = [
 		maxStockWeightPct: 20,
 	},
 	{ ...BASE, name: "current (entry -1.0, z-exit +1.0)" },
+	{
+		...BASE,
+		name: "current + 10 slots (8.5% weight)",
+		maxPositions: 10,
+		maxStockWeightPct: CAPITAL_SIZING.maxEquityPct / 10,
+	},
+	{
+		...BASE,
+		name: "current + 12 slots (7.08% weight)",
+		maxPositions: CAPITAL_SIZING.maxPositions,
+		maxStockWeightPct:
+			CAPITAL_SIZING.maxEquityPct / CAPITAL_SIZING.maxPositions,
+	},
 	{ ...BASE, name: "current + z-exit only at +1R", zExitMinR: 1 },
 	{ ...BASE, name: "entry -1.25", entrySigma: 1.25 },
 	{

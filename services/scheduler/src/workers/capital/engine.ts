@@ -15,6 +15,7 @@ import {
 	getActiveCapitalMlModel,
 	getCapitalConfig,
 	getCapitalOrders,
+	getCapitalReferenceNav,
 	getCapitalRiskContext,
 	getCapitalState,
 	getWorkerState,
@@ -48,6 +49,7 @@ import {
 	type CapitalScoringConfig,
 	type CapitalSignalMode,
 	type CapitalSignalScore,
+	capitalSlotPolicy,
 	type CapitalStockFeatures,
 	computeFeatures,
 	computeInvestorMetrics,
@@ -932,6 +934,12 @@ interface BookRunResult {
 		entriesAllowed: boolean;
 		entryPauseReasons: string[];
 		cooldownSkips: number;
+		slotPolicy: {
+			openPositions: number;
+			maxPositions: number;
+			maxStockWeightPct: number;
+			referenceNav: string | null;
+		} | null;
 	};
 }
 
@@ -958,6 +966,7 @@ async function runBook(
 				entriesAllowed: false,
 				entryPauseReasons: [],
 				cooldownSkips: 0,
+				slotPolicy: null,
 			},
 		};
 	}
@@ -971,6 +980,7 @@ async function runBook(
 				entriesAllowed: false,
 				entryPauseReasons: [],
 				cooldownSkips: 0,
+				slotPolicy: null,
 			},
 		};
 	}
@@ -1017,6 +1027,11 @@ async function runBook(
 	const positionByStock = new Map(
 		openPositions.map((position) => [position.stockId, position]),
 	);
+	const referenceNav = await getCapitalReferenceNav(book);
+	const slotPolicy = capitalSlotPolicy({
+		nav: moneyToNumber(nav.totalValue),
+		referenceNav,
+	});
 
 	const reserve =
 		mulPct(nav.totalValue, CAPITAL_SIZING.minCashReservePct) +
@@ -1332,7 +1347,7 @@ async function runBook(
 	if (entriesAllowed && entryPauseReasons.length === 0) {
 		for (const candidate of eligible) {
 			const { features, score, probability } = candidate;
-			if (positionCount >= CAPITAL_SIZING.maxPositions) break;
+			if (positionCount >= slotPolicy.maxPositions) break;
 			if (positionByStock.has(features.stockId)) continue;
 			// A fallback price exists only to evaluate exits; never open a new
 			// position on a stale or missing quote.
@@ -1359,7 +1374,7 @@ async function runBook(
 				maxSizeMultiplier: CAPITAL_CONFIDENCE.maxMultiplier,
 				config: {
 					riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
-					maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
+					maxStockWeightPct: slotPolicy.maxStockWeightPct,
 					stopAtrMultiplier: config.stopAtrMultiplier,
 					stopMinPct: config.stopMinPct,
 					stopMaxPct: CAPITAL_ENTRY_STOP.maxPct,
@@ -1476,6 +1491,12 @@ async function runBook(
 			entriesAllowed,
 			entryPauseReasons,
 			cooldownSkips,
+			slotPolicy: {
+				openPositions: openPositions.length,
+				maxPositions: slotPolicy.maxPositions,
+				maxStockWeightPct: slotPolicy.maxStockWeightPct,
+				referenceNav,
+			},
 		},
 	};
 }
@@ -1724,6 +1745,7 @@ async function runCapitalEngineCycleLocked(options?: {
 					entriesAllowed: false,
 					entryPauseReasons: [message],
 					cooldownSkips: 0,
+					slotPolicy: null,
 				},
 			});
 			logger.error(`Capital engine failed for ${book}:`, error);
@@ -1750,6 +1772,7 @@ async function runCapitalEngineCycleLocked(options?: {
 				entriesAllowed: result.details.entriesAllowed,
 				entryPauseReasons: result.details.entryPauseReasons,
 				cooldownSkips: result.details.cooldownSkips,
+				slotPolicy: result.details.slotPolicy,
 			},
 		});
 	}

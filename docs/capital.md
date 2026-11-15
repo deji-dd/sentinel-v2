@@ -6,7 +6,7 @@ Managed Torn City stock trading fund. Code prefix: `capital`. Host: `stocks.blas
 
 - `/` — public fund page: **Live** and **Simulation** tabs. Live shows NAV, current positions with marked-to-market P/L, recent live fills and the fee schedule; Simulation shows simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills. The legacy `/paper` link still opens the Simulation tab.
 - `/portfolio` — Discord-authenticated investor view: lots, payouts, withdrawals.
-- `/desk` — owner/admin desk with **Live** and **Simulation** tabs. Live has cash/deployed cards, open positions with frozen stops/targets, open orders (accept/cancel), investor, deposit, payout, withdrawal, risk-overlay and settings controls. Simulation has a permanent `SIMULATION` banner, the same positions/orders/risk cards, a **Send test alert** button and the reset control. The legacy `/desk/paper` link still opens the Simulation tab.
+- `/desk` — owner/admin desk with **Live** and **Simulation** tabs. Live has cash/deployed/retained-fee cards, open positions with frozen stops/targets, open orders (accept/cancel), investor, deposit, payout, withdrawal, risk-overlay and settings controls. Simulation has a permanent `SIMULATION` banner, the same positions/orders/risk cards, a **Send test alert** button and the reset control. The legacy `/desk/paper` link still opens the Simulation tab.
 
 The app lives in `web/stocks`. The API serves it by `Host` header from `services/api/src/middleware/static-spa.ts`; DNS/TLS for the subdomain is an external deployment prerequisite.
 
@@ -25,6 +25,8 @@ All three surfaces stay live over `/api/ws/capital` (`view=public|portfolio|admi
 - `capital_reconciliation_issues`, `capital_access`, `capital_audit_log`, `capital_smoke_reports`.
 
 NAV is `(cash + positions at last price) / units`. A deposit issues units at the pre-deposit NAV. Payouts distribute NAV gains above a lot's high-water mark and charge the lot's cadence fee. A `cash` lot redeems units for the net cash paid; a `reinvest` lot compounds the net payout back into the lot (principal rises, the fee is booked to the owner, and no in-game transfer is needed).
+
+Performance and exit fees are booked as `fee`/`exit_fee` cash rows, so they leave the fund's NAV and are retained by the owner; they are not reinvested. The desk's **Retained fees** card shows the lifetime amount. To put retained fees back into the fund, record a deposit under an operator lot — that issues units at the current NAV and re-enters the cash. A `reinvest` lot still compounds the investor's net payout automatically; switch the investor to `cash` if you want every payout to be a manual transfer.
 
 Payout dates are shared per cadence: daily at 00:00 UTC, weekly Monday 00:00 UTC, monthly on the 1st at 00:00 UTC. New deposits and post-payout rescheduling use the same aligned calendar; migration `0074` backfilled existing active lots. A period must accrue at least half a cadence before it can settle (`MIN_PAYOUT_ACCRUAL_FRACTION`), so a deposit made just before a boundary rolls to the following boundary instead of paying a stub period — the batch itself is unchanged. Set the fraction to `1` for a strict one-full-period rule.
 
@@ -102,9 +104,20 @@ the six buy candidates that used to receive an identical 12.5% now receive
 Position count and per-name weight are **code-level policy**, not dashboard
 settings (`packages/utils/src/capital-policy.ts`):
 
-- 7 positions max, 12% of NAV per name, 85% max equity, 15% cash reserve.
-  7 × 12% = 84%, so every slot can fill; the old 12 × 12.5% = 150% was capped
-  at ~6–7 positions by `max_equity_pct` and the other five slots were decorative.
+- **7 to 12 slots, scaled with NAV.** At inception the book runs 7 slots at a
+  12% per-name cap (7 × 12% = 84%, under the 85% equity cap). As NAV grows the
+  slot count grows with it — one slot per ~1/7th growth over the first funded
+  snapshot — up to 12. The per-name cap falls to `min(12%, 85% / slots)`
+  (7.08% at 12 slots), so the book still fits under the equity cap.
+  `capitalSlotPolicy` in `packages/utils/src/capital-policy.ts` owns the rule.
+  The anchor is the first non-zero NAV snapshot, not a hard-coded dollar
+  amount, so a later deposit adds slots instead of diluting the existing
+  positions while the new cash sits idle. The old fixed 7-slot cap could not
+  absorb new capital at all; a fixed 12 × 12.5% = 150% was capped at ~6–7
+  positions by `max_equity_pct`, leaving the other five slots decorative.
+- The per-name cap is the hard 12%; the effective cap for a cycle is the slot
+  policy value. Confidence sizing derives its base from that cap, so the
+  strongest signal still reaches the cap and a weak one uses a third of it.
 - Entry stop = `clamp(2.5 × ATR, 2%, 2.5%)`. Torn daily ATR is ~0.55%, so the 2%
   floor binds for most names. The stop, target and **initial risk are frozen on
   the position at entry** (`capital_positions.stop_price/target_price/entry_price`);
@@ -117,11 +130,13 @@ settings (`packages/utils/src/capital-policy.ts`):
   "peak" from the 30-day high, which could be a pre-entry price and trigger a
   trail on a position that never made a new high.
 - Time stop after 20 days without +1R.
-- Confidence sizing: `0.5 + score/100` → 0.5–1.5× on an 8% base weight. The entry
-  floor is 65, so the _effective_ range is 1.15–1.5× (9.2–12% of NAV), not the
-  4–12% the multiplier implies at score 0. Rescaling over 65–100 was tested and
-  rejected: it cuts deployment to ~40% of NAV and CAGR from 18.3% to 10.5%
-  because the low-score names it halves are still profitable.
+- Confidence sizing: `0.5 + score/100` → 0.5–1.5× on a base of `slot cap / 1.5`
+  (8% when the cap is 12%). The entry floor is 65, so the _effective_ range is
+  1.15–1.5× of that base, not the full 0.5–1.5× it implies at score 0.
+  Rescaling over 65–100 was tested and rejected: it cuts deployment to ~40% of
+  NAV and CAGR from 18.3% to 10.5% because the low-score names it halves are
+  still profitable. At 12 slots the base falls with the cap, so the confidence
+  spread is preserved instead of being clipped by the per-name cap.
 - The thesis (z-score) exit is **not** gated behind +1R. Gating it was tested:
   average R rises from +0.49 to +0.63, but CAGR falls from 18.3% to 16.0% and
   the 20-day time stops go from 121 to 372. The early z-exit is where the
@@ -226,10 +241,16 @@ winners that stop out first have been reviewed.
 - Signals need self-recorded candle history: `d7` needs ~7 days, `d30` ~30 days.
 - An off-recommendation buy recorded as an **error trade** is flagged `is_unplanned`; the engine uses half the normal stop distance and exits immediately if the setup does not qualify, otherwise it manages the position normally with a tighter risk budget.
 - Payout/withdrawal log matches currently verify the transfer and alert the owner; the desk confirmation records the ledger settlement.
-- Rule thresholds are configured defaults; the position count, per-name weight,
+- Rule thresholds are configured defaults; the slot policy, per-name weight,
   max equity and risk-per-trade are fixed policy and are not editable on the
-  desk. Re-run `scripts/capital-ladder-backtest.ts` before changing them.
-- `risk_per_trade_pct = 0.5` never binds: 12% weight × a ~2.05% stop is
+  desk. Re-run `scripts/capital-ladder-backtest.ts` before changing them; the
+  10-slot (8.5%) and 12-slot (7.08%) variants are included for the breadth
+  trade-off.
+- Dynamic slots change entries only. Existing positions keep their original
+  size until they exit; the engine does not rebalance a position up or down.
+- Slots are anchored on the first funded snapshot, so a large withdrawal does
+  not shrink the slot count below 7, and a reset re-anchors the book.
+- `risk_per_trade_pct = 0.5` never binds: even a 12% weight × a ~2.05% stop is
   0.20–0.23% of NAV per name, so portfolio heat is ~1.5%, not 3.5%. The weight
   cap, not the risk budget, is the real sizing constraint.
 - Sells persist an `exit_reason` (`stop`, `trail`, `scale_out`, `target`,

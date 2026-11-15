@@ -166,7 +166,7 @@ describe("capital API", () => {
 		};
 		expect(body.settings.publicShowHoldings).toBe(true);
 		expect(body.settings.minEntryScore).toBe(70);
-		expect(body.settings.maxPositions).toBe(7);
+		expect(body.settings.maxPositions).toBe(12);
 	});
 
 	test("payment intents carry the deposit cadence", async () => {

@@ -1518,7 +1518,9 @@ export function toCapitalSettings(
 		// effective values rather than a stale database column.
 		minCashReservePct: CAPITAL_SIZING.minCashReservePct,
 		maxEquityPct: CAPITAL_SIZING.maxEquityPct,
+		// Hard cap; `capitalSlotPolicy` lowers the effective weight as slots grow.
 		maxStockWeightPct: CAPITAL_SIZING.maxStockWeightPct,
+		// Ceiling; the engine runs between `minPositions` and this value.
 		maxPositions: CAPITAL_SIZING.maxPositions,
 		riskPerTradePct: CAPITAL_SIZING.riskPerTradePct,
 		stopAtrMultiplier: config.stopAtrMultiplier,
