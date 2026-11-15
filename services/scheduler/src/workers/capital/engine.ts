@@ -6,6 +6,7 @@ import {
 	capitalFills,
 	capitalMarketCandles,
 	capitalMarketLatest,
+	capitalMlPredictions,
 	capitalOrders,
 	capitalPositions,
 	db,
@@ -58,6 +59,7 @@ import {
 	confidenceMultiplier,
 	dailyReturnPct,
 	daysBetween,
+	describeBuyReason,
 	drawdownPctFromPeak,
 	entryStopDistance,
 	evaluateExit,
@@ -1332,15 +1334,70 @@ async function runBook(
 			? candidate.score.score * (1 - config.mlWeight) +
 				(candidate.probability ?? 0) * 100 * config.mlWeight
 			: candidate.score.score;
-	const eligible = candidates
-		.filter((candidate) => {
-			if (!candidate.score.eligible) return false;
-			if (mlApplied && (candidate.probability ?? 0) < config.mlMinConfidence) {
-				return false;
-			}
-			return true;
-		})
+	const ruleEligible = candidates.filter(
+		(candidate) => candidate.score.eligible,
+	);
+	const eligible = ruleEligible
+		.filter(
+			(candidate) =>
+				!mlApplied || (candidate.probability ?? 0) >= config.mlMinConfidence,
+		)
 		.sort((a, b) => blendScore(b) - blendScore(a));
+	if (mlApplied && ruleEligible.length > 0 && eligible.length === 0) {
+		const message =
+			`ML floor ${config.mlMinConfidence} rejected all ` +
+			`${ruleEligible.length} rule-eligible candidate(s) this cycle, so no ` +
+			"entries can be placed. Lower ml_min_confidence or disable ML.";
+		errors.push(message);
+		logger.warn(message);
+	}
+
+	// Shadow logging deliberately covers every rule-eligible candidate, not
+	// only the few that become orders: a ranking model needs a wide candidate
+	// sample, and logging buys alone accrues far too slowly to judge it. One
+	// prediction per stock per UTC day keeps the table bounded.
+	if (mlActive) {
+		try {
+			const dayStart = floorToUtcBucket(now, 1_440);
+			const logged = await db
+				.select({ stockId: capitalMlPredictions.stockId })
+				.from(capitalMlPredictions)
+				.where(
+					and(
+						eq(capitalMlPredictions.book, book),
+						gte(capitalMlPredictions.createdAt, dayStart),
+					),
+				);
+			const seen = new Set(logged.map((row) => row.stockId));
+			for (const candidate of ruleEligible) {
+				const { features, probability, score } = candidate;
+				if (probability === null) continue;
+				if (seen.has(features.stockId)) continue;
+				if (!(features.price > 0)) continue;
+				const values = capitalMlFeatureVector(features);
+				await insertCapitalMlPrediction({
+					book,
+					stockId: features.stockId,
+					modelId: ml.id,
+					horizonDays: ml.model.horizonDays,
+					entryPrice: features.price,
+					probability,
+					ruleScore: score.score,
+					eligible: score.eligible,
+					features: Object.fromEntries(
+						CAPITAL_ML_FEATURES.map((name, index) => [
+							name,
+							values[index] ?? 0,
+						]),
+					),
+				});
+			}
+		} catch (error) {
+			errors.push(
+				`ML shadow log failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 
 	const cooldownStockIds = new Set(risk.cooldownStockIds);
 	let positionCount = openPositions.length;
@@ -1395,6 +1452,7 @@ async function runBook(
 				mode === "reversal"
 					? `Reversal score ${score.score.toFixed(1)} (stretch ${score.components.trend.toFixed(0)}, flow ${score.components.timing.toFixed(0)}, risk ${score.components.risk.toFixed(0)}). z ${features.zscore20.toFixed(2)} vs the 20-period mean ${features.sma20.toFixed(2)}; 7d shares ${(features.sharesChange7Pct ?? 0).toFixed(2)}%.${mlNote} Stop ${plan.stopPrice.toFixed(2)}, target ${plan.targetPrice.toFixed(2)}.${sizingNote}`
 					: `Score ${score.score.toFixed(1)} (trend ${score.components.trend.toFixed(0)}, timing ${score.components.timing.toFixed(0)}, risk ${score.components.risk.toFixed(0)}). Stop ${plan.stopPrice.toFixed(2)}, target ${plan.targetPrice.toFixed(2)}.${sizingNote}`;
+			const alertReason = describeBuyReason(features, mode);
 			const order = await createOrder({
 				book,
 				stockId: features.stockId,
@@ -1411,32 +1469,6 @@ async function runBook(
 				runId,
 				expiresAt,
 			});
-			if (mlActive && probability !== null) {
-				// Shadow logging must never be able to block a real recommendation.
-				try {
-					const values = capitalMlFeatureVector(features);
-					await insertCapitalMlPrediction({
-						book,
-						stockId: features.stockId,
-						modelId: ml.id,
-						horizonDays: ml.model.horizonDays,
-						entryPrice: features.price,
-						probability,
-						ruleScore: score.score,
-						eligible: score.eligible,
-						features: Object.fromEntries(
-							CAPITAL_ML_FEATURES.map((name, index) => [
-								name,
-								values[index] ?? 0,
-							]),
-						),
-					});
-				} catch (error) {
-					errors.push(
-						`ML prediction log failed: ${error instanceof Error ? error.message : String(error)}`,
-					);
-				}
-			}
 			recommendations += 1;
 			positionCount += 1;
 			freeCash -= plan.notional;
@@ -1459,7 +1491,7 @@ async function runBook(
 					score: score.score,
 					stopPrice: plan.stopPrice,
 					targetPrice: plan.targetPrice,
-					reason: null,
+					reason: alertReason,
 					filled: true,
 					sizePct: plan.positionPct,
 				});
@@ -1474,7 +1506,7 @@ async function runBook(
 					score: score.score,
 					stopPrice: plan.stopPrice,
 					targetPrice: plan.targetPrice,
-					reason: null,
+					reason: alertReason,
 					filled: false,
 					sizePct: plan.positionPct,
 				});

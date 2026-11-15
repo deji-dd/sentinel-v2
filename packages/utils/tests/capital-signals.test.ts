@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	type CapitalCandle,
+	type CapitalStockFeatures,
 	computeFeatures,
 	computeMarketRegime,
+	describeBuyReason,
 	evaluateExit,
 	planEntry,
 	scoreStock,
@@ -570,5 +572,77 @@ describe("frozen stop and exit ladder", () => {
 		});
 		expect(low.positionPct).toBeCloseTo(4, 1);
 		expect(high.positionPct).toBeCloseTo(12, 1);
+	});
+});
+
+describe("describeBuyReason", () => {
+	function features(overrides: Partial<CapitalStockFeatures> = {}) {
+		const candles = makeCandles(120, { drift: 0.3, wobble: 0.5 });
+		const last = candles[candles.length - 1];
+		const base = computeFeatures({
+			stockId: 1,
+			price: (last?.close ?? 0) * 1.01,
+			candles,
+			regimeOn: true,
+		});
+		if (!base) throw new Error("features failed to compute");
+		return { ...base, ...overrides };
+	}
+
+	test("reversal reason explains the dip, flow and drawdown", () => {
+		const reason = describeBuyReason(
+			features({
+				zscore20: -1.62,
+				sharesChange7Pct: 1.24,
+				drawdown30Pct: -6.4,
+			}),
+			"reversal",
+		);
+		expect(reason).toContain("Buy the dip");
+		expect(reason).toContain("1.6σ below its 20-day mean");
+		expect(reason).toContain("7-day shares +1.2% (net inflow)");
+		expect(reason).toContain("down 6.4% from its 30-day high");
+	});
+
+	test("reversal reason names outflow and skips a shallow drawdown", () => {
+		const reason = describeBuyReason(
+			features({
+				zscore20: -1.3,
+				sharesChange7Pct: -0.8,
+				drawdown30Pct: -1,
+			}),
+			"reversal",
+		);
+		expect(reason).toContain("net outflow");
+		expect(reason).not.toContain("30-day high");
+	});
+
+	test("reversal reason omits flow when the store has none", () => {
+		const reason = describeBuyReason(
+			features({
+				zscore20: -1.4,
+				sharesChange7Pct: null,
+				sharesChange30Pct: null,
+			}),
+			"reversal",
+		);
+		expect(reason).not.toContain("shares");
+	});
+
+	test("momentum reason describes an uptrend and relative strength", () => {
+		const reason = describeBuyReason(
+			features({
+				ema20: 105,
+				ema50: 100,
+				rsi14: 58,
+				returns: { ...features().returns, d30: 4.2 },
+				relativeStrength30Pct: 3.1,
+			}),
+			"momentum",
+		);
+		expect(reason).toContain("Trending up");
+		expect(reason).toContain("+4.2% over 30 days");
+		expect(reason).toContain("RSI 58");
+		expect(reason).toContain("outperforming the market by 3.1%");
 	});
 });

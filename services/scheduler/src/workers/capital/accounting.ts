@@ -252,6 +252,9 @@ async function reinvestPayout(input: {
 			.set({
 				units: formatUnits(newUnits > 0n ? newUnits : 0n),
 				principal: formatMoney(parseMoney(lot.principal) + payout.net),
+				cumulativePayouts: formatMoney(
+					parseMoney(lot.cumulativePayouts) + payout.net,
+				),
 				cumulativeFees: formatMoney(
 					parseMoney(lot.cumulativeFees) + payout.fee,
 				),
@@ -355,6 +358,24 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 
 	let created = 0;
 	for (const lot of dueLots) {
+		const now = new Date();
+		// `next_payout_at` is the schedule, not proof the period is eligible.
+		// A lot created before the minimum-accrual rule (or realigned by an
+		// older cadence change) can point at a boundary that arrives before
+		// half a cadence has accrued. Never pay that stub: move the schedule
+		// to the first eligible boundary instead.
+		const eligibleAt = nextEligiblePayoutAt(
+			lot.lastPayoutAt ?? lot.openedAt,
+			lot.frequency as "daily" | "weekly" | "monthly",
+		);
+		if (eligibleAt.getTime() > now.getTime()) {
+			await db
+				.update(capitalInvestments)
+				.set({ nextPayoutAt: eligibleAt, updatedAt: now })
+				.where(eq(capitalInvestments.id, lot.id));
+			continue;
+		}
+
 		const open = await db
 			.select({ id: capitalPayoutObligations.id })
 			.from(capitalPayoutObligations)
@@ -378,7 +399,6 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 			highWaterNav: parseMoney(lot.highWaterNav),
 			feeBps: feeBpsFor(cfg, lot.frequency),
 		});
-		const now = new Date();
 		const next = nextEligiblePayoutAt(
 			now,
 			lot.frequency as "daily" | "weekly" | "monthly",
@@ -530,15 +550,10 @@ async function recordSnapshots(book: CapitalBook): Promise<void> {
 		.where(eq(capitalInvestments.book, book));
 	const payoutsRow = await db
 		.select({
-			total: sql<string>`COALESCE(SUM(-${capitalTransactions.amount}), 0)`,
+			total: sql<string>`COALESCE(SUM(${capitalInvestments.cumulativePayouts}), 0)`,
 		})
-		.from(capitalTransactions)
-		.where(
-			and(
-				eq(capitalTransactions.book, book),
-				eq(capitalTransactions.type, "payout"),
-			),
-		);
+		.from(capitalInvestments)
+		.where(eq(capitalInvestments.book, book));
 	const feesRow = await db
 		.select({
 			total: sql<string>`COALESCE(SUM(-${capitalTransactions.amount}), 0)`,

@@ -563,6 +563,58 @@ function scoreReversalStock(
 	};
 }
 
+/**
+ * Plain-language summary of why a stock cleared the entry screen.
+ *
+ * This is the Discord alert body, so it deliberately avoids the technical
+ * rationale stored on the order (scores, component weights, stops). It reads
+ * like a trader's note: "buy the dip", "trending up", net share inflow, etc.
+ */
+export function describeBuyReason(
+	features: CapitalStockFeatures,
+	mode: CapitalSignalMode,
+): string {
+	if (mode === "reversal") {
+		const parts = [
+			`Buy the dip: ${Math.abs(features.zscore20).toFixed(1)}σ below its 20-day mean`,
+		];
+		const flow = features.sharesChange7Pct ?? features.sharesChange30Pct;
+		if (flow !== null && Math.abs(flow) >= 0.1) {
+			parts.push(
+				`7-day shares ${flow >= 0 ? "+" : ""}${flow.toFixed(1)}% (${flow >= 0 ? "net inflow" : "net outflow"})`,
+			);
+		}
+		if (features.drawdown30Pct <= -2) {
+			parts.push(
+				`down ${Math.abs(features.drawdown30Pct).toFixed(1)}% from its 30-day high`,
+			);
+		}
+		return `${parts.join("; ")}.`;
+	}
+
+	const parts: string[] = [];
+	const d30 = features.returns.d30 ?? 0;
+	if (features.ema20 > features.ema50 && d30 > 0) {
+		parts.push(
+			`Trending up: EMA20 above EMA50, +${d30.toFixed(1)}% over 30 days`,
+		);
+	} else if (features.ema20 > features.ema50) {
+		parts.push("Trending up: EMA20 above EMA50");
+	} else {
+		parts.push(
+			`Recovering: ${d30 >= 0 ? "+" : ""}${d30.toFixed(1)}% over 30 days, ${features.price < features.ema20 ? "below" : "above"} its 20-day EMA`,
+		);
+	}
+	parts.push(`RSI ${features.rsi14.toFixed(0)}`);
+	const relative = features.relativeStrength30Pct;
+	if (relative !== null && Math.abs(relative) >= 0.5) {
+		parts.push(
+			`${relative >= 0 ? "outperforming" : "lagging"} the market by ${Math.abs(relative).toFixed(1)}% over 30 days`,
+		);
+	}
+	return `${parts.join("; ")}.`;
+}
+
 export interface CapitalEntryConfig {
 	riskPerTradePct: number;
 	maxStockWeightPct: number;

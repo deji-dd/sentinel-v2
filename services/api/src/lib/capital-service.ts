@@ -175,6 +175,24 @@ async function sumTransactionTypes(
 	return asString(row?.total);
 }
 
+/**
+ * Lifetime distributions, net of fees, across every lot.
+ *
+ * Lots carry `cumulative_payouts` for both cash and reinvested payouts (the
+ * cash path also writes a `payout` transaction, the reinvest path does not),
+ * so this is the only total that counts compounded distributions. Summing
+ * `payout` transactions alone understates it.
+ */
+async function sumLotPayouts(book: CapitalBook): Promise<string> {
+	const [row] = await db
+		.select({
+			total: sql<string>`COALESCE(SUM(${capitalInvestments.cumulativePayouts}), 0)`,
+		})
+		.from(capitalInvestments)
+		.where(eq(capitalInvestments.book, book));
+	return asString(row?.total);
+}
+
 async function countInvestors(book: CapitalBook): Promise<number> {
 	const [row] = await db
 		.select({
@@ -461,7 +479,7 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 		.limit(1);
 	const { nav } = await loadNav(book);
 	const [payouts, fees, investors, invested, first] = await Promise.all([
-		sumTransactionTypes(book, ["payout"]),
+		sumLotPayouts(book),
 		sumTransactionTypes(book, ["fee", "exit_fee"]),
 		countInvestors(book),
 		sumActivePrincipal(book),
@@ -916,22 +934,18 @@ export async function updateInvestor(input: {
 
 		// An investor-level cadence or payout setting is the source of truth for
 		// their whole book, so apply it to every active lot as well. A cadence
-		// change also realigns the next payout to the new schedule.
+		// change also realigns the next payout to the new schedule. The minimum
+		// accrual is measured from each lot's own accrual start, never from the
+		// moment of the change: otherwise changing cadence just after a deposit
+		// could book a stub period.
 		if (input.frequency !== undefined || input.payoutMode !== undefined) {
-			await tx
-				.update(capitalInvestments)
-				.set({
-					...(input.frequency === undefined
-						? {}
-						: {
-								frequency: input.frequency,
-								nextPayoutAt: nextEligiblePayoutAt(new Date(), input.frequency),
-							}),
-					...(input.payoutMode === undefined
-						? {}
-						: { payoutMode: input.payoutMode }),
-					updatedAt: new Date(),
+			const lots = await tx
+				.select({
+					id: capitalInvestments.id,
+					openedAt: capitalInvestments.openedAt,
+					lastPayoutAt: capitalInvestments.lastPayoutAt,
 				})
+				.from(capitalInvestments)
 				.where(
 					and(
 						eq(capitalInvestments.book, input.book),
@@ -939,6 +953,28 @@ export async function updateInvestor(input: {
 						eq(capitalInvestments.status, "active"),
 					),
 				);
+			const now = new Date();
+			for (const lot of lots) {
+				await tx
+					.update(capitalInvestments)
+					.set({
+						...(input.frequency === undefined
+							? {}
+							: {
+									frequency: input.frequency,
+									nextPayoutAt: nextEligiblePayoutAt(
+										lot.lastPayoutAt ?? lot.openedAt,
+										input.frequency,
+										now,
+									),
+								}),
+						...(input.payoutMode === undefined
+							? {}
+							: { payoutMode: input.payoutMode }),
+						updatedAt: now,
+					})
+					.where(eq(capitalInvestments.id, lot.id));
+			}
 		}
 
 		const contacts = await tx
