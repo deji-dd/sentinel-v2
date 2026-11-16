@@ -4,6 +4,8 @@ import {
 	and,
 	capitalInvestments,
 	capitalOrders,
+	capitalPayoutObligations,
+	capitalTransactions,
 	db,
 	eq,
 	resetCapitalPaperBook,
@@ -361,6 +363,164 @@ describe("capital API", () => {
 		expect(row?.activeLots).toBe(2);
 	});
 
+	test("operator withdrawals waive performance and exit fees", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+		await updateCapitalConfig(
+			"paper",
+			{ withdrawalPerformanceFeeEnabled: true, withdrawalExitFeeBps: 100 },
+			null,
+		);
+
+		const overviewResponse = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/overview", {
+				headers: cookieFor(sessionId),
+			}),
+		);
+		const overview = (await overviewResponse.json()) as {
+			investors: Array<{ investor: { id: string; kind: string } }>;
+		};
+		const operator = overview.investors.find(
+			(row) => row.investor.kind === "operator",
+		);
+		expect(operator).toBeTruthy();
+		if (!operator) return;
+
+		const deposit = await app.handle(
+			new Request(
+				`http://localhost/v2/capital/admin/paper/investors/${operator.investor.id}/deposits`,
+				{
+					method: "POST",
+					headers: {
+						...cookieFor(sessionId),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ amount: "1000000" }),
+				},
+			),
+		);
+		expect(deposit.status).toBe(200);
+
+		const request = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/withdrawals", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					investorId: operator.investor.id,
+					amount: "500000",
+				}),
+			}),
+		);
+		expect(request.status).toBe(200);
+		const body = (await request.json()) as {
+			request: {
+				performanceFee: string;
+				exitFee: string;
+				netAmount: string;
+				grossValue: string;
+			};
+		};
+		expect(Number(body.request.performanceFee)).toBe(0);
+		expect(Number(body.request.exitFee)).toBe(0);
+		expect(body.request.netAmount).toBe(body.request.grossValue);
+
+		await updateCapitalConfig(
+			"paper",
+			{ withdrawalPerformanceFeeEnabled: true, withdrawalExitFeeBps: 0 },
+			null,
+		);
+	});
+
+	test("operator payouts waive performance fees and do not book fee noise", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+
+		const overviewResponse = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/overview", {
+				headers: cookieFor(sessionId),
+			}),
+		);
+		const overview = (await overviewResponse.json()) as {
+			investors: Array<{
+				investor: { id: string; kind: string };
+				activeLots: number;
+			}>;
+		};
+		const operator = overview.investors.find(
+			(row) => row.investor.kind === "operator",
+		);
+		expect(operator).toBeTruthy();
+		if (!operator) return;
+
+		// Fetch operator's active lot
+		const [lot] = await db
+			.select()
+			.from(capitalInvestments)
+			.where(
+				and(
+					eq(capitalInvestments.book, "paper"),
+					eq(capitalInvestments.investorId, operator.investor.id),
+					eq(capitalInvestments.status, "active"),
+				),
+			)
+			.limit(1);
+		expect(lot).toBeTruthy();
+		if (!lot) return;
+
+		// Seed a payout obligation for the operator lot with hypothetical fee
+		const now = new Date();
+		const [obligation] = await db
+			.insert(capitalPayoutObligations)
+			.values({
+				book: "paper",
+				investmentId: lot.id,
+				investorId: operator.investor.id,
+				frequency: "monthly",
+				periodStart: lot.openedAt,
+				periodEnd: now,
+				dueAt: now,
+				grossAmount: "100000",
+				feeAmount: "20000",
+				netAmount: "80000",
+				paidAmount: "0",
+				remainingAmount: "100000",
+				status: "due",
+				highWaterNav: lot.highWaterNav,
+				navAtCreation: "1",
+			})
+			.returning();
+		expect(obligation).toBeTruthy();
+		if (!obligation) return;
+
+		const payResponse = await app.handle(
+			new Request("http://localhost/v2/capital/admin/paper/payouts/pay", {
+				method: "POST",
+				headers: {
+					...cookieFor(sessionId),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					obligationId: obligation.id,
+				}),
+			}),
+		);
+		expect(payResponse.status).toBe(200);
+
+		// Verify no fee transaction was booked for this payout
+		const feeTx = await db
+			.select()
+			.from(capitalTransactions)
+			.where(
+				and(
+					eq(capitalTransactions.book, "paper"),
+					eq(capitalTransactions.payoutId, obligation.id),
+					eq(capitalTransactions.type, "fee"),
+				),
+			);
+		expect(feeTx.length).toBe(0);
+	});
+
 	test("manual fills clamp a sell to the held shares", async () => {
 		if (!sessionId) throw new Error("No session fixture.");
 		const buy = await app.handle(
@@ -436,7 +596,7 @@ describe("capital API", () => {
 		}
 	});
 
-	test("paper reset clears everything and seeds no operator", async () => {
+	test("paper reset clears everything and recreates the operator", async () => {
 		if (!sessionId) throw new Error("No session fixture.");
 		const reset = await app.handle(
 			new Request("http://localhost/v2/capital/admin/paper/reset", {
@@ -454,11 +614,12 @@ describe("capital API", () => {
 		expect(overview.status).toBe(200);
 		const body = (await overview.json()) as {
 			summary: { cash: string; positionsValue: string };
-			investors: unknown[];
+			investors: Array<{ investor: { kind: string } }>;
 			positions: unknown[];
 			recentFills: unknown[];
 		};
-		expect(body.investors).toHaveLength(0);
+		expect(body.investors).toHaveLength(1);
+		expect(body.investors[0]?.investor.kind).toBe("operator");
 		expect(body.positions).toHaveLength(0);
 		expect(body.recentFills).toHaveLength(0);
 		expect(Number(body.summary.cash)).toBe(0);

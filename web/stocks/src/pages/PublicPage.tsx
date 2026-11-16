@@ -152,17 +152,27 @@ function BookOverview({ book }: { book: Book }) {
 							label={
 								data?.flags.showAum
 									? isPaper
-										? "Simulated AUM"
+										? "Amount Invested"
 										: "Assets under management"
 									: "AUM (private)"
 							}
-							value={data?.flags.showAum ? compactMoney(summary.aum) : "—"}
+							value={
+								data?.flags.showAum
+									? compactMoney(
+											isPaper ? summary.investedCapital : summary.aum,
+										)
+									: "—"
+							}
 							hint={
 								isPaper
-									? "Simulation book — no real capital"
+									? "Capital deployed in the simulation"
 									: `${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`
 							}
-							help="Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
+							help={
+								isPaper
+									? "Total capital deployed in the simulation — the sum of all deposits minus withdrawals."
+									: "Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
+							}
 						/>
 						<StatCard
 							label="NAV / unit"

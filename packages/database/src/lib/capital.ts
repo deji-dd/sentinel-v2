@@ -86,7 +86,9 @@ function asString(value: unknown): string {
  * Seeds the two books and their default configs.
  *
  * Called on API/scheduler boot and before any book read, so a fresh database
- * (or a migration that predates the seed) does not require a manual step.
+ * (or a migration that predates the seed) does not require a manual step. Each
+ * book also gets its operator investor: the owner's own capital and the
+ * destination for reinvested fees.
  */
 export async function ensureCapitalBooks(): Promise<void> {
 	await db
@@ -101,6 +103,231 @@ export async function ensureCapitalBooks(): Promise<void> {
 		.insert(capitalBookConfigs)
 		.values([{ book: "live" }, { book: "paper" }])
 		.onConflictDoNothing();
+
+	await Promise.all([
+		ensureCapitalOperator("live"),
+		ensureCapitalOperator("paper"),
+	]);
+}
+
+/** The default display name for each book's operator investor. */
+export const CAPITAL_OPERATOR_DISPLAY_NAMES: Record<CapitalBook, string> = {
+	live: "Operator",
+	paper: "Simulation Operator",
+};
+
+/** Marks the single lot that receives automatically reinvested fees. */
+export const CAPITAL_OPERATOR_FEE_LOT_NOTE = "Operator fee reinvestment lot";
+
+export interface CapitalOperatorOptions {
+	displayName?: string;
+	/** Owner's Torn id. Filled in when the operator is created, never overwritten. */
+	tornId?: number | null;
+}
+
+type CapitalWriteExecutor = Pick<typeof db, "select" | "insert" | "update">;
+
+async function ensureCapitalOperatorWith(
+	executor: CapitalWriteExecutor,
+	book: CapitalBook,
+	options: CapitalOperatorOptions = {},
+): Promise<CapitalInvestorRow> {
+	const [existing] = await executor
+		.select()
+		.from(capitalInvestors)
+		.where(
+			and(
+				eq(capitalInvestors.book, book),
+				eq(capitalInvestors.kind, "operator"),
+			),
+		)
+		.limit(1);
+	if (existing) {
+		// Only fill a missing Torn id; never rename or relink an operator the
+		// owner has already configured on the desk. Skip the link when another
+		// investor already owns that Torn id, rather than failing the
+		// `(book, torn_id)` unique index and breaking boot.
+		if (options.tornId && existing.tornId === null) {
+			const [tornOwner] = await executor
+				.select({ id: capitalInvestors.id })
+				.from(capitalInvestors)
+				.where(
+					and(
+						eq(capitalInvestors.book, book),
+						eq(capitalInvestors.tornId, options.tornId),
+					),
+				)
+				.limit(1);
+			if (!tornOwner || tornOwner.id === existing.id) {
+				const [updated] = await executor
+					.update(capitalInvestors)
+					.set({ tornId: options.tornId, updatedAt: new Date() })
+					.where(eq(capitalInvestors.id, existing.id))
+					.returning();
+				if (updated) return updated;
+			}
+		}
+		return existing;
+	}
+
+	// No operator yet. If the owner already has an investor row under this Torn
+	// id, adopt it (with its lots) instead of inserting a conflicting row.
+	if (options.tornId) {
+		const [owner] = await executor
+			.select()
+			.from(capitalInvestors)
+			.where(
+				and(
+					eq(capitalInvestors.book, book),
+					eq(capitalInvestors.tornId, options.tornId),
+				),
+			)
+			.limit(1);
+		if (owner) {
+			const [promoted] = await executor
+				.update(capitalInvestors)
+				.set({ kind: "operator", updatedAt: new Date() })
+				.where(eq(capitalInvestors.id, owner.id))
+				.returning();
+			if (promoted) return promoted;
+		}
+	}
+
+	const [created] = await executor
+		.insert(capitalInvestors)
+		.values({
+			book,
+			kind: "operator",
+			displayName: options.displayName ?? CAPITAL_OPERATOR_DISPLAY_NAMES[book],
+			frequency: "monthly",
+			payoutMode: "reinvest",
+			tornId: options.tornId ?? null,
+			createdBy: "system:operator",
+		})
+		.onConflictDoNothing()
+		.returning();
+	if (created) return created;
+
+	const [raced] = await executor
+		.select()
+		.from(capitalInvestors)
+		.where(
+			and(
+				eq(capitalInvestors.book, book),
+				eq(capitalInvestors.kind, "operator"),
+			),
+		)
+		.limit(1);
+	if (!raced) throw new Error(`Failed to seed the ${book} operator investor.`);
+	return raced;
+}
+
+/**
+ * Returns the book's operator investor, creating it if needed.
+ *
+ * The operator is the owner's own investor row: deposits go here, and every
+ * performance/exit fee is automatically reinvested into it.
+ */
+export async function ensureCapitalOperator(
+	book: CapitalBook,
+	options: CapitalOperatorOptions = {},
+): Promise<CapitalInvestorRow> {
+	return ensureCapitalOperatorWith(db, book, options);
+}
+
+/**
+ * Reinvests a booked fee into the operator's fee lot.
+ *
+ * The fee transaction itself stays on the ledger (so retained-fee reporting
+ * keeps working), and this credit puts the same cash back into the fund as
+ * operator capital by issuing units at the current NAV. Callers run it inside
+ * the book transaction that booked the fee.
+ */
+export async function creditCapitalFeeToOperator(
+	tx: CapitalTx,
+	input: {
+		book: CapitalBook;
+		/** Positive fee amount kept in the fund. */
+		amount: string;
+		/** Units to issue at `navPerUnit`. */
+		units: string;
+		navPerUnit: string;
+		occurredAt: Date;
+		source: string;
+		recordedBy: string | null;
+		note?: string | null;
+		metadata?: Record<string, unknown>;
+	},
+): Promise<void> {
+	const isZero = (value: string) => /^0*(?:\.0*)?$/.test(value.trim());
+	if (isZero(input.amount) || isZero(input.units)) return;
+
+	const operator = await ensureCapitalOperatorWith(tx, input.book);
+	const [existingLot] = await tx
+		.select()
+		.from(capitalInvestments)
+		.where(
+			and(
+				eq(capitalInvestments.book, input.book),
+				eq(capitalInvestments.investorId, operator.id),
+				eq(capitalInvestments.status, "active"),
+				eq(capitalInvestments.note, CAPITAL_OPERATOR_FEE_LOT_NOTE),
+			),
+		)
+		.limit(1);
+
+	let investmentId: string;
+	if (existingLot) {
+		await tx
+			.update(capitalInvestments)
+			.set({
+				units: sql`${capitalInvestments.units} + ${input.units}::numeric`,
+				principal: sql`${capitalInvestments.principal} + ${input.amount}::numeric`,
+				navAtDeposit: input.navPerUnit,
+				// New capital enters at today's NAV, so no accrued gain is
+				// attributed to it. The lot never schedules a payout: its
+				// value compounds in place and is realised on withdrawal.
+				highWaterNav: input.navPerUnit,
+				updatedAt: input.occurredAt,
+			})
+			.where(eq(capitalInvestments.id, existingLot.id));
+		investmentId = existingLot.id;
+	} else {
+		const [lot] = await tx
+			.insert(capitalInvestments)
+			.values({
+				book: input.book,
+				investorId: operator.id,
+				frequency: "monthly",
+				payoutMode: "reinvest",
+				principal: input.amount,
+				units: input.units,
+				navAtDeposit: input.navPerUnit,
+				highWaterNav: input.navPerUnit,
+				openedAt: input.occurredAt,
+				note: CAPITAL_OPERATOR_FEE_LOT_NOTE,
+				createdBy: input.recordedBy,
+			})
+			.returning();
+		if (!lot) throw new Error("Failed to create the operator fee lot.");
+		investmentId = lot.id;
+	}
+
+	await tx.insert(capitalTransactions).values({
+		book: input.book,
+		type: "reinvest",
+		investorId: operator.id,
+		investmentId,
+		amount: input.amount,
+		units: input.units,
+		navPerUnit: input.navPerUnit,
+		source: input.source,
+		occurredAt: input.occurredAt,
+		recordedBy: input.recordedBy,
+		note:
+			input.note ?? "Fee automatically reinvested into the operator's fee lot.",
+		metadata: { ...input.metadata, feeReinvestment: true },
+	});
 }
 
 export async function getCapitalBook(
@@ -895,8 +1122,10 @@ async function wipePaperBook(
 }
 
 /**
- * Clears the paper book. No operator/investor is seeded: the owner adds paper
- * investors and records their deposits on the desk.
+ * Clears the paper book and reseeds its operator investor.
+ *
+ * The operator has no lot and no cash after a reset: add deposits, or let fees
+ * reinvest into it as the simulation trades. The live book is never touched.
  */
 export async function clearCapitalPaperBook(
 	actor: string | null,
@@ -906,11 +1135,12 @@ export async function clearCapitalPaperBook(
 			sql`SELECT pg_advisory_xact_lock(hashtext('capital:paper'))`,
 		);
 		await wipePaperBook(tx, actor);
+		await ensureCapitalOperatorWith(tx, "paper");
 	});
 }
 
 /**
- * Wipes and reseeds the paper book with one operator lot.
+ * Wipes and reseeds the paper book with one funded operator lot.
  *
  * Used by the smoke test, which needs a funded book to exercise a full cycle.
  * The dashboard reset uses `clearCapitalPaperBook` instead.
@@ -929,16 +1159,7 @@ export async function resetCapitalPaperBook(
 		);
 		await wipePaperBook(tx, actor);
 
-		const [operator] = await tx
-			.insert(capitalInvestors)
-			.values({
-				book: "paper",
-				kind: "operator",
-				displayName: "Paper Operator",
-				createdBy: actor,
-			})
-			.returning();
-		if (!operator) throw new Error("Failed to seed paper operator.");
+		const operator = await ensureCapitalOperatorWith(tx, "paper");
 
 		const now = new Date();
 		const [lot] = await tx
@@ -947,6 +1168,7 @@ export async function resetCapitalPaperBook(
 				book: "paper",
 				investorId: operator.id,
 				frequency: "monthly",
+				payoutMode: "reinvest",
 				principal: startingCash,
 				units: startingCash,
 				navAtDeposit: "1",

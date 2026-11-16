@@ -75,7 +75,7 @@ export interface ScriptSettings {
 	apiKey: string;
 	panelOpen: boolean;
 	persistOpen: boolean;
-	activeTab: "crimes" | "stocks" | "battlestats" | "company" | "settings";
+	activeTab: "crimes" | "stocks" | "battlestats" | "settings";
 	timeframe: "7d" | "30d" | "90d" | "all";
 	chartMetric: "financials" | "activity";
 	position: { x: number; y: number };

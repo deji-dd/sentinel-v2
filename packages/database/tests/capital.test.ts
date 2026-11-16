@@ -7,8 +7,10 @@ import {
 	parseMoney,
 } from "../../utils/src/capital-money";
 import {
+	and,
 	applyCapitalFill,
 	capitalFills,
+	capitalInvestments,
 	capitalInvestors,
 	capitalMarketCandles,
 	capitalNavSnapshots,
@@ -17,7 +19,9 @@ import {
 	capitalPositions,
 	capitalTransactions,
 	clearCapitalPaperBook,
+	creditCapitalFeeToOperator,
 	db,
+	ensureCapitalOperator,
 	eq,
 	expireCapitalOrders,
 	getCapitalRiskContext,
@@ -132,7 +136,7 @@ describe("capital ledger", () => {
 describe("paper reset and frozen entry metadata", () => {
 	const RESET_STOCK_ID = 9_000_012;
 
-	test("a blank reset clears everything and seeds no operator", async () => {
+	test("a blank reset clears everything but keeps the operator", async () => {
 		await resetCapitalPaperBook("1000", null);
 		await clearCapitalPaperBook(null);
 		const state = await getCapitalState("paper");
@@ -143,12 +147,93 @@ describe("paper reset and frozen entry metadata", () => {
 			.select()
 			.from(capitalInvestors)
 			.where(eq(capitalInvestors.book, "paper"));
-		expect(investors).toHaveLength(0);
+		expect(investors).toHaveLength(1);
+		expect(investors[0]?.kind).toBe("operator");
+		const lots = await db
+			.select()
+			.from(capitalInvestments)
+			.where(eq(capitalInvestments.book, "paper"));
+		expect(lots).toHaveLength(0);
 		const fills = await db
 			.select()
 			.from(capitalFills)
 			.where(eq(capitalFills.book, "paper"));
 		expect(fills).toHaveLength(0);
+	});
+
+	test("adopts the owner's existing investor as the operator", async () => {
+		await clearCapitalPaperBook(null);
+		await db
+			.delete(capitalInvestors)
+			.where(
+				and(
+					eq(capitalInvestors.book, "paper"),
+					eq(capitalInvestors.kind, "operator"),
+				),
+			);
+
+		const [owner] = await db
+			.insert(capitalInvestors)
+			.values({
+				book: "paper",
+				kind: "user",
+				displayName: "Owner",
+				tornId: 9_000_198,
+			})
+			.returning();
+		expect(owner).toBeTruthy();
+		if (!owner) throw new Error("Failed to insert the owner investor.");
+
+		const operator = await ensureCapitalOperator("paper", {
+			tornId: 9_000_198,
+		});
+		expect(operator.id).toBe(owner.id);
+		expect(operator.kind).toBe("operator");
+		expect(operator.tornId).toBe(9_000_198);
+
+		// A second call is idempotent.
+		const again = await ensureCapitalOperator("paper", { tornId: 9_000_198 });
+		expect(again.id).toBe(operator.id);
+	});
+
+	test("reinvests a fee into the operator fee lot at the current NAV", async () => {
+		await clearCapitalPaperBook(null);
+		const now = new Date();
+		await withCapitalTransaction("paper", async (tx) => {
+			await creditCapitalFeeToOperator(tx, {
+				book: "paper",
+				amount: "250",
+				units: "125",
+				navPerUnit: "2",
+				occurredAt: now,
+				source: "paper",
+				recordedBy: null,
+				metadata: { kind: "performance_fee" },
+			});
+		});
+
+		const [operator] = await db
+			.select()
+			.from(capitalInvestors)
+			.where(eq(capitalInvestors.book, "paper"));
+		expect(operator?.kind).toBe("operator");
+
+		const [lot] = await db
+			.select()
+			.from(capitalInvestments)
+			.where(eq(capitalInvestments.book, "paper"));
+		expect(parseMoney(lot?.principal ?? "0")).toBe(parseMoney("250"));
+		expect(Number(lot?.units)).toBe(125);
+		expect(Number(lot?.navAtDeposit)).toBe(2);
+
+		const feeRows = await db
+			.select()
+			.from(capitalTransactions)
+			.where(eq(capitalTransactions.book, "paper"));
+		const reinvest = feeRows.find((row) => row.type === "reinvest");
+		expect(reinvest?.investorId).toBe(operator?.id);
+		expect(parseMoney(reinvest?.amount ?? "0")).toBe(parseMoney("250"));
+		expect(Number(reinvest?.units)).toBe(125);
 	});
 
 	test("freezes the entry stop/target/peak and resets on re-entry", async () => {

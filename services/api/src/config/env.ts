@@ -38,6 +38,16 @@ export const env = {
 
 	DISCORD_TOKEN: process.env.DISCORD_TOKEN ?? "",
 	DISCORD_USER_ID: process.env.DISCORD_USER_ID ?? "",
+	/** The owner's Torn character id, used to link the live operator investor. */
+	OWNER_TORN_ID: (() => {
+		const explicit = Number(process.env.OWNER_TORN_ID);
+		if (Number.isInteger(explicit) && explicit > 0) return explicit;
+		const firstSuperadmin = (process.env.CHAT_SUPERADMINS ?? "")
+			.split(",")[0]
+			?.trim();
+		const fallback = Number(firstSuperadmin);
+		return Number.isInteger(fallback) && fallback > 0 ? fallback : null;
+	})(),
 
 	// Server Types (Inferred from Environment)
 	ALLIANCE_GUILD_ID:

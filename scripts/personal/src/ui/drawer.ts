@@ -6,7 +6,6 @@ import {
 	STORAGE_KEYS,
 } from "../config";
 import { BattlestatsTab } from "../modules/battlestats-tab";
-import { CompanyTab } from "../modules/company-tab";
 import { CrimesTab } from "../modules/crimes-tab";
 import { StocksTab } from "../modules/stocks-tab";
 
@@ -32,8 +31,7 @@ function clampDrawerWidth(width: number, viewportWidth: number): number {
 }
 
 /** Tabs that render a body. */
-export type DrawerTabName =
-	"crimes" | "battlestats" | "company" | "stocks" | "settings";
+export type DrawerTabName = "crimes" | "battlestats" | "stocks" | "settings";
 
 /** The lifecycle every tab body implements, so the drawer has one code path. */
 interface DrawerTab {
@@ -45,7 +43,6 @@ interface DrawerTab {
 const TAB_LABELS: Record<DrawerTabName, string> = {
 	crimes: "Crimes",
 	battlestats: "Battlestats",
-	company: "Company",
 	stocks: "Stocks",
 	settings: "Settings",
 };
@@ -53,7 +50,6 @@ const TAB_LABELS: Record<DrawerTabName, string> = {
 const TAB_ORDER: DrawerTabName[] = [
 	"crimes",
 	"battlestats",
-	"company",
 	"stocks",
 	"settings",
 ];
@@ -301,8 +297,6 @@ export class DrawerPanel {
 					this.onRatioChange?.();
 				},
 			);
-		} else if (name === "company") {
-			tab = new CompanyTab(body, () => this.openSettings());
 		} else {
 			tab = new StocksTab(body, () => this.openSettings());
 		}
@@ -418,10 +412,6 @@ export class DrawerPanel {
 		if (!container) return;
 
 		const currentKey = GM_getValue<string>(STORAGE_KEYS.apiKey, "");
-		const currentUrl = GM_getValue<string>(
-			STORAGE_KEYS.apiUrl,
-			DEFAULT_SETTINGS.apiUrl,
-		);
 		const showBadges = GM_getValue<boolean>(
 			STORAGE_KEYS.showBadges,
 			DEFAULT_SETTINGS.showBadges,
@@ -434,35 +424,13 @@ export class DrawerPanel {
 				<label class="settings-label">
 					Sentinel API Key (Personal)
 					<input id="input-api-key" type="password" class="input-text" value="${escapeHtml(currentKey)}" placeholder="Enter your secret API key..." />
-					<span style="font-size: 11px; color: #94a3b8;">Used to authenticate requests to your personal crime ledger &amp; telemetry.</span>
-				</label>
-
-				<label class="settings-label">
-					API Base URL
-					<input id="input-api-url" type="text" class="input-text" value="${escapeHtml(currentUrl)}" placeholder="${escapeHtml(DEFAULT_SETTINGS.apiUrl)}" />
-					<span style="font-size: 11px; color: #94a3b8;">
-						Your key is only ever sent to api.blasted-labs.tech, sentinel.blasted-labs.tech or
-						localhost. Any other host is refused rather than handed the key.
-					</span>
+					<span style="font-size: 11px; color: #94a3b8;">Used to authenticate requests to your personal crime ledger & telemetry.</span>
 				</label>
 
 				<label class="checkbox-row" style="margin-top: 6px;">
 					<input id="chk-show-badges" type="checkbox" ${showBadges ? "checked" : ""} />
-					<span>Show ROI &amp; Profit badges directly on Torn crime cards</span>
+					<span>Show ROI & Profit badges directly on Torn crime cards</span>
 				</label>
-
-				<div class="tos-table">
-					<div class="tos-title">How your API key is used</div>
-					<table>
-						<tbody>
-							<tr><th>Data storage</th><td>Your key is kept in your userscript manager's storage on this device. The ledger data it produces is stored on the Sentinel server to build the analytics shown here.</td></tr>
-							<tr><th>Data sharing</th><td>Nobody. Nothing is shared with your faction, your friends, or any third party.</td></tr>
-							<tr><th>Purpose of use</th><td>Non-malicious statistical analysis and personal gain: crime, battlestats, company and stock analytics for your own account.</td></tr>
-							<tr><th>Key storage</th><td>Stored encrypted server-side and never shared. Requests from this script are authenticated with the key you enter above.</td></tr>
-							<tr><th>Key access level</th><td>Limited or custom: the selections this script needs (personal logs, battlestats, stocks, company, money). Nothing beyond that is requested.</td></tr>
-						</tbody>
-					</table>
-				</div>
 
 				<button id="btn-save-settings" class="btn-primary" style="margin-top: 8px;">Save Settings</button>
 			</div>
@@ -473,20 +441,11 @@ export class DrawerPanel {
 			?.addEventListener("click", () => {
 				const keyInput =
 					container.querySelector<HTMLInputElement>("#input-api-key");
-				const urlInput =
-					container.querySelector<HTMLInputElement>("#input-api-url");
 				const badgesInput =
 					container.querySelector<HTMLInputElement>("#chk-show-badges");
 
 				if (keyInput) {
 					GM_setValue(STORAGE_KEYS.apiKey, keyInput.value.trim());
-				}
-				if (urlInput) {
-					const url = urlInput.value.trim();
-					GM_setValue(
-						STORAGE_KEYS.apiUrl,
-						url.length > 0 ? url : DEFAULT_SETTINGS.apiUrl,
-					);
 				}
 				if (badgesInput) {
 					GM_setValue(STORAGE_KEYS.showBadges, badgesInput.checked);

@@ -200,6 +200,10 @@ export const capitalInvestors = pgTable(
 		uniqueIndex("capital_investors_book_faction_idx")
 			.on(table.book, table.factionId)
 			.where(sql`${table.factionId} IS NOT NULL`),
+		/** One owner/operator investor per book; fees are reinvested into it. */
+		uniqueIndex("capital_investors_book_operator_idx")
+			.on(table.book)
+			.where(sql`${table.kind} = 'operator'`),
 		index("capital_investors_book_status_idx").on(table.book, table.status),
 		check(
 			"capital_investors_frequency_check",

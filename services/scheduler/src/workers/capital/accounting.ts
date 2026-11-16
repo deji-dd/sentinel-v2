@@ -10,6 +10,7 @@ import {
 	capitalPayoutObligations,
 	capitalPositions,
 	capitalTransactions,
+	creditCapitalFeeToOperator,
 	db,
 	desc,
 	ensureCapitalBooks,
@@ -22,6 +23,7 @@ import {
 } from "@sentinel/database";
 import type { CapitalAlertPayload, CapitalBook } from "@sentinel/schemas";
 import {
+	computeDeposit,
 	computeNav,
 	computePayout,
 	divideRound,
@@ -162,7 +164,7 @@ async function payPaperObligation(
 			})
 			.where(eq(capitalInvestments.id, investment.id));
 
-		await tx.insert(capitalTransactions).values([
+		const transactions: Array<typeof capitalTransactions.$inferInsert> = [
 			{
 				book: "paper",
 				type: "payout",
@@ -175,7 +177,9 @@ async function payPaperObligation(
 				occurredAt: now,
 				recordedBy: actor,
 			},
-			{
+		];
+		if (fee > 0n) {
+			transactions.push({
 				book: "paper",
 				type: "fee",
 				investorId: obligation.investorId,
@@ -185,8 +189,22 @@ async function payPaperObligation(
 				source: "paper",
 				occurredAt: now,
 				recordedBy: actor,
-			},
-		]);
+			});
+		}
+		await tx.insert(capitalTransactions).values(transactions);
+		if (fee > 0n) {
+			const feeDeposit = computeDeposit(fee, nav.navPerUnit);
+			await creditCapitalFeeToOperator(tx, {
+				book: "paper",
+				amount: formatMoney(fee),
+				units: formatUnits(feeDeposit.unitsIssued),
+				navPerUnit: formatMoney(feeDeposit.navPerUnit),
+				occurredAt: now,
+				source: "paper",
+				recordedBy: actor,
+				metadata: { payoutId: obligation.id, kind: "performance_fee" },
+			});
+		}
 
 		await tx
 			.update(capitalPayoutObligations)
@@ -212,7 +230,7 @@ async function payPaperObligation(
 async function reinvestPayout(input: {
 	book: CapitalBook;
 	lot: typeof capitalInvestments.$inferSelect;
-	config: typeof capitalBookConfigs.$inferSelect;
+	feeBps: number;
 }): Promise<boolean> {
 	return withCapitalTransaction(input.book, async (tx, state) => {
 		const nav = computeNav({
@@ -235,7 +253,7 @@ async function reinvestPayout(input: {
 			navPerUnit: nav.navPerUnit,
 			units,
 			highWaterNav: parseMoney(lot.highWaterNav),
-			feeBps: feeBpsFor(input.config, lot.frequency),
+			feeBps: input.feeBps,
 		});
 		if (!payout.shouldPay) return false;
 
@@ -265,7 +283,7 @@ async function reinvestPayout(input: {
 			})
 			.where(eq(capitalInvestments.id, lot.id));
 
-		await tx.insert(capitalTransactions).values([
+		const transactions: Array<typeof capitalTransactions.$inferInsert> = [
 			{
 				book: input.book,
 				type: "reinvest",
@@ -286,7 +304,9 @@ async function reinvestPayout(input: {
 					unitsIssued: formatUnits(unitsIssued),
 				},
 			},
-			{
+		];
+		if (payout.fee > 0n) {
+			transactions.push({
 				book: input.book,
 				type: "fee",
 				investorId: lot.investorId,
@@ -296,8 +316,22 @@ async function reinvestPayout(input: {
 				occurredAt: now,
 				recordedBy: "system:reinvest",
 				note: "Performance fee on a reinvested payout.",
-			},
-		]);
+			});
+		}
+		await tx.insert(capitalTransactions).values(transactions);
+		if (payout.fee > 0n) {
+			const feeDeposit = computeDeposit(payout.fee, nav.navPerUnit);
+			await creditCapitalFeeToOperator(tx, {
+				book: input.book,
+				amount: formatMoney(payout.fee),
+				units: formatUnits(feeDeposit.unitsIssued),
+				navPerUnit: formatMoney(feeDeposit.navPerUnit),
+				occurredAt: now,
+				source: "system",
+				recordedBy: "system:reinvest",
+				metadata: { investmentId: lot.id, kind: "performance_fee" },
+			});
+		}
 
 		await tx.insert(capitalPayoutObligations).values({
 			book: input.book,
@@ -355,6 +389,19 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 				.where(eq(capitalTransactions.book, book))
 		)[0]?.cash ?? "0",
 	);
+	const operatorIds = new Set(
+		(
+			await db
+				.select({ id: capitalInvestors.id })
+				.from(capitalInvestors)
+				.where(
+					and(
+						eq(capitalInvestors.book, book),
+						eq(capitalInvestors.kind, "operator"),
+					),
+				)
+		).map((row) => row.id),
+	);
 
 	let created = 0;
 	for (const lot of dueLots) {
@@ -393,11 +440,17 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 			.limit(1);
 		if (open.length > 0) continue;
 
+		// The operator owns the fund, so its own scheduled payouts never book a
+		// performance fee (which would only be reinvested back into the same
+		// operator).
+		const lotFeeBps = operatorIds.has(lot.investorId)
+			? 0
+			: feeBpsFor(cfg, lot.frequency);
 		const payout = computePayout({
 			navPerUnit: nav.navPerUnit,
 			units: parseUnits(lot.units),
 			highWaterNav: parseMoney(lot.highWaterNav),
-			feeBps: feeBpsFor(cfg, lot.frequency),
+			feeBps: lotFeeBps,
 		});
 		const next = nextEligiblePayoutAt(
 			now,
@@ -410,7 +463,11 @@ async function generatePayouts(book: CapitalBook): Promise<number> {
 				.update(capitalInvestments)
 				.set({ nextPayoutAt: next, updatedAt: now })
 				.where(eq(capitalInvestments.id, lot.id));
-			await reinvestPayout({ book, lot, config: cfg });
+			await reinvestPayout({
+				book,
+				lot,
+				feeBps: lotFeeBps,
+			});
 			created += 1;
 			continue;
 		}

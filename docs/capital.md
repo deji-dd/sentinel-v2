@@ -15,7 +15,7 @@ All three surfaces stay live over `/api/ws/capital` (`view=public|portfolio|admi
 ## Data and accounting
 
 - `capital_books` + `capital_book_configs`: live/paper books and typed settings.
-- `capital_investors`, `capital_investor_contacts`, `capital_investments`: one **lot per deposit**; multiple deposits are expected. Cadence (`frequency`) and profit handling (`payout_mode`, `cash` or `reinvest`) are investor-level settings; every new lot inherits them, and changing them updates the investor's active lots. Live investors are `user`/`faction`/`operator` and require a Torn ID; paper investors are `test` only and may omit the Torn ID.
+- `capital_investors`, `capital_investor_contacts`, `capital_investments`: one **lot per deposit**; multiple deposits are expected. Cadence (`frequency`) and profit handling (`payout_mode`, `cash` or `reinvest`) are investor-level settings; every new lot inherits them, and changing them updates the investor's active lots. Every book has exactly one `operator` investor (created automatically) that represents the owner's character: it can take deposits like any investor, and every fee is reinvested into its dedicated fee lot. Live investors are `user`/`faction`/`operator` and require a Torn ID; paper investors are `test`, plus the seeded `operator`.
 - `capital_transactions`: append-only signed cash ledger; `capital_positions` is a rebuildable materialized view.
 - `capital_orders`, `capital_fills`, `capital_order_outcomes`: recommendations, execution, and variance.
 - `capital_payout_obligations`, `capital_withdrawal_requests`: profit distributions and capital exits.
@@ -26,7 +26,7 @@ All three surfaces stay live over `/api/ws/capital` (`view=public|portfolio|admi
 
 NAV is `(cash + positions at last price) / units`. A deposit issues units at the pre-deposit NAV. Payouts distribute NAV gains above a lot's high-water mark and charge the lot's cadence fee. A `cash` lot redeems units for the net cash paid; a `reinvest` lot compounds the net payout back into the lot (principal rises, the fee is booked to the owner, and no in-game transfer is needed).
 
-Performance and exit fees are booked as `fee`/`exit_fee` cash rows, so they leave the fund's NAV and are retained by the owner; they are not reinvested. The desk's **Retained fees** card shows the lifetime amount. To put retained fees back into the fund, record a deposit under an operator lot — that issues units at the current NAV and re-enters the cash. A `reinvest` lot still compounds the investor's net payout automatically; switch the investor to `cash` if you want every payout to be a manual transfer.
+Performance and exit fees are booked as `fee`/`exit_fee` cash rows, then immediately reinvested into the operator's fee lot at the current NAV. The reinvestment is a matching positive `reinvest` row plus units issued to the operator, so the fund keeps the cash and the owner's capital compounds; the desk's **Retained fees** card still reports the lifetime fee amount. Operator lots are fee-free: scheduled payouts (cash or reinvest) never book a performance fee, and operator withdrawals waive the performance and exit fees. A `reinvest` investor lot still compounds its net payout automatically; switch the investor to `cash` if you want every payout to be a manual transfer.
 
 Payout dates are shared per cadence: daily at 00:00 UTC, weekly Monday 00:00 UTC, monthly on the 1st at 00:00 UTC. New deposits and post-payout rescheduling use the same aligned calendar; migration `0074` backfilled existing active lots. A period must accrue at least half a cadence before it can settle (`MIN_PAYOUT_ACCRUAL_FRACTION`), so a deposit made just before a boundary rolls to the following boundary instead of paying a stub period — the batch itself is unchanged. Set the fraction to `1` for a strict one-full-period rule. The accounting worker re-checks eligibility from each lot's accrual start before it pays, so a stale stored `next_payout_at` (for example a lot created before this rule) reschedules instead of paying a stub. Changing an investor's cadence also realigns every lot from its own accrual start, not from the moment of the change.
 
@@ -215,10 +215,10 @@ Paper trade and risk alerts **are** sent, deliberately: they are the only way to
 
 `POST /v2/capital/admin/paper/reset` (the **Reset simulation** button on the
 Simulation tab of `/desk`) deletes every simulation investor, lot, position, order, fill, payout,
-snapshot, engine run, ML prediction and audit row. It seeds **nothing** — no
-operator, no starting cash — and resets the book's `started_at`. Add simulation
-investors and record their deposits on the desk to fund it. The live book is
-never touched.
+snapshot, engine run, ML prediction and audit row. It recreates the simulation
+operator investor with no lot and no cash, and resets the book's `started_at`.
+Add simulation investors and record their deposits on the desk to fund it; fees
+reinvest into the operator automatically. The live book is never touched.
 
 The smoke test still uses the seeded reset (`resetCapitalPaperBook`): it needs
 a funded book to exercise a full cycle.

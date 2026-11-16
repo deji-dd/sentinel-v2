@@ -589,6 +589,13 @@
 			"when": 1794463859501,
 			"tag": "0083_capital_stop_recalibration",
 			"breakpoints": true
+		},
+		{
+			"idx": 84,
+			"version": "7",
+			"when": 1794836866754,
+			"tag": "0084_nappy_boomerang",
+			"breakpoints": true
 		}
 	]
 }

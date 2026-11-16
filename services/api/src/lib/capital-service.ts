@@ -18,6 +18,7 @@ import {
 	capitalTransactions,
 	capitalWithdrawalRequests,
 	clearCapitalPaperBook,
+	creditCapitalFeeToOperator,
 	db,
 	desc,
 	eq,
@@ -1136,6 +1137,14 @@ export async function payPayout(input: {
 			.where(eq(capitalInvestments.id, obligation.investmentId))
 			.limit(1);
 		if (!investment) throw new Error("Investment lot not found.");
+		const [payoutInvestor] = await tx
+			.select({ kind: capitalInvestors.kind })
+			.from(capitalInvestors)
+			.where(eq(capitalInvestors.id, obligation.investorId))
+			.limit(1);
+		// Operator payouts are fee-free: the operator owns the fund, so a fee
+		// would only be reinvested back into the same investor.
+		const feeWaived = payoutInvestor?.kind === "operator";
 
 		const gross = parseMoney(obligation.grossAmount);
 		const fee = parseMoney(obligation.feeAmount);
@@ -1147,8 +1156,9 @@ export async function payPayout(input: {
 		);
 		if (payGross <= 0n) throw new Error("Payout amount must be positive.");
 
-		const feePaid =
-			remaining === gross
+		const feePaid = feeWaived
+			? 0n
+			: remaining === gross
 				? divideRound(fee * payGross, gross)
 				: divideRound(fee * payGross, gross);
 		const netPaid = payGross - feePaid;
@@ -1205,18 +1215,33 @@ export async function payPayout(input: {
 			recordedBy: input.actor,
 			note: input.note ?? null,
 		});
-		await tx.insert(capitalTransactions).values({
-			book: input.book,
-			type: "fee",
-			investorId: obligation.investorId,
-			investmentId: investment.id,
-			payoutId: obligation.id,
-			amount: formatMoney(-feePaid),
-			source: "manual",
-			occurredAt: now,
-			recordedBy: input.actor,
-			note: "Performance fee.",
-		});
+		if (feePaid > 0n) {
+			await tx.insert(capitalTransactions).values({
+				book: input.book,
+				type: "fee",
+				investorId: obligation.investorId,
+				investmentId: investment.id,
+				payoutId: obligation.id,
+				amount: formatMoney(-feePaid),
+				source: "manual",
+				occurredAt: now,
+				recordedBy: input.actor,
+				note: "Performance fee.",
+			});
+		}
+		if (feePaid > 0n) {
+			const feeDeposit = computeDeposit(feePaid, nav.navPerUnit);
+			await creditCapitalFeeToOperator(tx, {
+				book: input.book,
+				amount: formatMoney(feePaid),
+				units: formatUnits(feeDeposit.unitsIssued),
+				navPerUnit: formatMoney(feeDeposit.navPerUnit),
+				occurredAt: now,
+				source: "manual",
+				recordedBy: input.actor,
+				metadata: { payoutId: obligation.id, kind: "performance_fee" },
+			});
+		}
 
 		const newPaid = parseMoney(obligation.paidAmount) + payGross;
 		const newRemaining = remaining - payGross;
@@ -1296,6 +1321,13 @@ export async function createWithdrawalQuote(input: {
 	if (!investment) throw new Error("Investment lot not found.");
 	if (investment.status !== "active") throw new Error("Lot is not active.");
 
+	const [investor] = await db
+		.select({ kind: capitalInvestors.kind })
+		.from(capitalInvestors)
+		.where(eq(capitalInvestors.id, investment.investorId))
+		.limit(1);
+	const isOperator = investor?.kind === "operator";
+
 	const config = await getCapitalConfig(input.book);
 	const { nav } = await loadNav(input.book);
 	const units = parseUnits(investment.units);
@@ -1304,14 +1336,17 @@ export async function createWithdrawalQuote(input: {
 		units,
 		principal: parseMoney(investment.principal),
 		requestedAmount: input.requestedAmount ?? null,
-		performanceFeeEnabled: config.withdrawalPerformanceFeeEnabled,
+		// The operator owns the fund: its own withdrawal never pays itself a
+		// performance or exit fee.
+		performanceFeeEnabled:
+			!isOperator && config.withdrawalPerformanceFeeEnabled,
 		feeBps:
 			investment.frequency === "daily"
 				? config.feeRateDailyBps
 				: investment.frequency === "weekly"
 					? config.feeRateWeeklyBps
 					: config.feeRateMonthlyBps,
-		exitFeeBps: config.withdrawalExitFeeBps,
+		exitFeeBps: isOperator ? 0 : config.withdrawalExitFeeBps,
 	});
 
 	const liquidityWarning =
@@ -1399,6 +1434,67 @@ export async function createWithdrawalRequest(input: {
 		referenceCode: request.referenceCode,
 		note: request.note,
 	};
+}
+
+/**
+ * Desk-side withdrawal request.
+ *
+ * The investor-facing flow lives on `/portfolio`, but the owner also needs to
+ * withdraw operator capital and exercise the simulation book. When no lot is
+ * supplied, the investor's largest active lot is used.
+ */
+export async function createAdminWithdrawalRequest(input: {
+	book: CapitalBook;
+	investorId: string;
+	investmentId?: string | null;
+	requestedAmount: string;
+	actor: string | null;
+}): Promise<CapitalWithdrawalView> {
+	let investmentId = input.investmentId ?? null;
+	if (investmentId) {
+		const [lot] = await db
+			.select({ id: capitalInvestments.id })
+			.from(capitalInvestments)
+			.where(
+				and(
+					eq(capitalInvestments.book, input.book),
+					eq(capitalInvestments.id, investmentId),
+					eq(capitalInvestments.investorId, input.investorId),
+				),
+			)
+			.limit(1);
+		if (!lot) {
+			throw new CapitalServiceError(
+				"That lot does not belong to this investor.",
+				403,
+			);
+		}
+	} else {
+		const [lot] = await db
+			.select({ id: capitalInvestments.id })
+			.from(capitalInvestments)
+			.where(
+				and(
+					eq(capitalInvestments.book, input.book),
+					eq(capitalInvestments.investorId, input.investorId),
+					eq(capitalInvestments.status, "active"),
+				),
+			)
+			.orderBy(desc(capitalInvestments.units))
+			.limit(1);
+		if (!lot) {
+			throw new CapitalServiceError("This investor has no active lot.");
+		}
+		investmentId = lot.id;
+	}
+
+	return createWithdrawalRequest({
+		book: input.book,
+		investmentId,
+		investorId: input.investorId,
+		requestedAmount: input.requestedAmount,
+		actor: input.actor,
+	});
 }
 
 export async function payWithdrawal(input: {
@@ -1491,6 +1587,32 @@ export async function payWithdrawal(input: {
 					occurredAt: now,
 					recordedBy: input.actor,
 					note: "Withdrawal exit fee.",
+				});
+			}
+			const totalFees = performanceFee + exitFee;
+			if (totalFees > 0n) {
+				const nav = computeNav({
+					cash: state.cash,
+					units: state.units,
+					positions: state.positions.map((position) => ({
+						shares: position.shares,
+						price: position.price,
+					})),
+				});
+				const feeDeposit = computeDeposit(totalFees, nav.navPerUnit);
+				await creditCapitalFeeToOperator(tx, {
+					book: input.book,
+					amount: formatMoney(totalFees),
+					units: formatUnits(feeDeposit.unitsIssued),
+					navPerUnit: formatMoney(feeDeposit.navPerUnit),
+					occurredAt: now,
+					source: "manual",
+					recordedBy: input.actor,
+					metadata: {
+						withdrawalId: row.id,
+						performanceFee: formatMoney(performanceFee),
+						exitFee: formatMoney(exitFee),
+					},
 				});
 			}
 			const [updated] = await tx
@@ -2046,8 +2168,9 @@ export async function getCapitalAdminOverview(
 /**
  * Clears the paper book for the dashboard reset.
  *
- * No operator lot is seeded: the owner creates paper investors and records
- * their deposits. The smoke test keeps using the seeded reset directly.
+ * The paper operator investor is recreated automatically with no lot or cash;
+ * the owner adds simulation investors and records deposits. The smoke test
+ * keeps using the funded seeded reset directly.
  */
 export async function resetPaperBook(actor: string | null): Promise<void> {
 	await clearCapitalPaperBook(actor);

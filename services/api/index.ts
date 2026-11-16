@@ -1,4 +1,8 @@
-import { ensureTargetGuildConfigs, recordBootAlert } from "@sentinel/database";
+import {
+	ensureCapitalOperator,
+	ensureTargetGuildConfigs,
+	recordBootAlert,
+} from "@sentinel/database";
 
 import { app } from "./src/app";
 import { env } from "./src/config/env";
@@ -7,6 +11,9 @@ import { logger } from "./src/lib/logger";
 import { initSchedulerIpcListener } from "./src/lib/scheduler-ipc";
 
 await ensureTargetGuildConfigs();
+// The live operator represents the owner's character; link its Torn id so fees
+// and owner deposits land on an investor the portfolio view can resolve.
+await ensureCapitalOperator("live", { tornId: env.OWNER_TORN_ID });
 await recordBootAlert("api");
 
 // The dibs board is held in RAM for the 1-second evaluation loop, so restore the

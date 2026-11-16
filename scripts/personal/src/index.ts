@@ -4,7 +4,6 @@ import {
 	POLLING_CONFIG,
 	STORAGE_KEYS,
 } from "./config";
-import { CompanyDomObserver } from "./modules/company-observer";
 import { CrimesDomObserver } from "./modules/crimes-observer";
 import { GymDomObserver } from "./modules/gym-observer";
 import { IN_PAGE_BADGE_STYLES, SHADOW_STYLES } from "./styles";
@@ -41,7 +40,6 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 	// 3. Initialize Drawer & Launcher
 	let crimesObserver: CrimesDomObserver | null = null;
 	let gymObserver: GymDomObserver | null = null;
-	let companyObserver: CompanyDomObserver | null = null;
 
 	function isHudCyclingActive(): boolean {
 		try {
@@ -67,14 +65,12 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 		const active = isDocumentVisible() && (drawerOpen || isHudCyclingActive());
 		crimesObserver?.setRampedUp(active);
 		gymObserver?.setRampedUp(active);
-		companyObserver?.setRampedUp(active);
 	}
 
 	const drawer = new DrawerPanel(
 		() => {
 			if (crimesObserver) crimesObserver.reloadData();
 			if (gymObserver) gymObserver.reloadData();
-			if (companyObserver) companyObserver.reloadData();
 		},
 		() => {
 			if (gymObserver) gymObserver.scanAndInject(true);
@@ -121,10 +117,6 @@ declare function GM_registerMenuCommand(name: string, fn: () => void): void;
 		const gym = new GymDomObserver();
 		gymObserver = gym;
 		startObserver("Gym", () => gym.start());
-
-		const company = new CompanyDomObserver();
-		companyObserver = company;
-		startObserver("Company", () => company.start());
 
 		updateObserverPollRates(drawer.isOpen());
 	}

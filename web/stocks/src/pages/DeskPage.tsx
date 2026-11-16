@@ -2,6 +2,7 @@ import type {
 	CapitalAdminOverview,
 	CapitalPayoutFrequency,
 	CapitalSettings,
+	CapitalWithdrawalView,
 } from "@sentinel/schemas";
 import { Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -124,6 +125,8 @@ function DeskBook({ book }: { book: Book }) {
 		useState<PayoutMode>("cash");
 	const [depositInvestor, setDepositInvestor] = useState("");
 	const [depositAmount, setDepositAmount] = useState("");
+	const [withdrawInvestor, setWithdrawInvestor] = useState("");
+	const [withdrawAmount, setWithdrawAmount] = useState("");
 
 	const { markUpdated } = useCapitalLive<CapitalAdminOverview>({
 		view: "admin",
@@ -277,6 +280,32 @@ function DeskBook({ book }: { book: Book }) {
 		setDepositAmount("");
 	};
 
+	const requestWithdrawal = async () => {
+		if (!withdrawInvestor || !withdrawAmount) return;
+		const ok = await runAction(() =>
+			apiFetch(`/v2/capital/admin/${book}/withdrawals`, {
+				method: "POST",
+				body: JSON.stringify({
+					investorId: withdrawInvestor,
+					amount: withdrawAmount,
+				}),
+			}),
+		);
+		if (ok) setWithdrawAmount("");
+	};
+
+	const changeWithdrawal = async (
+		request: CapitalWithdrawalView,
+		action: "approve" | "reject" | "pay",
+	) => {
+		await runAction(() =>
+			apiFetch(
+				`/v2/capital/admin/${book}/withdrawals/${request.id}/${action}`,
+				{ method: "POST", body: "{}" },
+			),
+		);
+	};
+
 	const resetPaper = async () => {
 		const ok = await runAction(() =>
 			apiFetch("/v2/capital/admin/paper/reset", {
@@ -378,7 +407,7 @@ function DeskBook({ book }: { book: Book }) {
 						value={money(data.summary.cumulativeFees)}
 						hint="Performance + exit fees kept by the owner"
 						tone="success"
-						help="Every performance and exit fee booked out of the fund. The cash stays with the owner and is not reinvested automatically; record a deposit under your own investor lot to put it back into the fund."
+						help="Every performance and exit fee booked out of the fund. Fees are automatically reinvested into the operator investor's fee lot at the current NAV, so the cash stays in the fund and compounds as your own capital. Deposit under the operator from the deposit panel to add more."
 					/>
 				</div>
 			) : null}
@@ -570,6 +599,96 @@ function DeskBook({ book }: { book: Book }) {
 						<EmptyState title="No payouts due" />
 					)}
 				</SectionCard>
+
+				<SectionCard
+					title="Withdrawals"
+					description="Request, approve and settle an investor exit. Operator withdrawals skip performance and exit fees."
+				>
+					<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+						<Select
+							value={withdrawInvestor || undefined}
+							onValueChange={setWithdrawInvestor}
+						>
+							<SelectTrigger className="w-full">
+								<SelectValue placeholder="Select investor…" />
+							</SelectTrigger>
+							<SelectContent>
+								{investors.map((row) => (
+									<SelectItem key={row.investor.id} value={row.investor.id}>
+										{row.investor.displayName} ·{" "}
+										{compactMoney(row.currentValue)}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<NumberInput
+							decimals={2}
+							placeholder="Amount"
+							value={withdrawAmount}
+							onValueChange={setWithdrawAmount}
+						/>
+						<Button
+							variant="outline"
+							onClick={requestWithdrawal}
+							disabled={busy || !withdrawInvestor || !withdrawAmount}
+						>
+							Request withdrawal
+						</Button>
+					</div>
+					{data?.withdrawalsPending.length ? (
+						<div className="mt-3 space-y-2">
+							{data.withdrawalsPending.map((request) => (
+								<div
+									key={request.id}
+									className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 p-2 text-sm"
+								>
+									<div className="min-w-0">
+										<p className="truncate font-medium">
+											{request.investorName}
+										</p>
+										<p className="text-xs text-muted-foreground">
+											{compactMoney(request.netAmount)} net ·{" "}
+											{compactMoney(request.grossValue)} gross ·{" "}
+											{request.status}
+										</p>
+									</div>
+									<div className="flex flex-wrap gap-2">
+										{request.status === "requested" ||
+										request.status === "quoted" ? (
+											<Button
+												variant="outline"
+												disabled={busy}
+												onClick={() =>
+													void changeWithdrawal(request, "approve")
+												}
+											>
+												Approve
+											</Button>
+										) : (
+											<Button
+												disabled={busy}
+												onClick={() => void changeWithdrawal(request, "pay")}
+											>
+												Mark paid
+											</Button>
+										)}
+										<Button
+											variant="ghost"
+											disabled={busy}
+											onClick={() => void changeWithdrawal(request, "reject")}
+										>
+											Reject
+										</Button>
+									</div>
+								</div>
+							))}
+						</div>
+					) : (
+						<div className="mt-3">
+							<EmptyState title="No withdrawals pending" />
+						</div>
+					)}
+				</SectionCard>
 			</div>
 
 			<div className="mt-4">
@@ -592,6 +711,9 @@ function DeskBook({ book }: { book: Book }) {
 												<span className="truncate">
 													{row.investor.displayName}
 												</span>
+												{row.investor.kind === "operator" ? (
+													<StatusBadge tone="success">Operator</StatusBadge>
+												) : null}
 											</div>
 										</TableCell>
 										<TableCell className="font-mono text-xs">
@@ -887,7 +1009,7 @@ function DeskBook({ book }: { book: Book }) {
 				<div className="mt-4">
 					<SectionCard
 						title="Reset simulation"
-						description="Deletes all simulation data — investors, lots, positions, orders, fills, payouts, snapshots. The live book is never touched. Nothing is seeded afterwards; add investors and deposits yourself."
+						description="Deletes all simulation data — investors, lots, positions, orders, fills, payouts, snapshots. The live book is never touched. The operator investor is recreated with no lot or cash; add deposits or let fees reinvest into it."
 						actions={
 							<Button
 								variant="destructive"
@@ -913,8 +1035,8 @@ function DeskBook({ book }: { book: Book }) {
 						<DialogTitle>Reset the simulation?</DialogTitle>
 						<DialogDescription>
 							This permanently deletes all simulation investors, lots,
-							positions, orders, fills and NAV history. No operator or starting
-							cash is created; the simulation book starts empty. Type{" "}
+							positions, orders, fills and NAV history. The simulation operator
+							is recreated with no cash; the book otherwise starts empty. Type{" "}
 							<strong>RESET</strong> to continue.
 						</DialogDescription>
 					</DialogHeader>

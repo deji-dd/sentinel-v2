@@ -51,6 +51,7 @@ import { canReadCapital, resolveCapitalAccess } from "../../lib/capital-access";
 import {
 	addInvestorContact,
 	CapitalServiceError,
+	createAdminWithdrawalRequest,
 	createDepositLot,
 	createInvestor,
 	createWithdrawalQuote,
@@ -415,6 +416,25 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 							"Live investors must be users, factions or operators. Test investors belong on the paper desk.",
 					};
 				}
+				if (kind === "operator") {
+					const [existingOperator] = await db
+						.select({ id: capitalInvestors.id })
+						.from(capitalInvestors)
+						.where(
+							and(
+								eq(capitalInvestors.book, book),
+								eq(capitalInvestors.kind, "operator"),
+							),
+						)
+						.limit(1);
+					if (existingOperator) {
+						set.status = 400;
+						return {
+							success: false,
+							error: "The operator investor already exists for this book.",
+						};
+					}
+				}
 				if (!Number.isInteger(body.tornId) || (body.tornId ?? 0) <= 0) {
 					set.status = 400;
 					return { success: false, error: "A valid Torn ID is required." };
@@ -715,6 +735,48 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		const rows = await getCapitalWithdrawals(book);
 		return { success: true, withdrawals: rows };
 	})
+	.post(
+		"/admin/:book/withdrawals",
+		async ({ params, body, user, set }) => {
+			if (!isOwner(user)) {
+				set.status = 403;
+				return { success: false, error: "Admin access required." };
+			}
+			const book = parseBook(params.book, set);
+			if (!book) return { success: false, error: "Invalid book." };
+			try {
+				const request = await createAdminWithdrawalRequest({
+					book,
+					investorId: body.investorId,
+					investmentId: body.investmentId ?? null,
+					requestedAmount: body.amount,
+					actor: user?.discordId ?? null,
+				});
+				await recordCapitalAudit({
+					book,
+					actorDiscordId: user?.discordId ?? null,
+					action: "withdrawal.request",
+					entityType: "capital_withdrawal_request",
+					entityId: request.id,
+					after: request as unknown as Record<string, unknown>,
+				});
+				return { success: true, request };
+			} catch (error) {
+				set.status = error instanceof CapitalServiceError ? error.status : 400;
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : "Withdrawal failed.",
+				};
+			}
+		},
+		{
+			body: t.Object({
+				investorId: t.String(),
+				investmentId: t.Optional(t.String()),
+				amount: t.String(),
+			}),
+		},
+	)
 	.post(
 		"/admin/:book/withdrawals/:id/approve",
 		async ({ params, user, set }) => {
