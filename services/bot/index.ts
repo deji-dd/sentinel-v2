@@ -1,3 +1,4 @@
+import { isOilRigEnabled } from "@sentinel/utils";
 import {
 	Client,
 	Events,
@@ -81,7 +82,14 @@ async function main(): Promise<void> {
 		// On-demand oil-rig reports are DM-only and restricted to the director.
 		// The trigger words are parsed outside this file so the accepted names can
 		// be tested without booting the gateway client.
-		if (!message.guild && isDirectorUser(message.author.id)) {
+		//
+		// The company was sold, so the DM handler is dormant unless the oil-rig
+		// feature is explicitly re-enabled.
+		if (
+			isOilRigEnabled() &&
+			!message.guild &&
+			isDirectorUser(message.author.id)
+		) {
 			const command = parseOilDmCommand(message.content);
 			if (command) {
 				await handleOilDmCommand(message, command);

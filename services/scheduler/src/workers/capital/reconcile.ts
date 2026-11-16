@@ -18,6 +18,7 @@ import { getActiveIpcServer } from "../../lib/ipc/server";
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import { syncUserStocks } from "../personal/stocks";
 import type { WorkerStartOptions } from "../registry";
+import { stockDisplayLabel } from "./stock-display";
 
 const WORKER_NAME = "capital:reconcile";
 const logger = new Logger("Scheduler", "CapitalReconcile");
@@ -101,9 +102,13 @@ export async function runCapitalReconcileCycle(): Promise<void> {
 			const accountShares = accountByStock.get(position.stockId) ?? 0;
 			if (accountShares >= position.shares) continue;
 			if (await hasOpenIssue("share_shortfall", position.stockId)) continue;
+
+			// Look up the stock name for a more helpful alert
+			const stockDisplay = await stockDisplayLabel(position.stockId);
+
 			await createIssue({
 				kind: "share_shortfall",
-				title: `Fund position exceeds the account: stock #${position.stockId}`,
+				title: `Fund position exceeds the account: ${stockDisplay}`,
 				detail: `Fund holds ${position.shares.toLocaleString()} shares but Torn reports ${accountShares.toLocaleString()}. A sale may be unrecorded.`,
 				stockId: position.stockId,
 				details: {

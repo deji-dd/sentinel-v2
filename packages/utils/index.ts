@@ -7,6 +7,7 @@ export * from "./src/capital-policy";
 export * from "./src/capital-signals";
 export * from "./src/capital-time";
 export * from "./src/company-directives";
+export * from "./src/features";
 export * from "./src/crimes";
 export * from "./src/format";
 export * from "./src/guilds";

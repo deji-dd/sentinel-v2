@@ -11,6 +11,7 @@ import {
 	buildWeekToDateLogEntries,
 	deriveRosterBaseline,
 	getMondayOfWeek,
+	isOilRigEnabled,
 	loadLatestSnapshotFromDb,
 	loadPreviousBriefState,
 	loadRecentRosterBaselineRows,
@@ -49,6 +50,14 @@ function tickAgeMinutes(
 }
 
 export const companyRoutes = new Elysia({ prefix: "/company" })
+	// The company was sold. The routes remain mounted so the dashboard keeps
+	// building, but they answer 404 (exactly as if the feature never existed)
+	// unless OIL_RIG_ENABLED is switched back on.
+	.onBeforeHandle(({ set }) => {
+		if (isOilRigEnabled()) return;
+		set.status = 404;
+		return { error: "Not found." };
+	})
 	.derive(async ({ headers, set }) => {
 		const isAuthed = await authenticateCrimeLedgerRequest(headers);
 		if (!isAuthed) {

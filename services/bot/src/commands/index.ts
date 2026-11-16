@@ -1,3 +1,4 @@
+import { isOilRigEnabled } from "@sentinel/utils";
 import {
 	type ChatInputCommandInteraction,
 	Collection,
@@ -76,8 +77,14 @@ export const normalCommandsList: BotCommand[] = [
 	{ ...allianceMapCommand, scope: "normal" },
 	{ ...burnMapCommand, scope: "normal" },
 	{ ...targetFinderCommand, scope: "normal" },
-	{ ...oilBriefingCommand, scope: "both" },
-	{ ...oilPositionsCommand, scope: "both" },
+	// The company was sold; these stay defined but are not registered or
+	// dispatched unless OIL_RIG_ENABLED is switched back on.
+	...(isOilRigEnabled()
+		? [
+				{ ...oilBriefingCommand, scope: "both" as const },
+				{ ...oilPositionsCommand, scope: "both" as const },
+			]
+		: []),
 	{ ...stockAlertsCommand, scope: "faction" },
 	{ ...shopliftingAlertsCommand, scope: "faction" },
 ];

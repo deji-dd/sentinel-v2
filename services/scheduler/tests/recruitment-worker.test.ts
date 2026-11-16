@@ -96,7 +96,7 @@ describe("Subversive Recruitment Worker", () => {
 		autoScanEnabled: true,
 		excludedFactionIds: [],
 	};
-	let mockState: { init: boolean; data: Record<string, unknown> } | null = null;
+	let mockState: { init: boolean; cursor: number | null } | null = null;
 
 	beforeEach(() => {
 		resetRecruitmentCache();
@@ -130,9 +130,17 @@ describe("Subversive Recruitment Worker", () => {
 									{ id: SUBVERSIVE_RECRUITMENT_CONFIG_ID, ...mockConfig },
 								];
 							}
-							if (table === databaseModule.systemStates) {
+							if (table === databaseModule.workerState) {
 								if (targetVal === SUBVERSIVE_RECRUITMENT_STATE_ID) {
-									return mockState ? [mockState] : [];
+									return mockState
+										? [
+												{
+													workerId: SUBVERSIVE_RECRUITMENT_STATE_ID,
+													init: mockState.init,
+													cursor: mockState.cursor,
+												},
+											]
+										: [];
 								}
 								return [];
 							}
@@ -175,10 +183,13 @@ describe("Subversive Recruitment Worker", () => {
 							warId: Number(rec.warId),
 							playerId: Number(rec.playerId),
 						});
-					} else if (table === databaseModule.systemStates) {
+					} else if (table === databaseModule.workerState) {
 						mockState = {
 							init: Boolean(rec.init),
-							data: rec.data as Record<string, unknown>,
+							cursor:
+								rec.cursor === undefined || rec.cursor === null
+									? null
+									: Number(rec.cursor),
 						};
 					}
 					return [val];
@@ -232,7 +243,7 @@ describe("Subversive Recruitment Worker", () => {
 		const nowSec = Math.floor(Date.now() / 1000);
 		mockState = {
 			init: true,
-			data: { lastScanTimestamp: nowSec - 14400 },
+			cursor: nowSec - 14400,
 		};
 
 		// Page 1: 100 scheduled wars with future start times (end === 0)
@@ -361,7 +372,7 @@ describe("Subversive Recruitment Worker", () => {
 		const nowSec = Math.floor(Date.now() / 1000);
 		mockState = {
 			init: true,
-			data: { lastScanTimestamp: nowSec - 14400 },
+			cursor: nowSec - 14400,
 		};
 
 		// Simulate War 99902 on Page 1 already evaluated in a previous cycle

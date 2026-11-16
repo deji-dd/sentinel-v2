@@ -17,6 +17,7 @@ import {
 import type { CapitalAlertPayload } from "@sentinel/schemas";
 import {
 	computeFillVariance,
+	formatCurrency,
 	formatMoney,
 	Logger,
 	moneyFromPriceShares,
@@ -28,6 +29,7 @@ import {
 
 import { type LogIngestSource, schedulerEvents } from "../../lib/events";
 import { getActiveIpcServer } from "../../lib/ipc/server";
+import { stockDisplayLabel } from "./stock-display";
 
 const logger = new Logger("Scheduler", "CapitalFills");
 
@@ -51,7 +53,13 @@ function alertTradeIssue(issue: {
 		title: issue.title,
 		body: issue.detail,
 		fields: issue.amount
-			? [{ name: "Notional", value: issue.amount, inline: true }]
+			? [
+					{
+						name: "Notional",
+						value: formatCurrency(Number(issue.amount), 2),
+						inline: true,
+					},
+				]
 			: [],
 		link: "https://stocks.blasted-labs.tech/desk",
 		decision: {
@@ -270,10 +278,14 @@ async function processStockLog(log: {
 	if (event.side === "buy") {
 		if (cfg && !cfg.notifyUnmatchedBuys) return;
 		if (await issueExistsForLog(event.logId)) return;
+
+		// Look up the stock name for a more helpful alert
+		const stockDisplay = await stockDisplayLabel(event.stockId);
+
 		const issue = await createCapitalIssue({
 			book: "live",
 			kind: "unmatched_buy",
-			title: `Unmatched buy: stock #${event.stockId}`,
+			title: `Unmatched buy: ${stockDisplay}`,
 			detail: `The Torn log records a buy of ${event.shares.toLocaleString()} shares at ${event.price.toFixed(2)} with no open recommendation. Is this a personal trade or a fund trade?`,
 			stockId: event.stockId,
 			amount: event.worth.toFixed(2),
@@ -315,11 +327,15 @@ async function processStockLog(log: {
 			source: "torn_log",
 			variance: null,
 		});
+
+		// Look up the stock name for a more helpful alert
+		const stockDisplay = await stockDisplayLabel(event.stockId);
+
 		broadcastAlert({
 			kind: "reconciliation",
 			book: "live",
 			stockId: event.stockId,
-			title: `Unsolicited fund sale: stock #${event.stockId}`,
+			title: `Unsolicited fund sale: ${stockDisplay}`,
 			body: `Recorded a ${shares.toLocaleString()}-share sale with no open recommendation so the book matches the account.`,
 			fields: [{ name: "Price", value: event.price.toFixed(2), inline: true }],
 			link: "https://stocks.blasted-labs.tech/desk",
