@@ -9,6 +9,7 @@ import {
 	capitalMlPredictions,
 	capitalOrders,
 	capitalPositions,
+	capitalWithdrawalRequests,
 	db,
 	ensureCapitalBooks,
 	eq,
@@ -21,6 +22,7 @@ import {
 	getCapitalState,
 	getWorkerState,
 	gte,
+	inArray,
 	insertCapitalMlPrediction,
 	setWorkerInitFlag,
 	sql,
@@ -46,6 +48,7 @@ import {
 	type CapitalCandle,
 	type CapitalExitDecision,
 	type CapitalExitReason,
+	type CapitalLiquidityCandidate,
 	capitalMlFeatureVector,
 	type CapitalScoringConfig,
 	type CapitalSignalMode,
@@ -75,6 +78,7 @@ import {
 	mulPct,
 	parseMoney,
 	planEntry,
+	planWithdrawalLiquiditySales,
 	predictProbability,
 	scoreStock,
 } from "@sentinel/utils";
@@ -1271,6 +1275,158 @@ async function runBook(
 				filled: false,
 				sizePct,
 			});
+		}
+	}
+
+	// Withdrawal liquidity: an approved redemption can arrive while the book is
+	// fully invested. Strategy exits above freed whatever they could; this pass
+	// sells the least-painful remaining names to cover the rest. It runs for
+	// both books so the paper simulation exercises the same path.
+	const pendingWithdrawals = await db
+		.select({
+			id: capitalWithdrawalRequests.id,
+			grossValue: capitalWithdrawalRequests.grossValue,
+		})
+		.from(capitalWithdrawalRequests)
+		.where(
+			and(
+				eq(capitalWithdrawalRequests.book, book),
+				inArray(capitalWithdrawalRequests.status, [
+					"approved",
+					"queued_liquidity",
+				]),
+			),
+		);
+	if (pendingWithdrawals.length > 0) {
+		const withdrawalObligation = pendingWithdrawals.reduce(
+			(total, row) => total + parseMoney(row.grossValue),
+			0n,
+		);
+
+		// Re-read open orders: the exit pass may have queued sells this cycle.
+		// Their proceeds count towards the obligation, and the stock cannot take
+		// a second sell order while one is open.
+		const ordersAfterExits = await getCapitalOrders(book, true);
+		const openSellShares = new Map<number, number>();
+		for (const order of ordersAfterExits) {
+			if (order.side !== "sell") continue;
+			const remainingShares = Math.max(
+				0,
+				order.recommendedShares - (order.filledShares ?? 0),
+			);
+			if (remainingShares <= 0) continue;
+			openSellShares.set(
+				order.stockId,
+				(openSellShares.get(order.stockId) ?? 0) + remainingShares,
+			);
+		}
+
+		const liquidityCandidates: CapitalLiquidityCandidate[] = [];
+		for (const position of openPositions) {
+			const features = scopedFeatures.get(position.stockId);
+			if (!features) continue;
+			const costBasis = parseMoney(position.costBasis);
+			const averageCost =
+				position.shares > 0 ? moneyToNumber(costBasis) / position.shares : 0;
+			liquidityCandidates.push({
+				stockId: position.stockId,
+				shares: position.shares,
+				price: features.price,
+				score: scoreStock(features, scoringConfigFor(config)).score,
+				averageCost,
+				targetPrice: numberOrNull(position.targetPrice),
+				daysHeld: position.openedAt ? daysBetween(position.openedAt, now) : 0,
+				openOrderShares: openSellShares.get(position.stockId) ?? 0,
+			});
+		}
+
+		const liquidityPlan = planWithdrawalLiquiditySales({
+			requiredCash: withdrawalObligation + reserve,
+			availableCash: parseMoney(state.cash),
+			saleFeeBps: config.saleFeeBps,
+			candidates: liquidityCandidates,
+		});
+
+		if (liquidityPlan.sales.length > 0) {
+			logger.info(
+				`${book}: ${pendingWithdrawals.length} withdrawal request(s) short ${formatMoney(liquidityPlan.shortfall)}; queueing ${liquidityPlan.sales.length} liquidity sale(s).`,
+			);
+		}
+		if (liquidityPlan.uncovered > 0n) {
+			const message = `${book}: withdrawal liquidity shortfall of ${formatMoney(liquidityPlan.uncovered)} remains after selling every eligible position.`;
+			errors.push(message);
+			logger.warn(message);
+		}
+
+		for (const sale of liquidityPlan.sales) {
+			const features = scopedFeatures.get(sale.stockId);
+			if (!features) continue;
+			const score = scoreStock(features, scoringConfigFor(config));
+			const sizePct = sizePctOfNav(nav.totalValue, sale.price, sale.shares);
+			const reason = `Withdrawal liquidity: raise cash for ${pendingWithdrawals.length} approved redemption(s); ${formatMoney(liquidityPlan.shortfall)} short.`;
+			const order = await createOrder({
+				book,
+				stockId: sale.stockId,
+				side: "sell",
+				shares: sale.shares,
+				price: sale.price,
+				score: score.score,
+				rationale: reason,
+				factors: {
+					...featureSnapshot(features),
+					liquidity: {
+						shortfall: formatMoney(liquidityPlan.shortfall),
+						requiredCash: formatMoney(liquidityPlan.requiredCash),
+						withdrawalRequestIds: pendingWithdrawals.map((row) => row.id),
+						priority: sale.priority,
+					},
+				},
+				riskFlags: [...score.flags, "withdrawal_liquidity"],
+				stopPrice: null,
+				targetPrice: null,
+				exitReason: "liquidity",
+				runId,
+				expiresAt,
+			});
+			recommendations += 1;
+			if (book === "paper" && config.paperAutoFill) {
+				const fillPrice = await autoFillPaperOrder({
+					book: "paper",
+					order,
+					config,
+					price: sale.price,
+				});
+				paperFills += 1;
+				broadcastTradeAlert({
+					book,
+					stockId: order.stockId,
+					...stockMeta(order.stockId),
+					side: "sell",
+					shares: sale.shares,
+					price: fillPrice,
+					score: score.score,
+					stopPrice: null,
+					targetPrice: null,
+					reason,
+					filled: true,
+					sizePct,
+				});
+			} else {
+				broadcastTradeAlert({
+					book,
+					stockId: order.stockId,
+					...stockMeta(order.stockId),
+					side: "sell",
+					shares: sale.shares,
+					price: sale.price,
+					score: score.score,
+					stopPrice: null,
+					targetPrice: null,
+					reason,
+					filled: false,
+					sizePct,
+				});
+			}
 		}
 	}
 

@@ -143,6 +143,7 @@ const EXIT_REASON_LABELS: Record<string, string> = {
 	thesis: "Thesis broke",
 	time: "Time stop",
 	error_review: "Error-trade review",
+	liquidity: "Withdrawal liquidity",
 	manual: "Manual",
 	none: "—",
 	unknown: "Unknown",

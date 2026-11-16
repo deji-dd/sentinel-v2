@@ -1,4 +1,5 @@
 export * from "./src/battlestats";
+export * from "./src/capital-liquidity";
 export * from "./src/capital-matching";
 export * from "./src/capital-money";
 export * from "./src/capital-nav";

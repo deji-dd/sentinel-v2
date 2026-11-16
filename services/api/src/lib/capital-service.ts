@@ -1316,7 +1316,7 @@ export async function createWithdrawalQuote(input: {
 
 	const liquidityWarning =
 		quote.grossValue > parseMoney((await getCapitalState(input.book)).cash)
-			? "Cash is currently short of this withdrawal; the engine will need to sell positions before payment."
+			? "Cash is currently short of this withdrawal; the capital engine will queue the least-painful position sales to fund it."
 			: null;
 
 	return {
