@@ -405,6 +405,17 @@ export const capitalPositions = pgTable(
 			withTimezone: true,
 			mode: "date",
 		}),
+		/** Unrealized P&L in base currency (updated on each engine run). */
+		unrealizedPnl: money("unrealized_pnl").default("0").notNull(),
+		/** Unrealized P&L as percentage of cost basis. */
+		unrealizedPnlPct: doublePrecision("unrealized_pnl_pct")
+			.default(0)
+			.notNull(),
+		/** When the unrealized P&L was last computed. */
+		lastMarkedAt: timestamp("last_marked_at", {
+			withTimezone: true,
+			mode: "date",
+		}),
 		updatedAt,
 	},
 	(table) => [

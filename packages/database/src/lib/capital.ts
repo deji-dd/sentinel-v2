@@ -989,6 +989,9 @@ export async function applyCapitalFill(
 				peakPrice: entryPrice,
 				openedAt: input.occurredAt,
 				lastTradeAt: input.occurredAt,
+				unrealizedPnl: "0",
+				unrealizedPnlPct: 0,
+				lastMarkedAt: null,
 				updatedAt: new Date(),
 			})
 			.onConflictDoUpdate({
@@ -1007,6 +1010,9 @@ export async function applyCapitalFill(
 					targetPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${targetPrice}::numeric ELSE ${capitalPositions.targetPrice} END`,
 					peakPrice: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN ${entryPrice}::numeric ELSE ${capitalPositions.peakPrice} END`,
 					scaledOutAt: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN NULL ELSE ${capitalPositions.scaledOutAt} END`,
+					unrealizedPnl: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN 0 ELSE ${capitalPositions.unrealizedPnl} END`,
+					unrealizedPnlPct: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN 0 ELSE ${capitalPositions.unrealizedPnlPct} END`,
+					lastMarkedAt: sql`CASE WHEN ${capitalPositions.shares} <= 0 THEN NULL ELSE ${capitalPositions.lastMarkedAt} END`,
 					lastTradeAt: input.occurredAt,
 					updatedAt: new Date(),
 				},
@@ -1033,6 +1039,10 @@ export async function applyCapitalFill(
 				targetPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.targetPrice} END`,
 				peakPrice: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.peakPrice} END`,
 				scaledOutAt: scaledOutSet,
+				// Reset unrealized P&L on full close; keep for partial close (engine will recompute).
+				unrealizedPnl: sql`CASE WHEN ${closesPosition} THEN 0 ELSE ${capitalPositions.unrealizedPnl} END`,
+				unrealizedPnlPct: sql`CASE WHEN ${closesPosition} THEN 0 ELSE ${capitalPositions.unrealizedPnlPct} END`,
+				lastMarkedAt: sql`CASE WHEN ${closesPosition} THEN NULL ELSE ${capitalPositions.lastMarkedAt} END`,
 				lastTradeAt: input.occurredAt,
 				updatedAt: new Date(),
 			})

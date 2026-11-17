@@ -646,3 +646,200 @@ describe("describeBuyReason", () => {
 		expect(reason).toContain("outperforming the market by 3.1%");
 	});
 });
+
+describe("exit logic edge cases", () => {
+	const exitConfig = {
+		trailingTriggerR: 1,
+		trailingAtrMultiplier: 2,
+		trailingPct: 2,
+		tightenTrailPct: 1.5,
+		scaleOutR: 1,
+		scaleOutFraction: 0.3333,
+		timeStopDays: 20,
+		zExitMinR: 0,
+	};
+
+	test("reversal z-exit respects mean reversion above zero R (legacy)", () => {
+		// zscore20 >= reversalExitSigma (1) triggers the exit
+		const atMean = evaluateExit({
+			entryPrice: 100,
+			stopPrice: 98,
+			price: 100.5,
+			peakPrice: 100.5,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 101,
+			score: 40,
+			daysHeld: 5,
+			scaledOut: true,
+			mode: "reversal",
+			meanPrice: 100,
+			zscore20: 1.1,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, scaleOutR: 5 },
+		});
+		expect(atMean.action).toBe("sell");
+		expect(atMean.reasonCode).toBe("reversal");
+	});
+
+	test("reversal z-exit with zExitMinR=1 blocks early mean reversion", () => {
+		// z recovered but R < 1, so zExitMinR=1 blocks
+		const atMean = evaluateExit({
+			entryPrice: 100,
+			stopPrice: 98,
+			price: 100.5,
+			peakPrice: 100.5,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 101,
+			score: 40,
+			daysHeld: 5,
+			scaledOut: true,
+			mode: "reversal",
+			meanPrice: 100,
+			zscore20: 1.1,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, scaleOutR: 5, zExitMinR: 1 },
+		});
+		// R = (100.5 - 100) / 2 = 0.25 < 1, so hold
+		expect(atMean.action).toBe("hold");
+	});
+
+	test("trailing stop tightens after +1R scale out", () => {
+		const base = {
+			entryPrice: 100,
+			stopPrice: 98,
+			targetPrice: 104,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			mode: "reversal" as const,
+			zscore20: 0.2,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		};
+		const beforeTrim = evaluateExit({
+			...base,
+			price: 101.5,
+			peakPrice: 101.5,
+			scaledOut: false,
+		});
+		expect(beforeTrim.action).toBe("hold");
+		const afterTrim = evaluateExit({
+			...base,
+			price: 103.5,
+			peakPrice: 104,
+			scaledOut: true,
+		});
+		expect(afterTrim.action).toBe("hold");
+		const trailed = evaluateExit({
+			...base,
+			price: 102,
+			peakPrice: 104,
+			scaledOut: true,
+		});
+		expect(trailed.action).toBe("sell");
+		expect(trailed.reasonCode).toBe("tighten_trail");
+	});
+
+	test("time stop fires regardless of other conditions", () => {
+		const base = {
+			entryPrice: 100,
+			stopPrice: 98,
+			targetPrice: 104,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			scaledOut: false,
+			mode: "reversal" as const,
+			zscore20: -1.5,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, timeStopDays: 5 },
+		};
+		const timedOut = evaluateExit({
+			...base,
+			price: 101,
+			peakPrice: 101,
+			daysHeld: 6,
+		});
+		expect(timedOut.action).toBe("sell");
+		expect(timedOut.reasonCode).toBe("time");
+	});
+
+	test("scale out fires once at +1R", () => {
+		const base = {
+			entryPrice: 100,
+			stopPrice: 98,
+			targetPrice: 104,
+			atr: 0.6,
+			ema20: 100,
+			ema50: 99,
+			score: 80,
+			daysHeld: 3,
+			scaledOut: false,
+			mode: "reversal" as const,
+			zscore20: 0.2,
+			reversalExitSigma: 1,
+			config: { ...exitConfig, scaleOutR: 1 },
+		};
+		const atOneR = evaluateExit({
+			...base,
+			price: 102,
+			peakPrice: 102,
+		});
+		expect(atOneR.action).toBe("scale_out");
+		expect(atOneR.reasonCode).toBe("scale_out");
+		expect(atOneR.fraction).toBeCloseTo(1 / 3, 2);
+
+		const alreadyScaled = evaluateExit({
+			...base,
+			price: 103,
+			peakPrice: 103,
+			scaledOut: true,
+		});
+		expect(alreadyScaled.action).not.toBe("scale_out");
+	});
+
+	test("hard stop is immutable and ignores ATR changes", () => {
+		const stopPrice = 98;
+		const atLowAtr = evaluateExit({
+			entryPrice: 100,
+			price: 97.5,
+			peakPrice: 105,
+			stopPrice,
+			atr: 0.2,
+			ema20: 99,
+			ema50: 98,
+			score: 70,
+			daysHeld: 2,
+			scaledOut: false,
+			mode: "reversal",
+			zscore20: -1.5,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		});
+		const atHighAtr = evaluateExit({
+			entryPrice: 100,
+			price: 97.5,
+			peakPrice: 105,
+			stopPrice,
+			atr: 5.0,
+			ema20: 99,
+			ema50: 98,
+			score: 70,
+			daysHeld: 2,
+			scaledOut: false,
+			mode: "reversal",
+			zscore20: -1.5,
+			reversalExitSigma: 1,
+			config: exitConfig,
+		});
+		expect(atLowAtr.action).toBe("sell");
+		expect(atLowAtr.reasonCode).toBe("stop");
+		expect(atHighAtr.action).toBe("sell");
+		expect(atHighAtr.reasonCode).toBe("stop");
+	});
+});

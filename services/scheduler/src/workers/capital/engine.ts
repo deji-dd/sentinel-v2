@@ -961,7 +961,9 @@ async function runBook(
 	runId: string,
 	ml: LoadedMlModel | null,
 ): Promise<BookRunResult> {
+	const log = logger.child(`run:${runId.slice(0, 8)}`, `\x1b[36m`).child(book);
 	const errors: string[] = [];
+	log.debug("Starting book run");
 	if (!config.engineEnabled) {
 		return {
 			recommendations: 0,
@@ -1022,6 +1024,10 @@ async function runBook(
 			price: position.price,
 		})),
 	});
+	log.debug("NAV computed", {
+		nav: moneyToNumber(nav.totalValue),
+		cash: moneyToNumber(parseMoney(state.cash)),
+	});
 	const positions = await db
 		.select()
 		.from(capitalPositions)
@@ -1044,6 +1050,10 @@ async function runBook(
 		parseMoney(state.unpaidPayouts);
 	let freeCash = parseMoney(state.cash) - reserve;
 	if (freeCash < 0n) freeCash = 0n;
+	log.debug("Free cash calculated", {
+		freeCash: moneyToNumber(freeCash),
+		openPositions: openPositions.length,
+	});
 
 	const risk = await assessBookRisk(
 		book,
@@ -1051,6 +1061,11 @@ async function runBook(
 		formatMoney(nav.navPerUnit),
 		now,
 	);
+	log.debug("Risk assessment complete", {
+		drawdownPct: risk.drawdownPct,
+		entriesAllowed: !risk.entriesPaused,
+		sizeScale: risk.sizeScale,
+	});
 	const expiresAt = new Date(
 		now.getTime() + config.orderValidityMinutes * 60_000,
 	);
@@ -1080,6 +1095,7 @@ async function runBook(
 			continue;
 		}
 		if (openOrderKeys.has(`sell:${position.stockId}`)) continue;
+		const positionLog = log.child(`pos:${position.stockId}`);
 
 		const costBasis = parseMoney(position.costBasis);
 		const avgCost =
@@ -1204,6 +1220,35 @@ async function runBook(
 						zExitMinR: CAPITAL_EXIT.zExitMinR,
 					},
 				});
+		positionLog.debug("Exit decision", {
+			action: decision.action,
+			reason: decision.reason,
+			rMultiple: decision.rMultiple,
+		});
+
+		// Mark-to-market for open positions. Same definition as the API's
+		// CapitalPositionView (market value minus cost basis, fees included), so
+		// the persisted figure matches what the dashboard shows.
+		const unrealizedPnl =
+			moneyFromPriceShares(features.price, position.shares) - costBasis;
+		const unrealizedPnlPct =
+			costBasis > 0n
+				? (moneyToNumber(unrealizedPnl) / moneyToNumber(costBasis)) * 100
+				: 0;
+		await db
+			.update(capitalPositions)
+			.set({
+				unrealizedPnl: formatMoney(unrealizedPnl),
+				unrealizedPnlPct,
+				lastMarkedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(capitalPositions.book, book),
+					eq(capitalPositions.stockId, position.stockId),
+				),
+			);
+
 		if (decision.action === "hold") continue;
 
 		const shares =
@@ -1525,6 +1570,7 @@ async function runBook(
 					),
 				);
 			const seen = new Set(logged.map((row) => row.stockId));
+			let mlLogged = 0;
 			for (const candidate of ruleEligible) {
 				const { features, probability, score } = candidate;
 				if (probability === null) continue;
@@ -1547,7 +1593,12 @@ async function runBook(
 						]),
 					),
 				});
+				mlLogged++;
 			}
+			log.debug("ML shadow predictions logged", {
+				mlLogged,
+				modelId: ml.id.slice(0, 8),
+			});
 		} catch (error) {
 			errors.push(
 				`ML shadow log failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1558,8 +1609,14 @@ async function runBook(
 	const cooldownStockIds = new Set(risk.cooldownStockIds);
 	let positionCount = openPositions.length;
 	if (entriesAllowed && entryPauseReasons.length === 0) {
+		log.debug("Processing entries", {
+			eligible: eligible.length,
+			maxPositions: slotPolicy.maxPositions,
+			openPositions: openPositions.length,
+		});
 		for (const candidate of eligible) {
 			const { features, score, probability } = candidate;
+			const entryLog = log.child(`entry:${features.stockId}`);
 			if (positionCount >= slotPolicy.maxPositions) break;
 			if (positionByStock.has(features.stockId)) continue;
 			// A fallback price exists only to evaluate exits; never open a new
@@ -1628,6 +1685,14 @@ async function runBook(
 			recommendations += 1;
 			positionCount += 1;
 			freeCash -= plan.notional;
+			entryLog.info("Entry order created", {
+				orderId: order.id,
+				score: score.score,
+				zscore: features.zscore20,
+				shares: plan.shares,
+				stopPrice: plan.stopPrice,
+				targetPrice: plan.targetPrice,
+			});
 
 			if (book === "paper" && config.paperAutoFill) {
 				const fillPrice = await autoFillPaperOrder({
@@ -1637,6 +1702,10 @@ async function runBook(
 					price: features.price,
 				});
 				paperFills += 1;
+				entryLog.debug("Paper order auto-filled", {
+					fillPrice,
+					shares: plan.shares,
+				});
 				broadcastTradeAlert({
 					book,
 					stockId: features.stockId,
@@ -1669,6 +1738,11 @@ async function runBook(
 			}
 		}
 	}
+	log.info("Book run complete", {
+		recommendations,
+		paperFills,
+		errors: errors.length,
+	});
 
 	return {
 		recommendations,
