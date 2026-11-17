@@ -25,6 +25,7 @@ import {
 	getCapitalConfig,
 	getCapitalState,
 	inArray,
+	recordCapitalDeposit,
 	sql,
 	tornStocks,
 	withCapitalTransaction,
@@ -1093,6 +1094,10 @@ export async function createDepositLot(input: {
 			recordedBy: input.actor,
 			note: input.note ?? null,
 		});
+
+		// Record the deposit time in worker state to delay entry recommendations.
+		// Same transaction, so a rolled-back deposit never pauses the engine.
+		await recordCapitalDeposit(tx, input.book, input.occurredAt);
 
 		return {
 			investmentId: investment.id,

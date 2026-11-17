@@ -12,6 +12,7 @@ import {
 	eq,
 	inArray,
 	personalLogs,
+	recordCapitalDeposit,
 	sql,
 	upsertWorkerState,
 	withCapitalTransaction,
@@ -104,6 +105,9 @@ async function depositFromIntent(input: {
 			occurredAt: input.occurredAt,
 			note: "Deposit verified from Torn money log.",
 		});
+
+		// Defer new entries the same way a manual deposit does.
+		await recordCapitalDeposit(tx, "live", input.occurredAt);
 	});
 }
 

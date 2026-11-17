@@ -79,6 +79,13 @@ export interface WorkerStateInput {
 }
 
 /**
+ * Anything that can insert — the pool or an open transaction. Callers that are
+ * already inside a transaction must pass it so their state write commits (or
+ * rolls back) atomically with the work it describes.
+ */
+export type WorkerStateWriter = Pick<typeof db, "insert">;
+
+/**
  * Writes a worker's state.
  *
  * `init` is only written when explicitly provided, so a worker that persists
@@ -86,6 +93,7 @@ export interface WorkerStateInput {
  */
 export async function upsertWorkerState(
 	input: WorkerStateInput,
+	writer: WorkerStateWriter = db,
 ): Promise<void> {
 	const now = new Date();
 	const row: Record<string, unknown> = {
@@ -107,7 +115,7 @@ export async function upsertWorkerState(
 		row.details = input.details;
 	}
 
-	await db
+	await writer
 		.insert(workerState)
 		.values({ ...row, createdAt: now } as typeof workerState.$inferInsert)
 		.onConflictDoUpdate({

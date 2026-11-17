@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
 	and,
+	capitalDepositStateId,
 	capitalInvestments,
 	capitalOrders,
 	capitalPayoutObligations,
@@ -12,6 +13,7 @@ import {
 	updateCapitalConfig,
 	users,
 	userSessions,
+	workerState,
 } from "@sentinel/database";
 
 import { app } from "../src/app";
@@ -57,6 +59,9 @@ afterAll(async () => {
 		null,
 	);
 	await resetCapitalPaperBook("150000000000", null);
+	await db
+		.delete(workerState)
+		.where(eq(workerState.workerId, capitalDepositStateId("paper")));
 });
 
 describe("capital API", () => {
@@ -294,6 +299,18 @@ describe("capital API", () => {
 			investmentId: string;
 		};
 		expect(depositBody.success).toBe(true);
+
+		// The deposit must also stamp the per-book marker the engine reads to
+		// defer new entries.
+		const [marker] = await db
+			.select()
+			.from(workerState)
+			.where(eq(workerState.workerId, capitalDepositStateId("paper")))
+			.limit(1);
+		expect(marker).toBeDefined();
+		const markedAt = new Date(marker?.details.lastDepositAt as string);
+		expect(Number.isNaN(markedAt.getTime())).toBe(false);
+		expect(Math.abs(Date.now() - markedAt.getTime())).toBeLessThan(60_000);
 
 		const preferences = await app.handle(
 			new Request(

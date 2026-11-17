@@ -31,7 +31,11 @@ import {
 	type NewCapitalBookConfigRow,
 	type NewCapitalTransactionRow,
 } from "../schema/capital";
-import { getWorkerState, WORKER_STATE_IDS } from "./worker-state";
+import {
+	getWorkerState,
+	upsertWorkerState,
+	WORKER_STATE_IDS,
+} from "./worker-state";
 
 /**
  * Sentinel Capital data access.
@@ -394,6 +398,46 @@ export async function withCapitalTransaction<T>(
 		const state = await readCapitalState(tx, book);
 		return work(tx, state);
 	});
+}
+
+/**
+ * `worker_state` key that holds a book's last deposit timestamp.
+ *
+ * The engine reads this to defer new entries right after money arrives, and
+ * both deposit paths (manual API and Torn money log) write it. Keeping the key
+ * in one helper stops the writer and reader drifting apart.
+ */
+export function capitalDepositStateId(book: CapitalBook): string {
+	return `${WORKER_STATE_IDS.capitalEngine}:${book}`;
+}
+
+/**
+ * Records when a book last received a deposit. Pass the caller's transaction so
+ * the marker commits with the deposit, never on its own.
+ */
+export async function recordCapitalDeposit(
+	tx: CapitalTx,
+	book: CapitalBook,
+	occurredAt: Date,
+): Promise<void> {
+	await upsertWorkerState(
+		{
+			workerId: capitalDepositStateId(book),
+			details: { lastDepositAt: occurredAt.toISOString() },
+		},
+		tx,
+	);
+}
+
+/** Reads the last deposit time the engine uses to pause entries, if any. */
+export async function readCapitalDepositAt(
+	book: CapitalBook,
+): Promise<Date | null> {
+	const state = await getWorkerState(capitalDepositStateId(book));
+	const value = state?.details?.lastDepositAt;
+	if (typeof value !== "string") return null;
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /** Reads the signed cash balance, units outstanding, liabilities and positions. */

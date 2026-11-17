@@ -24,6 +24,7 @@ import {
 	gte,
 	inArray,
 	insertCapitalMlPrediction,
+	readCapitalDepositAt,
 	setWorkerInitFlag,
 	sql,
 	tornStocks,
@@ -90,6 +91,39 @@ import type { WorkerStartOptions } from "../registry";
 
 const WORKER_NAME = "capital:engine";
 const logger = new Logger("Scheduler", "CapitalEngine");
+
+/** New entries wait this long after a deposit so the new money settles first. */
+export const CAPITAL_DEPOSIT_ENTRY_DELAY_MS = 60_000;
+
+export interface CapitalDepositEntryPause {
+	/** Time since the deposit, clamped at zero for a future-dated deposit. */
+	elapsedMs: number;
+	/** Time left before entries resume. */
+	remainingMs: number;
+	/** Human-readable reason for `entryPauseReasons`. */
+	reason: string;
+}
+
+/**
+ * Decides whether a book is still inside its post-deposit entry delay.
+ *
+ * Only new entry recommendations are paused; exits and marking run regardless,
+ * so this is evaluated separately from the exit path. Returns `null` when
+ * entries may proceed.
+ */
+export function capitalDepositEntryPause(
+	lastDepositAt: Date | null,
+	now: Date,
+): CapitalDepositEntryPause | null {
+	if (!lastDepositAt) return null;
+	const elapsedMs = Math.max(0, now.getTime() - lastDepositAt.getTime());
+	if (elapsedMs >= CAPITAL_DEPOSIT_ENTRY_DELAY_MS) return null;
+	return {
+		elapsedMs,
+		remainingMs: CAPITAL_DEPOSIT_ENTRY_DELAY_MS - elapsedMs,
+		reason: `recent deposit ${Math.ceil(elapsedMs / 1000)}s ago (1m delay)`,
+	};
+}
 
 type TornStockWire = TornSchema<"TornStock">;
 type TornStockDetailedWire = TornSchema<"TornStockDetailed">;
@@ -1608,6 +1642,22 @@ async function runBook(
 
 	const cooldownStockIds = new Set(risk.cooldownStockIds);
 	let positionCount = openPositions.length;
+
+	// A deposit in this book pauses only new entries. Exits, marking and the
+	// withdrawal liquidity sales above already ran, so a stop is never delayed
+	// by fresh money arriving.
+	const depositPause = capitalDepositEntryPause(
+		await readCapitalDepositAt(book),
+		now,
+	);
+	if (depositPause) {
+		log.debug("Skipping entries due to recent deposit", {
+			elapsedMs: Math.ceil(depositPause.elapsedMs),
+			remainingMs: Math.ceil(depositPause.remainingMs),
+		});
+		entryPauseReasons.push(depositPause.reason);
+	}
+
 	if (entriesAllowed && entryPauseReasons.length === 0) {
 		log.debug("Processing entries", {
 			eligible: eligible.length,
