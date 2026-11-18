@@ -208,6 +208,14 @@ fold boundaries, hyperparameters, gates and metrics so it is reproducible. PBO
 is marked unreliable below 40 blocks; with the current holdout it is a thin
 sample and must not be read as evidence either way.
 
+The same report includes diagnostics: per-fold rule/model/reversal backtests,
+per-feature IC across folds and holdout, and top-5 candidate overlap. These are
+research-only — the candidate regime-feature vector they use is deliberately
+not part of the deployed feature spec, so the active model and shadow logging
+are unaffected. Current finding: the model and rule pick almost the same names
+(4.1/5 overlap) and the regime features show no usable IC, so further ranking
+complexity is not the next move.
+
 Activation is safe by default: the engine computes a probability for every
 reversal candidate and writes it to `capital_ml_predictions`, but does **not**
 change orders until the book sets `ml_enabled = true`. `ml_weight` blends the

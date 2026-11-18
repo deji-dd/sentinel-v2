@@ -29,10 +29,13 @@ import {
 	CAPITAL_ML_FEATURES,
 	CAPITAL_ML_HORIZON_DAYS,
 	CAPITAL_ML_LABEL_SPEC,
+	CAPITAL_ML_RESEARCH_FEATURES,
 	CAPITAL_ML_STOP_PCT,
 	CAPITAL_ML_TARGET_PCT,
 	CAPITAL_SALE_FEE_PCT,
 	capitalMlFeatureVector,
+	type CapitalMlResearchContext,
+	capitalMlResearchFeatureVector,
 	computeFeatures,
 	deflatedSharpe,
 	evaluateTripleBarrier,
@@ -120,6 +123,36 @@ export interface UncertaintyReport {
 	};
 }
 
+export interface FeatureIcReport {
+	name: string;
+	full: number;
+	folds: number[];
+	holdout: number;
+}
+
+export interface FoldBacktestReport {
+	index: number;
+	from: string;
+	to: string;
+	rule: BacktestSummary;
+	model: BacktestSummary;
+	reversal: BacktestSummary;
+}
+
+export interface OverlapReport {
+	blocks: number;
+	avgShared: number;
+	sharedReturnPct: number;
+	ruleOnlyReturnPct: number;
+	modelOnlyReturnPct: number;
+}
+
+export interface DiagnosticsReport {
+	featureIc: FeatureIcReport[];
+	foldBacktests: FoldBacktestReport[];
+	overlap: OverlapReport;
+}
+
 export interface CapitalMlTrainResult {
 	rows: number;
 	firstDate: Date;
@@ -132,6 +165,7 @@ export interface CapitalMlTrainResult {
 	corporateActions: number;
 	preregistration: { hash: string; family: string; selectionMetric: string };
 	foldAucs: number[];
+	diagnostics: DiagnosticsReport;
 	metrics: {
 		trainAuc: number;
 		/** Holdout AUC. Retained name for the existing operator report. */
@@ -182,6 +216,8 @@ export interface UniverseRow {
 
 export interface DatasetRow extends UniverseRow {
 	vector: number[];
+	/** Research-only regime vector; never part of the deployed artifact. */
+	researchVector: number[];
 	label: 0 | 1;
 	outcome: BarrierOutcome;
 }
@@ -237,6 +273,17 @@ function std(values: number[]): number {
 		values.reduce((sum, value) => sum + (value - m) ** 2, 0) /
 			(values.length - 1),
 	);
+}
+
+function realizedVolPct(closes: number[], end: number, window: number): number {
+	if (end <= window) return 0;
+	const returns: number[] = [];
+	for (let i = end - window + 1; i <= end; i++) {
+		const previous = closes[i - 1] ?? 0;
+		const current = closes[i] ?? 0;
+		if (previous > 0 && current > 0) returns.push(Math.log(current / previous));
+	}
+	return returns.length > 1 ? std(returns) * Math.sqrt(365) * 100 : 0;
 }
 
 function moments(values: number[]): { skew: number; kurtosis: number } {
@@ -331,6 +378,7 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 	}
 
 	const d30ByDate = new Map<number, number[]>();
+	const volByDate = new Map<number, number[]>();
 	for (const list of seriesByStock.values()) {
 		const closes = list.map((row) => Number(row.close));
 		for (let d = 30; d < closes.length; d++) {
@@ -338,12 +386,22 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 			const values = d30ByDate.get(date) ?? [];
 			values.push((closes[d] ?? 0) / (closes[d - 30] ?? 1) - 1);
 			d30ByDate.set(date, values);
+			const vols = volByDate.get(date) ?? [];
+			vols.push(realizedVolPct(closes, d, 20));
+			volByDate.set(date, vols);
 		}
 	}
 	const medianD30ByDate = new Map<number, number>();
+	const dispersionByDate = new Map<number, number>();
+	const universeVolByDate = new Map<number, number>();
 	for (const [date, values] of d30ByDate) {
 		values.sort((a, b) => a - b);
 		medianD30ByDate.set(date, values[Math.floor(values.length / 2)] ?? 0);
+		dispersionByDate.set(date, std(values) * 100);
+	}
+	for (const [date, values] of volByDate) {
+		const sorted = [...values].sort((a, b) => a - b);
+		universeVolByDate.set(date, sorted[Math.floor(sorted.length / 2)] ?? 0);
 	}
 
 	const rows: DatasetRow[] = [];
@@ -354,6 +412,7 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 	let processed = 0;
 	const delayMultiplier = 1 + CAPITAL_EXECUTION_DELAY_BPS / 10_000;
 	for (const [stockId, series] of seriesByStock) {
+		const closes = series.map((bar) => bar.close);
 		priceSeries.set(
 			stockId,
 			series.map((bar) => ({ date: bar.timestamp * 1000, close: bar.close })),
@@ -396,9 +455,17 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 			};
 			universeRows.push(universe);
 			if (rule.eligible) {
+				const context: CapitalMlResearchContext = {
+					dispersion30Pct: dispersionByDate.get(decisionBar.timestamp) ?? 0,
+					medianD30Pct: (medianD30ByDate.get(decisionBar.timestamp) ?? 0) * 100,
+					volDeltaPct:
+						realizedVolPct(closes, d, 20) - realizedVolPct(closes, d, 60),
+					universeVolPct: universeVolByDate.get(decisionBar.timestamp) ?? 0,
+				};
 				rows.push({
 					...universe,
 					vector: capitalMlFeatureVector(features),
+					researchVector: capitalMlResearchFeatureVector(context),
 					label: barrier.label,
 					outcome: barrier.outcome,
 				});
@@ -588,6 +655,153 @@ function rankIc(rows: DatasetRow[], model: LogisticModel): number {
 	return dx && dy ? numerator / Math.sqrt(dx * dy) : 0;
 }
 
+function pearson(xs: number[], ys: number[]): number {
+	const n = Math.min(xs.length, ys.length);
+	if (n < 3) return 0;
+	const mx = mean(xs.slice(0, n));
+	const my = mean(ys.slice(0, n));
+	let numerator = 0;
+	let dx = 0;
+	let dy = 0;
+	for (let i = 0; i < n; i++) {
+		const a = (xs[i] ?? 0) - mx;
+		const b = (ys[i] ?? 0) - my;
+		numerator += a * b;
+		dx += a * a;
+		dy += b * b;
+	}
+	return dx && dy ? numerator / Math.sqrt(dx * dy) : 0;
+}
+
+function vectorIc(rows: DatasetRow[], research: boolean): number[] {
+	const width = research
+		? (rows[0]?.researchVector.length ?? 0)
+		: (rows[0]?.vector.length ?? 0);
+	const target = rows.map((row) => row.forwardReturnPct);
+	return Array.from({ length: width }, (_, index) =>
+		pearson(
+			rows.map((row) =>
+				research ? (row.researchVector[index] ?? 0) : (row.vector[index] ?? 0),
+			),
+			target,
+		),
+	);
+}
+
+function featureIcReport(
+	rows: DatasetRow[],
+	folds: WalkFold[],
+	holdout: DatasetRow[],
+): FeatureIcReport[] {
+	const names = [...CAPITAL_ML_FEATURES, ...CAPITAL_ML_RESEARCH_FEATURES];
+	const ic = (sample: DatasetRow[]): number[] => [
+		...vectorIc(sample, false),
+		...vectorIc(sample, true),
+	];
+	const full = ic(rows);
+	const test = ic(holdout);
+	const perFold = folds.map((fold) => ic(fold.test));
+	return names.map((name, index) => ({
+		name,
+		full: full[index] ?? 0,
+		holdout: test[index] ?? 0,
+		folds: perFold.map((values) => values[index] ?? 0),
+	}));
+}
+
+function foldBacktestReports(
+	folds: WalkFold[],
+	universeRows: UniverseRow[],
+	foldModels: LogisticModel[],
+): FoldBacktestReport[] {
+	return folds.map((fold, index) => {
+		const scores = new Map<string, number>();
+		const model = foldModels[index];
+		if (model) {
+			fold.test.forEach((row) => {
+				scores.set(
+					`${row.date}:${row.stockId}`,
+					predictProbability(model, row.vector),
+				);
+			});
+		}
+		const dates = new Set(fold.test.map((row) => row.date));
+		const universe = universeRows.filter((row) => dates.has(row.date));
+		const candidates = universe.filter((row) => row.eligible);
+		const rule = backtestMetrics(
+			blockReturns(candidates, (row) => row.ruleScore, 5),
+		);
+		const withModel = backtestMetrics(
+			blockReturns(
+				candidates,
+				(row) =>
+					scores.get(`${row.date}:${row.stockId}`) ?? Number.NEGATIVE_INFINITY,
+				5,
+			),
+		);
+		const reversal = backtestMetrics(
+			blockReturns(universe, (row) => -row.zscore20, 5),
+		);
+		return {
+			index: fold.index,
+			from: new Date(Math.min(...dates)).toISOString().slice(0, 10),
+			to: new Date(Math.max(...dates)).toISOString().slice(0, 10),
+			rule,
+			model: withModel,
+			reversal,
+		};
+	});
+}
+
+function overlapReport(
+	holdout: DatasetRow[],
+	universeRows: UniverseRow[],
+	probabilityByKey: Map<string, number>,
+): OverlapReport {
+	const dates = [...new Set(holdout.map((row) => row.date))].sort(
+		(a, b) => a - b,
+	);
+	const shared: number[] = [];
+	const ruleOnly: number[] = [];
+	const modelOnly: number[] = [];
+	let blocks = 0;
+	let sharedCount = 0;
+	for (let i = 0; i < dates.length; i += HORIZON_DAYS) {
+		const date = dates[i];
+		if (date === undefined) continue;
+		const candidates = universeRows.filter(
+			(row) => row.date === date && row.eligible,
+		);
+		if (candidates.length === 0) continue;
+		const byRule = [...candidates].sort((a, b) => b.ruleScore - a.ruleScore);
+		const byModel = [...candidates].sort(
+			(a, b) =>
+				(probabilityByKey.get(`${b.date}:${b.stockId}`) ?? 0) -
+				(probabilityByKey.get(`${a.date}:${a.stockId}`) ?? 0),
+		);
+		const rulePicks = byRule.slice(0, 5);
+		const modelPicks = byModel.slice(0, 5);
+		const ruleIds = new Set(rulePicks.map((row) => row.stockId));
+		const modelIds = new Set(modelPicks.map((row) => row.stockId));
+		for (const row of rulePicks) {
+			if (modelIds.has(row.stockId)) shared.push(row.forwardReturnPct);
+			else ruleOnly.push(row.forwardReturnPct);
+		}
+		for (const row of modelPicks) {
+			if (!ruleIds.has(row.stockId)) modelOnly.push(row.forwardReturnPct);
+		}
+		sharedCount += [...ruleIds].filter((id) => modelIds.has(id)).length;
+		blocks++;
+	}
+	return {
+		blocks,
+		avgShared: blocks ? sharedCount / blocks : 0,
+		sharedReturnPct: mean(shared),
+		ruleOnlyReturnPct: mean(ruleOnly),
+		modelOnlyReturnPct: mean(modelOnly),
+	};
+}
+
 function blockReturns(
 	rows: UniverseRow[],
 	score: (row: UniverseRow) => number,
@@ -705,6 +919,7 @@ export async function trainCapitalMlModel(
 		l2: number;
 		auc: number;
 		foldAucs: number[];
+		foldModels: LogisticModel[];
 		predictions: DatasetRow[];
 		probabilities: number[];
 	} | null = null;
@@ -712,9 +927,11 @@ export async function trainCapitalMlModel(
 		const predictions: DatasetRow[] = [];
 		const probabilities: number[] = [];
 		const perFoldAucs: number[] = [];
+		const foldModels: LogisticModel[] = [];
 		for (const fold of split.folds) {
 			if (fold.train.length < MIN_TRAIN_ROWS) continue;
 			const { model } = fitFor(fold.train, l2);
+			foldModels.push(model);
 			const foldProbabilities = fold.test.map((row) =>
 				predictProbability(model, row.vector),
 			);
@@ -742,6 +959,7 @@ export async function trainCapitalMlModel(
 				l2,
 				auc: meanFoldAuc,
 				foldAucs: perFoldAucs,
+				foldModels,
 				predictions,
 				probabilities,
 			};
@@ -802,6 +1020,27 @@ export async function trainCapitalMlModel(
 	const scoreProbability = (row: UniverseRow): number =>
 		probabilityByKey.get(`${row.date}:${row.stockId}`) ??
 		Number.NEGATIVE_INFINITY;
+
+	const diagnostics: DiagnosticsReport = {
+		featureIc: featureIcReport(rows, split.folds, split.holdout),
+		foldBacktests: foldBacktestReports(
+			split.folds,
+			universeRows,
+			best.foldModels,
+		),
+		overlap: overlapReport(split.holdout, universeRows, probabilityByKey),
+	};
+	const foldWins = diagnostics.foldBacktests.filter(
+		(fold) => fold.model.cagr > fold.rule.cagr,
+	).length;
+	const topIc = [...diagnostics.featureIc]
+		.sort((a, b) => Math.abs(b.holdout) - Math.abs(a.holdout))
+		.slice(0, 4)
+		.map((feature) => `${feature.name} ${feature.holdout.toFixed(3)}`)
+		.join(", ");
+	log(
+		`Diagnostics: model beat rule in ${foldWins}/${diagnostics.foldBacktests.length} folds; holdout top |IC| ${topIc}; top-5 overlap ${diagnostics.overlap.avgShared.toFixed(1)}/5`,
+	);
 
 	let ruleReturns: number[];
 	let modelReturns: number[];
@@ -915,6 +1154,7 @@ export async function trainCapitalMlModel(
 			selectionMetric: PREREGISTRATION.selectionMetric,
 		},
 		foldAucs,
+		diagnostics,
 		metrics: {
 			trainAuc: trainEvaluation.auc,
 			testAuc: holdoutEvaluation.auc,
@@ -1014,6 +1254,7 @@ export async function trainCapitalMlModel(
 			calibrationError: calErr,
 			calibration: holdoutEvaluation.calibration,
 			correlationWithForwardReturn: ic,
+			diagnostics: diagnostics as unknown as Record<string, unknown>,
 		},
 		baselines: Object.fromEntries(
 			Object.entries(baselines).map(([name, summary]) => [name, summary]),

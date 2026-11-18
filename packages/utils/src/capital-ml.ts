@@ -55,6 +55,42 @@ export const CAPITAL_ML_FEATURES = [
 
 export type CapitalMlFeatureName = (typeof CAPITAL_ML_FEATURES)[number];
 
+/**
+ * Candidate regime features for P2a research. They are deliberately NOT part of
+ * `CAPITAL_ML_FEATURES`: the live engine cannot yet build the cross-sectional
+ * context they need, so shipping them would invalidate the active model. This
+ * vector is only used to measure whether the features explain the base-rate
+ * drift before anyone pays for engine wiring.
+ */
+export const CAPITAL_ML_RESEARCH_FEATURES = [
+	"dispersion30Pct",
+	"medianD30Pct",
+	"volDeltaPct",
+	"universeVolPct",
+] as const;
+
+export interface CapitalMlResearchContext {
+	/** Cross-sectional standard deviation of 30-day returns, percent. */
+	dispersion30Pct: number;
+	/** Median 30-day return across the universe, percent. */
+	medianD30Pct: number;
+	/** Stock's 20d realised vol minus its 60d realised vol, percent. */
+	volDeltaPct: number;
+	/** Median 20d realised vol across the universe on that date, percent. */
+	universeVolPct: number;
+}
+
+export function capitalMlResearchFeatureVector(
+	context: CapitalMlResearchContext,
+): number[] {
+	return [
+		context.dispersion30Pct,
+		context.medianD30Pct,
+		context.volDeltaPct,
+		context.universeVolPct,
+	];
+}
+
 export interface LogisticModel {
 	intercept: number;
 	weights: number[];

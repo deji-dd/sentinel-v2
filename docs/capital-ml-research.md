@@ -121,6 +121,21 @@ and a PBO of 0.63 on a thin 18-block sample. **The intervals overlap: there is n
 demonstrated edge over the rule.** `ml_enabled` stays false and shadow outcomes
 remain the deciding evidence.
 
+**Diagnostics — P2a (2026-11-18).** The trainer now reports per-fold rule/model/
+reversal backtests, per-feature IC (full, per fold, holdout) and top-5 candidate
+overlap, and persists them in `capital_ml_runs`. Four candidate regime features
+(dispersion, median 30-day return, vol delta, universe vol) are computed as a
+**research-only** vector — they are not part of the deployed feature spec, so
+the active model and shadow logging are unaffected. The local run is decisive:
+the model beat the rule in only **2 of 5 folds**; the top-5 lists share **4.1 of
+5 names** on average, leaving almost no room for re-ranking to add value; and the
+candidate-set ICs are far weaker than the whole-universe ICs earlier in this
+document (`zscore20` −0.06 here vs −0.21 on the universe) because conditioning on
+already-eligible names removes most of the cross-sectional dispersion. None of
+the four regime features has a meaningful holdout IC (−0.035 to +0.050), so they
+are **not** being wired into the live model. The next work should target position
+sizing/volatility rather than more ranking complexity.
+
 ---
 
 ## 1. Is there enough history? Yes.

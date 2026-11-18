@@ -12,6 +12,7 @@ function rows(count: number): DatasetRow[] {
 		stockId: index % 30,
 		date: index * day,
 		vector: [index % 7, index % 5],
+		researchVector: [index % 4, index % 6, index % 3, index % 9],
 		label: (index % 3 === 0 ? 1 : 0) as 0 | 1,
 		outcome: index % 3 === 0 ? ("target" as const) : ("stop" as const),
 		forwardReturnPct: 0.01,
