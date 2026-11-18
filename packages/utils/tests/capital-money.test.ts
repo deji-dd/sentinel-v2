@@ -7,6 +7,7 @@ import {
 	moneyFromPriceShares,
 	mulBps,
 	navFromValueUnits,
+	navReturnFromParPct,
 	parseMoney,
 	parseUnits,
 	unitsForAmount,
@@ -47,6 +48,12 @@ describe("capital money", () => {
 	test("derives NAV per unit", () => {
 		const nav = navFromValueUnits(parseMoney("150.1"), 1_000_000n);
 		expect(formatMoney(nav)).toBe("150.1");
+	});
+
+	test("measures return from the $1 par value, not the first snapshot", () => {
+		expect(navReturnFromParPct(parseMoney("1"))).toBe(0);
+		expect(navReturnFromParPct(parseMoney("0.9998"))).toBeCloseTo(-0.02, 10);
+		expect(navReturnFromParPct(parseMoney("1.05"))).toBeCloseTo(5, 10);
 	});
 
 	test("applies basis points", () => {

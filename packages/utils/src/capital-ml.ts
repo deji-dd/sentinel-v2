@@ -9,7 +9,33 @@
  * No dataset, no training loop and no model file live here — those are in
  * `scripts/capital-ml-train.ts` and the `capital_ml_*` tables.
  */
-import type { CapitalStockFeatures } from "./capital-signals";
+import type { CapitalCandle, CapitalStockFeatures } from "./capital-signals";
+
+/**
+ * Label definition shared by training and the live outcome scorer. Bump it
+ * whenever the entry, barrier, fee or timeout semantics change: a model trained
+ * under one spec must never be scored (or mixed) under another.
+ *
+ * v2: enter on the next bar's open with a 1–5 minute delay cost, touch barriers
+ * on daily high/low, assume the stop is hit first when both are touched in the
+ * same bar, charge the 0.1% sale fee, and keep timeout as a third outcome.
+ */
+export const CAPITAL_ML_LABEL_SPEC = "first_trim_r1_v2";
+
+/** Torn charges the seller 0.1%; the buy side is free. */
+export const CAPITAL_SALE_FEE_PCT = 0.1;
+
+/** Default first-trim barrier, mirroring +1R against a 2% entry stop. */
+export const CAPITAL_ML_TARGET_PCT = 2;
+export const CAPITAL_ML_STOP_PCT = 2;
+export const CAPITAL_ML_HORIZON_DAYS = 20;
+
+/**
+ * Conservative cost of the 1–5 minute manual execution delay. The paper book's
+ * default slippage is 5 bps; daily bars cannot resolve the actual intraday
+ * move, so training charges that same assumption on the next bar's open.
+ */
+export const CAPITAL_EXECUTION_DELAY_BPS = 5;
 
 /** Feature order is part of the model artifact; never reorder without retraining. */
 export const CAPITAL_ML_FEATURES = [
@@ -41,8 +67,9 @@ export interface LogisticModel {
 	stopPct: number;
 	horizonDays: number;
 	/**
-	 * Version of the live exit decision the barrier approximates.
-	 * `first_trim_r1_v1` = +1R trim vs the frozen entry stop.
+	 * Version of the live exit decision and label construction.
+	 * `first_trim_r1_v2` = +1R trim vs the frozen entry stop, next-bar entry,
+	 * fee-adjusted, high/low touches, stop-first on same-bar ambiguity.
 	 */
 	labelSpec?: string;
 	/** Optional Platt scaling fitted on the validation split. */
@@ -340,18 +367,190 @@ export function calibrationBuckets(
 	return out;
 }
 
-/** 1 when the target is touched before the stop within `horizonDays` closes. */
-export function tripleBarrierLabel(
+export type BarrierOutcome = "target" | "stop" | "timeout";
+
+/** The path information the barrier needs; daily highs/lows, not closes only. */
+export interface BarrierCandle {
+	high: number;
+	low: number;
+	close: number;
+}
+
+export interface BarrierResult {
+	outcome: BarrierOutcome;
+	/** 1 when the target is hit first; 0 for stop or timeout (binary meta-label). */
+	label: 0 | 1;
+	exitPrice: number;
+	/** Net return after the sale fee (the only side Torn charges). */
+	returnPct: number;
+	/** Gross price move, before the sale fee. */
+	grossReturnPct: number;
+}
+
+/**
+ * Path-realistic triple barrier.
+ *
+ * Enters at `entry`, which callers set to the next bar's open (plus delay), then
+ * walks the forward candles in order:
+ * - a bar that touches both barriers is resolved as the stop (conservative);
+ * - a target or stop touch exits at the barrier price;
+ * - otherwise the position times out at the final close.
+ *
+ * The sale fee is applied to the exit proceeds. Timeout is reported as its own
+ * outcome with the real horizon return, never as a zero label/return.
+ */
+export function evaluateTripleBarrier(
 	entry: number,
-	forwardCloses: number[],
+	forward: BarrierCandle[],
 	targetPct: number,
 	stopPct: number,
-): 0 | 1 {
+	saleFeePct = CAPITAL_SALE_FEE_PCT,
+): BarrierResult {
+	if (!(entry > 0) || !Number.isFinite(entry)) {
+		throw new Error(`Barrier entry price must be positive; got ${entry}.`);
+	}
 	const target = entry * (1 + targetPct / 100);
 	const stop = entry * (1 - stopPct / 100);
-	for (const close of forwardCloses) {
-		if (close >= target) return 1;
-		if (close <= stop) return 0;
+	let outcome: BarrierOutcome = "timeout";
+	let exitPrice = forward.at(-1)?.close ?? entry;
+
+	for (const candle of forward) {
+		const high = Number.isFinite(candle.high)
+			? candle.high
+			: Number.isFinite(candle.close)
+				? candle.close
+				: entry;
+		const low = Number.isFinite(candle.low)
+			? candle.low
+			: Number.isFinite(candle.close)
+				? candle.close
+				: entry;
+		const hitTarget = high >= target;
+		const hitStop = low <= stop;
+		// Same-bar ambiguity: the engine's intrabar ordering is unknowable, so
+		// assume the worse path.
+		if (hitStop) {
+			outcome = "stop";
+			exitPrice = stop;
+			break;
+		}
+		if (hitTarget) {
+			outcome = "target";
+			exitPrice = target;
+			break;
+		}
 	}
-	return 0;
+
+	const grossReturnPct = (exitPrice / entry - 1) * 100;
+	const netExitPrice = exitPrice * (1 - saleFeePct / 100);
+	return {
+		outcome,
+		label: outcome === "target" ? 1 : 0,
+		exitPrice,
+		returnPct: (netExitPrice / entry - 1) * 100,
+		grossReturnPct,
+	};
+}
+
+export interface CorporateAction {
+	/** Candle index the action takes effect on. */
+	index: number;
+	timestamp: number;
+	/** Shares outstanding multiplier: >1 split, <1 reverse split/merge. */
+	factor: number;
+}
+
+/**
+ * Detects splits and merges from the shares-outstanding series.
+ *
+ * A split or merge moves shares and price in opposite directions by the same
+ * ratio (shares x2, price /2). Ordinary issuance moves shares without the
+ * inverse price move and is left alone: it is a valid flow feature, not a
+ * corporate action.
+ */
+export function detectCorporateActions(
+	candles: CapitalCandle[],
+): CorporateAction[] {
+	const actions: CorporateAction[] = [];
+	// A real split/merge is a large, inverse share-count and price move. Torn
+	// also sees ordinary 10–15% issuance with a flat price; that is a flow
+	// feature, not a corporate action, so require a big move on both sides.
+	const minimumSharesMove = 0.5;
+	const minimumPriceMove = 0.25;
+	const inverseTolerance = 0.05;
+	for (let i = 1; i < candles.length; i++) {
+		const previous = candles[i - 1];
+		const current = candles[i];
+		if (!previous || !current) continue;
+		const previousShares = previous.shares;
+		const shares = current.shares;
+		if (
+			previousShares === null ||
+			previousShares === undefined ||
+			shares === null ||
+			shares === undefined ||
+			!(previousShares > 0) ||
+			!(shares > 0)
+		) {
+			continue;
+		}
+		const sharesRatio = shares / previousShares;
+		if (Math.abs(sharesRatio - 1) < minimumSharesMove) continue;
+		if (!(previous.close > 0) || !(current.open > 0)) continue;
+		const priceRatio = current.open / previous.close;
+		if (Math.abs(priceRatio - 1) < minimumPriceMove) continue;
+		// Inverse move: sharesRatio * priceRatio stays near 1.
+		if (Math.abs(sharesRatio * priceRatio - 1) > inverseTolerance) continue;
+		actions.push({
+			index: i,
+			timestamp: current.timestamp,
+			factor: sharesRatio,
+		});
+	}
+	return actions;
+}
+
+/**
+ * Re-bases a price/shares series onto the latest corporate-action basis so
+ * features and barrier labels never straddle a fake split/merge return.
+ *
+ * Pre-action prices are divided by the cumulative action factor and shares are
+ * multiplied by it, which also keeps shares-outstanding change features
+ * continuous.
+ */
+export function adjustForCorporateActions<T extends CapitalCandle>(
+	candles: T[],
+): {
+	candles: T[];
+	actions: CorporateAction[];
+} {
+	const sorted = [...candles].sort((a, b) => a.timestamp - b.timestamp);
+	const actions = detectCorporateActions(sorted);
+	if (actions.length === 0) return { candles: sorted, actions };
+	const byIndex = new Map(actions.map((action) => [action.index, action]));
+	const factors = new Array<number>(sorted.length).fill(1);
+	let cumulative = 1;
+	for (let i = sorted.length - 1; i >= 0; i--) {
+		factors[i] = cumulative;
+		const action = byIndex.get(i);
+		if (action) cumulative *= action.factor;
+	}
+	return {
+		candles: sorted.map((candle, i) => {
+			const factor = factors[i] ?? 1;
+			const shares = candle.shares;
+			return {
+				...candle,
+				open: candle.open / factor,
+				high: candle.high / factor,
+				low: candle.low / factor,
+				close: candle.close / factor,
+				shares:
+					shares === null || shares === undefined
+						? shares
+						: Math.round(shares * factor),
+			};
+		}),
+		actions,
+	};
 }

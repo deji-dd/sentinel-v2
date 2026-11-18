@@ -94,7 +94,7 @@ export async function getPendingCapitalMlPredictions(
 
 export async function completeCapitalMlPrediction(
 	id: string,
-	outcome: { realizedReturnPct: number; barrierHit: 0 | 1 },
+	outcome: { realizedReturnPct: number; barrierHit: -1 | 0 | 1 },
 ): Promise<void> {
 	await db
 		.update(capitalMlPredictions)

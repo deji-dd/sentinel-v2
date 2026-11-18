@@ -895,7 +895,7 @@ export const capitalMlPredictions = pgTable(
 			mode: "date",
 		}),
 		realizedReturnPct: doublePrecision("realized_return_pct"),
-		/** 1 target hit first, 0 stop/time, null pending. */
+		/** 1 target hit first, 0 stop hit first, -1 timeout, null pending. */
 		barrierHit: integer("barrier_hit"),
 	},
 	(table) => [

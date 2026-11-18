@@ -185,9 +185,12 @@ The current overlay state is exposed on the desk (`engine.risk`) and the thresho
 ## ML shadow layer
 
 The `capital:ml:train` worker builds a meta-label dataset from the stored daily
-candles (candidates with z <= -entry sigma, triple barrier +2%/-2% over 20 days),
-fits an L2 logistic regression with a time-ordered split and embargo, and
-activates the result for shadow logging when it clears the ranking gates. It runs
+candles (candidates filtered with the live book config, currently z <= -1.25σ
+and score >= 65), enters at the next bar's open with a delay cost, labels with
+`first_trim_r1_v2` (+2%/-2% over 20 days on daily high/low, stop-first on
+same-bar ambiguity, 0.1% sale fee, timeout as a distinct outcome), fits an L2
+logistic regression with a time-ordered split and embargo, and activates the
+result for shadow logging when it clears the ranking gates. It runs
 on boot once history is ready (checked 10 minutes after start) and retrains when
 the active model is older than 30 days — no command needed. `bun run capital:ml:train` remains for an immediate
 run or an experiment (`--activate` to store it). Disable with

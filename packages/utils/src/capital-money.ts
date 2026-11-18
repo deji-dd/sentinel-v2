@@ -192,6 +192,20 @@ export function navFromValueUnits(totalValue: Money, units: Units): Money {
 	return divideRound(totalValue * UNIT_SCALE, units);
 }
 
+/**
+ * Return since inception as a percentage.
+ *
+ * Units are struck at par ($1.00), and later deposits are issued at the
+ * prevailing NAV, so par is the only correct inception anchor. The earliest
+ * stored snapshot is not: the accounting worker floors daily buckets to 00:00
+ * and overwrites them during the day, so a new book's first daily row holds
+ * the first day's *close*, not the value at inception.
+ */
+export function navReturnFromParPct(navPerUnit: Money): number {
+	const par = moneyToNumber(MONEY_SCALE);
+	return ((moneyToNumber(navPerUnit) - par) / par) * 100;
+}
+
 /** Clamps a value into `[0, max]`; useful for partial payments. */
 export function clampMoney(value: Money, max: Money): Money {
 	if (value <= 0n) return 0n;

@@ -10,36 +10,46 @@
 import {
 	capitalMarketCandles,
 	db,
+	getCapitalConfig,
 	insertCapitalMlModel,
 } from "@sentinel/database";
 import {
+	adjustForCorporateActions,
 	auc,
+	type BarrierOutcome,
 	brierScore,
 	calibrationBuckets,
+	CAPITAL_EXECUTION_DELAY_BPS,
 	CAPITAL_ML_FEATURES,
+	CAPITAL_ML_HORIZON_DAYS,
+	CAPITAL_ML_LABEL_SPEC,
+	CAPITAL_ML_STOP_PCT,
+	CAPITAL_ML_TARGET_PCT,
+	CAPITAL_SALE_FEE_PCT,
 	capitalMlFeatureVector,
 	computeFeatures,
+	evaluateTripleBarrier,
 	featureStats,
 	fitLogistic,
 	type LogisticModel,
 	logLoss,
 	predictProbability,
+	scoreStock,
 	standardise,
-	tripleBarrierLabel,
 } from "@sentinel/utils";
 
-export const TARGET_PCT = 2;
-export const STOP_PCT = 2;
-export const HORIZON_DAYS = 20;
+export const TARGET_PCT = CAPITAL_ML_TARGET_PCT;
+export const STOP_PCT = CAPITAL_ML_STOP_PCT;
+export const HORIZON_DAYS = CAPITAL_ML_HORIZON_DAYS;
 /**
  * The label is a proxy for the live ladder's *first* decision: the +1R trim
- * against the frozen entry stop. With a 2% stop, +1R is +2%, so the ±2%
- * barrier below matches it closely. The remaining 2/3 is managed by the +2R
- * target and the z-score exit, which a single barrier cannot express.
+ * against the frozen entry stop. With a 2% stop, +1R is +2%. v2 adds the live
+ * engine's execution and cost assumptions: next-bar entry, daily high/low
+ * touches, stop-first on same-bar ambiguity, the 0.1% sale fee, and a distinct
+ * timeout outcome.
  */
-export const LABEL_SPEC = "first_trim_r1_v1";
+export const LABEL_SPEC = CAPITAL_ML_LABEL_SPEC;
 export const EMBARGO_DAYS = 25;
-export const ENTRY_SIGMA = 1;
 const MIN_HISTORY_DAYS = 300;
 const MIN_CANDLES = 80;
 const MIN_TRAIN_ROWS = 500;
@@ -69,6 +79,7 @@ export interface CapitalMlTrainResult {
 	split: { train: number; validation: number; test: number };
 	chosenL2: number;
 	platt: { a: number; b: number };
+	corporateActions: number;
 	metrics: {
 		trainAuc: number;
 		testAuc: number;
@@ -80,6 +91,8 @@ export interface CapitalMlTrainResult {
 		ruleOnly: BacktestSummary;
 		withModel: BacktestSummary;
 		calibration: ReturnType<typeof calibrationBuckets>;
+		outcomes: OutcomeCounts;
+		testOutcomes: OutcomeCounts;
 	};
 	gates: { auc: boolean; calibration: boolean; beatsBaseRate: boolean };
 	shadowSafe: boolean;
@@ -88,13 +101,26 @@ export interface CapitalMlTrainResult {
 	version: string | null;
 }
 
+interface OutcomeCounts {
+	target: number;
+	stop: number;
+	timeout: number;
+}
+
 interface DatasetRow {
 	stockId: number;
 	date: number;
 	vector: number[];
 	label: 0 | 1;
+	outcome: BarrierOutcome;
 	forwardReturnPct: number;
 	ruleScore: number;
+}
+
+interface CorporateActionSummary {
+	stockId: number;
+	timestamp: number;
+	factor: number;
 }
 
 interface Split {
@@ -117,29 +143,26 @@ function std(values: number[]): number {
 	);
 }
 
-/** Mirrors the reversal score so the rule/model comparison uses the same field. */
-function ruleScoreFor(features: ReturnType<typeof computeFeatures>): number {
-	if (!features) return 0;
-	const stretch =
-		Math.min(100, Math.max(0, (-features.zscore20 / ENTRY_SIGMA) * 100)) * 0.6 +
-		Math.min(100, Math.max(0, (-features.drawdown30Pct / 8) * 100)) * 0.4;
-	const flow = Math.min(
-		100,
-		Math.max(0, 50 + (features.sharesChange30Pct ?? 0) * 100),
-	);
-	const risk = Math.min(
-		100,
-		Math.max(0, 100 - Math.max(0, features.volatilityPct - 12) * 3),
-	);
-	return Math.min(
-		100,
-		Math.max(0, stretch * 0.6 + flow * 0.2 + risk * 0.15 + 100 * 0.05),
-	);
-}
-
-export async function loadDataset(
-	log: (line: string) => void,
-): Promise<{ rows: DatasetRow[]; firstDate: Date; lastDate: Date }> {
+export async function loadDataset(log: (line: string) => void): Promise<{
+	rows: DatasetRow[];
+	firstDate: Date;
+	lastDate: Date;
+	corporateActions: CorporateActionSummary[];
+	config: { entrySigma: number; minEntryScore: number; signalMode: string };
+}> {
+	const config = await getCapitalConfig("live");
+	const scoringConfig = {
+		mode:
+			config.signalMode === "momentum"
+				? ("momentum" as const)
+				: ("reversal" as const),
+		minEntryScore: config.minEntryScore,
+		maxRsi: config.maxRsi,
+		overboughtSigma: config.overboughtSigma,
+		reversalEntrySigma: config.reversalEntrySigma,
+		reversalExitSigma: config.reversalExitSigma,
+		maxVolatilityPct: config.maxVolatilityPct,
+	};
 	const candles = await db
 		.select()
 		.from(capitalMarketCandles)
@@ -157,12 +180,44 @@ export async function loadDataset(
 		);
 	}
 
+	// Re-base every series first: splits/merges would otherwise appear as fake
+	// returns in features, volatility and the forward barrier labels.
+	const seriesByStock = new Map<
+		number,
+		ReturnType<typeof adjustForCorporateActions>["candles"]
+	>();
+	const corporateActions: CorporateActionSummary[] = [];
+	for (const [stockId, list] of byStock) {
+		const raw = list.map((row) => ({
+			timestamp: row.bucketStart.getTime() / 1000,
+			open: Number(row.open),
+			high: Number(row.high),
+			low: Number(row.low),
+			close: Number(row.close),
+			shares: row.shares ?? null,
+		}));
+		const adjusted = adjustForCorporateActions(raw);
+		seriesByStock.set(stockId, adjusted.candles);
+		for (const action of adjusted.actions) {
+			corporateActions.push({
+				stockId,
+				timestamp: action.timestamp,
+				factor: action.factor,
+			});
+		}
+	}
+	if (corporateActions.length > 0) {
+		log(
+			`  adjusted ${corporateActions.length} split/merge window(s) across ${new Set(corporateActions.map((action) => action.stockId)).size} stocks`,
+		);
+	}
+
 	// Market regime per date: median 30-day return across stocks.
 	const d30ByDate = new Map<number, number[]>();
-	for (const list of byStock.values()) {
+	for (const list of seriesByStock.values()) {
 		const closes = list.map((row) => Number(row.close));
 		for (let d = 30; d < closes.length; d++) {
-			const date = (list[d]?.bucketStart.getTime() ?? 0) / 1000;
+			const date = (list[d]?.timestamp ?? 0) as number;
 			const list30 = d30ByDate.get(date) ?? [];
 			list30.push((closes[d] ?? 0) / (closes[d - 30] ?? 1) - 1);
 			d30ByDate.set(date, list30);
@@ -178,47 +233,50 @@ export async function loadDataset(
 	let firstDate = new Date();
 	let lastDate = new Date(0);
 	let processed = 0;
-	for (const [stockId, list] of byStock) {
-		const series = list.map((row) => ({
-			timestamp: row.bucketStart.getTime() / 1000,
-			open: Number(row.open),
-			high: Number(row.high),
-			low: Number(row.low),
-			close: Number(row.close),
-			shares: row.shares ?? null,
-		}));
-		const closes = series.map((candle) => candle.close);
+	const delayMultiplier = 1 + CAPITAL_EXECUTION_DELAY_BPS / 10_000;
+	for (const [stockId, series] of seriesByStock) {
 		for (let d = MIN_CANDLES; d + HORIZON_DAYS < series.length; d++) {
+			const decisionBar = series[d];
+			const entryBar = series[d + 1];
+			if (!decisionBar || !entryBar) continue;
+			// Features stop at the decision close. Execution is the next bar's
+			// open plus the manual 1–5 minute delay cost; never the same close.
+			if (!(entryBar.open > 0) || !(decisionBar.close > 0)) continue;
 			const slice = series.slice(Math.max(0, d - MIN_HISTORY_DAYS), d + 1);
-			const entry = closes[d] ?? 0;
-			if (entry <= 0) continue;
 			const base = computeFeatures({
 				stockId,
-				price: entry,
+				price: decisionBar.close,
 				candles: slice,
 				regimeOn: true,
 			});
 			if (!base) continue;
-			const marketDate = series[d]?.timestamp ?? 0;
 			const features = {
 				...base,
-				regimeOn: (medianD30ByDate.get(marketDate) ?? 0) > 0,
+				regimeOn: (medianD30ByDate.get(decisionBar.timestamp) ?? 0) > 0,
 			};
-			if (features.zscore20 > -ENTRY_SIGMA) continue;
-			if (features.volatilityPct > 40) continue;
-			if (features.drawdown90Pct < -50) continue;
-			const forward = closes.slice(d + 1, d + 1 + HORIZON_DAYS);
+			// Mirror the live book's candidate filters exactly (entry sigma, RSI,
+			// volatility, drawdown and score floor) instead of a training-only set.
+			const rule = scoreStock(features, scoringConfig);
+			if (!rule.eligible) continue;
+
+			const forward = series.slice(d + 1, d + 1 + HORIZON_DAYS);
 			if (forward.length < HORIZON_DAYS) continue;
-			const label = tripleBarrierLabel(entry, forward, TARGET_PCT, STOP_PCT);
-			const date = (series[d]?.timestamp ?? 0) * 1000;
+			const entryPrice = entryBar.open * delayMultiplier;
+			const barrier = evaluateTripleBarrier(
+				entryPrice,
+				forward,
+				TARGET_PCT,
+				STOP_PCT,
+			);
+			const date = decisionBar.timestamp * 1000;
 			rows.push({
 				stockId,
 				date,
 				vector: capitalMlFeatureVector(features),
-				label,
-				forwardReturnPct:
-					((closes[d + HORIZON_DAYS] ?? entry) / entry - 1) * 100,
-				ruleScore: ruleScoreFor(features),
+				label: barrier.label,
+				outcome: barrier.outcome,
+				forwardReturnPct: barrier.returnPct,
+				ruleScore: rule.score,
 			});
 			if (date < firstDate.getTime()) firstDate = new Date(date);
 			if (date > lastDate.getTime()) lastDate = new Date(date);
@@ -231,7 +289,17 @@ export async function loadDataset(
 		}
 	}
 	rows.sort((a, b) => a.date - b.date);
-	return { rows, firstDate, lastDate };
+	return {
+		rows,
+		firstDate,
+		lastDate,
+		corporateActions,
+		config: {
+			entrySigma: config.reversalEntrySigma,
+			minEntryScore: config.minEntryScore,
+			signalMode: config.signalMode,
+		},
+	};
 }
 
 function timeSplit(rows: DatasetRow[]): Split {
@@ -302,8 +370,8 @@ function backtest(
 		candidates.sort((a, b) => score(b) - score(a));
 		const chosen = candidates.slice(0, topK);
 		if (chosen.length === 0) continue;
-		const gross = mean(chosen.map((row) => row.forwardReturnPct)) / 100;
-		const net = gross - 0.001; // full rotation pays one sale fee per block
+		// `forwardReturnPct` is already net of the 0.1% sale fee on every row.
+		const net = mean(chosen.map((row) => row.forwardReturnPct)) / 100;
 		returns.push(net);
 		nav *= 1 + net;
 		peak = Math.max(peak, nav);
@@ -322,16 +390,27 @@ function backtest(
 	};
 }
 
+function outcomeCounts(rows: DatasetRow[]): OutcomeCounts {
+	const counts: OutcomeCounts = { target: 0, stop: 0, timeout: 0 };
+	for (const row of rows) counts[row.outcome] += 1;
+	return counts;
+}
+
 export async function trainCapitalMlModel(
 	options: TrainOptions = {},
 ): Promise<CapitalMlTrainResult> {
 	const log = options.onProgress ?? (() => {});
 	const minAuc = options.minAuc ?? 0.55;
 	log("Building dataset from stored daily candles…");
-	const { rows, firstDate, lastDate } = await loadDataset(log);
+	const { rows, firstDate, lastDate, corporateActions, config } =
+		await loadDataset(log);
 	const baseRate = mean(rows.map((row) => row.label));
+	const outcomes = outcomeCounts(rows);
 	log(
-		`${rows.length.toLocaleString()} candidates, ${firstDate.toISOString().slice(0, 10)}..${lastDate.toISOString().slice(0, 10)}, base hit rate ${(baseRate * 100).toFixed(1)}%`,
+		`${rows.length.toLocaleString()} candidates (${config.signalMode}, entry z<=-${config.entrySigma}, score>=${config.minEntryScore}), ${firstDate.toISOString().slice(0, 10)}..${lastDate.toISOString().slice(0, 10)}, base hit rate ${(baseRate * 100).toFixed(1)}%`,
+	);
+	log(
+		`outcomes: target ${outcomes.target.toLocaleString()}, stop ${outcomes.stop.toLocaleString()}, timeout ${outcomes.timeout.toLocaleString()}; ${corporateActions.length} split/merge adjustment(s)`,
 	);
 
 	const { train, validation, test } = timeSplit(rows);
@@ -463,6 +542,7 @@ export async function trainCapitalMlModel(
 		},
 		chosenL2: best.l2,
 		platt,
+		corporateActions: corporateActions.length,
 		metrics: {
 			trainAuc: trainMetrics.auc,
 			testAuc: testMetrics.auc,
@@ -474,6 +554,8 @@ export async function trainCapitalMlModel(
 			ruleOnly,
 			withModel,
 			calibration: testMetrics.calibration,
+			outcomes,
+			testOutcomes: outcomeCounts(test),
 		},
 		gates,
 		shadowSafe,
@@ -503,10 +585,11 @@ export async function trainCapitalMlModel(
 				splits: result.split,
 				baseRate,
 				gates,
+				candidateConfig: config,
 			},
 			dataStart: firstDate,
 			dataEnd: lastDate,
-			notes: `label ${LABEL_SPEC}: first +1R trim vs entry stop, proxied by target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; candidates z<=-${ENTRY_SIGMA}`,
+			notes: `label ${LABEL_SPEC}: first +1R trim vs entry stop, target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; next-bar execution + ${CAPITAL_EXECUTION_DELAY_BPS}bps delay; daily high/low touches, stop-first; ${CAPITAL_SALE_FEE_PCT}% fee on sale only; candidates ${config.signalMode} z<=-${config.entrySigma}, score>=${config.minEntryScore}`,
 		},
 		{ activate: true },
 	);

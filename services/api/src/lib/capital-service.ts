@@ -69,9 +69,9 @@ import {
 	formatUnits,
 	makeReferenceCode,
 	maxMoney,
-	MONEY_SCALE,
 	moneyFromPriceShares,
 	moneyToNumber,
+	navReturnFromParPct,
 	nextEligiblePayoutAt,
 	parseMoney,
 	parseUnits,
@@ -223,21 +223,6 @@ async function sumActivePrincipal(book: CapitalBook): Promise<string> {
 			),
 		);
 	return asString(row?.total);
-}
-
-async function firstSnapshot(
-	book: CapitalBook,
-): Promise<{ navPerUnit: string; capturedAt: Date } | null> {
-	const [row] = await db
-		.select({
-			navPerUnit: capitalNavSnapshots.navPerUnit,
-			capturedAt: capitalNavSnapshots.capturedAt,
-		})
-		.from(capitalNavSnapshots)
-		.where(eq(capitalNavSnapshots.book, book))
-		.orderBy(capitalNavSnapshots.capturedAt)
-		.limit(1);
-	return row ?? null;
 }
 
 async function loadPerformance(
@@ -481,24 +466,19 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 		.where(eq(capitalBooks.book, book))
 		.limit(1);
 	const { nav } = await loadNav(book);
-	const [payouts, fees, investors, invested, first] = await Promise.all([
+	const [payouts, fees, investors, invested] = await Promise.all([
 		sumLotPayouts(book),
 		sumTransactionTypes(book, ["fee", "exit_fee"]),
 		countInvestors(book),
 		sumActivePrincipal(book),
-		firstSnapshot(book),
 	]);
 	const stockMap = await loadStockNameMap();
 	const start = bookRow[0]?.startedAt ?? new Date();
 	const days = daysBetween(start, new Date());
-	const firstNav = first ? parseMoney(first.navPerUnit) : MONEY_SCALE;
-	const currentNav = nav.navPerUnit;
-	const totalReturnPct =
-		firstNav > 0n
-			? ((moneyToNumber(currentNav) - moneyToNumber(firstNav)) /
-					moneyToNumber(firstNav)) *
-				100
-			: null;
+	// Inception is par ($1.00), not the first stored snapshot: the accounting
+	// worker writes the daily row at 00:00 and overwrites it all day, so a new
+	// book's first daily row is the first day's close.
+	const totalReturnPct = navReturnFromParPct(nav.navPerUnit);
 	const [openIssues] = await db
 		.select({ total: sql<number>`COUNT(*)` })
 		.from(capitalReconciliationIssues)

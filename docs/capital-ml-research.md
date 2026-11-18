@@ -45,19 +45,19 @@ reproducible from that public series; the scripts were scratch work, not committ
 
 The data, signal and shadow-ML layers are implemented; live ML ranking is not.
 
-| Item                                                                  | Status                                      |
-| --------------------------------------------------------------------- | ------------------------------------------- |
-| `signal_mode` per book, default `reversal`                            | done — migration `0076`                     |
-| Reversal score (stretch + shares flow + risk) and mean-reversion exit | done — `capital-signals.ts`, tested         |
-| Reversal uses **daily** bars; momentum keeps hourly                   | done — the engine builds both feature maps  |
-| 1-minute candle collection from the 60s poll                          | done                                        |
-| One-time history backfill with Torn-anchor validation                 | done — `bun run stocks:backfill`            |
-| Audit reports per-interval readiness                                  | done — `bun run capital:ml:audit`           |
-| Dataset builder + triple-barrier labels                               | done — `bun run capital:ml:train`           |
-| Logistic meta-label, time-ordered split, embargo, Platt calibration   | done — test AUC **0.577**                   |
-| Shadow predictions + outcome scoring                                  | done — `capital:ml` worker                  |
-| Automatic retrain (boot + every 30 days, shadow activation only)      | done — `capital:ml:train` worker            |
-| Capped deployment (`ml_enabled`)                                      | not enabled — the first model ties the rule |
+| Item                                                                  | Status                                                    |
+| --------------------------------------------------------------------- | --------------------------------------------------------- |
+| `signal_mode` per book, default `reversal`                            | done — migration `0076`                                   |
+| Reversal score (stretch + shares flow + risk) and mean-reversion exit | done — `capital-signals.ts`, tested                       |
+| Reversal uses **daily** bars; momentum keeps hourly                   | done — the engine builds both feature maps                |
+| 1-minute candle collection from the 60s poll                          | done                                                      |
+| One-time history backfill with Torn-anchor validation                 | done — `bun run stocks:backfill`                          |
+| Audit reports per-interval readiness                                  | done — `bun run capital:ml:audit`                         |
+| Dataset builder + triple-barrier labels                               | done — `bun run capital:ml:train`                         |
+| Logistic meta-label, time-ordered split, embargo, Platt calibration   | done — test AUC **0.574** under label v2 (see note below) |
+| Shadow predictions + outcome scoring                                  | done — `capital:ml` worker                                |
+| Automatic retrain (boot + every 30 days, shadow activation only)      | done — `capital:ml:train` worker                          |
+| Capped deployment (`ml_enabled`)                                      | not enabled — the first model ties the rule               |
 
 The engine still runs the same risk overlay (stops, trailing, scale-out, drawdown
 halts, reserve, position caps); only the entry score and the thesis exit change
@@ -76,6 +76,22 @@ That is the honest state: the pipeline works end to end and retrains itself, but
 the gate refuses live deployment. The next iteration should add features that
 explain the base-rate shift (regime, dispersion) or a better label, not a bigger
 model.
+
+**Corrected label spec — `first_trim_r1_v2` (2026-11-18).** The first result used
+a training-only candidate set (`z <= -1`, its own rule-score formula), entered
+at the signal close, and labelled from closes with no fee or timeout outcome.
+v2 reads the live book config (`reversal_entry_sigma = 1.25`, 9,079 candidates),
+enters at the next bar's open with a 5 bps delay cost, touches barriers on daily
+high/low with stop-first on same-bar ambiguity, charges the 0.1% sale fee, and
+reports target/stop/timeout separately. Re-running `bun run capital:ml:train`
+(report only): 5,307 train / 1,604 validation / 1,687 test, test AUC **0.574**,
+Brier **0.215**, log loss **0.620**, calibration error **0.068**, test base rate
+30.7% (target 518 / stop 128 / timeout 1041). The test-slice top-5, 20-day
+blocks net of fees produced **5.2% CAGR (Sharpe 1.73) for the model vs 4.7%
+(Sharpe 1.50) for the rule**. So the old 0.577 was not purely artifact: ranking
+skill survives the corrections, but calibration is now outside the 0.05 gate and
+the backtest edge is small. No model was activated. The v1 model is ignored by
+the engine and its outcomes are no longer scored.
 
 **First model result (2026-11-11).** Trained on 13,273 candidates from
 2021-07 to 2026-10, 7,762 train / 2,333 validation / 2,482 test with a 25-day

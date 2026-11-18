@@ -18,7 +18,16 @@ import {
 	gte,
 	lte,
 } from "@sentinel/database";
-import { Logger, tripleBarrierLabel } from "@sentinel/utils";
+import {
+	adjustForCorporateActions,
+	CAPITAL_ML_LABEL_SPEC,
+	CAPITAL_ML_STOP_PCT,
+	CAPITAL_ML_TARGET_PCT,
+	CAPITAL_SALE_FEE_PCT,
+	type CapitalCandle,
+	evaluateTripleBarrier,
+	Logger,
+} from "@sentinel/utils";
 
 import { startEventDrivenRunner } from "../../lib/scheduler";
 import type { WorkerStartOptions } from "../registry";
@@ -29,15 +38,23 @@ const logger = new Logger("Scheduler", "CapitalMlWorker");
 /** Tolerates a day of clock skew before a prediction becomes evaluable. */
 const MIN_PENDING_AGE_MS = 86_400_000;
 
-async function dailyCloses(
+interface DailyCandle extends CapitalCandle {
+	at: Date;
+}
+
+async function dailyCandles(
 	stockId: number,
 	from: Date,
 	to: Date,
-): Promise<{ at: Date; close: number }[]> {
+): Promise<DailyCandle[]> {
 	const rows = await db
 		.select({
 			at: capitalMarketCandles.bucketStart,
+			open: capitalMarketCandles.open,
+			high: capitalMarketCandles.high,
+			low: capitalMarketCandles.low,
 			close: capitalMarketCandles.close,
+			shares: capitalMarketCandles.shares,
 		})
 		.from(capitalMarketCandles)
 		.where(
@@ -50,7 +67,15 @@ async function dailyCloses(
 		)
 		.orderBy(capitalMarketCandles.bucketStart);
 	return rows
-		.map((row) => ({ at: row.at, close: Number(row.close) }))
+		.map((row) => ({
+			at: row.at,
+			timestamp: row.at.getTime() / 1000,
+			open: Number(row.open),
+			high: Number(row.high),
+			low: Number(row.low),
+			close: Number(row.close),
+			shares: row.shares ?? null,
+		}))
 		.filter((row) => Number.isFinite(row.close) && row.close > 0);
 }
 
@@ -63,6 +88,7 @@ export async function runCapitalMlCycle(): Promise<{
 		500,
 	);
 	const modelCache = new Map<string, CapitalMlModelRow | null>();
+	const rejectedModels = new Set<string>();
 	let evaluated = 0;
 	for (const prediction of pending) {
 		const horizonEnd = new Date(
@@ -74,6 +100,7 @@ export async function runCapitalMlCycle(): Promise<{
 
 		let model: CapitalMlModelRow | null = null;
 		if (prediction.modelId) {
+			if (rejectedModels.has(prediction.modelId)) continue;
 			if (!modelCache.has(prediction.modelId)) {
 				modelCache.set(
 					prediction.modelId,
@@ -83,25 +110,51 @@ export async function runCapitalMlCycle(): Promise<{
 			model = modelCache.get(prediction.modelId) ?? null;
 		}
 		const artifact = model?.artifact as
-			{ targetPct?: number; stopPct?: number } | undefined;
-		const targetPct = artifact?.targetPct ?? 2;
-		const stopPct = artifact?.stopPct ?? 2;
+			| {
+					targetPct?: number;
+					stopPct?: number;
+					labelSpec?: string;
+			  }
+			| undefined;
+		// Outcomes must be measured under exactly the label the model was
+		// trained on. Anything else (legacy v1 or a future spec) is left
+		// pending rather than written into the same column.
+		if (artifact?.labelSpec !== CAPITAL_ML_LABEL_SPEC) {
+			const key = prediction.modelId ?? "unknown";
+			if (!rejectedModels.has(key)) {
+				rejectedModels.add(key);
+				logger.warn(
+					`Skipping outcome scoring for model ${key}: label spec '${artifact?.labelSpec ?? "missing"}' is not '${CAPITAL_ML_LABEL_SPEC}'.`,
+				);
+			}
+			continue;
+		}
+		const targetPct = artifact.targetPct ?? CAPITAL_ML_TARGET_PCT;
+		const stopPct = artifact.stopPct ?? CAPITAL_ML_STOP_PCT;
 
-		const closes = await dailyCloses(
+		// Include the entry day so a split/merge boundary is visible to the
+		// adjuster; the forward window itself still starts after the entry.
+		const candles = await dailyCandles(
 			prediction.stockId,
-			prediction.createdAt,
+			new Date(prediction.createdAt.getTime() - 86_400_000),
 			horizonEnd,
 		);
-		// Exclude the entry day itself; the prediction price is intraday.
-		const forward = closes
+		const adjusted = adjustForCorporateActions(candles).candles;
+		const forward = adjusted
 			.filter((row) => row.at.getTime() > prediction.createdAt.getTime())
-			.slice(0, prediction.horizonDays)
-			.map((row) => row.close);
+			.slice(0, prediction.horizonDays);
 		if (forward.length < prediction.horizonDays) continue;
-		const exit = forward[forward.length - 1] ?? entry;
+		const outcome = evaluateTripleBarrier(
+			entry,
+			forward,
+			targetPct,
+			stopPct,
+			CAPITAL_SALE_FEE_PCT,
+		);
 		await completeCapitalMlPrediction(prediction.id, {
-			realizedReturnPct: (exit / entry - 1) * 100,
-			barrierHit: tripleBarrierLabel(entry, forward, targetPct, stopPct),
+			realizedReturnPct: outcome.returnPct,
+			barrierHit:
+				outcome.outcome === "target" ? 1 : outcome.outcome === "stop" ? 0 : -1,
 		});
 		evaluated++;
 	}

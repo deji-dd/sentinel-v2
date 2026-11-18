@@ -44,6 +44,7 @@ import {
 	CAPITAL_ENTRY_STOP,
 	CAPITAL_EXIT,
 	CAPITAL_ML_FEATURES,
+	CAPITAL_ML_LABEL_SPEC,
 	CAPITAL_PRICE_GUARD_PCT,
 	CAPITAL_SIZING,
 	type CapitalCandle,
@@ -535,7 +536,7 @@ interface LoadedMlModel {
 	model: LogisticModel;
 }
 
-const CURRENT_ML_LABEL_SPEC = "first_trim_r1_v1";
+const CURRENT_ML_LABEL_SPEC = CAPITAL_ML_LABEL_SPEC;
 
 /** Loads and validates the active model; a shape mismatch disables it safely. */
 async function loadMlModel(): Promise<LoadedMlModel | null> {
@@ -556,16 +557,11 @@ async function loadMlModel(): Promise<LoadedMlModel | null> {
 		);
 		return null;
 	}
-	if (artifact.labelSpec && artifact.labelSpec !== CURRENT_ML_LABEL_SPEC) {
+	if (artifact.labelSpec !== CURRENT_ML_LABEL_SPEC) {
 		logger.warn(
-			`ML model ${row.id} was trained on label '${artifact.labelSpec}', not '${CURRENT_ML_LABEL_SPEC}'; ignoring it.`,
+			`ML model ${row.id} was trained on label '${artifact.labelSpec ?? "missing"}', not '${CURRENT_ML_LABEL_SPEC}'; ignoring it.`,
 		);
 		return null;
-	}
-	if (!artifact.labelSpec) {
-		logger.warn(
-			`ML model ${row.id} has no labelSpec; treating it as the legacy +2%/-2% first-trim proxy.`,
-		);
 	}
 	return {
 		id: row.id,

@@ -46,7 +46,10 @@ for (const bucket of result.metrics.calibration) {
 		)}% observed ${(bucket.observedRate * 100).toFixed(1)}% (n=${bucket.count})`,
 	);
 }
-console.log("\nTest-slice 20-day blocks, top-5, 0.1% fee:");
+console.log(
+	`\nOutcomes (test): target ${result.metrics.testOutcomes.target}, stop ${result.metrics.testOutcomes.stop}, timeout ${result.metrics.testOutcomes.timeout}; corporate actions ${result.corporateActions}`,
+);
+console.log("\nTest-slice 20-day blocks, top-5, net of 0.1% sale fee:");
 for (const [label, summary] of [
 	["rule only", result.metrics.ruleOnly],
 	["model    ", result.metrics.withModel],

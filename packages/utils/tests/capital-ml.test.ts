@@ -1,18 +1,21 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	adjustForCorporateActions,
 	auc,
 	brierScore,
 	calibrationBuckets,
 	CAPITAL_ML_FEATURES,
+	CAPITAL_SALE_FEE_PCT,
 	capitalMlFeatureVector,
+	detectCorporateActions,
+	evaluateTripleBarrier,
 	featureStats,
 	fitLogistic,
 	logLoss,
 	predictProbability,
 	sigmoid,
 	standardise,
-	tripleBarrierLabel,
 } from "../src/capital-ml";
 import { computeFeatures } from "../src/capital-signals";
 
@@ -94,9 +97,93 @@ describe("capital ml", () => {
 		expect(buckets[0]?.count).toBe(1);
 	});
 
-	test("triple barrier labels target before stop", () => {
-		expect(tripleBarrierLabel(100, [101, 102.1], 2, 2)).toBe(1);
-		expect(tripleBarrierLabel(100, [101, 97.9], 2, 2)).toBe(0);
-		expect(tripleBarrierLabel(100, [101, 101], 2, 2)).toBe(0);
+	test("triple barrier uses high/low, stop-first, fee and timeout", () => {
+		const bars = (high: number, low: number, close = (high + low) / 2) => ({
+			high,
+			low,
+			close,
+		});
+		expect(
+			evaluateTripleBarrier(100, [bars(101, 99), bars(102.1, 99)], 2, 2),
+		).toMatchObject({ outcome: "target", label: 1 });
+		expect(
+			evaluateTripleBarrier(100, [bars(101, 99), bars(101, 97.9)], 2, 2),
+		).toMatchObject({ outcome: "stop", label: 0 });
+		// Same-bar target + stop is resolved conservatively as the stop.
+		expect(evaluateTripleBarrier(100, [bars(103, 97)], 2, 2)).toMatchObject({
+			outcome: "stop",
+			label: 0,
+		});
+		// Neither barrier: a third outcome with the real horizon return.
+		const timeout = evaluateTripleBarrier(
+			100,
+			[bars(101, 99, 101), bars(101, 99, 100.5)],
+			2,
+			2,
+		);
+		expect(timeout.outcome).toBe("timeout");
+		expect(timeout.returnPct).toBeCloseTo(100.5 * 0.999 - 100, 6);
+		// The 0.1% sale fee is charged on the exit only.
+		const target = evaluateTripleBarrier(100, [bars(102.1, 99)], 2, 2);
+		expect(target.returnPct).toBeCloseTo(
+			100 * 1.02 * (1 - CAPITAL_SALE_FEE_PCT / 100) - 100,
+			6,
+		);
+	});
+
+	test("corporate actions are detected and rebased out of the series", () => {
+		const base = Date.UTC(2025, 0, 1) / 1000;
+		const candles = [
+			{
+				timestamp: base,
+				open: 100,
+				high: 100,
+				low: 100,
+				close: 100,
+				shares: 1_000,
+			},
+			{
+				timestamp: base + 86_400,
+				open: 101,
+				high: 101,
+				low: 101,
+				close: 101,
+				shares: 1_000,
+			},
+			// 2:1 split: shares double, price halves.
+			{
+				timestamp: base + 2 * 86_400,
+				open: 50.5,
+				high: 50.5,
+				low: 50.5,
+				close: 50.5,
+				shares: 2_000,
+			},
+			{
+				timestamp: base + 3 * 86_400,
+				open: 51,
+				high: 51,
+				low: 51,
+				close: 51,
+				shares: 2_000,
+			},
+		];
+		const actions = detectCorporateActions(candles);
+		expect(actions).toHaveLength(1);
+		expect(actions[0]?.factor).toBeCloseTo(2, 6);
+		// Ordinary issuance with a flat price is not a corporate action.
+		const issuance = candles.map((candle, i) => ({
+			...candle,
+			shares: (candle.shares ?? 0) + (i === 2 ? 100 : 0),
+		}));
+		expect(detectCorporateActions(issuance)).toHaveLength(0);
+		const adjusted = adjustForCorporateActions(candles);
+		expect(adjusted.candles[0]?.close).toBeCloseTo(50, 6);
+		expect(adjusted.candles[2]?.close).toBeCloseTo(50.5, 6);
+		expect(adjusted.candles[0]?.shares).toBe(2_000);
+		// The fake split return disappears.
+		const pre = adjusted.candles[1]?.close ?? 0;
+		const post = adjusted.candles[2]?.open ?? 0;
+		expect(post / pre - 1).toBeLessThan(0.02);
 	});
 });
