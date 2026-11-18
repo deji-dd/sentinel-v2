@@ -45,21 +45,21 @@ reproducible from that public series; the scripts were scratch work, not committ
 
 The data, signal and shadow-ML layers are implemented; live ML ranking is not.
 
-| Item                                                                  | Status                                                    |
-| --------------------------------------------------------------------- | --------------------------------------------------------- |
-| `signal_mode` per book, default `reversal`                            | done — migration `0076`                                   |
-| Reversal score (stretch + shares flow + risk) and mean-reversion exit | done — `capital-signals.ts`, tested                       |
-| Reversal uses **daily** bars; momentum keeps hourly                   | done — the engine builds both feature maps                |
-| 1-minute candle collection from the 60s poll                          | done                                                      |
-| One-time history backfill with Torn-anchor validation                 | done — `bun run stocks:backfill`                          |
-| Audit reports per-interval readiness                                  | done — `bun run capital:ml:audit`                         |
-| Dataset builder + triple-barrier labels                               | done — `bun run capital:ml:train`                         |
-| Logistic meta-label, purged 5-fold walk-forward, Platt calibration    | done — holdout AUC ~0.57 under label v2 (see notes)       |
-| Baselines, full metric set, bootstrap CIs, deflated Sharpe, PBO       | done — `bun run capital:ml:train`                        |
-| Immutable experiment records (`capital_ml_runs`)                      | done — migration `0086`                                   |
-| Shadow predictions + outcome scoring                                  | done — `capital:ml` worker                                |
-| Automatic retrain (boot + every 30 days, shadow activation only)      | done — `capital:ml:train` worker                          |
-| Capped deployment (`ml_enabled`)                                      | not enabled — the first model ties the rule               |
+| Item                                                                  | Status                                              |
+| --------------------------------------------------------------------- | --------------------------------------------------- |
+| `signal_mode` per book, default `reversal`                            | done — migration `0076`                             |
+| Reversal score (stretch + shares flow + risk) and mean-reversion exit | done — `capital-signals.ts`, tested                 |
+| Reversal uses **daily** bars; momentum keeps hourly                   | done — the engine builds both feature maps          |
+| 1-minute candle collection from the 60s poll                          | done                                                |
+| One-time history backfill with Torn-anchor validation                 | done — `bun run stocks:backfill`                    |
+| Audit reports per-interval readiness                                  | done — `bun run capital:ml:audit`                   |
+| Dataset builder + triple-barrier labels                               | done — `bun run capital:ml:train`                   |
+| Logistic meta-label, purged 5-fold walk-forward, Platt calibration    | done — holdout AUC ~0.57 under label v2 (see notes) |
+| Baselines, full metric set, bootstrap CIs, deflated Sharpe, PBO       | done — `bun run capital:ml:train`                   |
+| Immutable experiment records (`capital_ml_runs`)                      | done — migration `0086`                             |
+| Shadow predictions + outcome scoring                                  | done — `capital:ml` worker                          |
+| Automatic retrain (boot + every 30 days, shadow activation only)      | done — `capital:ml:train` worker                    |
+| Capped deployment (`ml_enabled`)                                      | not enabled — the first model ties the rule         |
 
 The engine still runs the same risk overlay (stops, trailing, scale-out, drawdown
 halts, reserve, position caps); only the entry score and the thesis exit change
@@ -110,7 +110,7 @@ shift (regime, dispersion) or a better label, not a bigger model.
 **Out-of-sample discipline (2026-11-18, P1).** The single split is replaced by a
 purged expanding walk-forward (five folds, 25-day embargo, final untouched 20%
 holdout). Features, label, model family and the l2 grid are pre-registered and
-hashed; l2 is chosen on the mean of *per-fold* AUCs, because pooling probabilities
+hashed; l2 is chosen on the mean of _per-fold_ AUCs, because pooling probabilities
 from models fitted on different windows inflates AUC. The holdout is replayed
 against rule, simple reversal, equal-weight and buy-and-hold on the same dates
 and costs, with the full risk/calibration metric set, bootstrap CIs, deflated
