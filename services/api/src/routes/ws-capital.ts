@@ -40,6 +40,7 @@ interface CapitalSocketClient {
 	};
 	view: CapitalLiveView;
 	book: CapitalBook;
+	granularity: "hourly" | "daily";
 	investorId: string | null;
 	sessionToken: string | undefined;
 	authCheckedAt: number;
@@ -62,6 +63,10 @@ function parseView(value: string | undefined): CapitalLiveView | null {
 
 function parseBook(value: string | undefined): CapitalBook {
 	return value === "paper" ? "paper" : "live";
+}
+
+function parseGranularity(value: string | undefined): "hourly" | "daily" {
+	return value === "hourly" ? "hourly" : "daily";
 }
 
 function originAllowed(request: Request): boolean {
@@ -145,14 +150,14 @@ async function buildSnapshot(
 				? getInvestorPortfolio("live", client.investorId)
 				: emptyPortfolio("No active investment is linked to this account.");
 		default:
-			return getCapitalPublicOverview(client.book);
+			return getCapitalPublicOverview(client.book, client.granularity);
 	}
 }
 
 function cacheKey(client: CapitalSocketClient): string {
 	return client.view === "portfolio"
 		? `portfolio:${client.investorId ?? ""}`
-		: `${client.view}:${client.book}`;
+		: `${client.view}:${client.book}:${client.granularity}`;
 }
 
 function snapshotFor(
@@ -172,6 +177,7 @@ function sendSnapshot(client: CapitalSocketClient, data: CapitalLiveData) {
 		type: "capital_snapshot",
 		view: client.view,
 		book: client.book,
+		granularity: client.granularity,
 		data,
 		updatedAtIso: new Date().toISOString(),
 	};
@@ -217,10 +223,12 @@ export const wsCapitalRoutes = new Elysia().ws("/api/ws/capital", {
 	query: t.Object({
 		view: t.Optional(t.String()),
 		book: t.Optional(t.String()),
+		granularity: t.Optional(t.String()),
 	}),
 	async open(ws) {
 		const view = parseView(ws.data.query.view);
 		const book = parseBook(ws.data.query.book);
+		const granularity = parseGranularity(ws.data.query.granularity);
 
 		if (!view || !originAllowed(ws.data.request)) {
 			ws.close(1008, "Not allowed");
@@ -259,6 +267,7 @@ export const wsCapitalRoutes = new Elysia().ws("/api/ws/capital", {
 				socket: ws,
 				view,
 				book,
+				granularity,
 				investorId,
 				sessionToken,
 				authCheckedAt: Date.now(),

@@ -146,8 +146,18 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 	.get(
 		"/public",
 		async ({ query }) =>
-			getCapitalPublicOverview(query.book === "paper" ? "paper" : "live"),
-		{ query: t.Object({ book: t.Optional(t.String()) }) },
+			getCapitalPublicOverview(
+				query.book === "paper" ? "paper" : "live",
+				query.granularity === "hourly" ? "hourly" : "daily",
+			),
+		{
+			query: t.Object({
+				book: t.Optional(t.String()),
+				granularity: t.Optional(
+					t.Union([t.Literal("hourly"), t.Literal("daily")]),
+				),
+			}),
+		},
 	)
 	.get("/me", async ({ user, set }) => {
 		if (!user) {

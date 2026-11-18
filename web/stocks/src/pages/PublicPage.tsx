@@ -1,16 +1,8 @@
 import type { CapitalPublicOverview } from "@sentinel/schemas";
 import { ArrowUpRight, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
-import {
-	Area,
-	AreaChart,
-	CartesianGrid,
-	ResponsiveContainer,
-	Tooltip,
-	XAxis,
-	YAxis,
-} from "recharts";
 
+import { PerformanceChart } from "../components/PerformanceChart";
 import {
 	Button,
 	EmptyState,
@@ -36,7 +28,6 @@ import { useAuth } from "../contexts/AuthContext";
 import {
 	apiFetch,
 	compactMoney,
-	isoDate,
 	money,
 	pct,
 	tctDate,
@@ -87,11 +78,13 @@ function BookOverview({ book }: { book: Book }) {
 	const [data, setData] = useState<CapitalPublicOverview | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
+	const [granularity, setGranularity] = useState<"hourly" | "daily">("daily");
 	const isPaper = book === "paper";
 
 	const { markUpdated } = useCapitalLive<CapitalPublicOverview>({
 		view: "public",
 		book,
+		granularity,
 		onSnapshot: (overview) => {
 			setData(overview);
 			setError(null);
@@ -103,7 +96,9 @@ function BookOverview({ book }: { book: Book }) {
 		let cancelled = false;
 		setLoading(true);
 		setError(null);
-		apiFetch<CapitalPublicOverview>(`/v2/capital/public?book=${book}`)
+		apiFetch<CapitalPublicOverview>(
+			`/v2/capital/public?book=${book}&granularity=${granularity}`,
+		)
 			.then((overview) => {
 				if (cancelled) return;
 				setData(overview);
@@ -120,7 +115,7 @@ function BookOverview({ book }: { book: Book }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [book, markUpdated]);
+	}, [book, granularity, markUpdated]);
 
 	if (loading)
 		return (
@@ -128,12 +123,7 @@ function BookOverview({ book }: { book: Book }) {
 		);
 
 	const summary = data?.summary;
-	const chartData =
-		data?.performance.map((point) => ({
-			date: isoDate(point.capturedAtIso),
-			nav: Number(point.navPerUnit),
-			returnPct: point.returnPct,
-		})) ?? [];
+	const performancePoints = data?.performance ?? [];
 
 	return (
 		<>
@@ -207,79 +197,36 @@ function BookOverview({ book }: { book: Book }) {
 							<SectionCard
 								title="NAV per unit"
 								description={
-									isPaper
-										? "Simulated Net Asset Value per unit — no real funds — indexed from the simulation book's daily snapshots."
-										: "Net Asset Value per unit — total assets divided by units outstanding — indexed from the fund's daily snapshots."
+									granularity === "hourly"
+										? isPaper
+											? "Simulated NAV per unit — hourly snapshots (last 7 days)."
+											: "Net Asset Value per unit — hourly snapshots (last 7 days)."
+										: isPaper
+											? "Simulated Net Asset Value per unit — no real funds — indexed from the simulation book's daily snapshots."
+											: "Net Asset Value per unit — total assets divided by units outstanding — indexed from the fund's daily snapshots."
+								}
+								actions={
+									<Tabs
+										value={granularity}
+										onValueChange={(value) =>
+											setGranularity(value as "hourly" | "daily")
+										}
+									>
+										<TabsList className="h-8">
+											<TabsTrigger value="daily" className="px-3 text-xs">
+												Daily
+											</TabsTrigger>
+											<TabsTrigger value="hourly" className="px-3 text-xs">
+												Hourly (7d)
+											</TabsTrigger>
+										</TabsList>
+									</Tabs>
 								}
 							>
-								{chartData.length < 2 ? (
-									<EmptyState
-										title="Not enough history yet"
-										description="The chart appears after the first few daily snapshots."
-									/>
-								) : (
-									<div className="h-64 w-full">
-										<ResponsiveContainer width="100%" height="100%">
-											<AreaChart data={chartData}>
-												<defs>
-													<linearGradient
-														id="navFill"
-														x1="0"
-														y1="0"
-														x2="0"
-														y2="1"
-													>
-														<stop
-															offset="5%"
-															stopColor="var(--primary)"
-															stopOpacity={0.35}
-														/>
-														<stop
-															offset="95%"
-															stopColor="var(--primary)"
-															stopOpacity={0}
-														/>
-													</linearGradient>
-												</defs>
-												<CartesianGrid
-													stroke="var(--border)"
-													strokeOpacity={0.4}
-													vertical={false}
-												/>
-												<XAxis
-													dataKey="date"
-													stroke="var(--muted-foreground)"
-													fontSize={11}
-													tickLine={false}
-													axisLine={false}
-												/>
-												<YAxis
-													stroke="var(--muted-foreground)"
-													fontSize={11}
-													tickLine={false}
-													axisLine={false}
-													width={48}
-												/>
-												<Tooltip
-													contentStyle={{
-														background: "var(--card)",
-														border: "1px solid var(--border)",
-														borderRadius: 8,
-														fontSize: 12,
-													}}
-												/>
-												<Area
-													type="monotone"
-													dataKey="nav"
-													stroke="var(--primary)"
-													fill="url(#navFill)"
-													strokeWidth={2}
-													name="NAV / unit"
-												/>
-											</AreaChart>
-										</ResponsiveContainer>
-									</div>
-								)}
+								<PerformanceChart
+									points={performancePoints}
+									granularity={granularity}
+								/>
 							</SectionCard>
 						</div>
 					</div>

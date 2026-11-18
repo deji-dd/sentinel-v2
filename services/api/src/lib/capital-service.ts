@@ -243,6 +243,7 @@ async function firstSnapshot(
 async function loadPerformance(
 	book: CapitalBook,
 	limit = 365,
+	granularity: "hourly" | "daily" = "daily",
 ): Promise<CapitalPerformancePoint[]> {
 	const rows = await db
 		.select()
@@ -250,7 +251,7 @@ async function loadPerformance(
 		.where(
 			and(
 				eq(capitalNavSnapshots.book, book),
-				eq(capitalNavSnapshots.granularity, "daily"),
+				eq(capitalNavSnapshots.granularity, granularity),
 			),
 		)
 		.orderBy(desc(capitalNavSnapshots.capturedAt))
@@ -534,13 +535,14 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 
 export async function getCapitalPublicOverview(
 	book: CapitalBook = "live",
+	granularity: "hourly" | "daily" = "daily",
 ): Promise<CapitalPublicOverview> {
 	const config = await getCapitalConfig(book);
 	const { summary, stockMap } = await getCapitalSummary(book);
 	const { nav } = await loadNav(book);
 	const [performance, holdings, trades, positions, investors] =
 		await Promise.all([
-			loadPerformance(book),
+			loadPerformance(book, granularity === "hourly" ? 168 : 365, granularity),
 			config.publicShowHoldings
 				? loadHoldings(book, stockMap)
 				: Promise.resolve([] as CapitalPublicHolding[]),

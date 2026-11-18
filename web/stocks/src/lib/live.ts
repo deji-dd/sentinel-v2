@@ -9,17 +9,24 @@ import { apiBaseUrl } from "./api";
 
 const MAX_RECONNECT_MS = 15_000;
 
-function streamUrl(view: CapitalLiveView, book: CapitalBook): string {
+function streamUrl(
+	view: CapitalLiveView,
+	book: CapitalBook,
+	granularity?: "hourly" | "daily",
+): string {
 	const url = new URL(apiBaseUrl);
 	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 	url.pathname = "/api/ws/capital";
-	url.search = new URLSearchParams({ view, book }).toString();
+	const params = new URLSearchParams({ view, book });
+	if (granularity) params.set("granularity", granularity);
+	url.search = params.toString();
 	return url.toString();
 }
 
 interface UseCapitalLiveOptions<T> {
 	view: CapitalLiveView;
 	book?: CapitalBook;
+	granularity?: "hourly" | "daily";
 	enabled?: boolean;
 	onSnapshot: (data: T, updatedAt: number) => void;
 }
@@ -32,6 +39,7 @@ interface UseCapitalLiveOptions<T> {
 export function useCapitalLive<T>({
 	view,
 	book = "live",
+	granularity,
 	enabled = true,
 	onSnapshot,
 }: UseCapitalLiveOptions<T>) {
@@ -66,7 +74,7 @@ export function useCapitalLive<T>({
 		function connect() {
 			if (stopped) return;
 			try {
-				socket = new WebSocket(streamUrl(view, book));
+				socket = new WebSocket(streamUrl(view, book, granularity));
 			} catch {
 				setConnected(false);
 				scheduleReconnect();
@@ -79,7 +87,7 @@ export function useCapitalLive<T>({
 			};
 
 			socket.onmessage = (event) => {
-				if (typeof event.data !== "string") return;
+				if (stopped || typeof event.data !== "string") return;
 				try {
 					const message = JSON.parse(event.data) as Partial<
 						CapitalLiveSnapshot<T>
@@ -90,6 +98,10 @@ export function useCapitalLive<T>({
 					) {
 						return;
 					}
+					// A snapshot queued on a socket that is being replaced (for
+					// example after switching chart granularity) must not overwrite
+					// the newer selection.
+					if (granularity && message.granularity !== granularity) return;
 					const stamp =
 						message.updatedAtIso &&
 						Number.isFinite(Date.parse(message.updatedAtIso))
@@ -118,7 +130,7 @@ export function useCapitalLive<T>({
 			socket?.close();
 			socket = null;
 		};
-	}, [view, book, enabled]);
+	}, [view, book, granularity, enabled]);
 
 	return { connected, lastUpdatedAt, markUpdated };
 }

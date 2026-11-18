@@ -721,6 +721,7 @@ export interface CapitalLiveSnapshot<T = unknown> {
 	type: "capital_snapshot";
 	view: CapitalLiveView;
 	book: CapitalBook;
+	granularity: "hourly" | "daily";
 	data: T;
 	/** Server time when the snapshot was generated. */
 	updatedAtIso: string;
