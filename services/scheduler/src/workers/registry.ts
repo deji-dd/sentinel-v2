@@ -6,6 +6,7 @@ import { startCapitalAccounting } from "./capital/accounting";
 import { startCapitalEngine } from "./capital/engine";
 import { startCapitalHistory } from "./capital/history";
 import { startCapitalMl } from "./capital/ml";
+import { startCapitalMlHealth } from "./capital/ml-health";
 import { startCapitalMlTrain } from "./capital/ml-train";
 import { startCapitalReconcile } from "./capital/reconcile";
 import {
@@ -193,6 +194,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Daily check that retrains and shadow-activates the ML meta-label when the active model is older than 30 days",
 		start: startCapitalMlTrain,
+	},
+	{
+		id: "capital:ml:health",
+		description:
+			"Hourly health check on scored ML predictions that auto-disables the overlay on IC, calibration, drawdown or drift breaches",
+		start: startCapitalMlHealth,
 	},
 	{
 		id: "capital:accounting",

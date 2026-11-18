@@ -127,6 +127,15 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 	mlWeight: doublePrecision("ml_weight").default(0.25).notNull(),
 	mlMinConfidence: doublePrecision("ml_min_confidence").default(0.5).notNull(),
 	mlMaxModelAgeDays: integer("ml_max_model_age_days").default(120).notNull(),
+	/** Health worker may switch ML off when live shadow metrics drift. */
+	mlKillSwitchEnabled: boolean("ml_kill_switch_enabled")
+		.default(true)
+		.notNull(),
+	mlDisabledAt: timestamp("ml_disabled_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	mlDisabledReason: text("ml_disabled_reason"),
 
 	regimeSmaDays: integer("regime_sma_days").default(50).notNull(),
 
@@ -911,6 +920,38 @@ export const capitalMlRuns = pgTable(
 
 export type CapitalMlRunRow = typeof capitalMlRuns.$inferSelect;
 export type NewCapitalMlRunRow = typeof capitalMlRuns.$inferInsert;
+
+/** Hourly health snapshot for the ML kill switch, per book. */
+export const capitalMlHealth = pgTable(
+	"capital_ml_health",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		createdAt,
+		book: text("book").notNull(),
+		modelId: text("model_id").references(() => capitalMlModels.id, {
+			onDelete: "set null",
+		}),
+		windowDays: integer("window_days").notNull(),
+		evaluatedCount: integer("evaluated_count").notNull(),
+		ic: doublePrecision("ic"),
+		hitRate: doublePrecision("hit_rate"),
+		calibrationError: doublePrecision("calibration_error"),
+		drawdownPct: doublePrecision("drawdown_pct"),
+		trainingBaseRate: doublePrecision("training_base_rate"),
+		liveVsBacktestPct: doublePrecision("live_vs_backtest_pct"),
+		breached: boolean("breached").default(false).notNull(),
+		reasons: jsonb("reasons").$type<string[]>().default([]).notNull(),
+		action: text("action").default("none").notNull(),
+	},
+	(table) => [
+		index("capital_ml_health_book_created_idx").on(table.book, table.createdAt),
+	],
+);
+
+export type CapitalMlHealthRow = typeof capitalMlHealth.$inferSelect;
+export type NewCapitalMlHealthRow = typeof capitalMlHealth.$inferInsert;
 
 export const capitalMlPredictions = pgTable(
 	"capital_ml_predictions",

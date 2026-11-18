@@ -42,10 +42,14 @@ import {
 	featureSpecHash,
 	featureStats,
 	fitLogistic,
+	fitRidge,
 	type LogisticModel,
 	logLoss,
 	predictProbability,
+	predictRidge,
 	probabilityOfBacktestOverfit,
+	type RidgeModel,
+	rSquared,
 	scoreStock,
 	standardise,
 } from "@sentinel/utils";
@@ -147,10 +151,22 @@ export interface OverlapReport {
 	modelOnlyReturnPct: number;
 }
 
+export interface VolatilityReport {
+	/** R² of the vol20 persistence baseline on the holdout. */
+	baselineRSquared: number;
+	/** R² of the HAR (5/20/60) ridge on the holdout. */
+	modelRSquared: number;
+	foldRSquared: number[];
+	equalWeight: BacktestSummary;
+	volScaled: BacktestSummary;
+	avgWeightSpread: number;
+}
+
 export interface DiagnosticsReport {
 	featureIc: FeatureIcReport[];
 	foldBacktests: FoldBacktestReport[];
 	overlap: OverlapReport;
+	volatility: VolatilityReport;
 }
 
 export interface CapitalMlTrainResult {
@@ -218,6 +234,10 @@ export interface DatasetRow extends UniverseRow {
 	vector: number[];
 	/** Research-only regime vector; never part of the deployed artifact. */
 	researchVector: number[];
+	/** Research-only HAR inputs: 5d/20d/60d realised vol, percent. */
+	volVector: number[];
+	/** Research-only forward 20d realised vol, percent. */
+	forwardVolPct: number;
 	label: 0 | 1;
 	outcome: BarrierOutcome;
 }
@@ -281,6 +301,21 @@ function realizedVolPct(closes: number[], end: number, window: number): number {
 	for (let i = end - window + 1; i <= end; i++) {
 		const previous = closes[i - 1] ?? 0;
 		const current = closes[i] ?? 0;
+		if (previous > 0 && current > 0) returns.push(Math.log(current / previous));
+	}
+	return returns.length > 1 ? std(returns) * Math.sqrt(365) * 100 : 0;
+}
+
+function forwardVolatilityPct(
+	closes: number[],
+	start: number,
+	horizon: number,
+): number {
+	const segment = closes.slice(start, start + horizon + 1);
+	const returns: number[] = [];
+	for (let i = 1; i < segment.length; i++) {
+		const previous = segment[i - 1] ?? 0;
+		const current = segment[i] ?? 0;
 		if (previous > 0 && current > 0) returns.push(Math.log(current / previous));
 	}
 	return returns.length > 1 ? std(returns) * Math.sqrt(365) * 100 : 0;
@@ -466,6 +501,12 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 					...universe,
 					vector: capitalMlFeatureVector(features),
 					researchVector: capitalMlResearchFeatureVector(context),
+					volVector: [
+						realizedVolPct(closes, d, 5),
+						realizedVolPct(closes, d, 20),
+						realizedVolPct(closes, d, 60),
+					],
+					forwardVolPct: forwardVolatilityPct(closes, d + 1, HORIZON_DAYS),
 					label: barrier.label,
 					outcome: barrier.outcome,
 				});
@@ -802,6 +843,106 @@ function overlapReport(
 	};
 }
 
+function weightedBlockReturns(
+	rows: UniverseRow[],
+	volByKey: Map<string, number>,
+	score: (row: UniverseRow) => number,
+	topK: number,
+	scoreFloor = Number.NEGATIVE_INFINITY,
+): { returns: number[]; avgSpread: number } {
+	const byDate = new Map<number, UniverseRow[]>();
+	for (const row of rows) {
+		const list = byDate.get(row.date) ?? [];
+		list.push(row);
+		byDate.set(row.date, list);
+	}
+	const dates = [...byDate.keys()].sort((a, b) => a - b);
+	const returns: number[] = [];
+	const spreads: number[] = [];
+	for (let i = 0; i < dates.length; i += HORIZON_DAYS) {
+		const date = dates[i];
+		if (date === undefined) continue;
+		const chosen = (byDate.get(date) ?? [])
+			.filter((row) => score(row) >= scoreFloor)
+			.sort((a, b) => score(b) - score(a))
+			.slice(0, topK);
+		if (chosen.length === 0) continue;
+		const inverseVols = chosen.map(
+			(row) =>
+				1 / Math.max(5, volByKey.get(`${row.date}:${row.stockId}`) ?? 10),
+		);
+		const total = inverseVols.reduce((sum, value) => sum + value, 0);
+		const weights = inverseVols.map((value) => value / total);
+		returns.push(
+			chosen.reduce(
+				(sum, row, index) =>
+					sum + (weights[index] ?? 0) * (row.forwardReturnPct / 100),
+				0,
+			),
+		);
+		spreads.push(Math.max(...weights) - Math.min(...weights));
+	}
+	return {
+		returns,
+		avgSpread: spreads.length ? mean(spreads) : 0,
+	};
+}
+
+function volatilityReport(
+	trainRows: DatasetRow[],
+	holdout: DatasetRow[],
+	universeRows: UniverseRow[],
+	folds: WalkFold[],
+	minEntryScore: number,
+): VolatilityReport {
+	// HAR is specified on log realised volatility, not the level: vol is
+	// positive and multiplicative, and the level target is anti-persistent here.
+	const logX = (row: DatasetRow): number[] =>
+		row.volVector.map((value) => Math.log(Math.max(1e-9, value)));
+	const x = (sample: DatasetRow[]): number[][] => sample.map(logX);
+	const y = (sample: DatasetRow[]): number[] =>
+		sample.map((row) => Math.log(Math.max(1e-9, row.forwardVolPct)));
+	const foldRSquared = folds.map((fold) => {
+		const model = fitRidge(x(fold.train), y(fold.train));
+		return rSquared(
+			y(fold.test),
+			fold.test.map((row) => predictRidge(model, logX(row))),
+		);
+	});
+	const har = fitRidge(x(trainRows), y(trainRows));
+	const logPredicted = holdout.map((row) => predictRidge(har, logX(row)));
+	const predicted = logPredicted.map((value) => Math.exp(value));
+	const volByKey = new Map<string, number>();
+	holdout.forEach((row, index) => {
+		volByKey.set(`${row.date}:${row.stockId}`, predicted[index] ?? 10);
+	});
+	const holdoutDates = new Set(holdout.map((row) => row.date));
+	const candidates = universeRows.filter(
+		(row) => holdoutDates.has(row.date) && row.eligible,
+	);
+	const equalWeight = backtestMetrics(
+		blockReturns(candidates, (row) => row.ruleScore, 5, minEntryScore),
+	);
+	const scaled = weightedBlockReturns(
+		candidates,
+		volByKey,
+		(row) => row.ruleScore,
+		5,
+		minEntryScore,
+	);
+	return {
+		baselineRSquared: rSquared(
+			y(holdout),
+			holdout.map((row) => Math.log(Math.max(1e-9, row.volVector[1] ?? 0))),
+		),
+		modelRSquared: rSquared(y(holdout), logPredicted),
+		foldRSquared,
+		equalWeight,
+		volScaled: backtestMetrics(scaled.returns),
+		avgWeightSpread: scaled.avgSpread,
+	};
+}
+
 function blockReturns(
 	rows: UniverseRow[],
 	score: (row: UniverseRow) => number,
@@ -1029,7 +1170,18 @@ export async function trainCapitalMlModel(
 			best.foldModels,
 		),
 		overlap: overlapReport(split.holdout, universeRows, probabilityByKey),
+		volatility: volatilityReport(
+			preHoldout,
+			split.holdout,
+			universeRows,
+			split.folds,
+			config.minEntryScore,
+		),
 	};
+	const vol = diagnostics.volatility;
+	log(
+		`Volatility research: HAR R² ${vol.modelRSquared.toFixed(3)} vs vol20 baseline ${vol.baselineRSquared.toFixed(3)}; vol-scaled sizing ${(vol.volScaled.cagr * 100).toFixed(1)}% CAGR vs equal-weight ${(vol.equalWeight.cagr * 100).toFixed(1)}%`,
+	);
 	const foldWins = diagnostics.foldBacktests.filter(
 		(fold) => fold.model.cagr > fold.rule.cagr,
 	).length;

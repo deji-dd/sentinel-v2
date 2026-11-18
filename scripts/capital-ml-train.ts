@@ -80,6 +80,10 @@ const overlap = result.diagnostics.overlap;
 console.log(
 	`\nTop-5 overlap: ${overlap.avgShared.toFixed(1)}/5 shared names across ${overlap.blocks} blocks; avg returns shared ${overlap.sharedReturnPct.toFixed(2)}%, rule-only ${overlap.ruleOnlyReturnPct.toFixed(2)}%, model-only ${overlap.modelOnlyReturnPct.toFixed(2)}%`,
 );
+const vol = result.diagnostics.volatility;
+console.log(
+	`\nVolatility research (not live): HAR R² ${vol.modelRSquared.toFixed(3)} vs vol20 baseline ${vol.baselineRSquared.toFixed(3)} (folds [${vol.foldRSquared.map((value) => value.toFixed(2)).join(", ")}]); vol-scaled sizing ${(vol.volScaled.cagr * 100).toFixed(1)}% CAGR / Sharpe ${vol.volScaled.sharpe.toFixed(2)} vs equal-weight ${(vol.equalWeight.cagr * 100).toFixed(1)}% / ${vol.equalWeight.sharpe.toFixed(2)}; avg weight spread ${vol.avgWeightSpread.toFixed(2)}`,
+);
 const uncertainty = result.metrics.uncertainty;
 console.log(
 	`\nUncertainty: model CAGR 95% CI [${(uncertainty.bootstrap.cagr.lower * 100).toFixed(1)}%, ${(uncertainty.bootstrap.cagr.upper * 100).toFixed(1)}%]; rule CAGR 95% CI [${(uncertainty.bootstrap.ruleCagr.lower * 100).toFixed(1)}%, ${(uncertainty.bootstrap.ruleCagr.upper * 100).toFixed(1)}%]; deflated Sharpe ${uncertainty.deflatedSharpe.toFixed(3)} (${uncertainty.deflatedSharpeTrials} trials); PBO ${uncertainty.pbo.pbo === null ? "n/a" : uncertainty.pbo.pbo.toFixed(3)}${uncertainty.pbo.reliable ? "" : " (thin sample)"}`,

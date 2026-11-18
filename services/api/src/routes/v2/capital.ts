@@ -317,6 +317,7 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				"notifyUnmatchedBuys",
 				"paperAutoFill",
 				"mlEnabled",
+				"mlKillSwitchEnabled",
 				"engineEnabled",
 				"liveEnabled",
 			];

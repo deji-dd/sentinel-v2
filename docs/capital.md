@@ -37,6 +37,7 @@ Withdrawals are quoted first; the performance fee applies only to a positive pro
 - `capital:engine` — every 60s: `/torn/stocks`, 1m/5m/60m candles, share-level signals, recommendations, paper auto-fill, one rotating detail refresh per cycle.
 - `capital:history` — hourly check that seeds missing stock history once on a fresh deploy, then idles. Disable with `CAPITAL_AUTO_BACKFILL=false`.
 - `capital:ml` — hourly: fills realized return and barrier outcome for shadow ML predictions. Never trades, never trains.
+- `capital:ml:health` — hourly: scores the active shadow model on its own evaluated predictions and auto-disables `ml_enabled` on IC, calibration, shadow-drawdown or live-vs-backtest drift, with an owner alert and audit row. It never enables ML.
 - `capital:accounting` — every 5 minutes: payout obligations, payment intents, NAV snapshots, recommendation outcomes (1d/5d/20d) and the daily 1-minute-candle retention sweep.
 - `capital:reconcile` — every 5 minutes: live account position/cash sanity.
 - `capital:payments` — event-driven `4810`/`4800` money-log matching, plus completed trades (`4430`) paired with their `4440`/`4441` money lines.
@@ -215,6 +216,17 @@ not part of the deployed feature spec, so the active model and shadow logging
 are unaffected. Current finding: the model and rule pick almost the same names
 (4.1/5 overlap) and the regime features show no usable IC, so further ranking
 complexity is not the next move.
+
+A research-only HAR model on log realised volatility (5/20/60-day components)
+and inverse-vol position sizing are also reported from the same run. Neither is
+wired into the engine. On the local dataset the HAR R² is negative (though better
+than the vol20 baseline), and vol-scaled sizing underperforms equal weight, so
+there is no case for changing live sizing either.
+
+The kill switch is configured by `ml_kill_switch_enabled` (default on); a breach
+sets `ml_enabled = false`, stamps `ml_disabled_at`/`ml_disabled_reason`, writes an
+audit row and sends a `risk` alert. Re-enabling is always a manual operator
+decision. Health snapshots are kept in `capital_ml_health`.
 
 Activation is safe by default: the engine computes a probability for every
 reversal candidate and writes it to `capital_ml_predictions`, but does **not**

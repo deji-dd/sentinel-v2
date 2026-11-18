@@ -604,6 +604,9 @@ export interface CapitalSettings {
 	mlWeight: number;
 	mlMinConfidence: number;
 	mlMaxModelAgeDays: number;
+	mlKillSwitchEnabled: boolean;
+	mlDisabledAtIso: string | null;
+	mlDisabledReason: string | null;
 	regimeSmaDays: number;
 	drawdownHaltPct: number;
 	drawdownDeriskPct: number;

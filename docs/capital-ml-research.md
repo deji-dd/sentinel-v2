@@ -136,6 +136,18 @@ the four regime features has a meaningful holdout IC (−0.035 to +0.050), so th
 are **not** being wired into the live model. The next work should target position
 sizing/volatility rather than more ranking complexity.
 
+**P3 kill switch and P2b volatility research (2026-11-18).** An hourly
+`capital:ml:health` worker scores the active model on its last 30 days of
+evaluated predictions (rolling IC, calibration, shadow drawdown, live-vs-trained
+hit rate), records a snapshot in `capital_ml_health`, and auto-disables
+`ml_enabled` with an audit row and owner alert on a breach. It never enables ML;
+re-enabling is manual. The research-only HAR model on log realised volatility
+improves on the vol20 persistence baseline but still has negative out-of-sample
+R² (−0.25 vs −0.67 locally), and inverse-vol sizing returns 9.5% CAGR against
+9.9% for equal weight. **Neither ranking nor sizing has demonstrated an
+improvement over the rule**, so the live overlay stays off and the shadow period
+continues to be the deciding evidence.
+
 ---
 
 ## 1. Is there enough history? Yes.

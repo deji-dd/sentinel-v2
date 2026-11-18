@@ -1,13 +1,16 @@
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt } from "drizzle-orm";
 
 import { db } from "../../index";
 import {
+	capitalMlHealth,
+	type CapitalMlHealthRow,
 	type CapitalMlModelRow,
 	capitalMlModels,
 	type CapitalMlPredictionRow,
 	capitalMlPredictions,
 	type CapitalMlRunRow,
 	capitalMlRuns,
+	type NewCapitalMlHealthRow,
 	type NewCapitalMlModelRow,
 	type NewCapitalMlPredictionRow,
 	type NewCapitalMlRunRow,
@@ -115,5 +118,34 @@ export async function insertCapitalMlRun(
 ): Promise<CapitalMlRunRow> {
 	const [row] = await db.insert(capitalMlRuns).values(run).returning();
 	if (!row) throw new Error("Failed to insert capital ML run.");
+	return row;
+}
+
+/** Scored predictions in a trailing window, oldest first. */
+export async function getEvaluatedCapitalMlPredictions(
+	book: string,
+	since: Date,
+	limit = 2000,
+): Promise<CapitalMlPredictionRow[]> {
+	return db
+		.select()
+		.from(capitalMlPredictions)
+		.where(
+			and(
+				eq(capitalMlPredictions.book, book),
+				gte(capitalMlPredictions.createdAt, since),
+				gte(capitalMlPredictions.evaluatedAt, since),
+			),
+		)
+		.orderBy(capitalMlPredictions.createdAt)
+		.limit(limit);
+}
+
+/** Records an hourly health snapshot for the auto-disable guard. */
+export async function insertCapitalMlHealth(
+	health: NewCapitalMlHealthRow,
+): Promise<CapitalMlHealthRow> {
+	const [row] = await db.insert(capitalMlHealth).values(health).returning();
+	if (!row) throw new Error("Failed to insert capital ML health row.");
 	return row;
 }

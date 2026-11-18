@@ -6,7 +6,11 @@
  * rather than hard-coded. These are report-only statistics; no trading code
  * imports them.
  */
-import { CAPITAL_ML_HORIZON_DAYS } from "./capital-ml";
+import {
+	CAPITAL_ML_HORIZON_DAYS,
+	featureStats,
+	standardise,
+} from "./capital-ml";
 
 export interface BacktestMetrics {
 	/** Number of non-overlapping horizon blocks. */
@@ -42,6 +46,25 @@ function sampleStdOf(values: number[]): number {
 		values.reduce((sum, value) => sum + (value - m) ** 2, 0) /
 			(values.length - 1),
 	);
+}
+
+/** Pearson correlation with a small-sample guard. */
+export function pearsonCorrelation(xs: number[], ys: number[]): number {
+	const n = Math.min(xs.length, ys.length);
+	if (n < 3) return 0;
+	const mx = meanOf(xs.slice(0, n));
+	const my = meanOf(ys.slice(0, n));
+	let numerator = 0;
+	let dx = 0;
+	let dy = 0;
+	for (let i = 0; i < n; i++) {
+		const a = (xs[i] ?? 0) - mx;
+		const b = (ys[i] ?? 0) - my;
+		numerator += a * b;
+		dx += a * a;
+		dy += b * b;
+	}
+	return dx && dy ? numerator / Math.sqrt(dx * dy) : 0;
 }
 
 /** Per-observation Sharpe, used by the statistical tests below. */
@@ -104,6 +127,117 @@ export function backtestMetrics(
 		turnover: years > 0 ? (n * rotationsPerBlock) / years : 0,
 		exposure: returns.filter((r) => r !== 0).length / n,
 	};
+}
+
+export interface RidgeModel {
+	intercept: number;
+	weights: number[];
+	mean: number[];
+	std: number[];
+}
+
+function solveLinearSystem(A: number[][], b: number[]): number[] {
+	const n = b.length;
+	const matrix = A.map((row, i) => [...row, b[i] ?? 0]);
+	for (let col = 0; col < n; col++) {
+		let pivot = col;
+		for (let row = col + 1; row < n; row++) {
+			if (
+				Math.abs(matrix[row]?.[col] ?? 0) > Math.abs(matrix[pivot]?.[col] ?? 0)
+			) {
+				pivot = row;
+			}
+		}
+		const current = matrix[col];
+		const swap = matrix[pivot];
+		if (!current || !swap) continue;
+		matrix[col] = swap;
+		matrix[pivot] = current;
+		const diagonal = matrix[col]?.[col] ?? 0;
+		if (Math.abs(diagonal) < 1e-12) continue;
+		for (let row = col + 1; row < n; row++) {
+			const target = matrix[row];
+			if (!target) continue;
+			const factor = (target[col] ?? 0) / diagonal;
+			if (factor === 0) continue;
+			for (let k = col; k <= n; k++) {
+				target[k] = (target[k] ?? 0) - factor * (matrix[col]?.[k] ?? 0);
+			}
+		}
+	}
+	const solution = new Array<number>(n).fill(0);
+	for (let row = n - 1; row >= 0; row--) {
+		let sum = matrix[row]?.[n] ?? 0;
+		for (let k = row + 1; k < n; k++) {
+			sum -= (matrix[row]?.[k] ?? 0) * (solution[k] ?? 0);
+		}
+		const diagonal = matrix[row]?.[row] ?? 0;
+		solution[row] = Math.abs(diagonal) < 1e-12 ? 0 : sum / diagonal;
+	}
+	return solution;
+}
+
+/** Small L2 linear regression, used for the research-only HAR volatility model. */
+export function fitRidge(
+	rows: number[][],
+	labels: number[],
+	l2 = 1,
+): RidgeModel {
+	const stats = featureStats(rows);
+	const scaled = standardise(rows, stats.mean, stats.std);
+	const width = scaled[0]?.length ?? 0;
+	const X = scaled.map((row) => [1, ...row]);
+	const H = Array.from({ length: width + 1 }, () =>
+		new Array<number>(width + 1).fill(0),
+	);
+	const g = new Array<number>(width + 1).fill(0);
+	for (let i = 0; i < X.length; i++) {
+		const row = X[i] ?? [];
+		const y = labels[i] ?? 0;
+		for (let a = 0; a <= width; a++) {
+			g[a] = (g[a] ?? 0) + (row[a] ?? 0) * y;
+			for (let b = a; b <= width; b++) {
+				H[a]![b] = (H[a]![b] ?? 0) + (row[a] ?? 0) * (row[b] ?? 0);
+			}
+		}
+	}
+	for (let a = 0; a <= width; a++) {
+		for (let b = 0; b < a; b++) H[a]![b] = H[b]?.[a] ?? 0;
+	}
+	for (let a = 1; a <= width; a++) H[a]![a] = (H[a]![a] ?? 0) + l2;
+	const beta = solveLinearSystem(H, g);
+	return {
+		intercept: beta[0] ?? 0,
+		weights: beta.slice(1),
+		mean: stats.mean,
+		std: stats.std,
+	};
+}
+
+export function predictRidge(model: RidgeModel, row: number[]): number {
+	let value = model.intercept;
+	for (let i = 0; i < model.weights.length; i++) {
+		const mean = model.mean[i] ?? 0;
+		const std = model.std[i] ?? 1;
+		value +=
+			(model.weights[i] ?? 0) * (std > 0 ? ((row[i] ?? 0) - mean) / std : 0);
+	}
+	return value;
+}
+
+export function rSquared(actual: number[], predicted: number[]): number {
+	const n = Math.min(actual.length, predicted.length);
+	if (n < 3) return 0;
+	const meanActual = meanOf(actual.slice(0, n));
+	let ssRes = 0;
+	let ssTot = 0;
+	for (let i = 0; i < n; i++) {
+		const error = (actual[i] ?? 0) - (predicted[i] ?? 0);
+		ssRes += error * error;
+		const deviation = (actual[i] ?? 0) - meanActual;
+		ssTot += deviation * deviation;
+	}
+	return ssTot > 0 ? 1 - ssRes / ssTot : 0;
 }
 
 export interface BootstrapCI {
