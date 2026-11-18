@@ -870,6 +870,48 @@ export const capitalMlModels = pgTable(
 export type CapitalMlModelRow = typeof capitalMlModels.$inferSelect;
 export type NewCapitalMlModelRow = typeof capitalMlModels.$inferInsert;
 
+/**
+ * One immutable training run. Kept separate from `capital_ml_models` so a
+ * shadow model's full evaluation (folds, baselines, uncertainty, gates) can be
+ * reproduced without re-running the trainer.
+ */
+export const capitalMlRuns = pgTable(
+	"capital_ml_runs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		createdAt,
+		featureSpecHash: text("feature_spec_hash").notNull(),
+		featureSpec: jsonb("feature_spec").$type<string[]>().notNull(),
+		labelSpec: text("label_spec").notNull(),
+		dataStart: timestamp("data_start", { withTimezone: true, mode: "date" }),
+		dataEnd: timestamp("data_end", { withTimezone: true, mode: "date" }),
+		rows: integer("rows").notNull(),
+		/** Fold boundaries, embargo and per-fold sizes. */
+		folds: jsonb("folds").$type<Record<string, unknown>>().notNull(),
+		/** l2 grid, fold count, embargo, holdout fraction. */
+		hyperparameters: jsonb("hyperparameters")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		gates: jsonb("gates").$type<Record<string, unknown>>().notNull(),
+		metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull(),
+		baselines: jsonb("baselines").$type<Record<string, unknown>>().notNull(),
+		uncertainty: jsonb("uncertainty")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		modelId: text("model_id").references(() => capitalMlModels.id, {
+			onDelete: "set null",
+		}),
+		activated: boolean("activated").default(false).notNull(),
+		notes: text("notes"),
+	},
+	(table) => [index("capital_ml_runs_created_idx").on(table.createdAt)],
+);
+
+export type CapitalMlRunRow = typeof capitalMlRuns.$inferSelect;
+export type NewCapitalMlRunRow = typeof capitalMlRuns.$inferInsert;
+
 export const capitalMlPredictions = pgTable(
 	"capital_ml_predictions",
 	{

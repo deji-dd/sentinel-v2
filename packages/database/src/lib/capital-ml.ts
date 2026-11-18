@@ -6,8 +6,11 @@ import {
 	capitalMlModels,
 	type CapitalMlPredictionRow,
 	capitalMlPredictions,
+	type CapitalMlRunRow,
+	capitalMlRuns,
 	type NewCapitalMlModelRow,
 	type NewCapitalMlPredictionRow,
+	type NewCapitalMlRunRow,
 } from "../schema/capital";
 
 /** The model the engine should use, or null when nothing has been trained. */
@@ -104,4 +107,13 @@ export async function completeCapitalMlPrediction(
 			barrierHit: outcome.barrierHit,
 		})
 		.where(eq(capitalMlPredictions.id, id));
+}
+
+/** Records an immutable training run for later reproducibility. */
+export async function insertCapitalMlRun(
+	run: NewCapitalMlRunRow,
+): Promise<CapitalMlRunRow> {
+	const [row] = await db.insert(capitalMlRuns).values(run).returning();
+	if (!row) throw new Error("Failed to insert capital ML run.");
+	return row;
 }

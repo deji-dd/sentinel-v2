@@ -3,20 +3,26 @@
  *
  * Shared by the `capital:ml:train` command and the `capital:ml:train` scheduler
  * worker (monthly retrain). Builds a rows-per-(day, stock) dataset from the
- * stored daily candles, keeps reversal candidates, labels them with a triple
- * barrier, fits an L2 logistic regression with a time-ordered split and
- * embargo, and activates the result for shadow logging if it clears the gates.
+ * stored daily candles, keeps the production reversal candidates, labels them
+ * with a fee/path-realistic triple barrier, and selects a model with a purged
+ * expanding walk-forward. The final slice is an untouched holdout used once for
+ * the gates. Every run is persisted in `capital_ml_runs` for reproducibility.
  */
 import {
 	capitalMarketCandles,
 	db,
 	getCapitalConfig,
 	insertCapitalMlModel,
+	insertCapitalMlRun,
 } from "@sentinel/database";
 import {
 	adjustForCorporateActions,
 	auc,
+	backtestMetrics,
 	type BarrierOutcome,
+	blockSharpe,
+	type BootstrapCI,
+	bootstrapCI,
 	brierScore,
 	calibrationBuckets,
 	CAPITAL_EXECUTION_DELAY_BPS,
@@ -28,12 +34,15 @@ import {
 	CAPITAL_SALE_FEE_PCT,
 	capitalMlFeatureVector,
 	computeFeatures,
+	deflatedSharpe,
 	evaluateTripleBarrier,
+	featureSpecHash,
 	featureStats,
 	fitLogistic,
 	type LogisticModel,
 	logLoss,
 	predictProbability,
+	probabilityOfBacktestOverfit,
 	scoreStock,
 	standardise,
 } from "@sentinel/utils";
@@ -42,18 +51,49 @@ export const TARGET_PCT = CAPITAL_ML_TARGET_PCT;
 export const STOP_PCT = CAPITAL_ML_STOP_PCT;
 export const HORIZON_DAYS = CAPITAL_ML_HORIZON_DAYS;
 /**
- * The label is a proxy for the live ladder's *first* decision: the +1R trim
- * against the frozen entry stop. With a 2% stop, +1R is +2%. v2 adds the live
- * engine's execution and cost assumptions: next-bar entry, daily high/low
- * touches, stop-first on same-bar ambiguity, the 0.1% sale fee, and a distinct
- * timeout outcome.
+ * The label proxies the live ladder's first decision: the +1R trim against the
+ * frozen entry stop. v2 adds next-bar entry, daily high/low touches, stop-first
+ * ambiguity, the 0.1% sale fee, and a distinct timeout outcome.
  */
 export const LABEL_SPEC = CAPITAL_ML_LABEL_SPEC;
 export const EMBARGO_DAYS = 25;
+export const L2_GRID = [0.1, 0.5, 1, 2, 5] as const;
+export const WALK_FORWARD_FOLDS = 5;
+export const HOLDOUT_FRACTION = 0.2;
 const MIN_HISTORY_DAYS = 300;
 const MIN_CANDLES = 80;
 const MIN_TRAIN_ROWS = 500;
 const MIN_TEST_ROWS = 200;
+
+/**
+ * Pre-registered before the holdout is ever evaluated: features, label, model
+ * family, search grid and the metrics used to judge the result. Changing any of
+ * it requires a new registration, not a quiet edit after seeing the test slice.
+ */
+export const PREREGISTRATION = {
+	features: [...CAPITAL_ML_FEATURES],
+	labelSpec: LABEL_SPEC,
+	modelFamily: "l2_logistic + platt",
+	l2Grid: [...L2_GRID],
+	folds: WALK_FORWARD_FOLDS,
+	embargoDays: EMBARGO_DAYS,
+	holdoutFraction: HOLDOUT_FRACTION,
+	selectionMetric: "walk_forward_oos_auc",
+	baselines: ["rule", "model", "reversal", "equal_weight", "buy_hold"],
+	metrics: [
+		"cagr",
+		"sharpe",
+		"sortino",
+		"max_drawdown",
+		"calmar",
+		"hit_rate",
+		"payoff",
+		"turnover",
+		"exposure",
+		"brier",
+		"log_loss",
+	],
+} as const;
 
 export interface TrainOptions {
 	activate?: boolean;
@@ -63,12 +103,21 @@ export interface TrainOptions {
 	onProgress?: (line: string) => void;
 }
 
-export interface BacktestSummary {
-	blocks: number;
-	cagr: number;
-	sharpe: number;
-	maxDrawdown: number;
-	avgForward: number;
+export type BacktestSummary = ReturnType<typeof backtestMetrics>;
+
+export interface BootstrapReport {
+	cagr: BootstrapCI;
+	sharpe: BootstrapCI;
+	ruleCagr: BootstrapCI;
+}
+
+export interface UncertaintyReport {
+	bootstrap: BootstrapReport;
+	deflatedSharpe: number;
+	deflatedSharpeTrials: number;
+	pbo: Omit<ReturnType<typeof probabilityOfBacktestOverfit>, "pbo"> & {
+		pbo: number | null;
+	};
 }
 
 export interface CapitalMlTrainResult {
@@ -76,12 +125,16 @@ export interface CapitalMlTrainResult {
 	firstDate: Date;
 	lastDate: Date;
 	baseRate: number;
+	/** train = rows before the holdout, validation = walk-forward OOS, test = holdout. */
 	split: { train: number; validation: number; test: number };
 	chosenL2: number;
 	platt: { a: number; b: number };
 	corporateActions: number;
+	preregistration: { hash: string; family: string; selectionMetric: string };
+	foldAucs: number[];
 	metrics: {
 		trainAuc: number;
+		/** Holdout AUC. Retained name for the existing operator report. */
 		testAuc: number;
 		testBrier: number;
 		testLogLoss: number;
@@ -93,12 +146,23 @@ export interface CapitalMlTrainResult {
 		calibration: ReturnType<typeof calibrationBuckets>;
 		outcomes: OutcomeCounts;
 		testOutcomes: OutcomeCounts;
+		oos: Evaluation;
+		holdout: Evaluation;
+		baselines: {
+			rule: BacktestSummary;
+			model: BacktestSummary;
+			reversal: BacktestSummary;
+			equalWeight: BacktestSummary;
+			buyHold: BacktestSummary;
+		};
+		uncertainty: UncertaintyReport;
 	};
 	gates: { auc: boolean; calibration: boolean; beatsBaseRate: boolean };
 	shadowSafe: boolean;
 	activated: boolean;
 	modelId: string | null;
 	version: string | null;
+	runId: string | null;
 }
 
 interface OutcomeCounts {
@@ -107,14 +171,19 @@ interface OutcomeCounts {
 	timeout: number;
 }
 
-interface DatasetRow {
+export interface UniverseRow {
 	stockId: number;
 	date: number;
+	forwardReturnPct: number;
+	zscore20: number;
+	ruleScore: number;
+	eligible: boolean;
+}
+
+export interface DatasetRow extends UniverseRow {
 	vector: number[];
 	label: 0 | 1;
 	outcome: BarrierOutcome;
-	forwardReturnPct: number;
-	ruleScore: number;
 }
 
 interface CorporateActionSummary {
@@ -123,15 +192,42 @@ interface CorporateActionSummary {
 	factor: number;
 }
 
-interface Split {
+export interface WalkFold {
+	index: number;
 	train: DatasetRow[];
-	validation: DatasetRow[];
 	test: DatasetRow[];
+	trainEnd: number;
+	testStart: number;
+	testEnd: number;
+}
+
+export interface WalkForwardSplit {
+	folds: WalkFold[];
+	oos: DatasetRow[];
+	holdout: DatasetRow[];
+	/** Segment edges plus the holdout start, as epoch ms. */
+	boundaries: number[];
+}
+
+interface Evaluation {
+	auc: number;
+	brier: number;
+	logLoss: number;
+	baseRate: number;
+	calibration: ReturnType<typeof calibrationBuckets>;
+	probabilities: number[];
+	labels: number[];
+}
+
+interface TrainingConfig {
+	entrySigma: number;
+	minEntryScore: number;
+	minConfidence: number;
+	signalMode: string;
 }
 
 function mean(values: number[]): number {
-	if (values.length === 0) return 0;
-	return values.reduce((a, b) => a + b, 0) / values.length;
+	return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 }
 
 function std(values: number[]): number {
@@ -143,12 +239,36 @@ function std(values: number[]): number {
 	);
 }
 
+function moments(values: number[]): { skew: number; kurtosis: number } {
+	const n = values.length;
+	if (n < 4) return { skew: 0, kurtosis: 3 };
+	const m = mean(values);
+	const sd = std(values);
+	if (sd <= 0) return { skew: 0, kurtosis: 3 };
+	let m3 = 0;
+	let m4 = 0;
+	for (const value of values) {
+		const z = (value - m) / sd;
+		m3 += z ** 3;
+		m4 += z ** 4;
+	}
+	return { skew: m3 / n, kurtosis: m4 / n };
+}
+
+function outcomeCounts(rows: DatasetRow[]): OutcomeCounts {
+	const counts: OutcomeCounts = { target: 0, stop: 0, timeout: 0 };
+	for (const row of rows) counts[row.outcome] += 1;
+	return counts;
+}
+
 export async function loadDataset(log: (line: string) => void): Promise<{
 	rows: DatasetRow[];
+	universeRows: UniverseRow[];
+	priceSeries: Map<number, { date: number; close: number }[]>;
 	firstDate: Date;
 	lastDate: Date;
 	corporateActions: CorporateActionSummary[];
-	config: { entrySigma: number; minEntryScore: number; signalMode: string };
+	config: TrainingConfig;
 }> {
 	const config = await getCapitalConfig("live");
 	const scoringConfig = {
@@ -180,8 +300,6 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 		);
 	}
 
-	// Re-base every series first: splits/merges would otherwise appear as fake
-	// returns in features, volatility and the forward barrier labels.
 	const seriesByStock = new Map<
 		number,
 		ReturnType<typeof adjustForCorporateActions>["candles"]
@@ -212,15 +330,14 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 		);
 	}
 
-	// Market regime per date: median 30-day return across stocks.
 	const d30ByDate = new Map<number, number[]>();
 	for (const list of seriesByStock.values()) {
 		const closes = list.map((row) => Number(row.close));
 		for (let d = 30; d < closes.length; d++) {
 			const date = (list[d]?.timestamp ?? 0) as number;
-			const list30 = d30ByDate.get(date) ?? [];
-			list30.push((closes[d] ?? 0) / (closes[d - 30] ?? 1) - 1);
-			d30ByDate.set(date, list30);
+			const values = d30ByDate.get(date) ?? [];
+			values.push((closes[d] ?? 0) / (closes[d - 30] ?? 1) - 1);
+			d30ByDate.set(date, values);
 		}
 	}
 	const medianD30ByDate = new Map<number, number>();
@@ -230,17 +347,21 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 	}
 
 	const rows: DatasetRow[] = [];
+	const universeRows: UniverseRow[] = [];
+	const priceSeries = new Map<number, { date: number; close: number }[]>();
 	let firstDate = new Date();
 	let lastDate = new Date(0);
 	let processed = 0;
 	const delayMultiplier = 1 + CAPITAL_EXECUTION_DELAY_BPS / 10_000;
 	for (const [stockId, series] of seriesByStock) {
+		priceSeries.set(
+			stockId,
+			series.map((bar) => ({ date: bar.timestamp * 1000, close: bar.close })),
+		);
 		for (let d = MIN_CANDLES; d + HORIZON_DAYS < series.length; d++) {
 			const decisionBar = series[d];
 			const entryBar = series[d + 1];
 			if (!decisionBar || !entryBar) continue;
-			// Features stop at the decision close. Execution is the next bar's
-			// open plus the manual 1–5 minute delay cost; never the same close.
 			if (!(entryBar.open > 0) || !(decisionBar.close > 0)) continue;
 			const slice = series.slice(Math.max(0, d - MIN_HISTORY_DAYS), d + 1);
 			const base = computeFeatures({
@@ -254,11 +375,7 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 				...base,
 				regimeOn: (medianD30ByDate.get(decisionBar.timestamp) ?? 0) > 0,
 			};
-			// Mirror the live book's candidate filters exactly (entry sigma, RSI,
-			// volatility, drawdown and score floor) instead of a training-only set.
 			const rule = scoreStock(features, scoringConfig);
-			if (!rule.eligible) continue;
-
 			const forward = series.slice(d + 1, d + 1 + HORIZON_DAYS);
 			if (forward.length < HORIZON_DAYS) continue;
 			const entryPrice = entryBar.open * delayMultiplier;
@@ -269,15 +386,23 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 				STOP_PCT,
 			);
 			const date = decisionBar.timestamp * 1000;
-			rows.push({
+			const universe: UniverseRow = {
 				stockId,
 				date,
-				vector: capitalMlFeatureVector(features),
-				label: barrier.label,
-				outcome: barrier.outcome,
 				forwardReturnPct: barrier.returnPct,
+				zscore20: features.zscore20,
 				ruleScore: rule.score,
-			});
+				eligible: rule.eligible,
+			};
+			universeRows.push(universe);
+			if (rule.eligible) {
+				rows.push({
+					...universe,
+					vector: capitalMlFeatureVector(features),
+					label: barrier.label,
+					outcome: barrier.outcome,
+				});
+			}
 			if (date < firstDate.getTime()) firstDate = new Date(date);
 			if (date > lastDate.getTime()) lastDate = new Date(date);
 		}
@@ -288,39 +413,77 @@ export async function loadDataset(log: (line: string) => void): Promise<{
 			);
 		}
 	}
+	universeRows.sort((a, b) => a.date - b.date);
 	rows.sort((a, b) => a.date - b.date);
 	return {
 		rows,
+		universeRows,
+		priceSeries,
 		firstDate,
 		lastDate,
 		corporateActions,
 		config: {
 			entrySigma: config.reversalEntrySigma,
 			minEntryScore: config.minEntryScore,
+			minConfidence: config.mlMinConfidence,
 			signalMode: config.signalMode,
 		},
 	};
 }
 
-function timeSplit(rows: DatasetRow[]): Split {
-	const dates = rows.map((row) => row.date).sort((a, b) => a - b);
-	const q60 = dates[Math.floor(dates.length * 0.6)] ?? 0;
-	const q80 = dates[Math.floor(dates.length * 0.8)] ?? 0;
-	const embargo = EMBARGO_DAYS * 86_400_000;
+/**
+ * Expanding walk-forward with one warm-up segment, five test segments and a
+ * final untouched holdout. Each fold trains on everything before the segment,
+ * skips a 25-day embargo, then tests inside the segment. The embargo is longer
+ * than the 20-day label horizon, so training and test outcomes never overlap.
+ */
+export function walkForwardSplit(
+	rows: DatasetRow[],
+	folds = WALK_FORWARD_FOLDS,
+	embargoDays = EMBARGO_DAYS,
+	holdoutFraction = HOLDOUT_FRACTION,
+): WalkForwardSplit {
+	const dates = [...new Set(rows.map((row) => row.date))].sort((a, b) => a - b);
+	const cutoff = Math.floor(dates.length * (1 - holdoutFraction));
+	const calibrationDates = dates.slice(0, Math.max(folds + 2, cutoff));
+	const edgeAt = (fraction: number): number =>
+		calibrationDates[
+			Math.min(
+				calibrationDates.length - 1,
+				Math.floor(calibrationDates.length * fraction),
+			)
+		] ?? 0;
+	const edges = Array.from({ length: folds + 2 }, (_, i) =>
+		edgeAt(i / (folds + 1)),
+	);
+	const embargo = embargoDays * 86_400_000;
+	const holdoutStart = (edges[folds + 1] ?? 0) + embargo;
+	const result: WalkFold[] = [];
+	for (let i = 1; i <= folds; i++) {
+		const trainEnd = edges[i] ?? 0;
+		const testStart = trainEnd + embargo;
+		const testEnd = (edges[i + 1] ?? 0) - embargo;
+		result.push({
+			index: i,
+			trainEnd,
+			testStart,
+			testEnd,
+			train: rows.filter((row) => row.date < trainEnd),
+			test: rows.filter((row) => row.date >= testStart && row.date < testEnd),
+		});
+	}
 	return {
-		train: rows.filter((row) => row.date < q60 - embargo),
-		validation: rows.filter(
-			(row) => row.date >= q60 + embargo && row.date < q80 - embargo,
-		),
-		test: rows.filter((row) => row.date >= q80 + embargo),
+		folds: result,
+		oos: result.flatMap((fold) => fold.test),
+		holdout: rows.filter((row) => row.date >= holdoutStart),
+		boundaries: [...edges, holdoutStart],
 	};
 }
 
-function evaluate(model: LogisticModel, rows: DatasetRow[]) {
-	const probabilities = rows.map((row) =>
-		predictProbability(model, row.vector),
-	);
-	const labels = rows.map((row) => row.label);
+function evaluateProbabilities(
+	probabilities: number[],
+	labels: number[],
+): Evaluation {
 	return {
 		auc: auc(probabilities, labels),
 		brier: brierScore(probabilities, labels),
@@ -330,6 +493,23 @@ function evaluate(model: LogisticModel, rows: DatasetRow[]) {
 		probabilities,
 		labels,
 	};
+}
+
+function evaluate(model: LogisticModel, rows: DatasetRow[]): Evaluation {
+	return evaluateProbabilities(
+		rows.map((row) => predictProbability(model, row.vector)),
+		rows.map((row) => row.label),
+	);
+}
+
+function plattProbability(
+	probability: number,
+	platt: { a: number; b: number },
+): number {
+	const clamped = Math.min(1 - 1e-6, Math.max(1e-6, probability));
+	const logit = Math.log(clamped / (1 - clamped));
+	const scaled = platt.a * logit + platt.b;
+	return 1 / (1 + Math.exp(-scaled));
 }
 
 function calibrationError(
@@ -346,12 +526,75 @@ function calibrationError(
 	return total ? weighted / total : 0;
 }
 
-function backtest(
+function fitFor(
 	rows: DatasetRow[],
-	score: (row: DatasetRow) => number,
+	l2: number,
+): { model: LogisticModel; mean: number[]; std: number[] } {
+	const stats = featureStats(rows.map((row) => row.vector));
+	const scaled = standardise(
+		rows.map((row) => row.vector),
+		stats.mean,
+		stats.std,
+	);
+	const { intercept, weights } = fitLogistic(
+		scaled,
+		rows.map((row) => row.label),
+		{ l2 },
+	);
+	return {
+		model: {
+			intercept,
+			weights,
+			mean: stats.mean,
+			std: stats.std,
+			features: CAPITAL_ML_FEATURES,
+			targetPct: TARGET_PCT,
+			stopPct: STOP_PCT,
+			horizonDays: HORIZON_DAYS,
+			labelSpec: LABEL_SPEC,
+		},
+		mean: stats.mean,
+		std: stats.std,
+	};
+}
+
+function fitPlatt(
+	probabilities: number[],
+	labels: number[],
+): { a: number; b: number } {
+	const logits = probabilities.map((probability) => {
+		const clamped = Math.min(1 - 1e-6, Math.max(1e-6, probability));
+		return [Math.log(clamped / (1 - clamped))];
+	});
+	const fit = fitLogistic(logits, labels, { l2: 0, iterations: 50 });
+	return { a: fit.weights[0] ?? 1, b: fit.intercept };
+}
+
+function rankIc(rows: DatasetRow[], model: LogisticModel): number {
+	const xs = rows.map((row) => predictProbability(model, row.vector));
+	const ys = rows.map((row) => row.forwardReturnPct);
+	const mx = mean(xs);
+	const my = mean(ys);
+	let numerator = 0;
+	let dx = 0;
+	let dy = 0;
+	for (let i = 0; i < xs.length; i++) {
+		const a = (xs[i] ?? 0) - mx;
+		const b = (ys[i] ?? 0) - my;
+		numerator += a * b;
+		dx += a * a;
+		dy += b * b;
+	}
+	return dx && dy ? numerator / Math.sqrt(dx * dy) : 0;
+}
+
+function blockReturns(
+	rows: UniverseRow[],
+	score: (row: UniverseRow) => number,
 	topK: number,
-): BacktestSummary {
-	const byDate = new Map<number, DatasetRow[]>();
+	scoreFloor = Number.NEGATIVE_INFINITY,
+): number[] {
+	const byDate = new Map<number, UniverseRow[]>();
 	for (const row of rows) {
 		const list = byDate.get(row.date) ?? [];
 		list.push(row);
@@ -359,51 +602,72 @@ function backtest(
 	}
 	const dates = [...byDate.keys()].sort((a, b) => a - b);
 	const returns: number[] = [];
-	let nav = 1;
-	let peak = 1;
-	let maxDrawdown = 0;
-	// Non-overlapping horizon blocks: take the top-k names each block.
 	for (let i = 0; i < dates.length; i += HORIZON_DAYS) {
 		const date = dates[i];
 		if (date === undefined) continue;
-		const candidates = byDate.get(date) ?? [];
-		candidates.sort((a, b) => score(b) - score(a));
-		const chosen = candidates.slice(0, topK);
-		if (chosen.length === 0) continue;
-		// `forwardReturnPct` is already net of the 0.1% sale fee on every row.
-		const net = mean(chosen.map((row) => row.forwardReturnPct)) / 100;
-		returns.push(net);
-		nav *= 1 + net;
-		peak = Math.max(peak, nav);
-		maxDrawdown = Math.max(maxDrawdown, 1 - nav / peak);
+		const candidates = (byDate.get(date) ?? [])
+			.filter((row) => score(row) >= scoreFloor)
+			.sort((a, b) => score(b) - score(a))
+			.slice(0, topK);
+		if (candidates.length === 0) continue;
+		returns.push(mean(candidates.map((row) => row.forwardReturnPct)) / 100);
 	}
-	const years = (returns.length * HORIZON_DAYS) / 365;
-	return {
-		blocks: returns.length,
-		cagr: years > 0 ? nav ** (1 / years) - 1 : 0,
-		sharpe:
-			returns.length > 1
-				? (mean(returns) / std(returns)) * Math.sqrt(365 / HORIZON_DAYS)
-				: 0,
-		maxDrawdown,
-		avgForward: mean(rows.map((row) => row.forwardReturnPct)),
-	};
+	return returns;
 }
 
-function outcomeCounts(rows: DatasetRow[]): OutcomeCounts {
-	const counts: OutcomeCounts = { target: 0, stop: 0, timeout: 0 };
-	for (const row of rows) counts[row.outcome] += 1;
-	return counts;
+function buyAndHoldReturn(
+	universe: UniverseRow[],
+	priceSeries: Map<number, { date: number; close: number }[]>,
+	minEntryScore: number,
+	topK: number,
+): number[] {
+	if (universe.length === 0) return [];
+	const first = Math.min(...universe.map((row) => row.date));
+	const last = Math.max(...universe.map((row) => row.date));
+	if (last <= first) return [];
+	const firstBar = universe.filter((row) => row.date === first);
+	const picks = [...firstBar]
+		.filter((row) => row.ruleScore >= minEntryScore)
+		.sort((a, b) => b.ruleScore - a.ruleScore)
+		.slice(0, topK);
+	if (picks.length === 0) return [];
+	const returns: number[] = [];
+	for (const pick of picks) {
+		const series = priceSeries.get(pick.stockId) ?? [];
+		const entry = series.find((bar) => bar.date >= first)?.close ?? 0;
+		const exit =
+			[...series].reverse().find((bar) => bar.date <= last)?.close ?? 0;
+		if (entry > 0 && exit > 0) {
+			returns.push(exit / entry - 1 - CAPITAL_SALE_FEE_PCT / 100);
+		}
+	}
+	return returns.length ? [mean(returns)] : [];
 }
 
 export async function trainCapitalMlModel(
 	options: TrainOptions = {},
 ): Promise<CapitalMlTrainResult> {
+	const hash = featureSpecHash(CAPITAL_ML_FEATURES);
+	if (
+		hash !== featureSpecHash(PREREGISTRATION.features) ||
+		LABEL_SPEC !== PREREGISTRATION.labelSpec
+	) {
+		throw new Error(
+			"Feature/label spec differs from the pre-registered experiment; register a new run before evaluating.",
+		);
+	}
 	const log = options.onProgress ?? (() => {});
 	const minAuc = options.minAuc ?? 0.55;
 	log("Building dataset from stored daily candles…");
-	const { rows, firstDate, lastDate, corporateActions, config } =
-		await loadDataset(log);
+	const {
+		rows,
+		universeRows,
+		priceSeries,
+		firstDate,
+		lastDate,
+		corporateActions,
+		config,
+	} = await loadDataset(log);
 	const baseRate = mean(rows.map((row) => row.label));
 	const outcomes = outcomeCounts(rows);
 	log(
@@ -413,121 +677,223 @@ export async function trainCapitalMlModel(
 		`outcomes: target ${outcomes.target.toLocaleString()}, stop ${outcomes.stop.toLocaleString()}, timeout ${outcomes.timeout.toLocaleString()}; ${corporateActions.length} split/merge adjustment(s)`,
 	);
 
-	const { train, validation, test } = timeSplit(rows);
-	log(
-		`split: train ${train.length}, validation ${validation.length}, test ${test.length} (embargo ${EMBARGO_DAYS}d)`,
+	const split = walkForwardSplit(rows);
+	const preHoldout = rows.filter(
+		(row) =>
+			row.date < (split.boundaries.at(-1) ?? 0) - EMBARGO_DAYS * 86_400_000,
 	);
-	if (train.length < MIN_TRAIN_ROWS || test.length < MIN_TEST_ROWS) {
+	log(
+		`walk-forward: ${split.folds.length} folds, ${EMBARGO_DAYS}d embargo, ${split.oos.length} OOS rows, ${split.holdout.length} untouched holdout rows`,
+	);
+	for (const fold of split.folds) {
+		log(
+			`  fold ${fold.index}: train ${fold.train.length}, test ${fold.test.length} (${new Date(fold.testStart).toISOString().slice(0, 10)}..${new Date(fold.testEnd).toISOString().slice(0, 10)})`,
+		);
+	}
+	if (
+		preHoldout.length < MIN_TRAIN_ROWS ||
+		split.oos.length < MIN_TEST_ROWS ||
+		split.holdout.length < MIN_TEST_ROWS
+	) {
 		throw new Error(
-			"Not enough labelled rows to train; waiting for more history.",
+			"Not enough labelled rows for walk-forward training; waiting for more history.",
 		);
 	}
 
-	const { mean: featureMean, std: featureStd } = featureStats(
-		train.map((row) => row.vector),
-	);
-	const scaledTrain = standardise(
-		train.map((row) => row.vector),
-		featureMean,
-		featureStd,
-	);
-	const labelsTrain = train.map((row) => row.label);
-
+	// Select the l2 on walk-forward OOS only; the holdout stays untouched.
 	let best: {
 		l2: number;
-		model: LogisticModel;
-		val: ReturnType<typeof evaluate>;
+		auc: number;
+		foldAucs: number[];
+		predictions: DatasetRow[];
+		probabilities: number[];
 	} | null = null;
-	for (const l2 of [0.1, 0.5, 1, 2, 5]) {
-		const { intercept, weights } = fitLogistic(scaledTrain, labelsTrain, {
-			l2,
-		});
-		const model: LogisticModel = {
-			intercept,
-			weights,
-			mean: featureMean,
-			std: featureStd,
-			features: CAPITAL_ML_FEATURES,
-			targetPct: TARGET_PCT,
-			stopPct: STOP_PCT,
-			horizonDays: HORIZON_DAYS,
-			labelSpec: LABEL_SPEC,
-		};
-		const val = evaluate(model, validation);
-		log(
-			`  l2=${l2}: val AUC ${val.auc.toFixed(4)}, Brier ${val.brier.toFixed(4)}, logLoss ${val.logLoss.toFixed(4)}`,
+	for (const l2 of L2_GRID) {
+		const predictions: DatasetRow[] = [];
+		const probabilities: number[] = [];
+		const perFoldAucs: number[] = [];
+		for (const fold of split.folds) {
+			if (fold.train.length < MIN_TRAIN_ROWS) continue;
+			const { model } = fitFor(fold.train, l2);
+			const foldProbabilities = fold.test.map((row) =>
+				predictProbability(model, row.vector),
+			);
+			predictions.push(...fold.test);
+			probabilities.push(...foldProbabilities);
+			perFoldAucs.push(
+				auc(
+					foldProbabilities,
+					fold.test.map((row) => row.label),
+				),
+			);
+		}
+		// Select on the mean of per-fold AUCs. Pooled AUC mixes models fitted on
+		// different windows with different calibration scales and can be inflated.
+		const meanFoldAuc = mean(perFoldAucs);
+		const pooledBrier = brierScore(
+			probabilities,
+			predictions.map((row) => row.label),
 		);
-		if (!best || val.auc > best.val.auc) best = { l2, model, val };
+		log(
+			`  l2=${l2}: mean fold AUC ${meanFoldAuc.toFixed(4)} (${perFoldAucs.map((value) => value.toFixed(3)).join(", ")}), pooled Brier ${pooledBrier.toFixed(4)}`,
+		);
+		if (!best || meanFoldAuc > best.auc) {
+			best = {
+				l2,
+				auc: meanFoldAuc,
+				foldAucs: perFoldAucs,
+				predictions,
+				probabilities,
+			};
+		}
 	}
 	if (!best) throw new Error("Training failed.");
-
-	const model = best.model;
-
-	// Platt calibration on validation: the base rate drifts between periods, so
-	// the raw scores rank well but are not trustworthy as absolutes.
-	const valProbabilities = validation.map((row) =>
-		predictProbability(model, row.vector),
+	const chosenL2 = options.l2 ?? best.l2;
+	const final = fitFor(preHoldout, chosenL2);
+	const model = final.model;
+	// Platt is fitted on the fold models' true OOS probabilities, never on the
+	// final model's in-sample scores.
+	const platt = fitPlatt(
+		best.probabilities,
+		best.predictions.map((row) => row.label),
 	);
-	const valLogits = valProbabilities.map((p) => {
-		const clamped = Math.min(1 - 1e-6, Math.max(1e-6, p));
-		return [Math.log(clamped / (1 - clamped))];
-	});
-	const plattFit = fitLogistic(
-		valLogits,
-		validation.map((row) => row.label),
-		{ l2: 0, iterations: 50 },
-	);
-	const platt = { a: plattFit.weights[0] ?? 1, b: plattFit.intercept };
 	model.platt = platt;
-	log(`Platt calibration: a=${platt.a.toFixed(3)} b=${platt.b.toFixed(3)}`);
-
-	const trainMetrics = evaluate(model, train);
-	const testMetrics = evaluate(model, test);
-	const calErr = calibrationError(testMetrics.calibration);
 	log(
-		`Chosen l2=${best.l2}; train AUC ${trainMetrics.auc.toFixed(4)}, test AUC ${testMetrics.auc.toFixed(4)}, test Brier ${testMetrics.brier.toFixed(4)}, test logLoss ${testMetrics.logLoss.toFixed(4)}, calibration error ${calErr.toFixed(4)}, test base rate ${(testMetrics.baseRate * 100).toFixed(1)}%`,
+		`Platt calibration (walk-forward OOS): a=${platt.a.toFixed(3)} b=${platt.b.toFixed(3)}`,
 	);
 
-	const testScores = test.map((row) => predictProbability(model, row.vector));
-	const scoreMap = new Map(test.map((row, i) => [row, testScores[i] ?? 0]));
-	const ruleCandidates = test.filter((row) => row.ruleScore >= 65);
-	const ruleOnly = backtest(ruleCandidates, (row) => row.ruleScore, 5);
-	const withModel = backtest(
-		ruleCandidates,
-		(row) => scoreMap.get(row) ?? 0,
-		5,
+	const trainEvaluation = evaluate(model, preHoldout);
+	const oosEvaluation = evaluateProbabilities(
+		best.probabilities.map((probability) =>
+			plattProbability(probability, platt),
+		),
+		best.predictions.map((row) => row.label),
 	);
-	const rankIc = (() => {
-		const xs = test.map((row) => scoreMap.get(row) ?? 0);
-		const ys = test.map((row) => row.forwardReturnPct);
-		const meanX = mean(xs);
-		const meanY = mean(ys);
-		let num = 0;
-		let dx = 0;
-		let dy = 0;
-		for (let i = 0; i < xs.length; i++) {
-			const a = (xs[i] ?? 0) - meanX;
-			const b = (ys[i] ?? 0) - meanY;
-			num += a * b;
-			dx += a * a;
-			dy += b * b;
-		}
-		return dx && dy ? num / Math.sqrt(dx * dy) : 0;
-	})();
+	// First holdout evaluation. No parameter is tuned after this point.
+	const holdoutEvaluation = evaluate(model, split.holdout);
+	const calErr = calibrationError(holdoutEvaluation.calibration);
+	const foldAucs =
+		chosenL2 === best.l2
+			? best.foldAucs
+			: split.folds.map((fold) => {
+					const { model: overrideModel } = fitFor(fold.train, chosenL2);
+					return auc(
+						fold.test.map((row) =>
+							predictProbability(overrideModel, row.vector),
+						),
+						fold.test.map((row) => row.label),
+					);
+				});
 	log(
-		`Test 20d blocks: rule CAGR ${(ruleOnly.cagr * 100).toFixed(1)}%, model CAGR ${(withModel.cagr * 100).toFixed(1)}%, correlation(p, forward20) ${rankIc.toFixed(4)}`,
+		`chosen l2=${chosenL2}; fold AUCs ${foldAucs.map((value) => value.toFixed(3)).join(", ")}; train AUC ${trainEvaluation.auc.toFixed(4)}, OOS AUC ${oosEvaluation.auc.toFixed(4)}, holdout AUC ${holdoutEvaluation.auc.toFixed(4)}, holdout Brier ${holdoutEvaluation.brier.toFixed(4)}, calibration error ${calErr.toFixed(4)}, holdout base rate ${(holdoutEvaluation.baseRate * 100).toFixed(1)}%`,
+	);
+
+	const holdoutDates = new Set(split.holdout.map((row) => row.date));
+	const holdoutUniverse = universeRows.filter((row) =>
+		holdoutDates.has(row.date),
+	);
+	const probabilityByKey = new Map<string, number>();
+	for (let i = 0; i < split.holdout.length; i++) {
+		probabilityByKey.set(
+			`${split.holdout[i]?.date}:${split.holdout[i]?.stockId}`,
+			holdoutEvaluation.probabilities[i] ?? 0,
+		);
+	}
+	const scoreProbability = (row: UniverseRow): number =>
+		probabilityByKey.get(`${row.date}:${row.stockId}`) ??
+		Number.NEGATIVE_INFINITY;
+
+	let ruleReturns: number[];
+	let modelReturns: number[];
+	let reversalReturns: number[];
+	let equalWeightReturns: number[];
+	let buyHoldReturns: number[];
+	{
+		const ruleCandidates = holdoutUniverse.filter((row) => row.eligible);
+		ruleReturns = blockReturns(
+			ruleCandidates,
+			(row) => row.ruleScore,
+			5,
+			config.minEntryScore,
+		);
+		// `ml_min_confidence` is an enable-time veto, not a ranking filter. The
+		// comparison is top-5 among rule candidates, exactly like the rule arm.
+		modelReturns = blockReturns(ruleCandidates, scoreProbability, 5);
+		reversalReturns = blockReturns(holdoutUniverse, (row) => -row.zscore20, 5);
+		equalWeightReturns = blockReturns(
+			holdoutUniverse,
+			() => 1,
+			Math.max(1, new Set(holdoutUniverse.map((row) => row.stockId)).size),
+		);
+		buyHoldReturns = buyAndHoldReturn(
+			holdoutUniverse,
+			priceSeries,
+			config.minEntryScore,
+			5,
+		);
+	}
+	const holdoutDays =
+		holdoutUniverse.length > 0
+			? (Math.max(...holdoutUniverse.map((row) => row.date)) -
+					Math.min(...holdoutUniverse.map((row) => row.date))) /
+				86_400_000
+			: HORIZON_DAYS;
+	const ruleOnly = backtestMetrics(ruleReturns);
+	const withModel = backtestMetrics(modelReturns);
+	const baselines = {
+		rule: ruleOnly,
+		model: withModel,
+		reversal: backtestMetrics(reversalReturns),
+		equalWeight: backtestMetrics(equalWeightReturns),
+		buyHold: backtestMetrics(buyHoldReturns, Math.max(1, holdoutDays), 1),
+	};
+	const { skew, kurtosis } = moments(modelReturns);
+	const uncertainty: UncertaintyReport = {
+		bootstrap: {
+			cagr: bootstrapCI(modelReturns, (sample) => backtestMetrics(sample).cagr),
+			sharpe: bootstrapCI(
+				modelReturns,
+				(sample) => backtestMetrics(sample).sharpe,
+			),
+			ruleCagr: bootstrapCI(
+				ruleReturns,
+				(sample) => backtestMetrics(sample).cagr,
+			),
+		},
+		deflatedSharpe: deflatedSharpe(
+			blockSharpe(modelReturns),
+			L2_GRID.length,
+			modelReturns.length,
+			skew,
+			kurtosis,
+		),
+		deflatedSharpeTrials: L2_GRID.length,
+		pbo: (() => {
+			const result = probabilityOfBacktestOverfit(
+				[ruleReturns, modelReturns, reversalReturns, equalWeightReturns],
+				8,
+			);
+			return Number.isNaN(result.pbo) ? { ...result, pbo: null } : result;
+		})(),
+	};
+	const ic = rankIc(split.holdout, model);
+	log(
+		`Holdout ${HORIZON_DAYS}d blocks: rule ${(ruleOnly.cagr * 100).toFixed(1)}% CAGR / Sharpe ${ruleOnly.sharpe.toFixed(2)} / MaxDD ${(ruleOnly.maxDrawdown * 100).toFixed(1)}%; model ${(withModel.cagr * 100).toFixed(1)}% / ${withModel.sharpe.toFixed(2)} / ${(withModel.maxDrawdown * 100).toFixed(1)}%; IC ${ic.toFixed(4)}`,
+	);
+	log(
+		`Uncertainty: model CAGR 95% CI [${(uncertainty.bootstrap.cagr.lower * 100).toFixed(1)}%, ${(uncertainty.bootstrap.cagr.upper * 100).toFixed(1)}%], deflated Sharpe ${uncertainty.deflatedSharpe.toFixed(3)}, PBO ${uncertainty.pbo.pbo === null ? "n/a" : uncertainty.pbo.pbo.toFixed(3)} (${uncertainty.pbo.reliable ? "reliable" : "thin sample"})`,
 	);
 
 	const gates = {
-		auc: testMetrics.auc >= minAuc,
+		auc: holdoutEvaluation.auc >= minAuc,
 		calibration: calErr <= 0.05,
-		beatsBaseRate: testMetrics.brier < baseRate * (1 - baseRate),
+		beatsBaseRate:
+			holdoutEvaluation.brier <
+			holdoutEvaluation.baseRate * (1 - holdoutEvaluation.baseRate),
 	};
-	// Shadow activation only needs ranking skill: predictions are logged and do
-	// not touch orders. `ml_enabled` is a separate operator decision.
 	const shadowSafe = gates.auc && gates.beatsBaseRate;
 	log(
-		`Gates: AUC ${gates.auc}, calibration ${gates.calibration}, beats base rate ${gates.beatsBaseRate}; shadow-safe ${shadowSafe}`,
+		`Gates (holdout): AUC ${gates.auc}, calibration ${gates.calibration}, beats base rate ${gates.beatsBaseRate}; shadow-safe ${shadowSafe}`,
 	);
 
 	const result: CapitalMlTrainResult = {
@@ -536,68 +902,128 @@ export async function trainCapitalMlModel(
 		lastDate,
 		baseRate,
 		split: {
-			train: train.length,
-			validation: validation.length,
-			test: test.length,
+			train: preHoldout.length,
+			validation: split.oos.length,
+			test: split.holdout.length,
 		},
-		chosenL2: best.l2,
+		chosenL2,
 		platt,
 		corporateActions: corporateActions.length,
+		preregistration: {
+			hash,
+			family: PREREGISTRATION.modelFamily,
+			selectionMetric: PREREGISTRATION.selectionMetric,
+		},
+		foldAucs,
 		metrics: {
-			trainAuc: trainMetrics.auc,
-			testAuc: testMetrics.auc,
-			testBrier: testMetrics.brier,
-			testLogLoss: testMetrics.logLoss,
+			trainAuc: trainEvaluation.auc,
+			testAuc: holdoutEvaluation.auc,
+			testBrier: holdoutEvaluation.brier,
+			testLogLoss: holdoutEvaluation.logLoss,
 			calibrationError: calErr,
-			testBaseRate: testMetrics.baseRate,
-			correlationWithForwardReturn: rankIc,
+			testBaseRate: holdoutEvaluation.baseRate,
+			correlationWithForwardReturn: ic,
 			ruleOnly,
 			withModel,
-			calibration: testMetrics.calibration,
+			calibration: holdoutEvaluation.calibration,
 			outcomes,
-			testOutcomes: outcomeCounts(test),
+			testOutcomes: outcomeCounts(split.holdout),
+			oos: oosEvaluation,
+			holdout: holdoutEvaluation,
+			baselines,
+			uncertainty,
 		},
 		gates,
 		shadowSafe,
 		activated: false,
 		modelId: null,
 		version: null,
+		runId: null,
 	};
 
-	if (!options.activate) return result;
-	if (!shadowSafe && !options.force) {
-		throw new Error(
-			"Ranking gates failed; refusing to activate. Use --force to override.",
+	if (options.activate) {
+		if (!shadowSafe && !options.force) {
+			throw new Error(
+				"Ranking gates failed; refusing to activate. Use --force to override.",
+			);
+		}
+		const version = `meta_label_logistic@${new Date().toISOString()}`;
+		const row = await insertCapitalMlModel(
+			{
+				version,
+				kind: PREREGISTRATION.modelFamily,
+				featureSpec: [...CAPITAL_ML_FEATURES],
+				artifact: model as unknown as Record<string, unknown>,
+				metrics: {
+					l2: chosenL2,
+					...result.metrics,
+					platt,
+					splits: result.split,
+					foldAucs,
+					baseRate,
+					gates,
+					preregistration: result.preregistration,
+					candidateConfig: config,
+				},
+				dataStart: firstDate,
+				dataEnd: lastDate,
+				notes: `label ${LABEL_SPEC}: first +1R trim vs entry stop, target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; next-bar execution + ${CAPITAL_EXECUTION_DELAY_BPS}bps delay; daily high/low touches, stop-first; ${CAPITAL_SALE_FEE_PCT}% fee on sale only; candidates ${config.signalMode} z<=-${config.entrySigma}, score>=${config.minEntryScore}; walk-forward ${WALK_FORWARD_FOLDS} folds, embargo ${EMBARGO_DAYS}d, holdout ${HOLDOUT_FRACTION}`,
+			},
+			{ activate: true },
+		);
+		result.activated = true;
+		result.modelId = row.id;
+		result.version = version;
+		log(
+			`Activated model ${row.id} (${version})${gates.calibration ? "" : " for shadow logging only; calibration outside target"}.`,
 		);
 	}
 
-	const version = `meta_label_logistic@${new Date().toISOString()}`;
-	const row = await insertCapitalMlModel(
-		{
-			version,
-			kind: "meta_label_logistic",
-			featureSpec: [...CAPITAL_ML_FEATURES],
-			artifact: model as unknown as Record<string, unknown>,
-			metrics: {
-				l2: best.l2,
-				...result.metrics,
-				platt,
-				splits: result.split,
-				baseRate,
-				gates,
-				candidateConfig: config,
-			},
-			dataStart: firstDate,
-			dataEnd: lastDate,
-			notes: `label ${LABEL_SPEC}: first +1R trim vs entry stop, target ${TARGET_PCT}% / stop ${STOP_PCT}% / ${HORIZON_DAYS}d; next-bar execution + ${CAPITAL_EXECUTION_DELAY_BPS}bps delay; daily high/low touches, stop-first; ${CAPITAL_SALE_FEE_PCT}% fee on sale only; candidates ${config.signalMode} z<=-${config.entrySigma}, score>=${config.minEntryScore}`,
+	const run = await insertCapitalMlRun({
+		featureSpecHash: hash,
+		featureSpec: [...CAPITAL_ML_FEATURES],
+		labelSpec: LABEL_SPEC,
+		dataStart: firstDate,
+		dataEnd: lastDate,
+		rows: rows.length,
+		folds: {
+			count: split.folds.length,
+			embargoDays: EMBARGO_DAYS,
+			holdoutFraction: HOLDOUT_FRACTION,
+			boundaries: split.boundaries.map((date) => new Date(date).toISOString()),
+			sizes: split.folds.map((fold) => ({
+				train: fold.train.length,
+				test: fold.test.length,
+			})),
+			aucs: foldAucs,
 		},
-		{ activate: true },
-	);
-	result.activated = true;
-	result.modelId = row.id;
-	result.version = version;
-	log(
-		`Activated model ${row.id} (${version})${gates.calibration ? "" : " for shadow logging only; calibration outside target"}.`,
-	);
+		hyperparameters: {
+			l2Grid: [...L2_GRID],
+			chosenL2,
+			platt,
+			modelFamily: PREREGISTRATION.modelFamily,
+			selectionMetric: PREREGISTRATION.selectionMetric,
+		},
+		gates: { ...gates, shadowSafe },
+		metrics: {
+			trainAuc: result.metrics.trainAuc,
+			oosAuc: oosEvaluation.auc,
+			testAuc: result.metrics.testAuc,
+			testBrier: result.metrics.testBrier,
+			testLogLoss: result.metrics.testLogLoss,
+			calibrationError: calErr,
+			calibration: holdoutEvaluation.calibration,
+			correlationWithForwardReturn: ic,
+		},
+		baselines: Object.fromEntries(
+			Object.entries(baselines).map(([name, summary]) => [name, summary]),
+		),
+		uncertainty: uncertainty as unknown as Record<string, unknown>,
+		modelId: result.modelId,
+		activated: result.activated,
+		notes: `pre-registered ${hash}; ${rows.length} candidates; outcomes ${outcomes.target}/${outcomes.stop}/${outcomes.timeout}`,
+	});
+	result.runId = run.id;
+	log(`Recorded ML run ${run.id}.`);
 	return result;
 }

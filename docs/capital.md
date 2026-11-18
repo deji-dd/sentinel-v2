@@ -188,25 +188,39 @@ The `capital:ml:train` worker builds a meta-label dataset from the stored daily
 candles (candidates filtered with the live book config, currently z <= -1.25σ
 and score >= 65), enters at the next bar's open with a delay cost, labels with
 `first_trim_r1_v2` (+2%/-2% over 20 days on daily high/low, stop-first on
-same-bar ambiguity, 0.1% sale fee, timeout as a distinct outcome), fits an L2
-logistic regression with a time-ordered split and embargo, and activates the
-result for shadow logging when it clears the ranking gates. It runs
+same-bar ambiguity, 0.1% sale fee, timeout as a distinct outcome), and selects
+an L2 logistic model with a **purged expanding walk-forward**: five folds, a
+25-day embargo between train and test, and a final untouched 20% holdout used
+once for the gates. Features, label, model family and the l2 grid are
+pre-registered before the holdout is evaluated; selection uses the mean of
+per-fold AUCs, not a pooled AUC that mixes calibration scales. It runs
 on boot once history is ready (checked 10 minutes after start) and retrains when
 the active model is older than 30 days — no command needed. `bun run capital:ml:train` remains for an immediate
 run or an experiment (`--activate` to store it). Disable with
 `CAPITAL_AUTO_ML_TRAIN=false`.
 
+Baselines are replayed on the same holdout dates and costs: rule, model, simple
+reversal, equal-weight and buy-and-hold. Every run reports net Sharpe, Sortino,
+MaxDD, Calmar, hit rate, payoff, turnover, exposure, Brier/log loss, a bootstrap
+95% CI on CAGR and Sharpe, deflated Sharpe and CSCV probability of backtest
+overfitting. Each run is persisted in `capital_ml_runs` with its feature hash,
+fold boundaries, hyperparameters, gates and metrics so it is reproducible. PBO
+is marked unreliable below 40 blocks; with the current holdout it is a thin
+sample and must not be read as evidence either way.
+
 Activation is safe by default: the engine computes a probability for every
 reversal candidate and writes it to `capital_ml_predictions`, but does **not**
 change orders until the book sets `ml_enabled = true`. `ml_weight` blends the
-probability into the ranking, `ml_min_confidence` is the probability floor, and
+probability into the ranking, `ml_min_confidence` is the enable-time veto
+(it is not applied to the model-vs-rule backtest), and
 `ml_max_model_age_days` expires a stale model. The active model is ignored
-automatically if its feature spec does not match the running code.
+automatically if its feature spec or label spec does not match the running code.
 
-The first model trained on 2021-2026 data reaches a test AUC of ~0.58 and is
-within ~0.06 of the calibration target; it ties the rule on the test slice, so it
-is activated for shadow logging only. Do not enable it until the shadow results
-and calibration improve.
+The current holdout slice gives AUC ~0.57 and passes calibration and
+beats-base-rate on the local dataset, but the bootstrap CIs for rule and model
+CAGR overlap heavily and the PBO estimate is too thin to trust. Do not enable
+until the shadow period produces live outcomes and the edge survives those
+uncertainty checks.
 
 ## Bot
 

@@ -54,7 +54,9 @@ The data, signal and shadow-ML layers are implemented; live ML ranking is not.
 | One-time history backfill with Torn-anchor validation                 | done — `bun run stocks:backfill`                          |
 | Audit reports per-interval readiness                                  | done — `bun run capital:ml:audit`                         |
 | Dataset builder + triple-barrier labels                               | done — `bun run capital:ml:train`                         |
-| Logistic meta-label, time-ordered split, embargo, Platt calibration   | done — test AUC **0.574** under label v2 (see note below) |
+| Logistic meta-label, purged 5-fold walk-forward, Platt calibration    | done — holdout AUC ~0.57 under label v2 (see notes)       |
+| Baselines, full metric set, bootstrap CIs, deflated Sharpe, PBO       | done — `bun run capital:ml:train`                        |
+| Immutable experiment records (`capital_ml_runs`)                      | done — migration `0086`                                   |
 | Shadow predictions + outcome scoring                                  | done — `capital:ml` worker                                |
 | Automatic retrain (boot + every 30 days, shadow activation only)      | done — `capital:ml:train` worker                          |
 | Capped deployment (`ml_enabled`)                                      | not enabled — the first model ties the rule               |
@@ -104,6 +106,20 @@ not a win. It is activated for shadow logging only; `ml_enabled` stays false.
 That is the honest state: the pipeline works end to end, the gate refuses to
 deploy, and the next iteration should add features that explain the base-rate
 shift (regime, dispersion) or a better label, not a bigger model.
+
+**Out-of-sample discipline (2026-11-18, P1).** The single split is replaced by a
+purged expanding walk-forward (five folds, 25-day embargo, final untouched 20%
+holdout). Features, label, model family and the l2 grid are pre-registered and
+hashed; l2 is chosen on the mean of *per-fold* AUCs, because pooling probabilities
+from models fitted on different windows inflates AUC. The holdout is replayed
+against rule, simple reversal, equal-weight and buy-and-hold on the same dates
+and costs, with the full risk/calibration metric set, bootstrap CIs, deflated
+Sharpe and CSCV PBO. On the local dataset (9,079 candidates) fold AUCs are
+0.529–0.594, holdout AUC 0.567, calibration error 0.036, and the model's 10.3%
+CAGR against the rule's 9.9% comes with 95% CIs of [5.6%, 15.0%] vs [5.2%, 14.8%]
+and a PBO of 0.63 on a thin 18-block sample. **The intervals overlap: there is no
+demonstrated edge over the rule.** `ml_enabled` stays false and shadow outcomes
+remain the deciding evidence.
 
 ---
 

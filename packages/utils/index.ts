@@ -4,6 +4,7 @@ export * from "./src/capital-matching";
 export * from "./src/capital-money";
 export * from "./src/capital-nav";
 export * from "./src/capital-ml";
+export * from "./src/capital-ml-metrics";
 export * from "./src/capital-policy";
 export * from "./src/capital-signals";
 export * from "./src/capital-time";

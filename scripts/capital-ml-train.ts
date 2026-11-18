@@ -55,9 +55,22 @@ for (const [label, summary] of [
 	["model    ", result.metrics.withModel],
 ] as const) {
 	console.log(
-		`  ${label}: blocks ${summary.blocks}, CAGR ${(summary.cagr * 100).toFixed(1)}%, Sharpe ${summary.sharpe.toFixed(2)}, MaxDD ${(summary.maxDrawdown * 100).toFixed(1)}%`,
+		`  ${label}: blocks ${summary.blocks}, CAGR ${(summary.cagr * 100).toFixed(1)}%, Sharpe ${summary.sharpe.toFixed(2)}, Sortino ${summary.sortino.toFixed(2)}, MaxDD ${(summary.maxDrawdown * 100).toFixed(1)}%, Calmar ${summary.calmar.toFixed(2)}, hit ${(summary.hitRate * 100).toFixed(1)}%, payoff ${summary.payoff.toFixed(2)}, turnover ${summary.turnover.toFixed(2)}, exposure ${(summary.exposure * 100).toFixed(0)}%`,
 	);
 }
+console.log("\nBaselines (same dates and costs):");
+for (const [label, summary] of Object.entries(result.metrics.baselines)) {
+	console.log(
+		`  ${label.padEnd(12)}: CAGR ${(summary.cagr * 100).toFixed(1)}%, Sharpe ${summary.sharpe.toFixed(2)}, MaxDD ${(summary.maxDrawdown * 100).toFixed(1)}%`,
+	);
+}
+const uncertainty = result.metrics.uncertainty;
+console.log(
+	`\nUncertainty: model CAGR 95% CI [${(uncertainty.bootstrap.cagr.lower * 100).toFixed(1)}%, ${(uncertainty.bootstrap.cagr.upper * 100).toFixed(1)}%]; rule CAGR 95% CI [${(uncertainty.bootstrap.ruleCagr.lower * 100).toFixed(1)}%, ${(uncertainty.bootstrap.ruleCagr.upper * 100).toFixed(1)}%]; deflated Sharpe ${uncertainty.deflatedSharpe.toFixed(3)} (${uncertainty.deflatedSharpeTrials} trials); PBO ${uncertainty.pbo.pbo === null ? "n/a" : uncertainty.pbo.pbo.toFixed(3)}${uncertainty.pbo.reliable ? "" : " (thin sample)"}`,
+);
+console.log(
+	`Pre-registered: ${result.preregistration.hash} / ${result.preregistration.family}; fold AUCs ${result.foldAucs.map((value) => value.toFixed(3)).join(", ")}; run ${result.runId ?? "n/a"}`,
+);
 console.log("\nGates:", result.gates);
 if (!flags.activate) {
 	console.log(
