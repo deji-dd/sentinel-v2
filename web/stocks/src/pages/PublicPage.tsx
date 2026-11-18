@@ -166,7 +166,7 @@ function BookOverview({ book }: { book: Book }) {
 						/>
 						<StatCard
 							label="NAV / unit"
-							value={money(summary.navPerUnit)}
+							value={money(summary.navPerUnit, 4)}
 							hint={`${summary.daysRunning ?? "—"} days running`}
 							help="Net Asset Value: the fund's total assets divided by the units outstanding. Each deposit buys units at the NAV on that day."
 						/>

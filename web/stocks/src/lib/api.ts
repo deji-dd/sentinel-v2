@@ -59,14 +59,18 @@ export async function apiFetch<T>(
 	return body as T;
 }
 
-export function money(value: string | number | null | undefined): string {
+export function money(
+	value: string | number | null | undefined,
+	decimals = 2,
+): string {
 	if (value === null || value === undefined || value === "") return "—";
 	const parsed = typeof value === "number" ? value : Number(value);
 	if (!Number.isFinite(parsed)) return "—";
 	return new Intl.NumberFormat("en-US", {
 		style: "currency",
 		currency: "USD",
-		maximumFractionDigits: 2,
+		minimumFractionDigits: decimals,
+		maximumFractionDigits: decimals,
 	}).format(parsed);
 }
 

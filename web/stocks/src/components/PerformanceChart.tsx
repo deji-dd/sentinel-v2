@@ -33,6 +33,12 @@ function formatPointTime(
 /** Smallest allowed Y span, as a fraction of the value: ±1% around the middle. */
 const MIN_SPAN_RATIO = 0.02;
 
+/** NAV per unit is stored with four decimals; format ticks and tooltips to match. */
+function formatNav(value: number | string): string {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed.toFixed(4) : "—";
+}
+
 /**
  * Hug the data instead of anchoring the Y axis at zero. NAV per unit sits near
  * 1.0 and daily moves are a fraction of a percent, so a zero baseline flattens
@@ -106,13 +112,15 @@ export function PerformanceChart({
 						fontSize={11}
 						tickLine={false}
 						axisLine={false}
-						width={52}
+						width={56}
 						domain={yDomain}
+						tickFormatter={formatNav}
 					/>
 					<Tooltip
 						labelFormatter={(value) =>
 							formatPointTime(String(value), granularity)
 						}
+						formatter={(value) => formatNav(String(value))}
 						contentStyle={{
 							background: "var(--card)",
 							border: "1px solid var(--border)",
