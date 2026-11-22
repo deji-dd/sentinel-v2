@@ -1,4 +1,4 @@
-import { Info } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info } from "lucide-react";
 import { type ReactNode, useId } from "react";
 
 import { cn } from "@/lib/utils";
@@ -283,5 +283,56 @@ export function HelpTip({ children }: { children: ReactNode }) {
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
+	);
+}
+
+/** Compact previous/next pagination for a table footer. */
+export function Pagination({
+	page,
+	pageCount,
+	onPageChange,
+	label,
+	disabled,
+}: {
+	page: number;
+	pageCount: number;
+	onPageChange: (page: number) => void;
+	label?: ReactNode;
+	disabled?: boolean;
+}) {
+	if (pageCount <= 1) return null;
+	return (
+		<div className="flex flex-col gap-2 border-t border-border/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+			<div className="text-[11px] text-muted-foreground sm:text-xs">
+				{label}
+			</div>
+			<div className="flex items-center justify-between gap-2 sm:justify-end">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={disabled || page <= 1}
+					onClick={() => onPageChange(page - 1)}
+					className="gap-1.5"
+				>
+					<ChevronLeft className="size-3.5" />
+					Prev
+				</Button>
+				<span className="px-1 font-mono text-[11px] tabular-nums text-muted-foreground sm:text-xs">
+					{page} / {pageCount}
+				</span>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={disabled || page >= pageCount}
+					onClick={() => onPageChange(page + 1)}
+					className="gap-1.5"
+				>
+					Next
+					<ChevronRight className="size-3.5" />
+				</Button>
+			</div>
+		</div>
 	);
 }

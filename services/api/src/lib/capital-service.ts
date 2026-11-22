@@ -32,6 +32,7 @@ import {
 } from "@sentinel/database";
 import type {
 	CapitalAccessRow,
+	CapitalAdminFillsPage,
 	CapitalAdminOverview,
 	CapitalBook,
 	CapitalContactView,
@@ -42,6 +43,7 @@ import type {
 	CapitalInvestorView,
 	CapitalLotView,
 	CapitalOrderView,
+	CapitalPagination,
 	CapitalPaymentIntentView,
 	CapitalPayoutView,
 	CapitalPerformancePoint,
@@ -50,13 +52,17 @@ import type {
 	CapitalPublicInvestor,
 	CapitalPublicOverview,
 	CapitalPublicTrade,
+	CapitalPublicTradesPage,
 	CapitalReconciliationIssueView,
 	CapitalSettings,
 	CapitalSummary,
 	CapitalWithdrawalQuote,
 	CapitalWithdrawalView,
 } from "@sentinel/schemas";
-import { isCapitalSignalMode } from "@sentinel/schemas";
+import {
+	CAPITAL_TRADES_PAGE_SIZE,
+	isCapitalSignalMode,
+} from "@sentinel/schemas";
 import {
 	CAPITAL_SIZING,
 	computeDeposit,
@@ -426,33 +432,140 @@ async function loadPublicInvestors(
 		);
 }
 
+function normalizePage(input: { page?: number; pageSize?: number }): {
+	page: number;
+	pageSize: number;
+	offset: number;
+} {
+	const page = Math.max(1, Math.floor(input.page ?? 1) || 1);
+	const pageSize = Math.min(
+		100,
+		Math.max(
+			1,
+			Math.floor(input.pageSize ?? CAPITAL_TRADES_PAGE_SIZE) ||
+				CAPITAL_TRADES_PAGE_SIZE,
+		),
+	);
+	return { page, pageSize, offset: (page - 1) * pageSize };
+}
+
+function buildPagination(input: {
+	page: number;
+	pageSize: number;
+	total: number;
+}): CapitalPagination {
+	const totalPages = Math.ceil(input.total / input.pageSize);
+	return {
+		page: input.page,
+		pageSize: input.pageSize,
+		total: input.total,
+		totalPages,
+		hasNextPage: input.page < totalPages,
+		hasPrevPage: input.page > 1,
+	};
+}
+
+async function countCapitalFills(book: CapitalBook): Promise<number> {
+	const [row] = await db
+		.select({ total: sql<number>`COUNT(*)` })
+		.from(capitalFills)
+		.where(eq(capitalFills.book, book));
+	return Number(row?.total ?? 0);
+}
+
+function toPublicTrade(
+	fill: typeof capitalFills.$inferSelect,
+	stockMap: Map<number, { name: string; acronym: string }>,
+): CapitalPublicTrade {
+	const stock = stockMap.get(fill.stockId);
+	return {
+		id: fill.id,
+		stockId: fill.stockId,
+		name: stock?.name ?? `Stock #${fill.stockId}`,
+		acronym: stock?.acronym ?? `#${fill.stockId}`,
+		side: fill.side === "sell" ? "sell" : "buy",
+		shares: fill.shares,
+		price: fill.price,
+		notional: fill.notional,
+		exitReason: fill.exitReason,
+		fees: fill.fees,
+		occurredAtIso: fill.occurredAt.toISOString(),
+	};
+}
+
 async function loadPublicTrades(
 	book: CapitalBook,
 	stockMap: Map<number, { name: string; acronym: string }>,
-	limit = 50,
+	limit = CAPITAL_TRADES_PAGE_SIZE,
+	offset = 0,
 ): Promise<CapitalPublicTrade[]> {
 	const fills = await db
 		.select()
 		.from(capitalFills)
 		.where(eq(capitalFills.book, book))
 		.orderBy(desc(capitalFills.occurredAt))
-		.limit(limit);
-	return fills.map((fill) => {
-		const stock = stockMap.get(fill.stockId);
-		return {
-			id: fill.id,
-			stockId: fill.stockId,
-			name: stock?.name ?? `Stock #${fill.stockId}`,
-			acronym: stock?.acronym ?? `#${fill.stockId}`,
-			side: fill.side === "sell" ? "sell" : "buy",
-			shares: fill.shares,
-			price: fill.price,
-			notional: fill.notional,
-			exitReason: fill.exitReason,
-			fees: fill.fees,
-			occurredAtIso: fill.occurredAt.toISOString(),
-		};
-	});
+		.limit(limit)
+		.offset(offset);
+	return fills.map((fill) => toPublicTrade(fill, stockMap));
+}
+
+function toCapitalFillView(
+	fill: typeof capitalFills.$inferSelect,
+	book: CapitalBook,
+	stockMap: Map<number, { name: string; acronym: string }>,
+): CapitalFillView {
+	const stock = stockMap.get(fill.stockId);
+	return {
+		id: fill.id,
+		book,
+		orderId: fill.orderId,
+		stockId: fill.stockId,
+		stockName: stock?.name ?? `Stock #${fill.stockId}`,
+		side: fill.side === "sell" ? "sell" : "buy",
+		shares: fill.shares,
+		price: fill.price,
+		notional: fill.notional,
+		fees: fill.fees,
+		source:
+			fill.source === "torn_log" ||
+			fill.source === "paper" ||
+			fill.source === "decision"
+				? fill.source
+				: "manual",
+		exitReason: fill.exitReason,
+		occurredAtIso: fill.occurredAt.toISOString(),
+		variance:
+			fill.varianceShares !== null ||
+			fill.variancePrice !== null ||
+			fill.slippageBps !== null
+				? {
+						sharesDelta: fill.varianceShares ?? 0,
+						priceDelta: fill.variancePrice ?? "0",
+						slippageBps: fill.slippageBps ?? 0,
+						delaySeconds: fill.delaySeconds ?? 0,
+						notionalDelta: fill.notionalDelta ?? "0",
+					}
+				: null,
+		note: fill.note,
+	};
+}
+
+/** One page of a book's public fill history, newest first. */
+export async function getCapitalPublicTrades(
+	book: CapitalBook,
+	input: { page?: number; pageSize?: number } = {},
+): Promise<CapitalPublicTradesPage> {
+	const { page, pageSize, offset } = normalizePage(input);
+	const stockMap = await loadStockNameMap();
+	const [trades, total] = await Promise.all([
+		loadPublicTrades(book, stockMap, pageSize, offset),
+		countCapitalFills(book),
+	]);
+	return {
+		success: true,
+		trades,
+		pagination: buildPagination({ page, pageSize, total }),
+	};
 }
 
 export async function getCapitalSummary(book: CapitalBook): Promise<{
@@ -520,7 +633,7 @@ export async function getCapitalPublicOverview(
 	const config = await getCapitalConfig(book);
 	const { summary, stockMap } = await getCapitalSummary(book);
 	const { nav } = await loadNav(book);
-	const [performance, holdings, trades, positions, investors] =
+	const [performance, holdings, trades, tradesTotal, positions, investors] =
 		await Promise.all([
 			loadPerformance(book, granularity === "hourly" ? 168 : 365, granularity),
 			config.publicShowHoldings
@@ -529,6 +642,7 @@ export async function getCapitalPublicOverview(
 			config.publicShowTrades
 				? loadPublicTrades(book, stockMap)
 				: Promise.resolve([] as CapitalPublicTrade[]),
+			config.publicShowTrades ? countCapitalFills(book) : Promise.resolve(0),
 			loadPositions(book, stockMap, nav.totalValue),
 			book === "paper"
 				? loadPublicInvestors(book, nav.navPerUnit)
@@ -556,6 +670,7 @@ export async function getCapitalPublicOverview(
 		positions,
 		investors,
 		trades,
+		tradesTotal,
 		feeSchedule: [
 			{ frequency: "daily", label: "Daily", feeBps: config.feeRateDailyBps },
 			{ frequency: "weekly", label: "Weekly", feeBps: config.feeRateWeeklyBps },
@@ -1774,7 +1889,8 @@ export async function getCapitalAdminOverview(
 		.from(capitalFills)
 		.where(eq(capitalFills.book, book))
 		.orderBy(desc(capitalFills.occurredAt))
-		.limit(50);
+		.limit(CAPITAL_TRADES_PAGE_SIZE);
+	const recentFillsTotal = await countCapitalFills(book);
 	const workerState = await db.query.workerState.findFirst({
 		where: (table, { eq: eqFn }) => eqFn(table.workerId, "capital:engine"),
 	});
@@ -2010,42 +2126,9 @@ export async function getCapitalAdminOverview(
 		};
 	});
 
-	const fillViews: CapitalFillView[] = fills.map((fill) => {
-		const stock = stockMap.get(fill.stockId);
-		return {
-			id: fill.id,
-			book,
-			orderId: fill.orderId,
-			stockId: fill.stockId,
-			stockName: stock?.name ?? `Stock #${fill.stockId}`,
-			side: fill.side === "sell" ? "sell" : "buy",
-			shares: fill.shares,
-			price: fill.price,
-			notional: fill.notional,
-			fees: fill.fees,
-			source:
-				fill.source === "torn_log" ||
-				fill.source === "paper" ||
-				fill.source === "decision"
-					? fill.source
-					: "manual",
-			exitReason: fill.exitReason,
-			occurredAtIso: fill.occurredAt.toISOString(),
-			variance:
-				fill.varianceShares !== null ||
-				fill.variancePrice !== null ||
-				fill.slippageBps !== null
-					? {
-							sharesDelta: fill.varianceShares ?? 0,
-							priceDelta: fill.variancePrice ?? "0",
-							slippageBps: fill.slippageBps ?? 0,
-							delaySeconds: fill.delaySeconds ?? 0,
-							notionalDelta: fill.notionalDelta ?? "0",
-						}
-					: null,
-			note: fill.note,
-		};
-	});
+	const fillViews: CapitalFillView[] = fills.map((fill) =>
+		toCapitalFillView(fill, book, stockMap),
+	);
 
 	const riskByBook = isRecord(engineDetails.riskByBook)
 		? engineDetails.riskByBook
@@ -2134,6 +2217,7 @@ export async function getCapitalAdminOverview(
 		paymentIntentsPending: intentViews,
 		orders: orderViews,
 		recentFills: fillViews,
+		recentFillsTotal,
 		performance: await loadPerformance(book),
 		holdings: await loadHoldings(book, stockMap),
 		positions: await loadPositions(book, stockMap, nav.totalValue),
@@ -2152,6 +2236,35 @@ export async function getCapitalAdminOverview(
 				(intent) => intent.status === "pending",
 			).length,
 		},
+	};
+}
+
+/**
+ * One page of a book's admin fill history, newest first.
+ *
+ * The admin overview only carries the first page so the live WebSocket stays
+ * cheap; older pages come from here with the same row shape.
+ */
+export async function getCapitalAdminFills(
+	book: CapitalBook,
+	input: { page?: number; pageSize?: number } = {},
+): Promise<CapitalAdminFillsPage> {
+	const { page, pageSize, offset } = normalizePage(input);
+	const stockMap = await loadStockNameMap();
+	const [fills, total] = await Promise.all([
+		db
+			.select()
+			.from(capitalFills)
+			.where(eq(capitalFills.book, book))
+			.orderBy(desc(capitalFills.occurredAt))
+			.limit(pageSize)
+			.offset(offset),
+		countCapitalFills(book),
+	]);
+	return {
+		success: true,
+		fills: fills.map((fill) => toCapitalFillView(fill, book, stockMap)),
+		pagination: buildPagination({ page, pageSize, total }),
 	};
 }
 

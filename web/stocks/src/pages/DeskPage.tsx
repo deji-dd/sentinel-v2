@@ -1,8 +1,11 @@
-import type {
-	CapitalAdminOverview,
-	CapitalPayoutFrequency,
-	CapitalSettings,
-	CapitalWithdrawalView,
+import {
+	CAPITAL_TRADES_PAGE_SIZE,
+	type CapitalAdminFillsPage,
+	type CapitalAdminOverview,
+	type CapitalFillView,
+	type CapitalPayoutFrequency,
+	type CapitalSettings,
+	type CapitalWithdrawalView,
 } from "@sentinel/schemas";
 import { Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -18,6 +21,7 @@ import {
 	NumberInput,
 	PageHeader,
 	PageShell,
+	Pagination,
 	SectionCard,
 	Select,
 	SelectContent,
@@ -113,6 +117,9 @@ function DeskBook({ book }: { book: Book }) {
 	);
 	const [resetOpen, setResetOpen] = useState(false);
 	const [resetConfirm, setResetConfirm] = useState("");
+	const [tradesPage, setTradesPage] = useState(1);
+	const [pagedFills, setPagedFills] = useState<CapitalFillView[] | null>(null);
+	const [tradesLoading, setTradesLoading] = useState(false);
 
 	const [investorName, setInvestorName] = useState("");
 	const [investorTornId, setInvestorTornId] = useState("");
@@ -166,6 +173,39 @@ function DeskBook({ book }: { book: Book }) {
 	useEffect(() => {
 		setInvestorKind(book === "paper" ? "test" : "user");
 	}, [book]);
+
+	useEffect(() => {
+		setTradesPage(1);
+		setPagedFills(null);
+	}, [book]);
+
+	useEffect(() => {
+		if (tradesPage <= 1) {
+			setPagedFills(null);
+			return;
+		}
+		let cancelled = false;
+		setTradesLoading(true);
+		apiFetch<CapitalAdminFillsPage>(
+			`/v2/capital/admin/${book}/fills?page=${tradesPage}&pageSize=${CAPITAL_TRADES_PAGE_SIZE}`,
+		)
+			.then((page) => {
+				if (!cancelled) setPagedFills(page.fills);
+			})
+			.catch((err: unknown) => {
+				if (!cancelled) {
+					setError(
+						err instanceof Error ? err.message : "Failed to load trades.",
+					);
+				}
+			})
+			.finally(() => {
+				if (!cancelled) setTradesLoading(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [book, tradesPage]);
 
 	const runAction = async (fn: () => Promise<unknown>) => {
 		setBusy(true);
@@ -347,8 +387,11 @@ function DeskBook({ book }: { book: Book }) {
 
 	const investors = data?.investors ?? [];
 
-	// Recent trades: combine recent fills and open order actions for a unified view
-	const recentTrades = data?.recentFills ?? [];
+	// Page 1 comes from the live overview snapshot; older pages are fetched.
+	const tradesTotal = data?.recentFillsTotal ?? 0;
+	const tradesPageCount = Math.ceil(tradesTotal / CAPITAL_TRADES_PAGE_SIZE);
+	const recentTrades =
+		tradesPage === 1 ? (data?.recentFills ?? []) : (pagedFills ?? []);
 
 	return (
 		<>
@@ -1002,6 +1045,13 @@ function DeskBook({ book }: { book: Book }) {
 					) : (
 						<EmptyState title="No trades yet" />
 					)}
+					<Pagination
+						page={tradesPage}
+						pageCount={tradesPageCount}
+						onPageChange={setTradesPage}
+						disabled={tradesLoading}
+						label={`Page ${tradesPage} of ${tradesPageCount} · ${tradesTotal.toLocaleString()} fills`}
+					/>
 				</SectionCard>
 			</div>
 

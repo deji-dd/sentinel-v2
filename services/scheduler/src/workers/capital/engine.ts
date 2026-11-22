@@ -52,6 +52,7 @@ import {
 	type CapitalExitReason,
 	type CapitalLiquidityCandidate,
 	capitalMlFeatureVector,
+	capitalOrderReminderMinutes,
 	type CapitalScoringConfig,
 	type CapitalSignalMode,
 	type CapitalSignalScore,
@@ -713,6 +714,12 @@ function sizePctOfNav(
  * working without risking capital. The mode field distinguishes the two books;
  * the title carries only the acronym, direction and size.
  */
+function orderDecimal(value: string | null | undefined): number | null {
+	return value === null || value === undefined
+		? null
+		: moneyToNumber(parseMoney(value));
+}
+
 function broadcastTradeAlert(input: {
 	book: CapitalBook;
 	stockId: number;
@@ -724,20 +731,29 @@ function broadcastTradeAlert(input: {
 	score: number;
 	stopPrice: number | null;
 	targetPrice: number | null;
+	/** Buy-side execution band stored on the order; null for market sells. */
+	minPrice?: number | null;
+	maxPrice?: number | null;
 	reason: string | null;
 	filled: boolean;
 	sizePct?: number | null;
+	/** Set for an open recommendation so the alert can show when it lapses. */
+	expiresAt?: Date | null;
+	/** True for the repeated "still open" alert, not the initial one. */
+	reminder?: boolean;
 }): void {
 	const isPaper = input.book === "paper";
 	const action = input.side === "buy" ? "Buy" : "Sell";
 	const acronym =
 		input.stockAcronym.trim() || input.stockName.trim() || "Stock";
-	const title = `[${acronym}] ${action} ${input.shares.toLocaleString()} shares`;
-	const body = input.reason
-		? input.reason
-		: input.filled
-			? "Filled at market."
-			: "Order placed at market.";
+	const title = `[${acronym}] ${action} ${input.shares.toLocaleString()} shares${input.reminder ? " (still valid)" : ""}`;
+	const body = input.reminder
+		? `Still open${input.reason ? ` — ${input.reason}` : ""}. This reminder repeats while the order is valid.`
+		: input.reason
+			? input.reason
+			: input.filled
+				? "Filled at market."
+				: "Order placed at market.";
 	const fields: CapitalAlertPayload["fields"] = [
 		{ name: "Mode", value: isPaper ? "Simulation" : "Live", inline: true },
 		{
@@ -752,6 +768,18 @@ function broadcastTradeAlert(input: {
 		},
 		{ name: "Score", value: input.score.toFixed(1), inline: true },
 	];
+	if (
+		input.minPrice !== null &&
+		input.minPrice !== undefined &&
+		input.maxPrice !== null &&
+		input.maxPrice !== undefined
+	) {
+		fields.push({
+			name: "Limit",
+			value: `${input.minPrice.toFixed(2)}–${input.maxPrice.toFixed(2)}`,
+			inline: true,
+		});
+	}
 	if (input.sizePct !== undefined && input.sizePct !== null) {
 		fields.push({
 			name: "Size",
@@ -773,6 +801,20 @@ function broadcastTradeAlert(input: {
 			inline: true,
 		});
 	}
+	if (input.expiresAt) {
+		const unix = Math.floor(input.expiresAt.getTime() / 1000);
+		fields.push({
+			name: "Order",
+			value: `Open — valid until <t:${unix}:t> (<t:${unix}:R>)`,
+			inline: false,
+		});
+	} else if (input.filled) {
+		fields.push({
+			name: "Order",
+			value: isPaper ? "Filled (simulated)" : "Filled",
+			inline: true,
+		});
+	}
 	broadcastAlert({
 		kind: "recommendation",
 		book: input.book,
@@ -786,6 +828,8 @@ function broadcastTradeAlert(input: {
 
 const priceGuardAlertAt = new Map<number, number>();
 const PRICE_GUARD_ALERT_COOLDOWN_MS = 30 * 60_000;
+/** Last reminder time per open order, keyed `book:orderId`. */
+const orderAlertReminderAt = new Map<string, number>();
 
 function alertPriceGuard(event: PriceGuardEvent): void {
 	const last = priceGuardAlertAt.get(event.stockId) ?? 0;
@@ -1346,8 +1390,11 @@ async function runBook(
 				score: score.score,
 				stopPrice: null,
 				targetPrice: null,
+				minPrice: orderDecimal(order.minPrice),
+				maxPrice: orderDecimal(order.maxPrice),
 				reason: decision.reason,
 				filled: false,
+				expiresAt: order.expiresAt,
 				sizePct,
 			});
 		}
@@ -1497,8 +1544,11 @@ async function runBook(
 					score: score.score,
 					stopPrice: null,
 					targetPrice: null,
+					minPrice: orderDecimal(order.minPrice),
+					maxPrice: orderDecimal(order.maxPrice),
 					reason,
 					filled: false,
+					expiresAt: order.expiresAt,
 					sizePct,
 				});
 			}
@@ -1777,13 +1827,64 @@ async function runBook(
 					score: score.score,
 					stopPrice: plan.stopPrice,
 					targetPrice: plan.targetPrice,
+					minPrice: orderDecimal(order.minPrice),
+					maxPrice: orderDecimal(order.maxPrice),
 					reason: alertReason,
 					filled: false,
+					expiresAt: order.expiresAt,
 					sizePct: plan.positionPct,
 				});
 			}
 		}
 	}
+
+	// Repeat still-open recommendations while they can still be executed. The
+	// first alert goes out with the order; without this pass a recommendation
+	// sent while the owner was asleep simply expires, and the only message they
+	// have is stale. The cadence is derived from the validity window so a
+	// 60-minute order reminds at 15/30/45 minutes rather than every cycle.
+	const reminderMs =
+		capitalOrderReminderMinutes(config.orderValidityMinutes) * 60_000;
+	const nowMs = Date.now();
+	const openNow = await getCapitalOrders(book, true);
+	const openNowKeys = new Set(openNow.map((order) => `${book}:${order.id}`));
+	for (const key of orderAlertReminderAt.keys()) {
+		if (key.startsWith(`${book}:`) && !openNowKeys.has(key)) {
+			orderAlertReminderAt.delete(key);
+		}
+	}
+	for (const order of openNow) {
+		if (order.expiresAt.getTime() <= nowMs) continue;
+		if (nowMs - order.generatedAt.getTime() < reminderMs) continue;
+		const key = `${book}:${order.id}`;
+		const lastReminderAt = orderAlertReminderAt.get(key) ?? 0;
+		if (nowMs - lastReminderAt < reminderMs) continue;
+		broadcastTradeAlert({
+			book,
+			stockId: order.stockId,
+			...stockMeta(order.stockId),
+			side: order.side === "sell" ? "sell" : "buy",
+			shares: order.recommendedShares,
+			price: moneyToNumber(parseMoney(order.priceGuide)),
+			score: order.score,
+			stopPrice:
+				order.stopPrice !== null
+					? moneyToNumber(parseMoney(order.stopPrice))
+					: null,
+			targetPrice:
+				order.targetPrice !== null
+					? moneyToNumber(parseMoney(order.targetPrice))
+					: null,
+			minPrice: orderDecimal(order.minPrice),
+			maxPrice: orderDecimal(order.maxPrice),
+			reason: order.side === "sell" ? "Exit order still open." : null,
+			filled: false,
+			expiresAt: order.expiresAt,
+			reminder: true,
+		});
+		orderAlertReminderAt.set(key, nowMs);
+	}
+
 	log.info("Book run complete", {
 		recommendations,
 		paperFills,

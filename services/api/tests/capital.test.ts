@@ -3,12 +3,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	and,
 	capitalDepositStateId,
+	capitalFills,
 	capitalInvestments,
 	capitalOrders,
 	capitalPayoutObligations,
 	capitalTransactions,
 	db,
 	eq,
+	inArray,
 	resetCapitalPaperBook,
 	updateCapitalConfig,
 	users,
@@ -641,5 +643,85 @@ describe("capital API", () => {
 		expect(body.recentFills).toHaveLength(0);
 		expect(Number(body.summary.cash)).toBe(0);
 		expect(Number(body.summary.positionsValue)).toBe(0);
+	});
+
+	test("recent trades are paginated newest-first on public and admin endpoints", async () => {
+		if (!sessionId) throw new Error("No session fixture.");
+		const base = Date.now() - 60_000;
+		const created = await db
+			.insert(capitalFills)
+			.values(
+				[1, 2, 3].map((offset) => ({
+					book: "paper" as const,
+					stockId: 9_000_100 + offset,
+					side: "buy" as const,
+					shares: 10 * offset,
+					price: "10.000000",
+					notional: `${100 * offset}.000000`,
+					source: "manual" as const,
+					occurredAt: new Date(base + offset * 1_000),
+				})),
+			)
+			.returning();
+		const ids = created.map((row) => row.id);
+		try {
+			const first = await app.handle(
+				new Request(
+					"http://localhost/v2/capital/public/trades?book=paper&page=1&pageSize=2",
+				),
+			);
+			expect(first.status).toBe(200);
+			const firstBody = (await first.json()) as {
+				trades: Array<{ id: string }>;
+				pagination: {
+					page: number;
+					pageSize: number;
+					total: number;
+					totalPages: number;
+					hasNextPage: boolean;
+					hasPrevPage: boolean;
+				};
+			};
+			expect(firstBody.trades).toHaveLength(2);
+			expect(firstBody.trades[0]?.id).toBe(ids[2]);
+			expect(firstBody.pagination).toEqual({
+				page: 1,
+				pageSize: 2,
+				total: 3,
+				totalPages: 2,
+				hasNextPage: true,
+				hasPrevPage: false,
+			});
+
+			const second = await app.handle(
+				new Request(
+					"http://localhost/v2/capital/public/trades?book=paper&page=2&pageSize=2",
+				),
+			);
+			expect(second.status).toBe(200);
+			const secondBody = (await second.json()) as {
+				trades: Array<{ id: string }>;
+			};
+			expect(secondBody.trades).toHaveLength(1);
+			expect(secondBody.trades[0]?.id).toBe(ids[0]);
+
+			const admin = await app.handle(
+				new Request(
+					"http://localhost/v2/capital/admin/paper/fills?page=2&pageSize=2",
+					{ headers: cookieFor(sessionId) },
+				),
+			);
+			expect(admin.status).toBe(200);
+			const adminBody = (await admin.json()) as {
+				fills: Array<{ id: string }>;
+				pagination: { total: number; hasPrevPage: boolean };
+			};
+			expect(adminBody.fills).toHaveLength(1);
+			expect(adminBody.fills[0]?.id).toBe(ids[0]);
+			expect(adminBody.pagination.total).toBe(3);
+			expect(adminBody.pagination.hasPrevPage).toBe(true);
+		} finally {
+			await db.delete(capitalFills).where(inArray(capitalFills.id, ids));
+		}
 	});
 });

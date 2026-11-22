@@ -4,7 +4,7 @@ Managed Torn City stock trading fund. Code prefix: `capital`. Host: `stocks.blas
 
 ## Surfaces
 
-- `/` — public fund page: **Live** and **Simulation** tabs. Live shows NAV, current positions with marked-to-market P/L, recent live fills and the fee schedule; Simulation shows simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills. The legacy `/paper` link still opens the Simulation tab.
+- `/` — public fund page: **Live** and **Simulation** tabs. Live shows NAV, current positions with marked-to-market P/L, recent live fills and the fee schedule; Simulation shows simulated NAV, current positions with P/L, test-investor results (no cadence/payout columns) and fills. Both Recent trades tables are paginated (25 per page); page 1 stays live over the socket and older pages come from `/v2/capital/public/trades`. The legacy `/paper` link still opens the Simulation tab.
 - `/portfolio` — Discord-authenticated investor view: lots, payouts, withdrawals.
 - `/desk` — owner/admin desk with **Live** and **Simulation** tabs. Live has cash/deployed/retained-fee cards, open positions with frozen stops/targets, open orders (accept/cancel), investor, deposit, payout, withdrawal, risk-overlay and settings controls. Simulation has a permanent `SIMULATION` banner, the same positions/orders/risk cards, a **Send test alert** button and the reset control. The legacy `/desk/paper` link still opens the Simulation tab.
 
@@ -247,6 +247,8 @@ uncertainty checks.
 No new slash commands. The bot receives `capital_alert` and `capital_paper_alert` IPC messages. Every capital alert is delivered to the owner's Discord DMs — there is no channel-ID setting.
 
 Paper trade and risk alerts **are** sent, deliberately: they are the only way to watch the strategy work without risking capital. The **Send test alert** button on the Simulation tab of `/desk` exercises the full scheduler → IPC → bot → DM path without creating an order or touching the book. Trade alerts are titled `[ACRONYM] Buy/Sell N shares` and carry Mode (`Simulation`/`Live`), Stock, Fill, Score, Size, Stop and Target fields; buy alerts also state the generic reason in the message body (`Buy the dip: 1.6σ below its 20-day mean; 7-day shares +1.2% (net inflow)` in reversal mode, `Trending up: …` in momentum mode) and sell alerts carry the exit reason. Neither the title nor the fields include a numeric stock id. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
+
+An alert for an **open** (unfilled) order carries a `Limit` field with the stored execution band (buy orders only) and an `Order` field with its expiry in Discord's absolute and relative timestamp formats, so a message seen hours later visibly reads "expired 2 hours ago" instead of looking current. The engine repeats that alert while the order remains open and valid — every quarter of `order_validity_minutes`, clamped to 5–30 minutes (a 60-minute order reminds at 15/30/45 minutes), with `(still valid)` appended to the title. Reminders stop as soon as the order fills, is cancelled, or expires; a paper auto-fill is already filled and gets a single alert.
 
 ## Resetting the simulation book
 

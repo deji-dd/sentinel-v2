@@ -123,6 +123,38 @@ export const CAPITAL_CONFIDENCE = {
 	deriskMultiplier: 0.5,
 } as const;
 
+/**
+ * Reminder cadence for an open trade order.
+ *
+ * A live recommendation only helps if the owner sees it while it can still be
+ * executed. The first alert is sent when the order is created; this derives how
+ * often to repeat it until the order fills, is cancelled, or expires. Tied to
+ * the validity window (a quarter of it) so a shorter window cannot produce more
+ * reminders than the order can survive, with floors/ceilings to keep a 60-minute
+ * order at a useful 15-minute cadence instead of a per-cycle ping.
+ */
+export const CAPITAL_ALERT = {
+	minReminderMinutes: 5,
+	maxReminderMinutes: 30,
+	reminderFraction: 0.25,
+} as const;
+
+export function capitalOrderReminderMinutes(
+	orderValidityMinutes: number,
+): number {
+	const validity = Number.isFinite(orderValidityMinutes)
+		? orderValidityMinutes
+		: 0;
+	if (validity <= 0) return CAPITAL_ALERT.minReminderMinutes;
+	return Math.min(
+		CAPITAL_ALERT.maxReminderMinutes,
+		Math.max(
+			CAPITAL_ALERT.minReminderMinutes,
+			Math.round(validity * CAPITAL_ALERT.reminderFraction),
+		),
+	);
+}
+
 /** Base weight before the confidence multiplier; 8% × 1.5 = 12%. */
 export const CAPITAL_BASE_WEIGHT_PCT =
 	CAPITAL_SIZING.maxStockWeightPct / CAPITAL_CONFIDENCE.maxMultiplier;

@@ -16,7 +16,6 @@ import {
 	eq,
 	getCapitalConfig,
 	getCapitalEngineRuns,
-	getCapitalFills,
 	getCapitalInvestors,
 	getCapitalIssues,
 	getCapitalOrders,
@@ -57,8 +56,10 @@ import {
 	createWithdrawalQuote,
 	createWithdrawalRequest,
 	findInvestorByTornId,
+	getCapitalAdminFills,
 	getCapitalAdminOverview,
 	getCapitalPublicOverview,
+	getCapitalPublicTrades,
 	getInvestorPortfolio,
 	payPayout,
 	payWithdrawal,
@@ -156,6 +157,21 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				granularity: t.Optional(
 					t.Union([t.Literal("hourly"), t.Literal("daily")]),
 				),
+			}),
+		},
+	)
+	.get(
+		"/public/trades",
+		async ({ query }) =>
+			getCapitalPublicTrades(query.book === "paper" ? "paper" : "live", {
+				page: Number(query.page),
+				pageSize: Number(query.pageSize),
+			}),
+		{
+			query: t.Object({
+				book: t.Optional(t.String()),
+				page: t.Optional(t.String()),
+				pageSize: t.Optional(t.String()),
 			}),
 		},
 	)
@@ -1097,15 +1113,27 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		if (!book) return { success: false, error: "Invalid book." };
 		return { success: true, orders: await getCapitalOrders(book) };
 	})
-	.get("/admin/:book/fills", async ({ params, user, set }) => {
-		if (!isOwner(user)) {
-			set.status = 403;
-			return { success: false, error: "Admin access required." };
-		}
-		const book = parseBook(params.book, set);
-		if (!book) return { success: false, error: "Invalid book." };
-		return { success: true, fills: await getCapitalFills(book) };
-	})
+	.get(
+		"/admin/:book/fills",
+		async ({ params, query, user, set }) => {
+			if (!isOwner(user)) {
+				set.status = 403;
+				return { success: false, error: "Admin access required." };
+			}
+			const book = parseBook(params.book, set);
+			if (!book) return { success: false, error: "Invalid book." };
+			return getCapitalAdminFills(book, {
+				page: Number(query.page),
+				pageSize: Number(query.pageSize),
+			});
+		},
+		{
+			query: t.Object({
+				page: t.Optional(t.String()),
+				pageSize: t.Optional(t.String()),
+			}),
+		},
+	)
 	.post(
 		"/admin/:book/fills",
 		async ({ params, body, user, set }) => {

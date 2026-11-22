@@ -19,6 +19,23 @@ export function isCapitalBook(value: unknown): value is CapitalBook {
 	return value === "live" || value === "paper";
 }
 
+/**
+ * Rows per page for the recent-trades tables.
+ *
+ * The overview snapshot carries exactly one page so the live WebSocket can keep
+ * page 1 current; older pages are fetched from the paginated endpoints.
+ */
+export const CAPITAL_TRADES_PAGE_SIZE = 25;
+
+export interface CapitalPagination {
+	page: number;
+	pageSize: number;
+	total: number;
+	totalPages: number;
+	hasNextPage: boolean;
+	hasPrevPage: boolean;
+}
+
 /** How often an investor lot receives a profit distribution. */
 export const CAPITAL_PAYOUT_FREQUENCIES = [
 	"daily",
@@ -264,12 +281,20 @@ export interface CapitalPublicOverview {
 	positions: CapitalPositionView[];
 	investors: CapitalPublicInvestor[];
 	trades: CapitalPublicTrade[];
+	/** Total fills in the book, so the table can paginate past the snapshot. */
+	tradesTotal: number;
 	feeSchedule: Array<{
 		frequency: CapitalPayoutFrequency;
 		label: string;
 		feeBps: number;
 	}>;
 	warnings: string[];
+}
+
+export interface CapitalPublicTradesPage {
+	success: boolean;
+	trades: CapitalPublicTrade[];
+	pagination: CapitalPagination;
 }
 
 // ─── Investor-facing ────────────────────────────────────────────────────────
@@ -642,6 +667,8 @@ export interface CapitalAdminOverview {
 	paymentIntentsPending: CapitalPaymentIntentView[];
 	orders: CapitalOrderView[];
 	recentFills: CapitalFillView[];
+	/** Total fills in the book, so the table can paginate past the snapshot. */
+	recentFillsTotal: number;
 	performance: CapitalPerformancePoint[];
 	holdings: CapitalPublicHolding[];
 	positions: CapitalPositionView[];
@@ -651,6 +678,12 @@ export interface CapitalAdminOverview {
 		pendingWithdrawals: number;
 		pendingPayments: number;
 	};
+}
+
+export interface CapitalAdminFillsPage {
+	success: boolean;
+	fills: CapitalFillView[];
+	pagination: CapitalPagination;
 }
 
 export interface CapitalApiCallReport {

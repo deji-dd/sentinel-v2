@@ -1,4 +1,9 @@
-import type { CapitalPublicOverview } from "@sentinel/schemas";
+import {
+	CAPITAL_TRADES_PAGE_SIZE,
+	type CapitalPublicOverview,
+	type CapitalPublicTrade,
+	type CapitalPublicTradesPage,
+} from "@sentinel/schemas";
 import { ArrowUpRight, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -9,6 +14,7 @@ import {
 	ErrorBanner,
 	PageHeader,
 	PageShell,
+	Pagination,
 	SectionCard,
 	Spinner,
 	StatCard,
@@ -79,6 +85,11 @@ function BookOverview({ book }: { book: Book }) {
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [granularity, setGranularity] = useState<"hourly" | "daily">("daily");
+	const [tradesPage, setTradesPage] = useState(1);
+	const [pagedTrades, setPagedTrades] = useState<CapitalPublicTrade[] | null>(
+		null,
+	);
+	const [tradesLoading, setTradesLoading] = useState(false);
 	const isPaper = book === "paper";
 
 	const { markUpdated } = useCapitalLive<CapitalPublicOverview>({
@@ -117,6 +128,39 @@ function BookOverview({ book }: { book: Book }) {
 		};
 	}, [book, granularity, markUpdated]);
 
+	useEffect(() => {
+		setTradesPage(1);
+		setPagedTrades(null);
+	}, [book]);
+
+	useEffect(() => {
+		if (tradesPage <= 1) {
+			setPagedTrades(null);
+			return;
+		}
+		let cancelled = false;
+		setTradesLoading(true);
+		apiFetch<CapitalPublicTradesPage>(
+			`/v2/capital/public/trades?book=${book}&page=${tradesPage}&pageSize=${CAPITAL_TRADES_PAGE_SIZE}`,
+		)
+			.then((page) => {
+				if (!cancelled) setPagedTrades(page.trades);
+			})
+			.catch((err: unknown) => {
+				if (!cancelled) {
+					setError(
+						err instanceof Error ? err.message : "Failed to load trades.",
+					);
+				}
+			})
+			.finally(() => {
+				if (!cancelled) setTradesLoading(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [book, tradesPage]);
+
 	if (loading)
 		return (
 			<Spinner label={isPaper ? "Loading simulation…" : "Loading the fund…"} />
@@ -124,6 +168,9 @@ function BookOverview({ book }: { book: Book }) {
 
 	const summary = data?.summary;
 	const performancePoints = data?.performance ?? [];
+	const tradesTotal = data?.tradesTotal ?? 0;
+	const tradesPageCount = Math.ceil(tradesTotal / CAPITAL_TRADES_PAGE_SIZE);
+	const trades = tradesPage === 1 ? (data?.trades ?? []) : (pagedTrades ?? []);
 
 	return (
 		<>
@@ -364,7 +411,7 @@ function BookOverview({ book }: { book: Book }) {
 								isPaper ? "Simulated fills." : "Confirmed live fills."
 							}
 						>
-							{data?.trades.length ? (
+							{trades.length ? (
 								<Table>
 									<TableHeader>
 										<TableRow>
@@ -377,7 +424,7 @@ function BookOverview({ book }: { book: Book }) {
 										</TableRow>
 									</TableHeader>
 									<TableBody>
-										{data.trades.map((trade) => (
+										{trades.map((trade) => (
 											<TableRow key={trade.id}>
 												<TableCell>
 													<span className="font-mono text-xs text-muted-foreground">
@@ -416,6 +463,13 @@ function BookOverview({ book }: { book: Book }) {
 							) : (
 								<EmptyState title="No public trades yet" />
 							)}
+							<Pagination
+								page={tradesPage}
+								pageCount={tradesPageCount}
+								onPageChange={setTradesPage}
+								disabled={tradesLoading}
+								label={`Page ${tradesPage} of ${tradesPageCount} · ${tradesTotal.toLocaleString()} fills`}
+							/>
 						</SectionCard>
 
 						{isPaper ? null : (

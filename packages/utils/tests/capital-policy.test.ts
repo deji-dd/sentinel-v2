@@ -4,6 +4,7 @@ import {
 	CAPITAL_BASE_WEIGHT_PCT,
 	CAPITAL_SIZING,
 	capitalExitReasonLabel,
+	capitalOrderReminderMinutes,
 	capitalSlotPolicy,
 	confidenceMultiplier,
 	dailyReturnPct,
@@ -103,5 +104,13 @@ describe("capital policy", () => {
 		expect(capitalExitReasonLabel("reversal")).toBe("Mean reversion");
 		expect(capitalExitReasonLabel("something_new")).toBe("something_new");
 		expect(capitalExitReasonLabel(null)).toBeNull();
+	});
+
+	test("order reminders derive from validity without spam", () => {
+		expect(capitalOrderReminderMinutes(60)).toBe(15);
+		expect(capitalOrderReminderMinutes(10)).toBe(5);
+		expect(capitalOrderReminderMinutes(240)).toBe(30);
+		expect(capitalOrderReminderMinutes(0)).toBe(5);
+		expect(capitalOrderReminderMinutes(Number.NaN)).toBe(5);
 	});
 });
