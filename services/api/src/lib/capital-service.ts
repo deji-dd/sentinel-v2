@@ -60,6 +60,7 @@ import type {
 	CapitalWithdrawalView,
 } from "@sentinel/schemas";
 import {
+	CAPITAL_APR_MIN_DAYS,
 	CAPITAL_TRADES_PAGE_SIZE,
 	isCapitalSignalMode,
 } from "@sentinel/schemas";
@@ -102,14 +103,6 @@ export class CapitalServiceError extends Error {
 function iso(value: Date | null | undefined): string | null {
 	return value ? value.toISOString() : null;
 }
-
-/**
- * A book-level APR is only meaningful once the book has a real track record.
- * NAV per unit is flow-insensitive, so annualizing it is sound in principle —
- * but annualizing a few days of performance produces absurd figures, so the
- * public API withholds the number until this many days of fills exist.
- */
-const APR_MIN_TRACK_RECORD_DAYS = 30;
 
 function asNumber(value: unknown): number {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -611,9 +604,7 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 	// book's first daily row is the first day's close.
 	const totalReturnPct = navReturnFromParPct(nav.navPerUnit);
 	const aprSinceInceptionPct =
-		days !== null &&
-		days >= APR_MIN_TRACK_RECORD_DAYS &&
-		totalReturnPct !== null
+		days !== null && days >= CAPITAL_APR_MIN_DAYS && totalReturnPct !== null
 			? (totalReturnPct * 365) / days
 			: null;
 	const [openIssues] = await db

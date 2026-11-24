@@ -11,6 +11,7 @@ import {
 	sql,
 } from "@sentinel/database";
 import type {
+	CapitalAlertChartContext,
 	CapitalAlertField,
 	CapitalAlertPayload,
 	CapitalBook,
@@ -98,6 +99,7 @@ function insight(
 	title: string,
 	body: string,
 	fields: CapitalAlertField[],
+	chart?: CapitalAlertChartContext,
 ): void {
 	broadcast({
 		kind: "insight",
@@ -108,6 +110,7 @@ function insight(
 		body,
 		fields,
 		link: book === "paper" ? PAPER_DESK_URL : DESK_URL,
+		chart,
 	});
 }
 
@@ -118,7 +121,7 @@ interface HistoryRow {
 
 async function loadHistory(
 	book: CapitalBook,
-	granularity: "minute" | "hourly",
+	granularity: "minute" | "hourly" | "daily",
 	since: Date,
 	before: Date,
 ): Promise<HistoryRow[]> {
@@ -147,6 +150,61 @@ function navAt(rows: HistoryRow[], target: Date): string | null {
 		found = row.navPerUnit;
 	}
 	return found;
+}
+
+/**
+ * Builds the unit-price series an insight alert hands to the bot for drawing.
+ * The current mark is appended so the event is visible at the right-hand edge,
+ * and the event time is passed through for a marker on the line.
+ */
+async function buildChart(
+	book: CapitalBook,
+	now: Date,
+	currentNav: bigint,
+	options: {
+		granularity: "minute" | "hourly" | "daily";
+		days: number;
+		title: string;
+		subtitle?: string;
+		reference?: { value: bigint; label: string } | null;
+	},
+): Promise<CapitalAlertChartContext> {
+	let rows: HistoryRow[] = [];
+	try {
+		rows = await loadHistory(
+			book,
+			options.granularity,
+			new Date(now.getTime() - options.days * 86_400_000),
+			now,
+		);
+	} catch (error) {
+		logger.warn(
+			`Could not load chart history for ${book}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const points = rows.map((row) => ({
+		capturedAtIso: row.capturedAt.toISOString(),
+		navPerUnit: moneyToNumber(parseMoney(row.navPerUnit)),
+	}));
+	const last = points[points.length - 1];
+	if (!last || now.getTime() - Date.parse(last.capturedAtIso) > 60_000) {
+		points.push({
+			capturedAtIso: now.toISOString(),
+			navPerUnit: moneyToNumber(currentNav),
+		});
+	}
+	return {
+		title: options.title,
+		subtitle: options.subtitle,
+		points,
+		eventAtIso: now.toISOString(),
+		reference: options.reference
+			? {
+					value: moneyToNumber(options.reference.value),
+					label: options.reference.label,
+				}
+			: null,
+	};
 }
 
 function pctChange(current: bigint, previous: bigint): number | null {
@@ -303,6 +361,13 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 					inline: true,
 				},
 			],
+			await buildChart(book, now, nav.navPerUnit, {
+				granularity: "hourly",
+				days: 7,
+				title: `${book === "paper" ? "TEST — " : ""}Unit price — new high`,
+				subtitle: `New all-time high $${label}`,
+				reference: { value: high!, label: "Previous high" },
+			}),
 		);
 	}
 	if (newLow && shouldFire(`${book}:extreme:low`, COOLDOWNS.newExtreme)) {
@@ -314,6 +379,13 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 				{ name: "Unit price", value: `$${label}`, inline: true },
 				{ name: "Previous low", value: `$${formatMoney(low!)}`, inline: true },
 			],
+			await buildChart(book, now, nav.navPerUnit, {
+				granularity: "hourly",
+				days: 7,
+				title: `${book === "paper" ? "TEST — " : ""}Unit price — new low`,
+				subtitle: `New all-time low $${label}`,
+				reference: { value: low!, label: "Previous low" },
+			}),
 		);
 	}
 
@@ -358,6 +430,16 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 				},
 				{ name: "Change", value: signedPct(change), inline: true },
 			],
+			await buildChart(book, now, nav.navPerUnit, {
+				granularity: move.window === "1h" ? "minute" : "hourly",
+				days: move.window === "1h" ? 0.25 : 2,
+				title: `${book === "paper" ? "TEST — " : ""}Unit price — ${move.window} ${direction}`,
+				subtitle: `${signedPct(change)} over ${move.window}`,
+				reference: {
+					value: parseMoney(move.nav),
+					label: `${move.window} ago`,
+				},
+			}),
 		);
 	}
 
@@ -396,6 +478,12 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 						inline: true,
 					},
 				],
+				await buildChart(book, now, nav.navPerUnit, {
+					granularity: "hourly",
+					days: 3,
+					title: `${book === "paper" ? "TEST — " : ""}Unit price — ${direction} trend`,
+					subtitle: `${THRESHOLDS.streakPeriods} consecutive hourly ${direction === "up" ? "gains" : "losses"}`,
+				}),
 			);
 		}
 	}
@@ -437,6 +525,13 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 					},
 					{ name: "Unit price", value: `$${label}`, inline: true },
 				],
+				await buildChart(book, now, nav.navPerUnit, {
+					granularity: "daily",
+					days: 90,
+					title: `${book === "paper" ? "TEST — " : ""}Unit price — ${milestone.level}% return`,
+					subtitle: `Since inception ${signedPct(currentReturn)}`,
+					reference: { value: parseMoney("1"), label: "Par $1.00" },
+				}),
 			);
 		}
 	}
@@ -463,6 +558,13 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 						},
 						{ name: "Unit price", value: `$${label}`, inline: true },
 					],
+					await buildChart(book, now, nav.navPerUnit, {
+						granularity: "hourly",
+						days: 7,
+						title: `${book === "paper" ? "TEST — " : ""}Unit price — ${level}% drawdown`,
+						subtitle: `Below all-time high $${formatMoney(high)}`,
+						reference: { value: high, label: "Peak" },
+					}),
 				);
 			}
 		}
@@ -584,6 +686,13 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
 				? "Simulation snapshot — no real funds."
 				: "Daily snapshot of the live fund.",
 			fields,
+			await buildChart(book, now, nav.navPerUnit, {
+				granularity: "daily",
+				days: 90,
+				title: `${book === "paper" ? "TEST — " : ""}Unit price — daily digest`,
+				subtitle: `Since inception ${signedPct(inceptionReturn)}`,
+				reference: { value: parseMoney("1"), label: "Par $1.00" },
+			}),
 		);
 	}
 }

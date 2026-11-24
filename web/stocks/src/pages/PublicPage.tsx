@@ -1,4 +1,5 @@
 import {
+	CAPITAL_APR_MIN_DAYS,
 	CAPITAL_TRADES_PAGE_SIZE,
 	type CapitalPublicOverview,
 	type CapitalPublicTrade,
@@ -167,6 +168,17 @@ function BookOverview({ book }: { book: Book }) {
 		);
 
 	const summary = data?.summary;
+	const aprDaysRemaining =
+		summary?.daysRunning === null || summary?.daysRunning === undefined
+			? null
+			: Math.max(1, CAPITAL_APR_MIN_DAYS - summary.daysRunning);
+	const aprHint =
+		summary?.aprSinceInceptionPct !== null &&
+		summary?.aprSinceInceptionPct !== undefined
+			? `Indicative · ${summary.daysRunning ?? "—"} days`
+			: aprDaysRemaining !== null
+				? `Calculated in ${aprDaysRemaining} day${aprDaysRemaining === 1 ? "" : "s"}`
+				: `Calculated after ${CAPITAL_APR_MIN_DAYS} days`;
 	const performancePoints = data?.performance ?? [];
 	const tradesTotal = data?.tradesTotal ?? 0;
 	const tradesPageCount = Math.ceil(tradesTotal / CAPITAL_TRADES_PAGE_SIZE);
@@ -218,23 +230,23 @@ function BookOverview({ book }: { book: Book }) {
 							help="The fund's net assets divided by its units outstanding — what one unit is worth today. Each deposit buys units at this price. Also called NAV per unit."
 						/>
 						<StatCard
-							label="Since inception"
+							label="ROI"
 							value={pct(summary.sinceInceptionReturnPct)}
 							tone={
 								(summary.sinceInceptionReturnPct ?? 0) >= 0
 									? "success"
 									: "danger"
 							}
-							help="The change in unit price since the fund started at $1.00. Deposits and withdrawals do not affect it."
+							help="Return on investment since the fund started at $1.00 per unit. It is the change in unit price, so deposits and withdrawals do not affect it."
 						/>
 						<StatCard
-							label="APR since inception"
+							label="APR"
 							value={pct(summary.aprSinceInceptionPct)}
-							hint="indicative"
+							hint={aprHint}
 							tone={
 								(summary.aprSinceInceptionPct ?? 0) >= 0 ? "success" : "danger"
 							}
-							help="The since-inception return annualized across the book's track record. Indicative only: a short history exaggerates annualized figures. Shown once the fund has 30 days of trading."
+							help={`Annualized ROI based on the fund's track record. Indicative: a short history exaggerates annualized figures. Calculated after ${CAPITAL_APR_MIN_DAYS} days of trading.`}
 						/>
 						<StatCard
 							label={

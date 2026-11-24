@@ -27,6 +27,12 @@ export function isCapitalBook(value: unknown): value is CapitalBook {
  */
 export const CAPITAL_TRADES_PAGE_SIZE = 25;
 
+/**
+ * Minimum track record before a book-level APR is meaningful. Shared so the
+ * API's guard and the UI's "calculated in N days" hint cannot drift apart.
+ */
+export const CAPITAL_APR_MIN_DAYS = 30;
+
 export interface CapitalPagination {
 	page: number;
 	pageSize: number;
@@ -831,6 +837,23 @@ export interface CapitalTradeContext {
 	exitReason?: string | null;
 }
 
+/** A unit-price series sent to the bot so it can draw a contextual chart. */
+export interface CapitalAlertChartPoint {
+	capturedAtIso: string;
+	/** Unit price (NAV per unit) as a plain number, four decimals are enough. */
+	navPerUnit: number;
+}
+
+export interface CapitalAlertChartContext {
+	title: string;
+	subtitle?: string;
+	points: CapitalAlertChartPoint[];
+	/** Timestamp of the event, marked on the line. */
+	eventAtIso?: string | null;
+	/** Optional horizontal reference, e.g. par ($1.00) or the previous extreme. */
+	reference?: { value: number; label: string } | null;
+}
+
 export interface CapitalAlertPayload {
 	kind: CapitalAlertKind;
 	book: CapitalBook;
@@ -849,6 +872,8 @@ export interface CapitalAlertPayload {
 	};
 	/** Trade metadata for a generated chart; absent on non-trade alerts. */
 	trade?: CapitalTradeContext;
+	/** Unit-price history for a generated chart on insight alerts. */
+	chart?: CapitalAlertChartContext;
 }
 
 /** Deep link to a stock's owned-shares tab in Torn. */

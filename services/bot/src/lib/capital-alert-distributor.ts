@@ -30,6 +30,7 @@ import {
 	MessageFlags,
 } from "discord.js";
 
+import { generateCapitalNavChartPng } from "./capital-nav-chart";
 import { generateCapitalTradeChartPng } from "./capital-trade-chart";
 import { isDirectorUser } from "./director-auth";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
@@ -194,6 +195,21 @@ export async function handleCapitalAlert(
 		} catch (error) {
 			logger.warn(
 				`Could not generate trade chart for '${payload.title}': ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+	if (!files.length && payload.chart) {
+		try {
+			const png = await generateCapitalNavChartPng(payload.chart);
+			if (png) {
+				files.push(
+					new AttachmentBuilder(png, { name: "unit-price-chart.png" }),
+				);
+				embed.setImage("attachment://unit-price-chart.png");
+			}
+		} catch (error) {
+			logger.warn(
+				`Could not generate unit-price chart for '${payload.title}': ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
