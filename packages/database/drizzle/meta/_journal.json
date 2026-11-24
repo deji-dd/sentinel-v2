@@ -617,6 +617,27 @@
 			"when": 1795031583331,
 			"tag": "0087_stale_valeria_richards",
 			"breakpoints": true
+		},
+		{
+			"idx": 88,
+			"version": "7",
+			"when": 1795100000000,
+			"tag": "0088_capital_alert_controls",
+			"breakpoints": true
+		},
+		{
+			"idx": 89,
+			"version": "7",
+			"when": 1795101000000,
+			"tag": "0089_capital_alert_preferences",
+			"breakpoints": true
+		},
+		{
+			"idx": 90,
+			"version": "7",
+			"when": 1795102000000,
+			"tag": "0090_capital_alert_delivery",
+			"breakpoints": true
 		}
 	]
 }

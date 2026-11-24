@@ -2,9 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
 	and,
+	capitalAccess,
+	capitalAlertDelivery,
+	capitalAlertPreferences,
 	capitalDepositStateId,
 	capitalFills,
 	capitalInvestments,
+	capitalInvestors,
 	capitalOrders,
 	capitalPayoutObligations,
 	capitalTransactions,
@@ -612,6 +616,96 @@ describe("capital API", () => {
 		expect(response.status).toBe(400);
 		if (liveOrder) {
 			await db.delete(capitalOrders).where(eq(capitalOrders.id, liveOrder.id));
+		}
+	});
+
+	test("an investor can read and change their own alert preferences", async () => {
+		const suffix = crypto.randomUUID().slice(0, 8);
+		const [investor] = await db
+			.insert(capitalInvestors)
+			.values({
+				book: "live",
+				kind: "user",
+				displayName: `alert-test-${suffix}`,
+				tornId: 9_000_000 + Math.floor(Math.random() * 100_000),
+				frequency: "weekly",
+				payoutMode: "cash",
+			})
+			.returning();
+		const [user] = await db
+			.insert(users)
+			.values({
+				discordId: `alerts-test-${suffix}`,
+				username: `alerts-test-${suffix}`,
+				role: "user",
+			})
+			.returning();
+		if (!investor || !user) throw new Error("Failed to create alert fixture.");
+		const [session] = await db
+			.insert(userSessions)
+			.values({
+				userId: user.id,
+				expiresAt: new Date(Date.now() + 86_400_000),
+			})
+			.returning();
+		await db.insert(capitalAccess).values({
+			book: "live",
+			discordId: user.discordId,
+			role: "investor",
+			investorId: investor.id,
+		});
+		await db.insert(capitalAlertDelivery).values({
+			discordUserId: user.discordId!,
+			dmClosedAt: new Date(),
+		});
+
+		try {
+			const read = await app.handle(
+				new Request("http://localhost/v2/capital/me/alerts", {
+					headers: cookieFor(session!.id),
+				}),
+			);
+			expect(read.status).toBe(200);
+			const body = (await read.json()) as {
+				preferences: { payoutsEnabled: boolean; aprEnabled: boolean };
+				delivery: { dmClosed: boolean } | null;
+				botUserId: string;
+			};
+			expect(body.preferences.payoutsEnabled).toBe(true);
+			expect(body.preferences.aprEnabled).toBe(true);
+			expect(body.delivery?.dmClosed).toBe(true);
+
+			const updated = await app.handle(
+				new Request("http://localhost/v2/capital/me/alerts", {
+					method: "PUT",
+					headers: {
+						...cookieFor(session!.id),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ aprEnabled: false }),
+				}),
+			);
+			expect(updated.status).toBe(200);
+			const changed = (await updated.json()) as {
+				preferences: { payoutsEnabled: boolean; aprEnabled: boolean };
+			};
+			expect(changed.preferences.payoutsEnabled).toBe(true);
+			expect(changed.preferences.aprEnabled).toBe(false);
+		} finally {
+			await db
+				.delete(capitalAccess)
+				.where(eq(capitalAccess.investorId, investor.id));
+			await db
+				.delete(capitalAlertPreferences)
+				.where(eq(capitalAlertPreferences.investorId, investor.id));
+			await db
+				.delete(capitalAlertDelivery)
+				.where(eq(capitalAlertDelivery.discordUserId, user.discordId!));
+			await db
+				.delete(capitalInvestors)
+				.where(eq(capitalInvestors.id, investor.id));
+			await db.delete(userSessions).where(eq(userSessions.id, session!.id));
+			await db.delete(users).where(eq(users.id, user.id));
 		}
 	});
 

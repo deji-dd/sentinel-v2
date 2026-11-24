@@ -3,6 +3,8 @@ import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import { db, sqlClient } from "../../index";
 import {
 	capitalAccess,
+	capitalAlertDelivery,
+	capitalAlertPreferences,
 	capitalAuditLog,
 	type CapitalBookConfigRow,
 	capitalBookConfigs,
@@ -600,6 +602,112 @@ export async function getCapitalContacts(
 		.from(capitalInvestorContacts)
 		.where(eq(capitalInvestorContacts.book, book))
 		.orderBy(capitalInvestorContacts.createdAt);
+}
+
+export interface CapitalAlertPreferenceView {
+	investorId: string;
+	payoutsEnabled: boolean;
+	aprEnabled: boolean;
+	updatedAtIso: string;
+}
+
+/** Returns an investor's notification preferences, defaulting both on. */
+export async function getCapitalAlertPreferences(
+	investorId: string,
+): Promise<CapitalAlertPreferenceView> {
+	const [row] = await db
+		.select()
+		.from(capitalAlertPreferences)
+		.where(eq(capitalAlertPreferences.investorId, investorId))
+		.limit(1);
+	return {
+		investorId,
+		payoutsEnabled: row?.payoutsEnabled ?? true,
+		aprEnabled: row?.aprEnabled ?? true,
+		updatedAtIso: (row?.updatedAt ?? new Date(0)).toISOString(),
+	};
+}
+
+export async function updateCapitalAlertPreferences(
+	investorId: string,
+	patch: Partial<
+		Pick<CapitalAlertPreferenceView, "payoutsEnabled" | "aprEnabled">
+	>,
+): Promise<CapitalAlertPreferenceView> {
+	await db
+		.insert(capitalAlertPreferences)
+		.values({
+			investorId,
+			payoutsEnabled: patch.payoutsEnabled ?? true,
+			aprEnabled: patch.aprEnabled ?? true,
+		})
+		.onConflictDoUpdate({
+			target: capitalAlertPreferences.investorId,
+			set: {
+				...(patch.payoutsEnabled !== undefined
+					? { payoutsEnabled: patch.payoutsEnabled }
+					: {}),
+				...(patch.aprEnabled !== undefined
+					? { aprEnabled: patch.aprEnabled }
+					: {}),
+				updatedAt: new Date(),
+			},
+		});
+	return getCapitalAlertPreferences(investorId);
+}
+
+export interface CapitalAlertDeliveryView {
+	discordUserId: string;
+	dmClosed: boolean;
+	dmClosedAtIso: string | null;
+	lastSuccessAtIso: string | null;
+}
+
+/** Last DM result for a recipient, used to explain a closed DM in the UI. */
+export async function getCapitalAlertDelivery(
+	discordUserId: string,
+): Promise<CapitalAlertDeliveryView | null> {
+	const [row] = await db
+		.select()
+		.from(capitalAlertDelivery)
+		.where(eq(capitalAlertDelivery.discordUserId, discordUserId))
+		.limit(1);
+	if (!row) return null;
+	return {
+		discordUserId: row.discordUserId,
+		dmClosed: row.dmClosedAt !== null,
+		dmClosedAtIso: row.dmClosedAt?.toISOString() ?? null,
+		lastSuccessAtIso: row.lastSuccessAt?.toISOString() ?? null,
+	};
+}
+
+/**
+ * Records one DM attempt. A success clears the closed-DM flag, so the warning
+ * disappears as soon as the investor opens a DM and alerts resume.
+ */
+export async function recordCapitalAlertDelivery(
+	discordUserId: string,
+	result: { ok: boolean; dmClosed: boolean },
+): Promise<void> {
+	const now = new Date();
+	await db
+		.insert(capitalAlertDelivery)
+		.values({
+			discordUserId,
+			dmClosedAt: result.dmClosed ? now : null,
+			lastFailureAt: result.ok ? null : now,
+			lastSuccessAt: result.ok ? now : null,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: capitalAlertDelivery.discordUserId,
+			set: {
+				...(result.dmClosed ? { dmClosedAt: now } : { dmClosedAt: null }),
+				lastFailureAt: result.ok ? null : now,
+				...(result.ok ? { lastSuccessAt: now } : {}),
+				updatedAt: now,
+			},
+		});
 }
 
 export async function getCapitalInvestments(

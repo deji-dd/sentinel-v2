@@ -14,6 +14,8 @@ import {
 	capitalWithdrawalRequests,
 	db,
 	eq,
+	getCapitalAlertDelivery,
+	getCapitalAlertPreferences,
 	getCapitalConfig,
 	getCapitalEngineRuns,
 	getCapitalInvestors,
@@ -28,6 +30,7 @@ import {
 	isCapitalBook,
 	recordCapitalAudit,
 	resolveCapitalIssue,
+	updateCapitalAlertPreferences,
 	updateCapitalConfig,
 } from "@sentinel/database";
 import {
@@ -72,7 +75,15 @@ import {
 	notifySchedulerForceRun,
 	sendSchedulerRequest,
 } from "../../lib/scheduler-ipc";
-import { authPlugin } from "../../middleware/auth";
+import { authPlugin, type AuthUser } from "../../middleware/auth";
+
+/** Resolves the caller to a live-book investor, or null for admins/strangers. */
+async function investorIdFor(user: AuthUser): Promise<string | null> {
+	const access = await resolveCapitalAccess(user, "live", env.DISCORD_USER_ID);
+	if (!canReadCapital(access)) return null;
+	if (access.investorId) return access.investorId;
+	return access.tornId ? findInvestorByTornId("live", access.tornId) : null;
+}
 
 function isOwner(
 	user: { role: string; discordId: string | null } | null,
@@ -207,6 +218,55 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 		}
 		return getInvestorPortfolio("live", investorId);
 	})
+	.get("/me/alerts", async ({ user, set }) => {
+		if (!user) {
+			set.status = 401;
+			return { success: false, error: "Unauthorized" };
+		}
+		const investorId = await investorIdFor(user);
+		if (!investorId) {
+			return {
+				success: true,
+				preferences: null,
+				delivery: null,
+				botUserId: env.DISCORD_CLIENT_ID,
+			};
+		}
+		return {
+			success: true,
+			preferences: await getCapitalAlertPreferences(investorId),
+			delivery: user.discordId
+				? await getCapitalAlertDelivery(user.discordId)
+				: null,
+			botUserId: env.DISCORD_CLIENT_ID,
+		};
+	})
+	.put(
+		"/me/alerts",
+		async ({ user, body, set }) => {
+			if (!user) {
+				set.status = 401;
+				return { success: false, error: "Unauthorized" };
+			}
+			const investorId = await investorIdFor(user);
+			if (!investorId) {
+				set.status = 403;
+				return { success: false, error: "No linked investment is available." };
+			}
+			const patch: { payoutsEnabled?: boolean; aprEnabled?: boolean } = {};
+			if (typeof body.payoutsEnabled === "boolean") {
+				patch.payoutsEnabled = body.payoutsEnabled;
+			}
+			if (typeof body.aprEnabled === "boolean") {
+				patch.aprEnabled = body.aprEnabled;
+			}
+			return {
+				success: true,
+				preferences: await updateCapitalAlertPreferences(investorId, patch),
+			};
+		},
+		{ body: t.Record(t.String(), t.Unknown()) },
+	)
 	.post(
 		"/me/withdrawals/quote",
 		async ({ body, user, set }) => {
@@ -331,6 +391,7 @@ export const capitalRoutes = new Elysia({ prefix: "/capital" })
 				"publicShowFees",
 				"withdrawalPerformanceFeeEnabled",
 				"notifyUnmatchedBuys",
+				"alertsEnabled",
 				"paperAutoFill",
 				"mlEnabled",
 				"mlKillSwitchEnabled",

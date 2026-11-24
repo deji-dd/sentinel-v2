@@ -184,7 +184,7 @@ function BookOverview({ book }: { book: Book }) {
 
 			{summary ? (
 				<>
-					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
 						<StatCard
 							label={
 								data?.flags.showAum
@@ -212,10 +212,10 @@ function BookOverview({ book }: { book: Book }) {
 							}
 						/>
 						<StatCard
-							label="NAV / unit"
+							label="Unit price"
 							value={money(summary.navPerUnit, 4)}
 							hint={`${summary.daysRunning ?? "—"} days running`}
-							help="Net Asset Value: the fund's total assets divided by the units outstanding. Each deposit buys units at the NAV on that day."
+							help="The fund's net assets divided by its units outstanding — what one unit is worth today. Each deposit buys units at this price. Also called NAV per unit."
 						/>
 						<StatCard
 							label="Since inception"
@@ -225,6 +225,16 @@ function BookOverview({ book }: { book: Book }) {
 									? "success"
 									: "danger"
 							}
+							help="The change in unit price since the fund started at $1.00. Deposits and withdrawals do not affect it."
+						/>
+						<StatCard
+							label="APR since inception"
+							value={pct(summary.aprSinceInceptionPct)}
+							hint="indicative"
+							tone={
+								(summary.aprSinceInceptionPct ?? 0) >= 0 ? "success" : "danger"
+							}
+							help="The since-inception return annualized across the book's track record. Indicative only: a short history exaggerates annualized figures. Shown once the fund has 30 days of trading."
 						/>
 						<StatCard
 							label={
@@ -242,15 +252,15 @@ function BookOverview({ book }: { book: Book }) {
 					<div className="mt-4">
 						<div>
 							<SectionCard
-								title="NAV per unit"
+								title="Unit price history"
 								description={
 									granularity === "hourly"
 										? isPaper
-											? "Simulated NAV per unit — hourly snapshots (last 7 days)."
-											: "Net Asset Value per unit — hourly snapshots (last 7 days)."
+											? "Simulated unit price — hourly snapshots (last 7 days)."
+											: "Unit price (NAV per unit) — hourly snapshots (last 7 days)."
 										: isPaper
-											? "Simulated Net Asset Value per unit — no real funds — indexed from the simulation book's daily snapshots."
-											: "Net Asset Value per unit — total assets divided by units outstanding — indexed from the fund's daily snapshots."
+											? "Simulated unit price — no real funds — indexed from the simulation book's daily snapshots."
+											: "Unit price (net assets per unit) — indexed from the fund's daily snapshots."
 								}
 								actions={
 									<Tabs

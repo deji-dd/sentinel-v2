@@ -4,11 +4,13 @@ import {
 	capitalReconciliationIssues,
 	db,
 	eq,
+	getCapitalConfig,
 	resolveCapitalIssue,
 	withCapitalTransaction,
 } from "@sentinel/database";
 import type {
 	CapitalAlertPayload,
+	CapitalBook,
 	CapitalPaperAlertPayload,
 } from "@sentinel/schemas";
 import { tornStockUrl } from "@sentinel/schemas";
@@ -45,6 +47,38 @@ function alertColor(payload: CapitalAlertPayload): number {
 		return EMBED_COLORS.SUCCESS;
 	}
 	return EMBED_COLORS.PRIMARY;
+}
+
+/**
+ * One gate for every capital alert. A book can be muted from its desk without
+ * stopping its engine: trading and accounting keep running, only the Discord
+ * delivery is skipped. The desk's "test alert" (kind `test`) always goes
+ * through, so the scheduler → bot path stays verifiable while muted.
+ *
+ * Cached briefly because alerts arrive in bursts (e.g. a paper cycle emits
+ * several) and a DB read per alert would be wasteful. Fail open on error:
+ * a config lookup problem must never silently swallow live alerts.
+ */
+const alertGateCache = new Map<CapitalBook, { enabled: boolean; at: number }>();
+const ALERT_GATE_TTL_MS = 30_000;
+
+export async function isCapitalAlertsEnabled(
+	book: CapitalBook,
+): Promise<boolean> {
+	const cached = alertGateCache.get(book);
+	if (cached && Date.now() - cached.at < ALERT_GATE_TTL_MS) {
+		return cached.enabled;
+	}
+	try {
+		const config = await getCapitalConfig(book);
+		alertGateCache.set(book, { enabled: config.alertsEnabled, at: Date.now() });
+		return config.alertsEnabled;
+	} catch (error) {
+		logger.warn(
+			`Could not read ${book} alert setting; delivering alert: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return true;
+	}
 }
 
 function buildDecisionRow(
@@ -107,6 +141,13 @@ export async function handleCapitalAlert(
 	client: Client,
 	payload: CapitalAlertPayload,
 ): Promise<void> {
+	if (
+		payload.kind !== "test" &&
+		!(await isCapitalAlertsEnabled(payload.book))
+	) {
+		logger.info(`Suppressed muted ${payload.book} alert: ${payload.title}`);
+		return;
+	}
 	const embed = createBaseEmbed(
 		payload.title,
 		payload.body,
@@ -187,6 +228,10 @@ export async function handleCapitalPaperAlert(
 	client: Client,
 	payload: CapitalPaperAlertPayload,
 ): Promise<void> {
+	if (!(await isCapitalAlertsEnabled("paper"))) {
+		logger.info(`Suppressed muted paper report: ${payload.title}`);
+		return;
+	}
 	const embed = createBaseEmbed(
 		payload.title,
 		payload.summary,

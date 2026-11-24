@@ -17,6 +17,8 @@ const logger = new Logger("ResolveDiscordTornUser");
 export interface ResolvedTornUser {
 	tornId: number;
 	tornName: string;
+	/** Discord snowflake when Torn publishes one and it could be resolved. */
+	discordId?: string | null;
 }
 
 interface TornUserApiResponse {
@@ -31,6 +33,9 @@ interface TornUserApiResponse {
 		tag?: string;
 	};
 	discord?: {
+		/** Torn returns `discordID` (camel case with a capital D). */
+		discordID?: string;
+		/** Older/other surfaces may use snake case; accept both. */
 		discord_id?: string;
 	};
 }
@@ -285,6 +290,7 @@ export async function resolveTornUser(
 		return {
 			tornId: cached.tornId,
 			tornName: cached.name,
+			discordId: cached.discordId,
 		};
 	}
 
@@ -301,7 +307,8 @@ export async function resolveTornUser(
 
 		const profileId = response?.profile?.id ?? response?.player_id ?? tornId;
 		const tornName = response?.profile?.name ?? response?.name;
-		const discordId = response?.discord?.discord_id || null;
+		const discordId =
+			response?.discord?.discordID || response?.discord?.discord_id || null;
 
 		if (profileId && tornName) {
 			const now = new Date();
@@ -338,7 +345,7 @@ export async function resolveTornUser(
 				logger.warn(`Failed updating tornUsers cache for ${profileId}:`, dbErr);
 			}
 
-			return { tornId: profileId, tornName };
+			return { tornId: profileId, tornName, discordId };
 		}
 	} catch (apiErr) {
 		logger.warn(
@@ -351,6 +358,7 @@ export async function resolveTornUser(
 		return {
 			tornId: cached.tornId,
 			tornName: cached.name,
+			discordId: cached.discordId,
 		};
 	}
 

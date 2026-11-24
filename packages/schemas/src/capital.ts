@@ -224,6 +224,12 @@ export interface CapitalSummary {
 	cash: CapitalDecimal;
 	totalReturnPct: number | null;
 	sinceInceptionReturnPct: number | null;
+	/**
+	 * Annualized simple return since inception, derived from NAV per unit (which
+	 * is flow-insensitive). Null until the book has a meaningful track record.
+	 * Indicative only: annualizing a short history exaggerates the figure.
+	 */
+	aprSinceInceptionPct: number | null;
 	cumulativePayouts: CapitalDecimal;
 	cumulativeFees: CapitalDecimal;
 	investorCount: number;
@@ -646,6 +652,8 @@ export interface CapitalSettings {
 	withdrawalNoticeDays: number;
 	paymentMatchTolerancePct: number;
 	notifyUnmatchedBuys: boolean;
+	/** When false, Discord alerts for this book are silenced (trading continues). */
+	alertsEnabled: boolean;
 	paperStartingCash: CapitalDecimal;
 	paperSlippageBps: number;
 	paperAutoFill: boolean;
@@ -772,7 +780,11 @@ export type CapitalAlertKind =
 	| "risk"
 	| "reconciliation"
 	| "payment"
-	| "key_failure";
+	| "key_failure"
+	/** NAV milestones, trends, drawdowns, exposure and the daily digest. */
+	| "insight"
+	/** Manual desk test: always delivered, even when a book's alerts are muted. */
+	| "test";
 
 export interface CapitalAlertField {
 	name: string;
@@ -850,4 +862,38 @@ export interface CapitalPaperAlertPayload {
 	summary: string;
 	success: boolean;
 	link: string;
+}
+
+// ─── Personal (investor) alerts ──────────────────────────────────────────────
+
+export type CapitalPersonalAlertKind =
+	"payout_due" | "payout_paid" | "apr" | "test";
+
+/** A DM to one investor, routed through a dedicated IPC action. */
+export interface CapitalPersonalAlertPayload {
+	recipientDiscordId: string;
+	investorId: string;
+	book: CapitalBook;
+	kind: CapitalPersonalAlertKind;
+	title: string;
+	body: string;
+	fields?: CapitalAlertField[];
+	/** Deep link to the portfolio page (or paper desk for simulations). */
+	link: string;
+}
+
+/** Per-investor notification preferences, editable from `/portfolio`. */
+export interface CapitalAlertPreferences {
+	investorId: string;
+	payoutsEnabled: boolean;
+	aprEnabled: boolean;
+	updatedAtIso: string;
+}
+
+/** Last DM result, so the UI can explain why an investor got no alert. */
+export interface CapitalAlertDeliveryStatus {
+	discordUserId: string;
+	dmClosed: boolean;
+	dmClosedAtIso: string | null;
+	lastSuccessAtIso: string | null;
 }

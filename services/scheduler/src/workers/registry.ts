@@ -3,6 +3,7 @@ import { Logger } from "@sentinel/utils";
 import { startFactionMonitoring } from "./bot/monitoring";
 import { startVerification } from "./bot/verification";
 import { startCapitalAccounting } from "./capital/accounting";
+import { startCapitalAlerts } from "./capital/alerts";
 import { startCapitalEngine } from "./capital/engine";
 import { startCapitalHistory } from "./capital/history";
 import { startCapitalMl } from "./capital/ml";
@@ -206,6 +207,12 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"5-minute Sentinel Capital NAV snapshots, payout obligations and reserve checks",
 		start: startCapitalAccounting,
+	},
+	{
+		id: "capital:alerts",
+		description:
+			"1-minute Sentinel Capital unit-price insights: new highs/lows, 1h/1d moves, hourly trends, return and drawdown milestones, exposure alerts and a daily digest (both books)",
+		start: startCapitalAlerts,
 	},
 	{
 		id: "capital:reconcile",

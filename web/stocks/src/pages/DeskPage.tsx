@@ -360,6 +360,15 @@ function DeskBook({ book }: { book: Book }) {
 		setDepositAmount("");
 	};
 
+	const togglePaperAlerts = async (enabled: boolean) => {
+		await runAction(() =>
+			apiFetch("/v2/capital/admin/paper/settings", {
+				method: "PUT",
+				body: JSON.stringify({ alertsEnabled: enabled }),
+			}),
+		);
+	};
+
 	const saveSettings = async () => {
 		if (!settingsDraft) return;
 		await runAction(() =>
@@ -399,23 +408,31 @@ function DeskBook({ book }: { book: Book }) {
 				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
 					<span>
 						SIMULATION — no real funds. Results are public on the Simulation
-						tab; trade and risk alerts are sent to your DMs labelled TEST.
+						tab; alerts are labelled TEST. Turn them off once live alerts start
+						so the two are never mixed — the simulation keeps trading.
 					</span>
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={busy}
-						onClick={() =>
-							void runAction(() =>
-								apiFetch("/v2/capital/admin/paper/test-alert", {
-									method: "POST",
-									body: "{}",
-								}),
-							)
-						}
-					>
-						Send test alert
-					</Button>
+					<div className="flex flex-wrap items-center gap-4">
+						<CheckboxField
+							label="Simulation alerts"
+							checked={settingsDraft?.alertsEnabled ?? true}
+							onCheckedChange={(checked) => void togglePaperAlerts(checked)}
+						/>
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={busy}
+							onClick={() =>
+								void runAction(() =>
+									apiFetch("/v2/capital/admin/paper/test-alert", {
+										method: "POST",
+										body: "{}",
+									}),
+								)
+							}
+						>
+							Send test alert
+						</Button>
+					</div>
 				</div>
 			) : null}
 

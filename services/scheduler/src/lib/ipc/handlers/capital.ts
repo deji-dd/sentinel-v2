@@ -51,7 +51,8 @@ export const handleCapitalTestAlert: IpcActionHandler = async (ctx) => {
 			? "https://stocks.blasted-labs.tech/desk/paper"
 			: "https://stocks.blasted-labs.tech/desk";
 	const payload: CapitalAlertPayload = {
-		kind: "recommendation",
+		// `test` bypasses the per-book mute: it exists to prove the alert path.
+		kind: "test",
 		book,
 		title: "TEST ALERT — routing works",
 		body: "This is a test alert from the desk. No order was created and no book was changed.",

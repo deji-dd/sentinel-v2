@@ -164,6 +164,9 @@ export const capitalBookConfigs = pgTable("capital_book_configs", {
 		.notNull(),
 	notifyUnmatchedBuys: boolean("notify_unmatched_buys").default(true).notNull(),
 
+	/** Silence Discord alerts for this book without stopping its engine. */
+	alertsEnabled: boolean("alerts_enabled").default(true).notNull(),
+
 	paperStartingCash: money("paper_starting_cash")
 		.default("150000000000")
 		.notNull(),
@@ -255,6 +258,35 @@ export type CapitalInvestorContactRow =
 	typeof capitalInvestorContacts.$inferSelect;
 export type NewCapitalInvestorContactRow =
 	typeof capitalInvestorContacts.$inferInsert;
+
+/** Per-investor notification preferences, edited from `/portfolio`. */
+export const capitalAlertPreferences = pgTable("capital_alert_preferences", {
+	investorId: text("investor_id")
+		.primaryKey()
+		.references(() => capitalInvestors.id, { onDelete: "cascade" }),
+	payoutsEnabled: boolean("payouts_enabled").default(true).notNull(),
+	aprEnabled: boolean("apr_enabled").default(true).notNull(),
+	createdAt,
+	updatedAt,
+});
+
+export type CapitalAlertPreferencesRow =
+	typeof capitalAlertPreferences.$inferSelect;
+
+/** Last Discord delivery result per recipient, so the UI can explain a closed DM. */
+export const capitalAlertDelivery = pgTable("capital_alert_delivery", {
+	discordUserId: text("discord_user_id").primaryKey(),
+	dmClosedAt: timestamp("dm_closed_at", { withTimezone: true, mode: "date" }),
+	lastFailureAt: timestamp("last_failure_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	lastSuccessAt: timestamp("last_success_at", {
+		withTimezone: true,
+		mode: "date",
+	}),
+	updatedAt,
+});
 
 export const capitalInvestments = pgTable(
 	"capital_investments",

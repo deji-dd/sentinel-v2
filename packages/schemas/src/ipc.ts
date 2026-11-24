@@ -6,6 +6,7 @@
 import type {
 	CapitalAlertPayload,
 	CapitalPaperAlertPayload,
+	CapitalPersonalAlertPayload,
 	CapitalSmokeReport,
 } from "./capital";
 import type { SubversiveChainAlertPayload } from "./chain-alerts";
@@ -564,6 +565,18 @@ export type IpcCapitalPaperAlertMessage = {
 	data: CapitalPaperAlertPayload;
 };
 
+/**
+ * A personal capital alert destined for one investor's Discord DM.
+ *
+ * Separate from `capital_alert`, which is always owner-only. The recipient is
+ * explicit so the bot can DM many investors in parallel with per-user failure
+ * isolation, the same way stock-alert subscriptions are delivered.
+ */
+export type IpcCapitalPersonalAlertMessage = {
+	action: "capital_personal_alert";
+	data: CapitalPersonalAlertPayload;
+};
+
 /** Request a labelled test alert through the real scheduler → bot path. */
 export type IpcCapitalTestAlertMessage = {
 	action: "capital_test_alert";
@@ -684,6 +697,7 @@ export type IpcMessage =
 	| IpcSubversiveStockAlertsMessage
 	| IpcUserStockAlertsMessage
 	| IpcCapitalAlertMessage
+	| IpcCapitalPersonalAlertMessage
 	| IpcCapitalPaperAlertMessage
 	| IpcCapitalSmokeResultMessage
 	| IpcCapitalTestAlertMessage

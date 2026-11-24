@@ -65,7 +65,7 @@ function navDomain(
 
 export function PerformanceChart({
 	points,
-	label = "NAV per unit",
+	label = "Unit price",
 	granularity = "daily",
 }: {
 	points: CapitalPerformancePoint[];

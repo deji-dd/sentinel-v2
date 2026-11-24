@@ -15,6 +15,7 @@ import {
 	handleCapitalAlert,
 	handleCapitalPaperAlert,
 } from "../capital-alert-distributor";
+import { handleCapitalPersonalAlert } from "../capital-personal-alert-distributor";
 import { handleSubversiveChainAlert } from "../chain-alert-distributor";
 import { handleCronVerificationProgress } from "../cron-verification-logger";
 import {
@@ -392,6 +393,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleCapitalAlert(client, message.data);
 		} else if (message.action === "capital_paper_alert" && message.data) {
 			void handleCapitalPaperAlert(client, message.data);
+		} else if (message.action === "capital_personal_alert" && message.data) {
+			void handleCapitalPersonalAlert(client, message.data);
 		} else if (message.action === "user_shoplifting_alerts" && message.data) {
 			void handleUserShopliftingAlerts(client, message.data);
 		} else if (
