@@ -102,6 +102,11 @@ the six buy candidates that used to receive an identical 12.5% now receive
 
 ### Sizing and the exit ladder
 
+Two units are easy to conflate and worth stating plainly:
+
+- **z-score** is `(price − SMA20) / σ20` over the last 20 daily closes. It is a volatility-normalised distance from the stock's own recent mean, not a percentage move: a quiet stock can be 1.25σ below its mean at −0.8%, a noisy one at −6%. The engine buys at z ≤ −1.25 and exits at z ≥ +1.
+- **R** is the initial risk per share, `entry price − frozen stop price`. It is not a fixed 2% target. Because the stop is `clamp(2.5 × ATR, 2%, 2.5%)` and Torn's daily ATR is ~0.55%, 2.5 × ATR ≈ 1.4% is below the floor, so the 2% floor binds for most names — hence 1R ≈ 2% of the entry price, +2R ≈ +4%, and −1R is the stop. With a 7–12% NAV position that is roughly 0.14–0.25% of the fund per trade, which is why the 0.5% `risk_per_trade_pct` never binds.
+
 Position count and per-name weight are **code-level policy**, not dashboard
 settings (`packages/utils/src/capital-policy.ts`):
 
@@ -247,6 +252,10 @@ uncertainty checks.
 No new slash commands. The bot receives `capital_alert` and `capital_paper_alert` IPC messages. Every capital alert is delivered to the owner's Discord DMs — there is no channel-ID setting.
 
 Paper trade and risk alerts **are** sent, deliberately: they are the only way to watch the strategy work without risking capital. The **Send test alert** button on the Simulation tab of `/desk` exercises the full scheduler → IPC → bot → DM path without creating an order or touching the book. Trade alerts are titled `[ACRONYM] Buy/Sell N shares` and carry Mode (`Simulation`/`Live`), Stock, Fill, Score, Size, Stop and Target fields; buy alerts also state the generic reason in the message body (`Buy the dip: 1.6σ below its 20-day mean; 7-day shares +1.2% (net inflow)` in reversal mode, `Trending up: …` in momentum mode) and sell alerts carry the exit reason. Neither the title nor the fields include a numeric stock id. Unmatched stock buys expose **Personal — ignore** / **Record as fund trade** buttons; payment issues expose Ignore + desk link.
+
+Both buy and sell alerts now attach a generated PNG chart, rendered in the bot from the scheduler's own daily candles with the same `@resvg/resvg-js` SVG→PNG path the map commands use. The top panel shows the daily close, SMA20 and the ±1σ band; the lower panel shows the 20-day z-score with the −1.25σ entry and +1σ exit thresholds. Buy charts mark the fill and the frozen stop/target; sell charts also mark the original entry, shade the holding window, and annotate R and P/L. A missing candle series or a renderer failure only drops the image — the embed and its fields are still delivered.
+
+Buy fields add **Signal** (z, RSI, 7-day share flow), **Score parts** (stretch/flow/risk/regime in reversal mode, trend/timing/risk/regime in momentum) and **1R** (per-share risk and its percentage of entry). Sell fields add **Entry**, **This sale**, **P/L (position)**, **R**, **Held** and **Exit**. The position P/L is flat across the whole holding: prior partial sells are included, and the percentage denominator is rebuilt from the position's buy fills because `cost_basis` shrinks on every trim. Unfilled live sell recommendations label the P/L figures `(est.)`; paper auto-fills are exact.
 
 An alert for an **open** (unfilled) order carries a `Limit` field with the stored execution band (buy orders only) and an `Order` field with its expiry in Discord's absolute and relative timestamp formats, so a message seen hours later visibly reads "expired 2 hours ago" instead of looking current. The engine repeats that alert while the order remains open and valid — every quarter of `order_validity_minutes`, clamped to 5–30 minutes (a 60-minute order reminds at 15/30/45 minutes), with `(still valid)` appended to the title. Reminders stop as soon as the order fills, is cancelled, or expires; a paper auto-fill is already filled and gets a single alert.
 

@@ -780,6 +780,45 @@ export interface CapitalAlertField {
 	inline?: boolean;
 }
 
+/**
+ * Extra context that lets the bot draw a trade chart and state the trade's
+ * result. It is deliberately numeric rather than pre-rendered: the bot owns the
+ * presentation, and an alert's fields and image must agree.
+ *
+ * All prices are per-share decimals; all money figures are display strings
+ * produced by the scheduler's exact money helpers.
+ */
+export interface CapitalTradeContext {
+	side: "buy" | "sell";
+	/** Price the position was opened at. Present on sell alerts. */
+	entryPrice?: number | null;
+	/** Current fill or recommended execution price. */
+	exitPrice: number;
+	/** Frozen entry stop, when the trade has one. */
+	stopPrice?: number | null;
+	/** Frozen take-profit, when the trade has one. */
+	targetPrice?: number | null;
+	/** Whether the alert describes a completed fill or an open recommendation. */
+	filled: boolean;
+	entryAt?: string | null;
+	exitAt?: string | null;
+	/** Signal context, so the chart can annotate the decision. */
+	score?: number | null;
+	zscore20?: number | null;
+	sma20?: number | null;
+	sd20?: number | null;
+	rsi14?: number | null;
+	sharesChange7Pct?: number | null;
+	drawdown30Pct?: number | null;
+	/** Sell result. `totalPnl` is the whole position, including prior trims. */
+	rMultiple?: number | null;
+	salePnl?: string | null;
+	totalPnl?: string | null;
+	totalPnlPct?: number | null;
+	heldDays?: number | null;
+	exitReason?: string | null;
+}
+
 export interface CapitalAlertPayload {
 	kind: CapitalAlertKind;
 	book: CapitalBook;
@@ -796,6 +835,8 @@ export interface CapitalAlertPayload {
 		id: string;
 		actions: string[];
 	};
+	/** Trade metadata for a generated chart; absent on non-trade alerts. */
+	trade?: CapitalTradeContext;
 }
 
 /** Deep link to a stock's owned-shares tab in Torn. */

@@ -36,6 +36,7 @@ import {
 import type {
 	CapitalAlertPayload,
 	CapitalBook,
+	CapitalTradeContext,
 	TornSchema,
 } from "@sentinel/schemas";
 import { tornApi } from "@sentinel/torn-api";
@@ -50,9 +51,11 @@ import {
 	type CapitalCandle,
 	type CapitalExitDecision,
 	type CapitalExitReason,
+	capitalExitReasonLabel,
 	type CapitalLiquidityCandidate,
 	capitalMlFeatureVector,
 	capitalOrderReminderMinutes,
+	type CapitalScoreComponents,
 	type CapitalScoringConfig,
 	type CapitalSignalMode,
 	type CapitalSignalScore,
@@ -75,6 +78,7 @@ import {
 	isStopCooldownActive,
 	Logger,
 	type LogisticModel,
+	type Money,
 	moneyFromPriceShares,
 	moneyToNumber,
 	mulBps,
@@ -707,12 +711,54 @@ function sizePctOfNav(
 	return (notional / nav) * 100;
 }
 
+/** Signed dollar amount for an alert field, e.g. `+$1,234.56`. */
+function signedUsd(amount: Money): string {
+	const value = moneyToNumber(amount);
+	const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+	return `${sign}$${Math.abs(value).toLocaleString("en-US", {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	})}`;
+}
+
+/**
+ * Original cost of the position, from its buy fills since the current entry.
+ *
+ * `capital_positions.cost_basis` shrinks on every partial sell, so it cannot be
+ * used as the denominator for a whole-position P/L percentage. The fills are
+ * append-only, which makes them the only honest source for that figure.
+ */
+async function positionOriginalCost(input: {
+	book: CapitalBook;
+	stockId: number;
+	openedAt: Date | null;
+}): Promise<string | null> {
+	// Without an entry timestamp there is no way to tell this holding's buys
+	// from an earlier, fully closed trade in the same stock.
+	if (!input.openedAt) return null;
+	const [row] = await db
+		.select({
+			total: sql<string>`coalesce(sum(${capitalFills.notional} + ${capitalFills.fees}), 0)`,
+		})
+		.from(capitalFills)
+		.where(
+			and(
+				eq(capitalFills.book, input.book),
+				eq(capitalFills.stockId, input.stockId),
+				eq(capitalFills.side, "buy"),
+				gte(capitalFills.occurredAt, input.openedAt),
+			),
+		);
+	return row?.total ?? null;
+}
+
 /**
  * One trade alert for both books.
  *
  * Paper alerts are intentional: they are the only way to see the strategy
  * working without risking capital. The mode field distinguishes the two books;
- * the title carries only the acronym, direction and size.
+ * the title carries only the acronym, direction and size. The numeric context
+ * is passed to the bot so it can draw the same signal the engine acted on.
  */
 function orderDecimal(value: string | null | undefined): number | null {
 	return value === null || value === undefined
@@ -741,6 +787,23 @@ function broadcastTradeAlert(input: {
 	expiresAt?: Date | null;
 	/** True for the repeated "still open" alert, not the initial one. */
 	reminder?: boolean;
+	/** Signal values that justify a buy, attached to the generated chart. */
+	features?: CapitalStockFeatures | null;
+	components?: CapitalScoreComponents | null;
+	mode?: CapitalSignalMode | null;
+	/** Sell-side result context. */
+	position?: {
+		entryPrice: number | null;
+		openedAt: Date | null;
+		shares: number;
+		costBasis: string;
+		realized: string;
+		originalCost: string | null;
+	};
+	exitReason?: CapitalExitReason | null;
+	rMultiple?: number | null;
+	heldDays?: number | null;
+	saleFeeBps?: number;
 }): void {
 	const isPaper = input.book === "paper";
 	const action = input.side === "buy" ? "Buy" : "Sell";
@@ -815,6 +878,145 @@ function broadcastTradeAlert(input: {
 			inline: true,
 		});
 	}
+
+	// The buy body already says "buy the dip" in plain English; these fields
+	// carry the numbers behind that sentence, which are also drawn on the chart.
+	let salePnl: Money | null = null;
+	let totalPnl: Money | null = null;
+	let totalPnlPct: number | null = null;
+	if (input.side === "buy") {
+		const features = input.features;
+		if (features) {
+			const flow = features.sharesChange7Pct;
+			fields.push({
+				name: "Signal",
+				value:
+					`z ${features.zscore20 >= 0 ? "+" : ""}${features.zscore20.toFixed(2)}σ vs 20d mean · ` +
+					`RSI ${features.rsi14.toFixed(0)}` +
+					(flow !== null
+						? ` · 7d shares ${flow >= 0 ? "+" : ""}${flow.toFixed(1)}%`
+						: ""),
+				inline: false,
+			});
+		}
+		if (input.components && input.mode) {
+			const [first, second] =
+				input.mode === "reversal" ? ["Stretch", "Flow"] : ["Trend", "Timing"];
+			fields.push({
+				name: "Score parts",
+				value:
+					`${first} ${input.components.trend.toFixed(0)} · ` +
+					`${second} ${input.components.timing.toFixed(0)} · ` +
+					`Risk ${input.components.risk.toFixed(0)} · ` +
+					`Regime ${input.components.regime.toFixed(0)}`,
+				inline: false,
+			});
+		}
+		if (input.stopPrice !== null && input.stopPrice < input.price) {
+			const initialRisk = input.price - input.stopPrice;
+			fields.push({
+				name: "1R",
+				value: `${formatMoney(parseMoney(initialRisk.toFixed(6)))} (${((initialRisk / input.price) * 100).toFixed(1)}%)`,
+				inline: true,
+			});
+		}
+	} else if (input.position) {
+		const {
+			entryPrice,
+			shares: heldShares,
+			costBasis,
+			realized,
+		} = input.position;
+		const remainingBasis = parseMoney(costBasis);
+		const costRemoved =
+			heldShares > 0
+				? (remainingBasis * BigInt(input.shares)) / BigInt(heldShares)
+				: 0n;
+		const gross = moneyFromPriceShares(input.price.toFixed(6), input.shares);
+		const fees = mulBps(gross, input.saleFeeBps ?? 0);
+		salePnl = gross - fees - costRemoved;
+		totalPnl = parseMoney(realized) + salePnl;
+		const originalCost = input.position.originalCost
+			? parseMoney(input.position.originalCost)
+			: remainingBasis;
+		totalPnlPct =
+			originalCost > 0n
+				? (moneyToNumber(totalPnl) / moneyToNumber(originalCost)) * 100
+				: null;
+
+		if (entryPrice !== null && entryPrice > 0) {
+			fields.push({
+				name: "Entry",
+				value: formatMoney(parseMoney(entryPrice.toFixed(6))),
+				inline: true,
+			});
+		}
+		fields.push({
+			name: "This sale",
+			value: `${signedUsd(salePnl)}${input.filled ? "" : " (est.)"}`,
+			inline: true,
+		});
+		fields.push({
+			name: "P/L (position)",
+			value:
+				signedUsd(totalPnl) +
+				(totalPnlPct !== null
+					? ` · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(1)}%`
+					: "") +
+				(input.filled ? "" : " (est.)"),
+			inline: false,
+		});
+		if (input.rMultiple !== null && input.rMultiple !== undefined) {
+			fields.push({
+				name: "R",
+				value: `${input.rMultiple >= 0 ? "+" : ""}${input.rMultiple.toFixed(2)}R`,
+				inline: true,
+			});
+		}
+		if (input.heldDays !== null && input.heldDays !== undefined) {
+			fields.push({
+				name: "Held",
+				value: `${input.heldDays} day${input.heldDays === 1 ? "" : "s"}`,
+				inline: true,
+			});
+		}
+		if (input.exitReason) {
+			fields.push({
+				name: "Exit",
+				value: capitalExitReasonLabel(input.exitReason) ?? input.exitReason,
+				inline: true,
+			});
+		}
+	}
+
+	const now = new Date();
+	const trade: CapitalTradeContext = {
+		side: input.side,
+		exitPrice: input.price,
+		filled: input.filled,
+		entryPrice:
+			input.side === "buy" ? input.price : (input.position?.entryPrice ?? null),
+		stopPrice: input.stopPrice,
+		targetPrice: input.targetPrice,
+		entryAt:
+			input.side === "buy"
+				? now.toISOString()
+				: (input.position?.openedAt?.toISOString() ?? null),
+		exitAt: now.toISOString(),
+		score: input.score,
+		zscore20: input.features?.zscore20 ?? null,
+		sma20: input.features?.sma20 ?? null,
+		sd20: input.features?.sd20 ?? null,
+		rsi14: input.features?.rsi14 ?? null,
+		sharesChange7Pct: input.features?.sharesChange7Pct ?? null,
+		drawdown30Pct: input.features?.drawdown30Pct ?? null,
+		rMultiple: input.rMultiple ?? null,
+		salePnl: salePnl !== null ? formatMoney(salePnl) : null,
+		totalPnl: totalPnl !== null ? formatMoney(totalPnl) : null,
+		totalPnlPct,
+		heldDays: input.heldDays ?? null,
+		exitReason: input.exitReason ?? null,
+	};
 	broadcastAlert({
 		kind: "recommendation",
 		book: input.book,
@@ -823,6 +1025,7 @@ function broadcastTradeAlert(input: {
 		body,
 		fields,
 		link: isPaper ? PAPER_DESK_URL : DESK_URL,
+		trade,
 	});
 }
 
@@ -1337,6 +1540,28 @@ async function runBook(
 				: position.shares;
 		if (shares <= 0) continue;
 		const sizePct = sizePctOfNav(nav.totalValue, features.price, shares);
+		const originalCost = await positionOriginalCost({
+			book,
+			stockId: position.stockId,
+			openedAt: position.openedAt,
+		});
+		const sellContext = {
+			features,
+			position: {
+				entryPrice,
+				openedAt: position.openedAt,
+				shares: position.shares,
+				costBasis: position.costBasis,
+				realized: position.realized,
+				originalCost,
+			},
+			exitReason: decision.reasonCode,
+			rMultiple: decision.rMultiple,
+			heldDays: daysHeld,
+			saleFeeBps: config.saleFeeBps,
+			stopPrice,
+			targetPrice,
+		};
 
 		const order = await createOrder({
 			book,
@@ -1373,8 +1598,7 @@ async function runBook(
 				shares,
 				price: fillPrice,
 				score: score.score,
-				stopPrice: null,
-				targetPrice: null,
+				...sellContext,
 				reason: decision.reason,
 				filled: true,
 				sizePct,
@@ -1388,8 +1612,7 @@ async function runBook(
 				shares,
 				price: features.price,
 				score: score.score,
-				stopPrice: null,
-				targetPrice: null,
+				...sellContext,
 				minPrice: orderDecimal(order.minPrice),
 				maxPrice: orderDecimal(order.maxPrice),
 				reason: decision.reason,
@@ -1486,6 +1709,34 @@ async function runBook(
 			const score = scoreStock(features, scoringConfigFor(config));
 			const sizePct = sizePctOfNav(nav.totalValue, sale.price, sale.shares);
 			const reason = `Withdrawal liquidity: raise cash for ${pendingWithdrawals.length} approved redemption(s); ${formatMoney(liquidityPlan.shortfall)} short.`;
+			const held = positionByStock.get(sale.stockId);
+			const liquidityContext = held
+				? {
+						features,
+						position: {
+							entryPrice: numberOrNull(held.entryPrice),
+							openedAt: held.openedAt,
+							shares: held.shares,
+							costBasis: held.costBasis,
+							realized: held.realized,
+							originalCost: await positionOriginalCost({
+								book,
+								stockId: held.stockId,
+								openedAt: held.openedAt,
+							}),
+						},
+						exitReason: "liquidity" as CapitalExitReason,
+						heldDays: held.openedAt ? daysBetween(held.openedAt, now) : 0,
+						saleFeeBps: config.saleFeeBps,
+						stopPrice: numberOrNull(held.stopPrice),
+						targetPrice: numberOrNull(held.targetPrice),
+					}
+				: {
+						features,
+						stopPrice: null,
+						targetPrice: null,
+						exitReason: "liquidity" as CapitalExitReason,
+					};
 			const order = await createOrder({
 				book,
 				stockId: sale.stockId,
@@ -1527,8 +1778,7 @@ async function runBook(
 					shares: sale.shares,
 					price: fillPrice,
 					score: score.score,
-					stopPrice: null,
-					targetPrice: null,
+					...liquidityContext,
 					reason,
 					filled: true,
 					sizePct,
@@ -1542,8 +1792,7 @@ async function runBook(
 					shares: sale.shares,
 					price: sale.price,
 					score: score.score,
-					stopPrice: null,
-					targetPrice: null,
+					...liquidityContext,
 					minPrice: orderDecimal(order.minPrice),
 					maxPrice: orderDecimal(order.maxPrice),
 					reason,
@@ -1815,6 +2064,9 @@ async function runBook(
 					reason: alertReason,
 					filled: true,
 					sizePct: plan.positionPct,
+					features,
+					components: score.components,
+					mode,
 				});
 			} else {
 				broadcastTradeAlert({
@@ -1833,6 +2085,9 @@ async function runBook(
 					filled: false,
 					expiresAt: order.expiresAt,
 					sizePct: plan.positionPct,
+					features,
+					components: score.components,
+					mode,
 				});
 			}
 		}
@@ -1881,6 +2136,8 @@ async function runBook(
 			filled: false,
 			expiresAt: order.expiresAt,
 			reminder: true,
+			features: scopedFeatures.get(order.stockId) ?? null,
+			mode,
 		});
 		orderAlertReminderAt.set(key, nowMs);
 	}

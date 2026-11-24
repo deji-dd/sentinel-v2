@@ -20,6 +20,7 @@ import {
 } from "@sentinel/utils";
 import {
 	ActionRowBuilder,
+	AttachmentBuilder,
 	ButtonBuilder,
 	ButtonStyle,
 	type Client,
@@ -27,6 +28,7 @@ import {
 	MessageFlags,
 } from "discord.js";
 
+import { generateCapitalTradeChartPng } from "./capital-trade-chart";
 import { isDirectorUser } from "./director-auth";
 import { createBaseEmbed, EMBED_COLORS } from "./embeds";
 import { logger } from "./logger";
@@ -82,6 +84,7 @@ async function sendToDestination(
 	_payload: CapitalAlertPayload,
 	embed: ReturnType<typeof createBaseEmbed>,
 	components: ActionRowBuilder<ButtonBuilder>[],
+	files: AttachmentBuilder[] = [],
 ): Promise<{ channelId: string | null; messageId: string | null }> {
 	// Capital alerts are owner DMs by design. There is no per-book channel
 	// setting: a channel shared by live and paper used to double-notify.
@@ -95,7 +98,7 @@ async function sendToDestination(
 		logger.warn(`Could not fetch capital alert DM recipient ${ownerId}.`);
 		return { channelId: null, messageId: null };
 	}
-	const message = await owner.send({ embeds: [embed], components });
+	const message = await owner.send({ embeds: [embed], components, files });
 	return { channelId: null, messageId: message.id };
 }
 
@@ -133,8 +136,35 @@ export async function handleCapitalAlert(
 		);
 	}
 
+	// A chart is an enhancement, never a delivery precondition: if the native
+	// renderer or the candle query fails, the owner still gets the full embed.
+	const files: AttachmentBuilder[] = [];
+	if (payload.trade && payload.stockId) {
+		try {
+			const png = await generateCapitalTradeChartPng({
+				stockId: payload.stockId,
+				title: payload.title,
+				trade: payload.trade,
+			});
+			if (png) {
+				files.push(new AttachmentBuilder(png, { name: "trade-chart.png" }));
+				embed.setImage("attachment://trade-chart.png");
+			}
+		} catch (error) {
+			logger.warn(
+				`Could not generate trade chart for '${payload.title}': ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	try {
-		const sent = await sendToDestination(client, payload, embed, components);
+		const sent = await sendToDestination(
+			client,
+			payload,
+			embed,
+			components,
+			files,
+		);
 		if (payload.decision && payload.decision.id) {
 			await db
 				.update(capitalReconciliationIssues)
