@@ -724,4 +724,44 @@ describe("capital API", () => {
 			await db.delete(capitalFills).where(inArray(capitalFills.id, ids));
 		}
 	});
+
+	test("days running counts from the first opened position", async () => {
+		const before = await app.handle(
+			new Request("http://localhost/v2/capital/public?book=paper"),
+		);
+		expect(before.status).toBe(200);
+		const beforeBody = (await before.json()) as {
+			summary: { daysRunning: number | null };
+		};
+		expect(beforeBody.summary.daysRunning).toBeNull();
+
+		const openedAt = new Date(Date.now() - (10 * 86_400_000 + 7_200_000));
+		const [fill] = await db
+			.insert(capitalFills)
+			.values({
+				book: "paper",
+				stockId: 9_000_300,
+				side: "buy",
+				shares: 10,
+				price: "10.000000",
+				notional: "100.000000",
+				source: "manual",
+				occurredAt: openedAt,
+			})
+			.returning();
+		try {
+			const after = await app.handle(
+				new Request("http://localhost/v2/capital/public?book=paper"),
+			);
+			expect(after.status).toBe(200);
+			const afterBody = (await after.json()) as {
+				summary: { daysRunning: number | null };
+			};
+			expect(afterBody.summary.daysRunning).toBe(10);
+		} finally {
+			if (fill) {
+				await db.delete(capitalFills).where(eq(capitalFills.id, fill.id));
+			}
+		}
+	});
 });

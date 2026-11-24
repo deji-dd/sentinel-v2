@@ -579,15 +579,25 @@ export async function getCapitalSummary(book: CapitalBook): Promise<{
 		.where(eq(capitalBooks.book, book))
 		.limit(1);
 	const { nav } = await loadNav(book);
-	const [payouts, fees, investors, invested] = await Promise.all([
+	const [payouts, fees, investors, invested, firstEntry] = await Promise.all([
 		sumLotPayouts(book),
 		sumTransactionTypes(book, ["fee", "exit_fee"]),
 		countInvestors(book),
 		sumActivePrincipal(book),
+		db
+			.select({ at: capitalFills.occurredAt })
+			.from(capitalFills)
+			.where(and(eq(capitalFills.book, book), eq(capitalFills.side, "buy")))
+			.orderBy(capitalFills.occurredAt)
+			.limit(1),
 	]);
 	const stockMap = await loadStockNameMap();
 	const start = bookRow[0]?.startedAt ?? new Date();
-	const days = daysBetween(start, new Date());
+	// Track record starts with the first position actually opened, not when the
+	// book row was created: a book can sit enabled for days before its first
+	// entry, and those idle days are not days running.
+	const firstEntryAt = firstEntry[0]?.at ?? null;
+	const days = firstEntryAt ? daysBetween(firstEntryAt, new Date()) : null;
 	// Inception is par ($1.00), not the first stored snapshot: the accounting
 	// worker writes the daily row at 00:00 and overwrites it all day, so a new
 	// book's first daily row is the first day's close.
