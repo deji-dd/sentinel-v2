@@ -230,14 +230,15 @@ function BookOverview({ book }: { book: Book }) {
 							help="The fund's net assets divided by its units outstanding — what one unit is worth today. Each deposit buys units at this price. Also called NAV per unit."
 						/>
 						<StatCard
-							label="ROI"
+							label="Unit price return"
 							value={pct(summary.sinceInceptionReturnPct)}
+							hint="since inception"
 							tone={
 								(summary.sinceInceptionReturnPct ?? 0) >= 0
 									? "success"
 									: "danger"
 							}
-							help="Return on investment since the fund started at $1.00 per unit. It is the change in unit price, so deposits and withdrawals do not affect it."
+							help="Growth in NAV per unit since the fund started at $1.00. Deposits and withdrawals buy or redeem units at the current price, so they do not affect this figure. Cash distributions paid to investors are not included."
 						/>
 						<StatCard
 							label="APR"
@@ -246,7 +247,7 @@ function BookOverview({ book }: { book: Book }) {
 							tone={
 								(summary.aprSinceInceptionPct ?? 0) >= 0 ? "success" : "danger"
 							}
-							help={`Annualized ROI based on the fund's track record. Indicative: a short history exaggerates annualized figures. Calculated after ${CAPITAL_APR_MIN_DAYS} days of trading.`}
+							help={`Annualized unit price return based on the fund's track record. Indicative: a short history exaggerates annualized figures. Calculated after ${CAPITAL_APR_MIN_DAYS} days of trading.`}
 						/>
 						<StatCard
 							label={

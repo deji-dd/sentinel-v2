@@ -64,6 +64,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/user/auctionhouse": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your auction house listings
+		 * @description Requires Limited, Full or Custom key with sensitive data enabled. <br>Returns your item listings ordered by their end time.
+		 */
+		get: operations["getMyAuctionHouseListings"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/user/bars": {
 		parameters: {
 			query?: never;
@@ -76,6 +96,26 @@ export interface paths {
 		 * @description Requires minimal access key. <br>
 		 */
 		get: operations["getMyBars"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/user/bazaar": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your bazaar
+		 * @description Requires Limited, Full or Custom key with sensitive data enabled. <br>Item details are included only for the Primary, Secondary, Melee and Defensive categories. <br>The All category returns every item unless a limit is given. <br>Identical items are grouped into one row with their uids listed; limit and offset count individual items.
+		 */
+		get: operations["getMyBazaar"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -153,7 +193,7 @@ export interface paths {
 		};
 		/**
 		 * Get bounties placed on you
-		 * @description <b>Globally cached selection.</b><br><br>Requires public access key. <br>
+		 * @description <b>Globally cached selection (5 minutes).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getMyBounties"];
 		put?: never;
@@ -173,7 +213,7 @@ export interface paths {
 		};
 		/**
 		 * Get bounties placed on a specific user
-		 * @description Requires public access key. <br>
+		 * @description <b>Globally cached selection (5 minutes).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getUserBounties"];
 		put?: never;
@@ -304,6 +344,46 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/user/criminalrecord": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your criminal record
+		 * @description Requires public access key. <br>UserCriminalRecordV1 is returned only for players who have not yet migrated to Crimes 2.0.
+		 */
+		get: operations["getMyCriminalRecord"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/user/{id}/criminalrecord": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get criminal record for a specific player
+		 * @description Requires public access key. <br>UserCriminalRecordV1 is returned only for players who have not yet migrated to Crimes 2.0.
+		 */
+		get: operations["getUserCriminalRecord"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/user/discord": {
 		parameters: {
 			query?: never;
@@ -336,6 +416,46 @@ export interface paths {
 		 * @description Requires public access key. <br>
 		 */
 		get: operations["getUserDiscord"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/user/display": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your display case
+		 * @description Requires public access key. <br>Item details are included only for the Primary, Secondary, Melee and Defensive categories. <br>The All category returns every item unless a limit is given. <br>Identical items are grouped into one row with their uids listed; limit and offset count individual items.
+		 */
+		get: operations["getMyDisplayCase"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/user/{id}/display": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get display case for a specific player
+		 * @description Requires public access key. <br>Item details are included only for the Primary, Secondary, Melee and Defensive categories. <br>The All category returns every item unless a limit is given. <br>Identical items are grouped into one row with their uids listed; limit and offset count individual items.
+		 */
+		get: operations["getUserDisplayCase"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -692,8 +812,8 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * Get your achieved honors
-		 * @description Requires minimal access key. <br>
+		 * Get your honors
+		 * @description Requires minimal access key. <br>By default (category 'all'), only your achieved honors are returned as 'UserHonorsResponse'. <br>When a specific category is requested, all honors of that category are returned as 'UserHonorsDetailedResponse', including the ones you have not achieved yet. <br>The 'latest' category returns your 36 most recently achieved honors.
 		 */
 		get: operations["getMyHonors"];
 		put?: never;
@@ -932,8 +1052,8 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * Get all your achieved medals
-		 * @description Requires public access key. <br>
+		 * Get your medals
+		 * @description Requires public access key. <br>By default (category 'all'), only your achieved medals are returned as 'UserMedalsResponse'. <br>When a specific category is requested, all medals of that category are returned as 'UserMedalsDetailedResponse', including the ones you have not achieved yet, with your progress towards them. This requires a minimal access key. <br>The 'latest' category returns your 30 most recently achieved medals.
 		 */
 		get: operations["getMyMedals"];
 		put?: never;
@@ -1073,7 +1193,7 @@ export interface paths {
 		};
 		/**
 		 * Get your networth
-		 * @description Requires limited access key. <br>
+		 * @description <b>Cached selection (15 minutes).</b><br><br>Requires limited access key. <br>
 		 */
 		get: operations["getMyNetworth"];
 		put?: never;
@@ -1093,7 +1213,7 @@ export interface paths {
 		};
 		/**
 		 * Get your unseen messages
-		 * @description Requires limited access key. <br>This selection is cached for 1 hour.
+		 * @description Requires limited access key. <br>
 		 */
 		get: operations["getMyNewMessages"];
 		put?: never;
@@ -1285,7 +1405,7 @@ export interface paths {
 		};
 		/**
 		 * Get your own properties
-		 * @description Requires public access key. <br>Extended responses are available when requesting the data with Limited or higher access keys.
+		 * @description <b>Cached selection (1 hour).</b><br><br>Requires public access key. <br>Extended responses are available when requesting the data with Limited or higher access keys. <br>The cache is skipped when requesting your own or your spouse's properties with a Limited or higher access key.
 		 */
 		get: operations["getMyProperties"];
 		put?: never;
@@ -1305,7 +1425,7 @@ export interface paths {
 		};
 		/**
 		 * Get specific user's properties
-		 * @description Requires public access key. <br>Extended responses are available when requesting the data with Limited or higher access keys for yourself or your spouse.
+		 * @description <b>Cached selection (1 hour).</b><br><br>Requires public access key. <br>Extended responses are available when requesting the data with Limited or higher access keys for yourself or your spouse. <br>The cache is skipped when requesting your own or your spouse's properties with a Limited or higher access key.
 		 */
 		get: operations["getUserProperties"];
 		put?: never;
@@ -1447,7 +1567,7 @@ export interface paths {
 		};
 		/**
 		 * Get your detailed revives
-		 * @description Requires limited access key. <br>
+		 * @description Requires minimal access key. <br>
 		 */
 		get: operations["getMyRevives"];
 		put?: never;
@@ -1467,7 +1587,7 @@ export interface paths {
 		};
 		/**
 		 * Get your simplified revives
-		 * @description Requires limited access key. <br>
+		 * @description Requires minimal access key. <br>
 		 */
 		get: operations["getMyRevivesSimplified"];
 		put?: never;
@@ -2103,6 +2223,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/faction/headlines": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get your faction's news ticker headlines
+		 * @description Requires minimal access key with faction API access permissions. <br>Returns the headlines currently shown in your faction's news ticker. 'importance' is 'urgent' for headlines marked as urgent.
+		 */
+		get: operations["getMyFactionHeadlines"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/faction/hof": {
 		parameters: {
 			query?: never;
@@ -2215,6 +2355,35 @@ export interface paths {
 		 * @description Requires minimal access key with faction API access permissions. <br> It is possible to pass up to 10 categories at the time (comma separated). Categories 'attack', 'depositFunds' and 'giveFunds' are only available with 'Custom', 'Limited' or 'Full' access keys.
 		 */
 		get: operations["getMyFactionNews"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/faction/{crimeId}/ochistory": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the history of a specific organized crime
+		 * @description Requires limited access key with faction API access permissions. <br>Only available for organized crimes of your current faction. Entries are ordered from newest to oldest, limited to the latest 500.<br> The 'details' field depends on the 'action':
+		 *      * 'Joined', 'Left' & 'Kicked' return 'FactionOcHistoryRoleDetails'.
+		 *      * 'RoleChanged' returns 'FactionOcHistoryRoleChangeDetails'.
+		 *      * 'Spawned' returns 'FactionOcHistorySpawnDetails'.
+		 *      * 'ItemUsed' & 'ItemLost' return 'FactionOcHistoryItem'.
+		 *      * 'Jailed' & 'Hospitalized' return 'FactionOcHistoryPunishmentDetails'.
+		 *      * 'Injured' returns 'FactionOcHistoryInjuryDetails'.
+		 *      * 'Payout' returns 'FactionOcHistoryPayoutDetails'.
+		 *      * 'PayoutReceived' returns 'FactionOcHistoryPayoutReceivedDetails'.
+		 *      * 'Completed', 'Failed' & 'Expired' return null.
+		 */
+		get: operations["getMyFactionOrganizedCrimeHistory"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -2414,7 +2583,7 @@ export interface paths {
 		};
 		/**
 		 * Get your faction's detailed revives
-		 * @description Requires limited access key with faction API access permissions. <br>
+		 * @description Requires minimal access key with faction API access permissions. <br>
 		 */
 		get: operations["getMyFactionRevives"];
 		put?: never;
@@ -2434,7 +2603,7 @@ export interface paths {
 		};
 		/**
 		 * Get your faction's simplified revives
-		 * @description Requires limited access key with faction API access permissions. <br>
+		 * @description Requires minimal access key with faction API access permissions. <br>
 		 */
 		get: operations["getMyFactionRevivesSimplified"];
 		put?: never;
@@ -2936,7 +3105,7 @@ export interface paths {
 		};
 		/**
 		 * Get a list of companies for a specific company type
-		 * @description Requires public access key. <br>
+		 * @description <b>Globally cached selection (1 hour).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getCompaniesList"];
 		put?: never;
@@ -3334,7 +3503,7 @@ export interface paths {
 		};
 		/**
 		 * Get specific item auction house listings
-		 * @description Requires public access key. <br>
+		 * @description <b>Globally cached selection (15 minutes, ongoing listings only).</b><br><br>Requires public access key. <br>Ongoing listings are returned from the cached and delayed ongoing listings.
 		 */
 		get: operations["getMarketAuctionHouseListing"];
 		put?: never;
@@ -3354,7 +3523,7 @@ export interface paths {
 		};
 		/**
 		 * Get specific item auction house listings
-		 * @description Requires public access key. <br>
+		 * @description <b>Globally cached selection (15 minutes, ongoing listings only).</b><br><br>Requires public access key. <br>Ongoing listings are cached and delayed; auctionhouse_timestamp and auctionhouse_delay are returned only for the ongoing category. <br>Listings are sorted by their end time: complete listings descending by default, ongoing listings ascending by default.
 		 */
 		get: operations["getMarketAuctionHouseItem"];
 		put?: never;
@@ -3374,7 +3543,7 @@ export interface paths {
 		};
 		/**
 		 * Get auction house listings
-		 * @description Requires public access key. <br>
+		 * @description <b>Globally cached selection (15 minutes, ongoing listings only).</b><br><br>Requires public access key. <br>Ongoing listings are cached and delayed; auctionhouse_timestamp and auctionhouse_delay are returned only for the ongoing category. <br>Listings are sorted by their end time: complete listings descending by default, ongoing listings ascending by default.
 		 */
 		get: operations["getMarketAuctionHouse"];
 		put?: never;
@@ -3434,9 +3603,29 @@ export interface paths {
 		};
 		/**
 		 * Get item market listings
-		 * @description <b>Globally cached selection.</b><br><br>Requires public access key. <br>
+		 * @description <b>Globally cached selection (1 hour).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getMarketItemMarketItem"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/market/{id}/itemhistory": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get item price and circulation history
+		 * @description Requires public access key. <br>Returns the daily average sale price and circulation of an item, one entry per day, as used for the item value and circulation graphs.
+		 */
+		get: operations["getMarketItemHistory"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -3454,7 +3643,7 @@ export interface paths {
 		};
 		/**
 		 * Get properties market listings
-		 * @description <b>Globally cached selection.</b><br><br>Requires public access key. <br>
+		 * @description <b>Globally cached selection (1 hour).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getMarketProperties"];
 		put?: never;
@@ -3485,6 +3674,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/market/pointshistory": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get points price and circulation history
+		 * @description Requires public access key. <br>Returns the daily average points market price and the total points in circulation, one entry per day, as used for the points price graph.
+		 */
+		get: operations["getMarketPointsHistory"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/market/{propertyTypeId}/rentals": {
 		parameters: {
 			query?: never;
@@ -3494,7 +3703,7 @@ export interface paths {
 		};
 		/**
 		 * Get properties rental listings
-		 * @description <b>Globally cached selection.</b><br><br>Requires public access key. <br>
+		 * @description <b>Globally cached selection (1 hour).</b><br><br>Requires public access key. <br>
 		 */
 		get: operations["getMarketPropertiesRental"];
 		put?: never;
@@ -3614,7 +3823,7 @@ export interface paths {
 		};
 		/**
 		 * Get races
-		 * @description Requires public access key. <br>Returns a list of races, ordered by race start timestamp. <br>The 'available' category returns races which have not started yet and can still be joined; 'from' and 'to' are ignored for this category.
+		 * @description Requires public access key. <br>Returns a list of races, ordered by race start timestamp. <br>The 'available' category returns only custom races which have not started yet and can still be joined; 'from' and 'to' are ignored for this category.
 		 */
 		get: operations["getRacingRaces"];
 		put?: never;
@@ -3874,7 +4083,7 @@ export interface paths {
 		};
 		/**
 		 * Get bounties
-		 * @description <b>Globally cached selection.</b><br><br>Requires public key. <br>
+		 * @description <b>Globally cached selection (5 minutes).</b><br><br>Requires public key. <br>
 		 */
 		get: operations["getTornBounties"];
 		put?: never;
@@ -4157,6 +4366,26 @@ export interface paths {
 		 * @description Requires minimal access key. <br>Returns the list of available Halloween basket upgrades with their benefits, treats cost and unlock requirement.
 		 */
 		get: operations["getTornHalloween"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/torn/headlines": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get news ticker headlines
+		 * @description Requires public access key. <br>Returns the headlines currently shown in the news ticker. 'importance' is 'urgent' for headlines marked as announcements.
+		 */
+		get: operations["getTornHeadlines"];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -9725,6 +9954,23 @@ export interface components {
 		FactionCrimeStatusEnum:
 			"Recruiting" | "Planning" | "Successful" | "Failure" | "Expired";
 		/** @enum {string} */
+		FactionOcHistoryActionEnum:
+			| "Joined"
+			| "Left"
+			| "Kicked"
+			| "RoleChanged"
+			| "Spawned"
+			| "ItemUsed"
+			| "ItemLost"
+			| "Jailed"
+			| "Hospitalized"
+			| "Injured"
+			| "Completed"
+			| "Failed"
+			| "Expired"
+			| "Payout"
+			| "PayoutReceived";
+		/** @enum {string} */
 		AttackActionEnum:
 			| "attackerhosp"
 			| "busy"
@@ -10587,6 +10833,55 @@ export interface components {
 				/** Format: int32 */
 				timestamp: number;
 			};
+		};
+		UserCriminalRecordV2: {
+			/** @enum {string} */
+			version: "v2";
+			/** Format: int32 */
+			vandalism: number;
+			/** Format: int32 */
+			theft: number;
+			/** Format: int32 */
+			counterfeiting: number;
+			/** Format: int32 */
+			fraud: number;
+			/** Format: int32 */
+			illicit_services: number;
+			/** Format: int32 */
+			cybercrime: number;
+			/** Format: int32 */
+			extortion: number;
+			/** Format: int32 */
+			illegal_production: number;
+			/** Format: int32 */
+			total: number;
+		};
+		UserCriminalRecordV1: {
+			/** @enum {string} */
+			version: "v1";
+			/** Format: int32 */
+			sell_illegal_goods: number;
+			/** Format: int32 */
+			theft: number;
+			/** Format: int32 */
+			auto_theft: number;
+			/** Format: int32 */
+			drug_deals: number;
+			/** Format: int32 */
+			computer: number;
+			/** Format: int32 */
+			fraud: number;
+			/** Format: int32 */
+			murder: number;
+			/** Format: int32 */
+			other: number;
+			/** Format: int32 */
+			total: number;
+		};
+		UserCriminalRecordResponse: {
+			criminalrecord:
+				| components["schemas"]["UserCriminalRecordV2"]
+				| components["schemas"]["UserCriminalRecordV1"];
 		};
 		UserItemMod: {
 			id: components["schemas"]["ItemModId"];
@@ -11836,15 +12131,6 @@ export interface components {
 			itemmarket: components["schemas"]["UserItemMarketListing"][];
 			_metadata: components["schemas"]["RequestMetadataWithLinks"];
 		};
-		UserFactionBalance: {
-			/** Format: int64 */
-			money: number;
-			/** Format: int64 */
-			points: number;
-		};
-		UserFactionBalanceResponse: {
-			factionBalance: components["schemas"]["UserFactionBalance"] | null;
-		};
 		UserOrganizedCrimeError: {
 			/**
 			 * Format: int32
@@ -11877,21 +12163,25 @@ export interface components {
 					| "ammo"
 					| "attacks"
 					| "attacksfull"
+					| "auctionhouse"
 					| "bars"
 					| "basic"
 					| "battlestats"
+					| "bazaar"
 					| "bounties"
 					| "calendar"
 					| "casino"
 					| "competition"
 					| "cooldowns"
 					| "crimes"
+					| "criminalrecord"
 					| "discord"
+					| "display"
+					| "education"
 					| "enlistedcars"
 					| "equipment"
 					| "events"
 					| "faction"
-					| "factionbalance"
 					| "forumfeed"
 					| "forumfriends"
 					| "forumposts"
@@ -11904,13 +12194,12 @@ export interface components {
 					| "icons"
 					| "inventory"
 					| "itemmarket"
-					| "itemmod"
+					| "itemmods"
 					| "job"
 					| "jobpoints"
 					| "jobranks"
 					| "list"
 					| "log"
-					| "lookup"
 					| "medals"
 					| "merits"
 					| "messages"
@@ -11921,6 +12210,8 @@ export interface components {
 					| "newmessages"
 					| "notifications"
 					| "organizedcrime"
+					| "organizedcrimes"
+					| "perks"
 					| "personalstats"
 					| "profile"
 					| "properties"
@@ -11932,20 +12223,16 @@ export interface components {
 					| "revives"
 					| "revivesfull"
 					| "skills"
-					| "snapshot"
 					| "stocks"
-					| "trades"
 					| "trade"
+					| "trades"
 					| "travel"
 					| "travelinventory"
-					| "timestamp"
+					| "virus"
 					| "weaponexp"
 					| "workstats"
-					| "bazaar"
-					| "criminalrecord"
-					| "display"
-					| "education"
-					| "perks"
+					| "lookup"
+					| "timestamp"
 			  )
 			| string;
 		UserLookupResponse: {
@@ -11959,6 +12246,48 @@ export interface components {
 		UserHonorsResponse: {
 			honors: components["schemas"]["UserHonor"][];
 		};
+		/** @enum {string} */
+		UserHonorsCategory:
+			| "all"
+			| "latest"
+			| "attacking"
+			| "camo"
+			| "weapons"
+			| "education"
+			| "crimes"
+			| "drugs"
+			| "jail"
+			| "hospital"
+			| "travel"
+			| "gym"
+			| "level"
+			| "competitions"
+			| "money"
+			| "items"
+			| "commitment"
+			| "casino"
+			| "missions"
+			| "misc";
+		UserHonorProgress: {
+			/** Format: int64 */
+			current: number;
+			/** Format: int64 */
+			target: number;
+		};
+		UserHonorDetailed: {
+			id: components["schemas"]["HonorId"];
+			name: string;
+			description: string;
+			is_unlocked: boolean;
+			is_tracked: boolean;
+			/** @description 'timestamp' is null when 'is_unlocked' is false. */
+			timestamp: number | null;
+			/** @description 'progress' is null when 'is_unlocked' is true or 'is_tracked' is false. */
+			progress: components["schemas"]["UserHonorProgress"] | null;
+		};
+		UserHonorsDetailedResponse: {
+			honors: components["schemas"]["UserHonorDetailed"][];
+		};
 		UserMedal: {
 			id: components["schemas"]["MedalId"];
 			/** Format: int32 */
@@ -11966,6 +12295,36 @@ export interface components {
 		};
 		UserMedalsResponse: {
 			medals: components["schemas"]["UserMedal"][];
+		};
+		/** @enum {string} */
+		UserMedalsCategory:
+			| "all"
+			| "latest"
+			| "general"
+			| "attacking"
+			| "crimes"
+			| "commitment"
+			| "rank"
+			| "level"
+			| "networth";
+		UserMedalProgress: {
+			/** Format: int64 */
+			current: number;
+			/** Format: int64 */
+			target: number;
+		};
+		UserMedalDetailed: {
+			id: components["schemas"]["MedalId"];
+			name: string;
+			description: string;
+			is_unlocked: boolean;
+			/** @description 'timestamp' is null when 'is_unlocked' is false. */
+			timestamp: number | null;
+			/** @description 'progress' is null when 'is_unlocked' is true. */
+			progress: components["schemas"]["UserMedalProgress"] | null;
+		};
+		UserMedalsDetailedResponse: {
+			medals: components["schemas"]["UserMedalDetailed"][];
 		};
 		UserMeritUpgrade: {
 			id: components["schemas"]["MeritId"];
@@ -12002,6 +12361,103 @@ export interface components {
 		};
 		UserHalloweenResponse: {
 			halloween: components["schemas"]["UserHalloween"];
+		};
+		/** @enum {string} */
+		UserItemsCategory:
+			| "All"
+			| "Alcohol"
+			| "Artifact"
+			| "Booster"
+			| "Candy"
+			| "Car"
+			| "Clothing"
+			| "Collectible"
+			| "Defensive"
+			| "Drug"
+			| "Energy Drink"
+			| "Enhancer"
+			| "Flower"
+			| "Jewelry"
+			| "Material"
+			| "Medical"
+			| "Melee"
+			| "Other"
+			| "Plushie"
+			| "Primary"
+			| "Secondary"
+			| "Special"
+			| "Supply Pack"
+			| "Temporary"
+			| "Tool";
+		UserArmouryItemDetails: {
+			stats: components["schemas"]["ItemMarketListingItemStats"] | null;
+			bonuses: components["schemas"]["ItemMarketListingItemBonus"][];
+			rarity: ("yellow" | "orange" | "red") | null;
+		};
+		UserBazaarItemUid: {
+			uid: components["schemas"]["ItemUid"];
+			/** Format: int64 */
+			price: number;
+		};
+		UserBazaarItem: {
+			id: components["schemas"]["ItemId"];
+			uids: components["schemas"]["UserBazaarItemUid"][];
+			name: string;
+			type: components["schemas"]["TornInventoryItemType"];
+			/** Format: int32 */
+			quantity: number;
+			price: number | null;
+			/** Format: int64 */
+			market_price: number;
+			item_details: components["schemas"]["UserArmouryItemDetails"] | null;
+		};
+		UserBazaar: {
+			exists: boolean;
+			is_open: boolean;
+			items: components["schemas"]["UserBazaarItem"][];
+		};
+		UserBazaarResponse: {
+			bazaar: components["schemas"]["UserBazaar"];
+			_metadata: components["schemas"]["RequestMetadataWithLinks"];
+		};
+		UserDisplayItem: {
+			id: components["schemas"]["ItemId"];
+			uids: components["schemas"]["ItemUid"][];
+			name: string;
+			type: components["schemas"]["TornInventoryItemType"];
+			/** Format: int32 */
+			quantity: number;
+			/** Format: int32 */
+			circulation: number;
+			/** Format: int64 */
+			market_price: number;
+			item_details: components["schemas"]["UserArmouryItemDetails"] | null;
+		};
+		UserDisplay: {
+			items: components["schemas"]["UserDisplayItem"][];
+		};
+		UserDisplayResponse: {
+			display: components["schemas"]["UserDisplay"];
+			_metadata: components["schemas"]["RequestMetadataWithLinks"];
+		};
+		/** @enum {string} */
+		UserAuctionHouseCategory: "all" | "ongoing" | "complete";
+		UserAuctionHouseListing: {
+			id: components["schemas"]["AuctionListingId"];
+			buyer: components["schemas"]["BasicUser"];
+			/** Format: int32 */
+			timestamp: number;
+			/** Format: int32 */
+			price: number;
+			/** Format: int32 */
+			bids: number;
+			item:
+				| components["schemas"]["AuctionHouseStackableItem"]
+				| components["schemas"]["TornItemDetails"];
+		};
+		UserAuctionHouseResponse: {
+			auctionhouse: components["schemas"]["UserAuctionHouseListing"][];
+			_metadata: components["schemas"]["RequestMetadataWithLinks"];
 		};
 		PersonalStatsOther: {
 			other: {
@@ -13668,6 +14124,7 @@ export interface components {
 		FactionRankedWar: {
 			/** Format: int32 */
 			war_id: number;
+			template: components["schemas"]["FactionRankedWarTemplate"];
 			/** Format: int32 */
 			start: number;
 			end: number | null;
@@ -13744,6 +14201,9 @@ export interface components {
 			text: string;
 			/** Format: int32 */
 			timestamp: number;
+		};
+		FactionHeadlinesResponse: {
+			headlines: components["schemas"]["TornHeadline"][];
 		};
 		NewsResponse: {
 			news: components["schemas"]["News"][];
@@ -14037,6 +14497,88 @@ export interface components {
 		FactionCrimeResponse: {
 			crime: components["schemas"]["FactionCrime"];
 		};
+		FactionOcHistoryRole: {
+			id: components["schemas"]["TornOrganizedCrimePositionId"] | null;
+			label: string;
+		};
+		FactionOcHistoryItem: {
+			item_id: components["schemas"]["ItemId"];
+			item_name: string;
+			/** Format: int32 */
+			quantity: number;
+		};
+		FactionOcHistoryRoleDetails: {
+			role: components["schemas"]["FactionOcHistoryRole"];
+		};
+		FactionOcHistoryRoleChangeDetails: {
+			old_role: components["schemas"]["FactionOcHistoryRole"];
+			new_role: components["schemas"]["FactionOcHistoryRole"];
+		};
+		FactionOcHistorySpawnDetails: {
+			/** Format: int32 */
+			scope: number;
+		};
+		FactionOcHistoryPunishmentDetails: {
+			reason: string | null;
+			/** Format: int32 */
+			duration: number;
+		};
+		FactionOcHistoryInjuryDetails: {
+			/** Format: int32 */
+			life_lost: number;
+		};
+		/** @enum {string} */
+		FactionOcHistoryPayoutTypeEnum: "money" | "item";
+		/** @enum {string} */
+		FactionOcHistoryPayoutDestinationEnum: "wallet" | "balance";
+		FactionOcHistoryPayoutDetails: {
+			type: components["schemas"]["FactionOcHistoryPayoutTypeEnum"];
+			destination:
+				components["schemas"]["FactionOcHistoryPayoutDestinationEnum"] | null;
+			/** Format: float */
+			percentage: number;
+			money: number | null;
+			items: components["schemas"]["FactionOcHistoryItem"][];
+			participants: components["schemas"]["UserId"][];
+		};
+		FactionOcHistoryPayoutReceivedDetails: {
+			type: components["schemas"]["FactionOcHistoryPayoutTypeEnum"];
+			destination:
+				components["schemas"]["FactionOcHistoryPayoutDestinationEnum"] | null;
+			/** Format: float */
+			percentage: number;
+			money: number | null;
+			items: components["schemas"]["FactionOcHistoryItem"][];
+			role: components["schemas"]["FactionOcHistoryRole"];
+			crime_id: components["schemas"]["FactionCrimeId"] | null;
+		};
+		FactionOcHistoryEntry: {
+			/** Format: int64 */
+			id: number;
+			/** Format: int32 */
+			timestamp: number;
+			action: components["schemas"]["FactionOcHistoryActionEnum"];
+			user: components["schemas"]["BasicUser"] | null;
+			performed_by: components["schemas"]["BasicUser"] | null;
+			text: string;
+			details:
+				| components["schemas"]["FactionOcHistoryRoleDetails"]
+				| components["schemas"]["FactionOcHistoryRoleChangeDetails"]
+				| components["schemas"]["FactionOcHistorySpawnDetails"]
+				| components["schemas"]["FactionOcHistoryItem"]
+				| components["schemas"]["FactionOcHistoryPunishmentDetails"]
+				| components["schemas"]["FactionOcHistoryInjuryDetails"]
+				| components["schemas"]["FactionOcHistoryPayoutDetails"]
+				| components["schemas"]["FactionOcHistoryPayoutReceivedDetails"]
+				| null;
+		};
+		FactionOcHistory: {
+			crime_id: components["schemas"]["FactionCrimeId"];
+			history: components["schemas"]["FactionOcHistoryEntry"][];
+		};
+		FactionOcHistoryResponse: {
+			ochistory: components["schemas"]["FactionOcHistory"];
+		};
 		FactionBalance: {
 			faction: {
 				/** Format: int64 */
@@ -14071,40 +14613,44 @@ export interface components {
 					| "contributors"
 					| "crime"
 					| "crimes"
-					| "crimeexp"
-					| "dirtbombs"
-					| "hof"
-					| "lookup"
+					| "dirtybombs"
+					| "headlines"
+					| "inventory"
 					| "members"
 					| "news"
+					| "ochistory"
 					| "positions"
 					| "rackets"
 					| "raidreport"
 					| "raids"
-					| "rankedwars"
 					| "rankedwarreport"
+					| "rankedwars"
 					| "reports"
 					| "revives"
 					| "revivesfull"
-					| "search"
 					| "stats"
 					| "territory"
 					| "territoryownership"
 					| "territorywarreport"
 					| "territorywars"
-					| "timestamp"
 					| "upgrades"
+					| "warfare"
 					| "warfarechains"
 					| "warfareraids"
 					| "warfareranked"
 					| "warfareterritory"
 					| "wars"
+					| "lookup"
+					| "timestamp"
+					| "crimeexp"
+					| "hof"
 			  )
 			| string;
 		FactionLookupResponse: {
 			selections: components["schemas"]["FactionSelectionName"][];
 		};
 		FactionRankedWarDetails: {
+			template: components["schemas"]["FactionRankedWarTemplate"];
 			id: components["schemas"]["RankedWarId"];
 			/**
 			 * Format: int32
@@ -14160,6 +14706,14 @@ export interface components {
 				| components["schemas"]["FactionWarfareDirtyBomb"][];
 			_metadata: components["schemas"]["RequestMetadataWithLinks"];
 		};
+		FactionRankedWarMode: "Tug of War" | string;
+		FactionRankedWarRule:
+			("Day War" | "50% Reduced score requirement" | "Frying Pans") | string;
+		FactionRankedWarTemplate: {
+			/** @description 'mode' is null when the war has no named mode. */
+			mode: components["schemas"]["FactionRankedWarMode"] | null;
+			rules: components["schemas"]["FactionRankedWarRule"][];
+		};
 		FactionRankedWarReportResponse: {
 			rankedwarreport: {
 				id: components["schemas"]["RankedWarId"];
@@ -14175,6 +14729,7 @@ export interface components {
 				end: number;
 				winner: components["schemas"]["FactionId"];
 				forfeit: boolean;
+				template: components["schemas"]["FactionRankedWarTemplate"];
 				factions: {
 					id: components["schemas"]["FactionId"];
 					name: string;
@@ -14216,11 +14771,10 @@ export interface components {
 					| "applications"
 					| "companies"
 					| "employees"
-					| "lookup"
 					| "news"
 					| "profile"
-					| "snapshot"
 					| "stock"
+					| "lookup"
 					| "timestamp"
 			  )
 			| string;
@@ -14565,7 +15119,7 @@ export interface components {
 			_metadata: components["schemas"]["RequestMetadataWithLinks"];
 		};
 		ForumSelectionName:
-			| ("categories" | "lookup" | "posts" | "thread" | "threads" | "timestamp")
+			| ("categories" | "posts" | "thread" | "threads" | "lookup" | "timestamp")
 			| string;
 		ForumLookupResponse: {
 			selections: components["schemas"]["ForumSelectionName"][];
@@ -14660,8 +15214,14 @@ export interface components {
 		AuctionHouseListingResponse: {
 			auctionhouselisting: components["schemas"]["AuctionHouseListing"];
 		};
+		/** @enum {string} */
+		MarketAuctionHouseCategory: "complete" | "ongoing";
 		AuctionHouseResponse: {
 			auctionhouse: components["schemas"]["AuctionHouseListing"][];
+			/** Format: int32 */
+			auctionhouse_timestamp?: number;
+			/** Format: int32 */
+			auctionhouse_delay?: number;
 			_metadata: components["schemas"]["RequestMetadataWithLinks"];
 		};
 		BasicProperty: {
@@ -14843,12 +15403,30 @@ export interface components {
 			itemmarket: components["schemas"]["ItemMarket"];
 			_metadata: components["schemas"]["RequestMetadataWithLinksAndTotal"];
 		};
+		MarketHistoryEntry: {
+			/** Format: int32 */
+			timestamp: number;
+			/** @description 'price' is null when there were no sales that day. */
+			price: number | null;
+			/** @description 'circulation' is null when it was not recorded that day. */
+			circulation: number | null;
+		};
+		MarketItemHistoryResponse: {
+			itemhistory: components["schemas"]["MarketHistoryEntry"][];
+			_metadata: components["schemas"]["RequestMetadataWithLinks"];
+		};
+		MarketPointsHistoryResponse: {
+			pointshistory: components["schemas"]["MarketHistoryEntry"][];
+			_metadata: components["schemas"]["RequestMetadataWithLinks"];
+		};
 		MarketSelectionName:
 			| (
 					| "auctionhouse"
 					| "auctionhouselisting"
 					| "bazaar"
+					| "itemhistory"
 					| "itemmarket"
+					| "pointshistory"
 					| "pointsmarket"
 					| "properties"
 					| "rentals"
@@ -15014,12 +15592,12 @@ export interface components {
 			| (
 					| "cars"
 					| "carupgrades"
-					| "lookup"
 					| "race"
 					| "races"
 					| "records"
-					| "timestamp"
 					| "tracks"
+					| "lookup"
+					| "timestamp"
 			  )
 			| string;
 		RacingLookupResponse: {
@@ -16135,16 +16713,16 @@ export interface components {
 					| "factiontree"
 					| "gyms"
 					| "halloween"
+					| "headlines"
 					| "hof"
 					| "honors"
 					| "itemammo"
 					| "itemdetails"
 					| "itemmods"
-					| "itemstats"
 					| "items"
+					| "itemstats"
 					| "logcategories"
 					| "logtypes"
-					| "lookup"
 					| "medals"
 					| "merits"
 					| "museum"
@@ -16158,6 +16736,7 @@ export interface components {
 					| "stocks"
 					| "subcrimes"
 					| "territory"
+					| "lookup"
 					| "timestamp"
 					| "competition"
 					| "organisedcrimes"
@@ -16181,6 +16760,22 @@ export interface components {
 		};
 		TornHalloweenResponse: {
 			halloween: components["schemas"]["TornHalloween"];
+		};
+		TornHeadline: {
+			id: number | null;
+			headline: string;
+			link: string | null;
+			type: string;
+			/** @enum {string} */
+			importance: "normal" | "urgent";
+			/** Format: int64 */
+			start_at: number;
+			/** Format: int64 */
+			end_at: number;
+			has_countdown: boolean;
+		};
+		TornHeadlinesResponse: {
+			headlines: components["schemas"]["TornHeadline"][];
 		};
 	};
 	responses: never;
@@ -16290,6 +16885,7 @@ export interface components {
 		ApiName: string;
 		ApiLimit20: number;
 		ApiLimit100Default20: number;
+		ApiLimit1000Default100: number;
 		ApiLimit1000Default20: number;
 		ApiLimit50: number;
 		ApiLimit50Default20: number;
@@ -16436,6 +17032,42 @@ export interface operations {
 			};
 		};
 	};
+	getMyAuctionHouseListings: {
+		parameters: {
+			query?: {
+				/** @description Listings category, defaults to all */
+				cat?: components["schemas"]["UserAuctionHouseCategory"];
+				limit?: components["parameters"]["ApiLimit100Default20"];
+				/** @description Sorted by the greatest timestamps */
+				sort?: components["parameters"]["ApiSort"];
+				/** @description Timestamp that sets the lower limit for the data returned. Data returned will be after this time */
+				from?: components["parameters"]["ApiFrom"];
+				/** @description Timestamp that sets the upper limit for the data returned. Data returned will be up to and including this time */
+				to?: components["parameters"]["ApiTo"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyLimited"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserAuctionHouseResponse"];
+				};
+			};
+		};
+	};
 	getMyBars: {
 		parameters: {
 			query?: {
@@ -16459,6 +17091,39 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["UserBarsResponse"];
+				};
+			};
+		};
+	};
+	getMyBazaar: {
+		parameters: {
+			query?: {
+				/** @description Items category, defaults to All */
+				cat?: components["schemas"]["UserItemsCategory"];
+				offset?: components["parameters"]["ApiOffset"];
+				limit?: components["parameters"]["ApiLimit100Default20"];
+				/** @description Sort by item name */
+				sort?: "DESC" | "ASC";
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyLimited"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserBazaarResponse"];
 				};
 			};
 		};
@@ -16776,6 +17441,63 @@ export interface operations {
 			};
 		};
 	};
+	getMyCriminalRecord: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserCriminalRecordResponse"];
+				};
+			};
+		};
+	};
+	getUserCriminalRecord: {
+		parameters: {
+			query?: {
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path: {
+				/** @description User id or user discord id */
+				id: components["schemas"]["UserDiscordPathId"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserCriminalRecordResponse"];
+				};
+			};
+		};
+	};
 	getMyDiscord: {
 		parameters: {
 			query?: {
@@ -16829,6 +17551,75 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["UserDiscordResponse"];
+				};
+			};
+		};
+	};
+	getMyDisplayCase: {
+		parameters: {
+			query?: {
+				/** @description Items category, defaults to All */
+				cat?: components["schemas"]["UserItemsCategory"];
+				offset?: components["parameters"]["ApiOffset"];
+				limit?: components["parameters"]["ApiLimit100Default20"];
+				/** @description Sort by item name */
+				sort?: "DESC" | "ASC";
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserDisplayResponse"];
+				};
+			};
+		};
+	};
+	getUserDisplayCase: {
+		parameters: {
+			query?: {
+				/** @description Items category, defaults to All */
+				cat?: components["schemas"]["UserItemsCategory"];
+				offset?: components["parameters"]["ApiOffset"];
+				limit?: components["parameters"]["ApiLimit100Default20"];
+				/** @description Sort by item name */
+				sort?: "DESC" | "ASC";
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path: {
+				/** @description User id */
+				id: components["schemas"]["UserId"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserDisplayResponse"];
 				};
 			};
 		};
@@ -17346,6 +18137,8 @@ export interface operations {
 	getMyHonors: {
 		parameters: {
 			query?: {
+				/** @description Honors category, defaults to all */
+				cat?: components["schemas"]["UserHonorsCategory"];
 				/** @description Timestamp to bypass cache */
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
@@ -17365,7 +18158,9 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					"application/json": components["schemas"]["UserHonorsResponse"];
+					"application/json":
+						| components["schemas"]["UserHonorsResponse"]
+						| components["schemas"]["UserHonorsDetailedResponse"];
 				};
 			};
 		};
@@ -17702,6 +18497,8 @@ export interface operations {
 	getMyMedals: {
 		parameters: {
 			query?: {
+				/** @description Medals category, defaults to all */
+				cat?: components["schemas"]["UserMedalsCategory"];
 				/** @description Timestamp to bypass cache */
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
@@ -17721,7 +18518,9 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					"application/json": components["schemas"]["UserMedalsResponse"];
+					"application/json":
+						| components["schemas"]["UserMedalsResponse"]
+						| components["schemas"]["UserMedalsDetailedResponse"];
 				};
 			};
 		};
@@ -18455,8 +19254,8 @@ export interface operations {
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
 				comment?: components["parameters"]["ApiComment"];
-				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
-				key?: components["parameters"]["ApiKeyLimited"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
 			};
 			header?: never;
 			path?: never;
@@ -18496,8 +19295,8 @@ export interface operations {
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
 				comment?: components["parameters"]["ApiComment"];
-				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
-				key?: components["parameters"]["ApiKeyLimited"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
 			};
 			header?: never;
 			path?: never;
@@ -18980,11 +19779,12 @@ export interface operations {
 						| components["schemas"]["UserBountiesResponse"]
 						| components["schemas"]["UserJobRanksResponse"]
 						| components["schemas"]["UserPropertiesResponse"]
-						| components["schemas"]["UserFactionBalanceResponse"]
 						| components["schemas"]["UserBasicResponse"]
 						| components["schemas"]["RevivesResponse"]
 						| components["schemas"]["UserHonorsResponse"]
+						| components["schemas"]["UserHonorsDetailedResponse"]
 						| components["schemas"]["UserMedalsResponse"]
+						| components["schemas"]["UserMedalsDetailedResponse"]
 						| components["schemas"]["UserMeritsResponse"]
 						| components["schemas"]["RevivesFullResponse"]
 						| components["schemas"]["UserProfileResponse"]
@@ -19024,8 +19824,12 @@ export interface operations {
 						| components["schemas"]["UserEventsResponse"]
 						| components["schemas"]["UserMessagesResponse"]
 						| components["schemas"]["UserNewMessagesResponse"]
-						| components["schemas"]["UserLookupResponse"]
 						| components["schemas"]["UserInventoryResponse"]
+						| components["schemas"]["UserBazaarResponse"]
+						| components["schemas"]["UserDisplayResponse"]
+						| components["schemas"]["UserAuctionHouseResponse"]
+						| components["schemas"]["UserCriminalRecordResponse"]
+						| components["schemas"]["UserLookupResponse"]
 						| components["schemas"]["TimestampResponse"];
 				};
 			};
@@ -19569,6 +20373,35 @@ export interface operations {
 			};
 		};
 	};
+	getMyFactionHeadlines: {
+		parameters: {
+			query?: {
+				/** @description Determines if fields include HTML or not ('Hospitalized by <a href=...>user</a>' vs 'Hospitalized by user'). */
+				striptags?: components["parameters"]["ApiStripTagsFalse"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["FactionHeadlinesResponse"];
+				};
+			};
+		};
+	};
 	getMyFactionHoF: {
 		parameters: {
 			query?: {
@@ -19752,6 +20585,38 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["NewsResponse"];
+				};
+			};
+		};
+	};
+	getMyFactionOrganizedCrimeHistory: {
+		parameters: {
+			query?: {
+				/** @description Determines if fields include HTML or not ('Hospitalized by <a href=...>user</a>' vs 'Hospitalized by user'). */
+				striptags?: components["parameters"]["ApiStripTagsTrue"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyLimited"];
+			};
+			header?: never;
+			path: {
+				/** @description Crime id */
+				crimeId: components["schemas"]["FactionCrimeId"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["FactionOcHistoryResponse"];
 				};
 			};
 		};
@@ -20064,8 +20929,8 @@ export interface operations {
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
 				comment?: components["parameters"]["ApiComment"];
-				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
-				key?: components["parameters"]["ApiKeyLimited"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
 			};
 			header?: never;
 			path?: never;
@@ -20105,8 +20970,8 @@ export interface operations {
 				timestamp?: components["parameters"]["ApiTimestamp"];
 				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
 				comment?: components["parameters"]["ApiComment"];
-				/** @description API key (Limited).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
-				key?: components["parameters"]["ApiKeyLimited"];
+				/** @description API key (Minimal).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyMinimal"];
 			};
 			header?: never;
 			path?: never;
@@ -20799,6 +21664,7 @@ export interface operations {
 						| components["schemas"]["FactionBasicResponse"]
 						| components["schemas"]["FactionWarsResponse"]
 						| components["schemas"]["NewsResponse"]
+						| components["schemas"]["FactionHeadlinesResponse"]
 						| components["schemas"]["RevivesResponse"]
 						| components["schemas"]["FactionTerritoryWarsHistoryResponse"]
 						| components["schemas"]["AttacksResponse"]
@@ -20814,6 +21680,7 @@ export interface operations {
 						| components["schemas"]["FactionChainReportResponse"]
 						| components["schemas"]["FactionCrimesResponse"]
 						| components["schemas"]["FactionCrimeResponse"]
+						| components["schemas"]["FactionOcHistoryResponse"]
 						| components["schemas"]["FactionRaidsResponse"]
 						| components["schemas"]["FactionWarfareResponse"]
 						| components["schemas"]["FactionRankedWarReportResponse"]
@@ -21651,6 +22518,8 @@ export interface operations {
 	getMarketAuctionHouseItem: {
 		parameters: {
 			query?: {
+				/** @description Listings category, defaults to complete */
+				cat?: components["schemas"]["MarketAuctionHouseCategory"];
 				limit?: components["parameters"]["ApiLimit100Default20"];
 				/** @description Sorted by the greatest timestamps */
 				sort?: components["parameters"]["ApiSort"];
@@ -21688,6 +22557,8 @@ export interface operations {
 	getMarketAuctionHouse: {
 		parameters: {
 			query?: {
+				/** @description Listings category, defaults to complete */
+				cat?: components["schemas"]["MarketAuctionHouseCategory"];
 				limit?: components["parameters"]["ApiLimit100Default20"];
 				/** @description Sorted by the greatest timestamps */
 				sort?: components["parameters"]["ApiSort"];
@@ -21812,6 +22683,43 @@ export interface operations {
 			};
 		};
 	};
+	getMarketItemHistory: {
+		parameters: {
+			query?: {
+				limit?: components["parameters"]["ApiLimit1000Default100"];
+				/** @description Sorted by the greatest timestamps */
+				sort?: components["parameters"]["ApiSortDesc"];
+				/** @description Timestamp that sets the lower limit for the data returned. Data returned will be after this time */
+				from?: components["parameters"]["ApiFrom"];
+				/** @description Timestamp that sets the upper limit for the data returned. Data returned will be up to and including this time */
+				to?: components["parameters"]["ApiTo"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path: {
+				/** @description Item id */
+				id: components["schemas"]["ItemId"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["MarketItemHistoryResponse"];
+				};
+			};
+		};
+	};
 	getMarketProperties: {
 		parameters: {
 			query?: {
@@ -21869,6 +22777,40 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["PointsMarketResponse"];
+				};
+			};
+		};
+	};
+	getMarketPointsHistory: {
+		parameters: {
+			query?: {
+				limit?: components["parameters"]["ApiLimit1000Default100"];
+				/** @description Sorted by the greatest timestamps */
+				sort?: components["parameters"]["ApiSortDesc"];
+				/** @description Timestamp that sets the lower limit for the data returned. Data returned will be after this time */
+				from?: components["parameters"]["ApiFrom"];
+				/** @description Timestamp that sets the upper limit for the data returned. Data returned will be up to and including this time */
+				to?: components["parameters"]["ApiTo"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["MarketPointsHistoryResponse"];
 				};
 			};
 		};
@@ -22004,6 +22946,8 @@ export interface operations {
 						| components["schemas"]["BazaarResponse"]
 						| components["schemas"]["BazaarResponseSpecialized"]
 						| components["schemas"]["MarketItemMarketResponse"]
+						| components["schemas"]["MarketItemHistoryResponse"]
+						| components["schemas"]["MarketPointsHistoryResponse"]
 						| components["schemas"]["MarketRentalsResponse"]
 						| components["schemas"]["AuctionHouseResponse"]
 						| components["schemas"]["AuctionHouseListingResponse"]
@@ -22898,6 +23842,35 @@ export interface operations {
 				};
 				content: {
 					"application/json": components["schemas"]["TornHalloweenResponse"];
+				};
+			};
+		};
+	};
+	getTornHeadlines: {
+		parameters: {
+			query?: {
+				/** @description Determines if fields include HTML or not ('Hospitalized by <a href=...>user</a>' vs 'Hospitalized by user'). */
+				striptags?: components["parameters"]["ApiStripTagsFalse"];
+				/** @description Timestamp to bypass cache */
+				timestamp?: components["parameters"]["ApiTimestamp"];
+				/** @description Comment for your tool/service/bot/website to be visible in the logs. */
+				comment?: components["parameters"]["ApiComment"];
+				/** @description API key (Public).<br>It's not required to use this parameter when passing the API key via the Authorization header. */
+				key?: components["parameters"]["ApiKeyPublic"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["TornHeadlinesResponse"];
 				};
 			};
 		};
@@ -23804,6 +24777,7 @@ export interface operations {
 						| components["schemas"]["TornMedalsResponse"]
 						| components["schemas"]["TornBankResponse"]
 						| components["schemas"]["TornHalloweenResponse"]
+						| components["schemas"]["TornHeadlinesResponse"]
 						| components["schemas"]["TornBountiesResponse"]
 						| components["schemas"]["TornGymsResponse"]
 						| components["schemas"]["TornPokerTablesResponse"]

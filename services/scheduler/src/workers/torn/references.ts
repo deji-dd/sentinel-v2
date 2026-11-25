@@ -54,6 +54,13 @@ type PointsMarketResponse = {
 	pointsmarket?: Record<string, { cost: number; quantity: number }>;
 };
 
+type PointsHistoryResponse = TornSchema<"MarketPointsHistoryResponse">;
+
+/** How many recent daily bars to check when the latest day had no sales. */
+const POINTS_HISTORY_LOOKBACK = 7;
+/** Points sampled by the listed-market fallback VWAP. */
+const POINTS_VWAP_SAMPLE_SIZE = 5_000;
+
 /**
  * Syncs static public reference data from Torn (Items, Crimes, Stocks, Properties, Gyms, Points Market Price).
  */
@@ -61,7 +68,7 @@ export async function runTornReferenceSync(): Promise<void> {
 	const finishSync = logger.time();
 
 	try {
-		const [res, marketRes, calRes] = (await Promise.all([
+		const [res, marketRes, calRes, historyRes] = (await Promise.all([
 			tornApi.getPersonal("/torn", {
 				queryParams: {
 					selections: ["items", "crimes", "stocks", "properties", "gyms"],
@@ -76,50 +83,82 @@ export async function runTornReferenceSync(): Promise<void> {
 				);
 				return null;
 			}),
+			tornApi
+				.getPersonal("/market/pointshistory", {
+					queryParams: { limit: POINTS_HISTORY_LOOKBACK, sort: "DESC" },
+				})
+				.catch((err) => {
+					logger.warn(
+						`Failed to fetch points history in reference sync: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					return null;
+				}),
 		])) as [
 			TornFullReferenceResponse,
 			PointsMarketResponse,
 			{ calendar?: { competitions?: unknown[]; events?: unknown[] } } | null,
+			PointsHistoryResponse | null,
 		];
 
 		const now = new Date();
 
-		// Calculate average points market price across top 5,000 points
+		// Torn's own daily average is the authoritative figure and stays stable
+		// across the day, unlike a snapshot of the cheapest live listings. A day
+		// with no sales reports a null price, so check the recent bars for the
+		// newest one that actually has a price.
+		const newestPricedEntry = historyRes?.pointshistory?.find(
+			(entry) =>
+				typeof entry.price === "number" &&
+				Number.isFinite(entry.price) &&
+				entry.price > 0,
+		);
+		const dailyPrice =
+			newestPricedEntry && typeof newestPricedEntry.price === "number"
+				? Math.round(newestPricedEntry.price)
+				: null;
+
+		// Fall back to the volume-weighted top 5,000 listings when Torn has no
+		// recent daily price (or the history call failed).
+		let sampledQty = 0;
+		let vwapPrice = 0;
 		if (marketRes.pointsmarket) {
 			let totalCost = 0;
-			let totalQty = 0;
 			for (const listing of Object.values(marketRes.pointsmarket)) {
-				totalQty += listing.quantity;
+				sampledQty += listing.quantity;
 				totalCost += listing.cost * listing.quantity;
-				if (totalQty >= 5000) break;
+				if (sampledQty >= POINTS_VWAP_SAMPLE_SIZE) break;
 			}
-			const avgPointsPrice =
-				totalQty > 0 ? Math.round(totalCost / totalQty) : 0;
+			vwapPrice = sampledQty > 0 ? Math.round(totalCost / sampledQty) : 0;
+		}
 
-			if (avgPointsPrice > 0) {
-				// A typed numeric column: the legacy blob accepted a
-				// double-encoded value and every reader then silently fell back
-				// to "price unknown", valuing points payouts at zero.
-				await db
-					.insert(tornMarketPrices)
-					.values({
-						refKey: POINTS_MARKET_PRICE_KEY,
-						price: avgPointsPrice,
-						createdAt: now,
+		const pointsPrice = dailyPrice ?? vwapPrice;
+		if (pointsPrice > 0) {
+			// A typed numeric column: the legacy blob accepted a
+			// double-encoded value and every reader then silently fell back
+			// to "price unknown", valuing points payouts at zero.
+			await db
+				.insert(tornMarketPrices)
+				.values({
+					refKey: POINTS_MARKET_PRICE_KEY,
+					price: pointsPrice,
+					createdAt: now,
+					updatedAt: now,
+				})
+				.onConflictDoUpdate({
+					target: tornMarketPrices.refKey,
+					set: {
+						price: pointsPrice,
 						updatedAt: now,
-					})
-					.onConflictDoUpdate({
-						target: tornMarketPrices.refKey,
-						set: {
-							price: avgPointsPrice,
-							updatedAt: now,
-						},
-					});
+					},
+				});
 
-				logger.info(
-					`Updated average Points Market Price: $${avgPointsPrice.toLocaleString()} (sample: ${totalQty} points).`,
-				);
-			}
+			const source =
+				dailyPrice !== null
+					? `Torn daily average (circulation: ${newestPricedEntry?.circulation?.toLocaleString() ?? "unknown"})`
+					: `top-${POINTS_VWAP_SAMPLE_SIZE.toLocaleString()} VWAP (sample: ${sampledQty.toLocaleString()} points)`;
+			logger.info(
+				`Updated Points Market Price: $${pointsPrice.toLocaleString()} (${source}).`,
+			);
 		}
 
 		// Sync Torn Calendar activities to tornCalendarActivities table (24-hour reference lifecycle)
