@@ -72,6 +72,12 @@ export type EventRunnerConfig = {
 	/** Optional initial delay in milliseconds to stagger boot executions */
 	initialDelayMs?: number;
 	/**
+	 * For cron workers only: never catch up a missed tick at boot — wait for the
+	 * next scheduled tick instead. Use for side-effectful jobs (notifications,
+	 * digests) where a restart must not replay a run the system already did.
+	 */
+	skipBootRun?: boolean;
+	/**
 	 * Maximum execution time in milliseconds before the cycle is aborted.
 	 * If omitted for interval workers with cadence <= 60s, defaults to 85% of interval.
 	 * If omitted for cron / long workers, defaults to 5 minutes (300,000ms).
@@ -238,8 +244,17 @@ export class ScheduledRunner {
 
 			let delayMs = 0;
 
-			// 2. Check if we have a valid future nextRunAt target and no forceRun flag
+			// 2. A persisted cron tick in the past would normally run immediately
+			//    on boot. Jobs that must only fire on their fixed tick opt out.
+			//    An explicit forceRun still wins — that is an operator asking for
+			//    an immediate execution.
 			if (
+				!schedule.forceRun &&
+				this.config.skipBootRun &&
+				this.schedule.type === "cron"
+			) {
+				delayMs = Math.max(0, this.getNextScheduledTimeMs() - now);
+			} else if (
 				schedule.nextRunAt &&
 				schedule.nextRunAt.getTime() > now &&
 				!schedule.forceRun

@@ -49,6 +49,8 @@ export const WORKER_STATE_IDS = {
 	capitalReconciliation: "capital:reconciliation",
 	/** Money-log payment matching status and last processed log. */
 	capitalPayments: "capital:payments",
+	/** Capital unit-price insight cooldowns, persisted across scheduler restarts. */
+	capitalAlerts: "capital:alerts",
 } as const;
 
 export type WorkerStateId =
