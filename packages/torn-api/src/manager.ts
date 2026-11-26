@@ -170,6 +170,14 @@ export async function getAllianceKeyPool(
 		keyType: "alliance" as const,
 	}));
 
+	// Transitional fallback: on a database where the backfill has not produced
+	// any Alliance keys yet, keep the system pool as the source of truth so
+	// territory activity can still boot. This also keeps tests that seed only
+	// system keys working.
+	if (pool.length === 0) {
+		return getSystemKeyPool();
+	}
+
 	if (guildId === undefined) {
 		cachedAllianceKeyPool = pool;
 		cachedAllianceKeyPoolAt = now;
