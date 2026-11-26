@@ -6,6 +6,7 @@ import {
 } from "@sentinel/database";
 import { ActivityType, type Client, Events } from "discord.js";
 
+import { updateAllianceKeyDonationChannel } from "../lib/alliance-key-donation";
 import { startBootAlertNotifier } from "../lib/boot-notifier";
 import { updateElimsArmoryStorageChannel } from "../lib/elims-armory-storage";
 import { updateElimsItemRequestsChannel } from "../lib/elims-item-requests";
@@ -94,6 +95,11 @@ export const readyEvent = {
 		// Synchronize Giveaway Channel if configured
 		await updateGiveawayChannel(client).catch((err) => {
 			logger.warn("Failed to sync Giveaway embed on boot:", err);
+		});
+
+		// Synchronize Alliance key donation embed if configured
+		await updateAllianceKeyDonationChannel(client).catch((err) => {
+			logger.warn("Failed to sync Alliance Key Donation embed on boot:", err);
 		});
 
 		// Synchronize Key Donation Channel if configured

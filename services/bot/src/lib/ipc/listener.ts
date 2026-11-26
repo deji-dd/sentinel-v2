@@ -11,6 +11,7 @@ import { IPC_SOCKET_PATHS, IpcClient, IpcServer } from "@sentinel/utils/ipc";
 import type { Client } from "discord.js";
 
 import { deployGuildCommands } from "../../scripts/deploy-commands";
+import { updateAllianceKeyDonationChannel } from "../alliance-key-donation";
 import {
 	handleCapitalAlert,
 	handleCapitalPaperAlert,
@@ -322,6 +323,8 @@ export function setupBotIpcListeners(client: Client): void {
 			void syncElimsStockHoldersChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_giveaways") {
 			void updateGiveawayChannel(client, message.data?.guildId);
+		} else if (message.action === "sync_alliance_key_donation") {
+			void updateAllianceKeyDonationChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_key_donation") {
 			void updateElimsKeyDonationChannel(client, message.data?.guildId);
 		} else if (message.action === "sync_elims_live_data") {

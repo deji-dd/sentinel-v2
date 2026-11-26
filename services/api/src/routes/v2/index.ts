@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 
+import { allianceRoutes } from "./alliance";
 import { authRoutes } from "./auth";
 import { capitalRoutes } from "./capital";
 import { chatRoutes } from "./chat";
@@ -15,6 +16,7 @@ import { systemRoutes } from "./system";
 import { ttRoutes } from "./tt";
 
 export {
+	allianceRoutes,
 	authRoutes,
 	capitalRoutes,
 	chatRoutes,
@@ -31,6 +33,7 @@ export {
 };
 
 export const v2Routes = new Elysia({ prefix: "/v2" })
+	.use(allianceRoutes)
 	.use(authRoutes)
 	.use(capitalRoutes)
 	.use(chatRoutes)

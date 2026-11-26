@@ -1,6 +1,6 @@
 import { db, eq, factions, inArray } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
-import { tornApi } from "@sentinel/torn-api";
+import { getActiveAllianceKeyPool, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 
 const logger = new Logger("FactionTracker");
@@ -53,6 +53,7 @@ async function processPendingFactionQueue(): Promise<void> {
 					"/faction/{id}/basic",
 					batchIds,
 					(factionId) => ({ pathParams: { id: Number(factionId) } }),
+					await getActiveAllianceKeyPool(),
 				)) as FactionBasicResponse[];
 
 				const validResponses = responses.filter((r) => r?.basic);

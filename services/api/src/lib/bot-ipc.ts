@@ -189,6 +189,15 @@ export async function syncElimsGiveawaysViaIpc(
 }
 
 /**
+ * Dispatches an IPC signal to the Bot to refresh the Alliance key donation embed.
+ */
+export async function syncAllianceKeyDonationViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_alliance_key_donation", { guildId });
+}
+
+/**
  * Dispatches an IPC signal to the Bot to synchronize the Elims API Key Donation module
  * (persistent channel embed maintenance).
  */

@@ -7,12 +7,15 @@ import type {
 } from "@sentinel/schemas";
 
 import {
+	allianceApiKeys,
 	and,
 	apiKeys,
 	db,
 	elimsApiKeys,
 	eq,
 	guildApiKeys,
+	isNull,
+	or,
 	subversiveApiKeys,
 } from "../../database";
 import { Logger } from "../../utils";
@@ -111,6 +114,101 @@ export async function getNextSystemKey(): Promise<ManagedApiKey> {
 		throw new Error("No API keys available in key pool.");
 	}
 	systemKeyIndex = (systemKeyIndex + 1) % keys.length;
+	return key;
+}
+
+const ALLIANCE_KEY_POOL_TTL_MS = 30_000;
+let cachedAllianceKeyPool: ManagedApiKey[] | null = null;
+let cachedAllianceKeyPoolAt = 0;
+let allianceKeyIndex = 0;
+
+/** Drops the memoised Alliance key pool (test seam, and for key-mutation paths). */
+export function clearAllianceKeyPoolCache(): void {
+	cachedAllianceKeyPool = null;
+	cachedAllianceKeyPoolAt = 0;
+}
+
+/**
+ * Fetches all active keys in the Alliance pool. Null-guild rows are the system
+ * keys imported when the pool was created and are visible to every guild.
+ */
+export async function getAllianceKeyPool(
+	guildId?: string,
+): Promise<ManagedApiKey[]> {
+	const now = Date.now();
+	if (
+		guildId === undefined &&
+		cachedAllianceKeyPool &&
+		now - cachedAllianceKeyPoolAt < ALLIANCE_KEY_POOL_TTL_MS
+	) {
+		return cachedAllianceKeyPool;
+	}
+
+	const masterKey = process.env.ENCRYPTION_KEY ?? "";
+	const rows = await db
+		.select()
+		.from(allianceApiKeys)
+		.where(
+			and(
+				eq(allianceApiKeys.isValid, true),
+				guildId
+					? or(
+							isNull(allianceApiKeys.guildId),
+							eq(allianceApiKeys.guildId, guildId),
+						)
+					: undefined,
+			),
+		)
+		.orderBy(allianceApiKeys.lastUsedAt);
+
+	const pool = rows.map((k) => ({
+		apiKey:
+			k.apiKeyEncrypted.length > 16 && masterKey
+				? decryptApiKey(k.apiKeyEncrypted, masterKey)
+				: k.apiKeyEncrypted,
+		userId: k.tornId,
+		keyType: "alliance" as const,
+	}));
+
+	if (guildId === undefined) {
+		cachedAllianceKeyPool = pool;
+		cachedAllianceKeyPoolAt = now;
+	}
+	return pool;
+}
+
+/** Alliance keys that are not in a temporary health cooldown. */
+export async function getActiveAllianceKeyPool(
+	guildId?: string,
+): Promise<ManagedApiKey[]> {
+	const pool = await getAllianceKeyPool(guildId);
+	const active = pool.filter(
+		(k) => !tornApi.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey),
+	);
+	return active.length > 0 ? active : pool;
+}
+
+/** Gets the next Alliance key in fair round-robin order. */
+export async function getNextAllianceKey(
+	excludeKeys?: Set<string>,
+	resolvedPool?: ManagedApiKey[],
+): Promise<ManagedApiKey | null> {
+	const pool = resolvedPool ?? (await getAllianceKeyPool());
+	if (pool.length === 0) return null;
+
+	let candidates = pool.filter(
+		(k) =>
+			!tornApi.keyHealthManager.isKeyTemporarilyDisabled(k.apiKey) &&
+			!excludeKeys?.has(k.apiKey),
+	);
+	if (candidates.length === 0) {
+		candidates = pool.filter((k) => !excludeKeys?.has(k.apiKey));
+	}
+	if (candidates.length === 0) candidates = pool;
+
+	const key = candidates[allianceKeyIndex % candidates.length];
+	if (!key) return null;
+	allianceKeyIndex = (allianceKeyIndex + 1) % candidates.length;
 	return key;
 }
 
@@ -469,9 +567,10 @@ export class ManagedTornApiClient {
 		this.client = new TornApiClient({
 			onInvalidKey: async (apiKey, errorCode) => {
 				await this.keyHealthManager.handleInvalidKey(apiKey, errorCode);
-				// `handleInvalidKey` persists key validity, so the memoised pool is
+				// `handleInvalidKey` persists key validity, so the memoised pools are
 				// now stale and must be re-read rather than serving the dead key.
 				clearSystemKeyPoolCache();
+				clearAllianceKeyPoolCache();
 			},
 		});
 	}
@@ -508,6 +607,16 @@ export class ManagedTornApiClient {
 		}
 		systemKeyIndex = (systemKeyIndex + 1) % candidates.length;
 		return key;
+	}
+
+	/**
+	 * Selects the next available Alliance key, filtering out keys in cooldown.
+	 */
+	async getNextAllianceKey(
+		excludeKeys?: Set<string>,
+		resolvedPool?: ManagedApiKey[],
+	): Promise<ManagedApiKey | null> {
+		return getNextAllianceKey(excludeKeys, resolvedPool);
 	}
 
 	/**
@@ -553,6 +662,8 @@ export class ManagedTornApiClient {
 		options?: {
 			userId?: number | string;
 			apiKey?: string;
+			/** Which implicit key pool to use when `apiKey` is omitted. */
+			pool?: "system" | "alliance";
 			pathParams?: OperationPathParams<PathOperation<P>>;
 			queryParams?: OperationQueryParams<PathOperation<P>>;
 			/** Per-call retry override; see `TornApiConfig.maxAttempts`. */
@@ -585,15 +696,24 @@ export class ManagedTornApiClient {
 			return result;
 		}
 
-		const pool = await getSystemKeyPool();
+		const useAlliancePool = options?.pool === "alliance";
+		const pool = useAlliancePool
+			? await getAllianceKeyPool()
+			: await getSystemKeyPool();
+		if (pool.length === 0) {
+			throw new Error("No API keys available in alliance key pool.");
+		}
 		const maxAttempts = Math.min(pool.length, 3);
 		const triedKeys = new Set<string>();
 		let lastError: unknown = null;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			const systemKey = await this.getNextSystemKey(triedKeys, pool);
-			const apiKey = systemKey.apiKey;
-			const userId = systemKey.userId;
+			const resolvedKey = useAlliancePool
+				? await this.getNextAllianceKey(triedKeys, pool)
+				: await this.getNextSystemKey(triedKeys, pool);
+			const apiKey = resolvedKey?.apiKey;
+			const userId = resolvedKey?.userId ?? 0;
+			if (!apiKey) break;
 			triedKeys.add(apiKey);
 
 			await this.cooldownManager.waitIfInCooldown(userId);
@@ -628,7 +748,7 @@ export class ManagedTornApiClient {
 				}
 
 				logger.warn(
-					`System key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next system key (attempt ${attempt}/${maxAttempts}).`,
+					`${useAlliancePool ? "Alliance" : "System"} key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next key (attempt ${attempt}/${maxAttempts}).`,
 				);
 			}
 		}
@@ -646,6 +766,8 @@ export class ManagedTornApiClient {
 		options?: {
 			userId?: number | string;
 			apiKey?: string;
+			/** Which implicit key pool to use when `apiKey` is omitted. */
+			pool?: "system" | "alliance";
 			queryParams?: Record<string, string | number | boolean | undefined>;
 		},
 	): Promise<T> {
@@ -673,15 +795,24 @@ export class ManagedTornApiClient {
 			return result;
 		}
 
-		const pool = await getSystemKeyPool();
+		const useAlliancePool = options?.pool === "alliance";
+		const pool = useAlliancePool
+			? await getAllianceKeyPool()
+			: await getSystemKeyPool();
+		if (pool.length === 0) {
+			throw new Error("No API keys available in alliance key pool.");
+		}
 		const maxAttempts = Math.min(pool.length, 3);
 		const triedKeys = new Set<string>();
 		let lastError: unknown = null;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			const systemKey = await this.getNextSystemKey(triedKeys, pool);
-			const apiKey = systemKey.apiKey;
-			const userId = systemKey.userId;
+			const resolvedKey = useAlliancePool
+				? await this.getNextAllianceKey(triedKeys, pool)
+				: await this.getNextSystemKey(triedKeys, pool);
+			const apiKey = resolvedKey?.apiKey;
+			const userId = resolvedKey?.userId ?? 0;
+			if (!apiKey) break;
 			triedKeys.add(apiKey);
 
 			await this.cooldownManager.waitIfInCooldown(userId);
@@ -715,7 +846,7 @@ export class ManagedTornApiClient {
 				}
 
 				logger.warn(
-					`System key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next system key (attempt ${attempt}/${maxAttempts}).`,
+					`${useAlliancePool ? "Alliance" : "System"} key ending in '...${decryptedKey.slice(-4)}' failed with error code ${error.code}. Failing over to next key (attempt ${attempt}/${maxAttempts}).`,
 				);
 			}
 		}

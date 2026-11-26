@@ -1,3 +1,4 @@
+export * from "./alliance";
 export * from "./api-keys";
 export * from "./auth";
 export * from "./capital";

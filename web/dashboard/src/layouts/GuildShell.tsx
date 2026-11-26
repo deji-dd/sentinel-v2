@@ -17,6 +17,7 @@ import { ElimsProvider, useElims } from "../contexts/ElimsContext";
 import { useTheme } from "../hooks/useTheme";
 import { api } from "../lib/api";
 import { getNavSections, getPageLabel } from "../lib/navigation";
+import { AllianceApiKeysPage } from "../pages/AllianceApiKeysPage";
 import { ChainAlertsPage } from "../pages/ChainAlertsPage";
 import { DibsConfigPage } from "../pages/DibsConfigPage";
 import { ElimsGuildConfigPage } from "../pages/ElimsGuildConfigPage";
@@ -205,6 +206,10 @@ export default function GuildShell() {
 			return <MercContractsPage guildId={guildId} />;
 		if (isMerc) {
 			return <NotFound />;
+		}
+		if (subPath === "/api-keys") {
+			if (!isAlliance) return <NotFound />;
+			return <AllianceApiKeysPage guildId={guildId} />;
 		}
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/recruitment")

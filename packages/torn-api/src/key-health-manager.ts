@@ -1,4 +1,4 @@
-import { apiKeys, db, elimsApiKeys, eq } from "../../database";
+import { allianceApiKeys, apiKeys, db, elimsApiKeys, eq } from "../../database";
 import { Logger } from "../../utils";
 import { hashApiKey } from "./crypto";
 
@@ -147,6 +147,23 @@ export class KeyHealthManager {
 				const guildId = updatedElimsKeys[0]?.guildId ?? "Unknown";
 				logger.warn(
 					`Guild API Key for Torn User ${tornId} in guild ${guildId} disabled after ${INVALIDATION_THRESHOLD} consecutive Error Code 2 failures.`,
+				);
+				return;
+			}
+
+			const updatedAllianceKeys = await db
+				.update(allianceApiKeys)
+				.set({
+					isValid: false,
+					updatedAt: new Date(),
+				})
+				.where(eq(allianceApiKeys.apiKeyHash, keyHash))
+				.returning({ tornId: allianceApiKeys.tornId });
+
+			if (updatedAllianceKeys.length > 0) {
+				const tornId = updatedAllianceKeys[0]?.tornId ?? "Unknown";
+				logger.warn(
+					`Alliance API Key for Torn User ${tornId} disabled after ${INVALIDATION_THRESHOLD} consecutive Error Code 2 failures.`,
 				);
 			}
 		} catch (err) {

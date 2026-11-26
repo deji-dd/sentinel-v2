@@ -4,6 +4,7 @@ import {
 	Calendar,
 	Gift,
 	Hash,
+	KeyRound,
 	Link2,
 	MapPin,
 	Package,
@@ -157,6 +158,17 @@ export function getNavSections({
 							icon: Smile,
 							accent: "text-warning",
 						},
+				// Alliance-only: public key pool administration lives on its own page.
+				...(isAlliance
+					? [
+							{
+								label: "API Keys",
+								subPath: "/api-keys",
+								icon: KeyRound,
+								accent: "text-primary",
+							},
+						]
+					: []),
 				// Faction-only: the market alerting feature belongs to the family
 				// factions' server, which is also the only guild where the
 				// member-facing `/stock-alerts` command is registered.

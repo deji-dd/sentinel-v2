@@ -12,7 +12,7 @@ import type {
 	IpcWarPayload,
 	TornSchema,
 } from "@sentinel/schemas";
-import { getActiveSystemKeyPool, tornApi } from "@sentinel/torn-api";
+import { getActiveAllianceKeyPool, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 
 import { trackFactions } from "../../lib/faction-tracker";
@@ -83,15 +83,19 @@ type ApiTerritoryWarV1 = {
 };
 
 /**
- * Calculates safe polling cadence in seconds based on available system API key pool size.
+ * Calculates safe polling cadence in seconds based on available Alliance key
+ * pool size. Never faster than once per second — with a large donated pool the
+ * raw 30 req/min/key formula can otherwise produce sub-second loops that waste
+ * the key budget on overlapping cycles.
  */
-function calculateOptimalCadence(
+export function calculateOptimalCadence(
 	keyCount: number,
 	requestsPerLoop: number,
 ): number {
 	const maxRequestsPerMinute = Math.max(1, keyCount) * 30;
 	const maxLoopsPerMinute = Math.floor(maxRequestsPerMinute / requestsPerLoop);
-	return Number((60 / Math.max(1, maxLoopsPerMinute)).toFixed(2));
+	const cadence = 60 / Math.max(1, maxLoopsPerMinute);
+	return Math.max(1, Number(cadence.toFixed(2)));
 }
 
 /**
@@ -139,7 +143,7 @@ export async function executeActivityEngine(): Promise<number> {
 			(_, i) => i * 500,
 		);
 
-		// Execute parallel fetches across endpoints using centralized system key pool.
+		// Execute parallel fetches across endpoints using the Alliance key pool.
 		//
 		// `allSettled` rather than `all`: with 11 concurrent requests a single
 		// rate-limited or transiently failing endpoint used to reject the whole
@@ -154,13 +158,17 @@ export async function executeActivityEngine(): Promise<number> {
 		// looks like every racket despawned, and a missing ownership page looks
 		// like territory was lost.
 		const settled = await Promise.allSettled([
-			tornApi.get("/faction/rackets") as Promise<ApiFactionRacketsResponse>,
+			tornApi.get("/faction/rackets", {
+				pool: "alliance",
+			}) as Promise<ApiFactionRacketsResponse>,
 			tornApi.getRaw<ApiTerritoryWarV1>("/torn", {
+				pool: "alliance",
 				queryParams: { selections: "territorywars" },
 			}),
 			...offsets.map(
 				(offset) =>
 					tornApi.get("/faction/territoryownership", {
+						pool: "alliance",
 						queryParams: { limit: 500, offset },
 					}) as Promise<TornSchema<"FactionTerritoriesOwnershipResponse">>,
 			),
@@ -596,7 +604,7 @@ export async function executeActivityEngine(): Promise<number> {
 		finishLog();
 
 		const totalRequestsPerLoop = 11;
-		const availableKeys = (await getActiveSystemKeyPool()).length;
+		const availableKeys = (await getActiveAllianceKeyPool()).length;
 		const nextCadence = calculateOptimalCadence(
 			availableKeys,
 			totalRequestsPerLoop,

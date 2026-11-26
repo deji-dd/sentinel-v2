@@ -138,6 +138,23 @@ export async function getElimsGuildId(): Promise<string | null> {
 }
 
 /**
+ * Retrieves the Discord guild id configured as the Alliance server.
+ * The Alliance server is environment-configured, like every other designated
+ * server type, so this is a cheap synchronous lookup.
+ */
+export function getAllianceGuildId(): string | null {
+	return getEnvVar("ALLIANCE_GUILD_ID", "DISCORD_ALLIANCE_GUILD_ID");
+}
+
+/**
+ * Synchronous check whether a guild is the configured Alliance server.
+ */
+export function isAllianceGuild(guildId: string | null | undefined): boolean {
+	if (!guildId) return false;
+	return guildId === getAllianceGuildId();
+}
+
+/**
  * Synchronous check whether a guild is the active Elims tournament server.
  */
 export function isElimsGuild(guildId: string | null | undefined): boolean {

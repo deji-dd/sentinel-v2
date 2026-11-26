@@ -1,6 +1,6 @@
 import { db, sql, territoryBlueprints } from "@sentinel/database";
 import type { TornSchema } from "@sentinel/schemas";
-import { tornApi } from "@sentinel/torn-api";
+import { getActiveAllianceKeyPool, tornApi } from "@sentinel/torn-api";
 import { Logger } from "@sentinel/utils";
 
 import { startEventDrivenRunner } from "../../lib/scheduler";
@@ -24,11 +24,12 @@ async function fetchAndDumpData(): Promise<void> {
 		const pageCount = Math.ceil(estimatedTotal / limit);
 		const offsets = Array.from({ length: pageCount }, (_, i) => i * limit);
 
-		// Execute parallel batch requests across all offsets using central key pool & rate limiter
+		// Execute parallel batch requests across all offsets using the Alliance pool
 		const responses = (await tornApi.executeBatch(
 			"/torn/territory",
 			offsets,
 			(offset) => ({ queryParams: { offset, limit } }),
+			await getActiveAllianceKeyPool(),
 		)) as TornSchema<"TornTerritoriesResponse">[];
 
 		const territories: SingleTerritory[] = responses.flatMap(

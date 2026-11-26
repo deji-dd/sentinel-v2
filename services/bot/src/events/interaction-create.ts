@@ -48,6 +48,10 @@ import {
 	TEAM_BREAKDOWN_SELECT_ID,
 } from "../commands/team-breakdown";
 import {
+	handleAllianceKeyDonationButton,
+	handleAllianceKeyDonationModalSubmit,
+} from "../lib/alliance-key-donation";
+import {
 	handleCapitalPaymentButton,
 	handleCapitalTradeButton,
 } from "../lib/capital-alert-distributor";
@@ -154,6 +158,8 @@ export const interactionCreateEvent = {
 					await handleGiveawayItemPageButton(interaction);
 				} else if (interaction.customId.startsWith("giveaway_entry:")) {
 					await handleGiveawayEntryButton(interaction);
+				} else if (interaction.customId === "alliance_donate_key_button") {
+					await handleAllianceKeyDonationButton(interaction);
 				} else if (interaction.customId === "elims_donate_key_button") {
 					await handleKeyDonationButton(interaction);
 				} else if (interaction.customId.startsWith("elims_holder_assign:")) {
@@ -253,6 +259,8 @@ export const interactionCreateEvent = {
 					await handleItemVerifySendModalSubmit(interaction);
 				} else if (interaction.customId.startsWith("giveaway_config_modal:")) {
 					await handleGiveawayModalSubmit(interaction);
+				} else if (interaction.customId === "alliance_donate_key_modal") {
+					await handleAllianceKeyDonationModalSubmit(interaction);
 				} else if (interaction.customId === "elims_donate_key_modal") {
 					await handleKeyDonationModalSubmit(interaction);
 				} else if (

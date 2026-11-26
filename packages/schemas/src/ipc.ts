@@ -271,6 +271,13 @@ export type IpcSyncElimsKeyDonationMessage = {
 	};
 };
 
+export type IpcSyncAllianceKeyDonationMessage = {
+	action: "sync_alliance_key_donation";
+	data?: {
+		guildId?: string;
+	};
+};
+
 export type IpcSyncElimsLiveDataMessage = {
 	action: "sync_elims_live_data";
 	data?: {
@@ -670,6 +677,7 @@ export type IpcMessage =
 	| IpcSyncElimsItemRequestsMessage
 	| IpcSyncElimsGiveawaysMessage
 	| IpcSyncElimsKeyDonationMessage
+	| IpcSyncAllianceKeyDonationMessage
 	| IpcSyncElimsLiveDataMessage
 	| IpcElimsAssignStatRolesMessage
 	| IpcElimsResolveUserRequestMessage

@@ -49,6 +49,10 @@ export const guildConfigs = pgTable("guild_configs", {
 		.default([])
 		.notNull(),
 	ttFactionIds: jsonb("tt_faction_ids").$type<number[]>().default([]).notNull(),
+	/** Channel where the Alliance public-key donation embed is posted. */
+	keyDonationChannelId: text("key_donation_channel_id"),
+	/** Id of the persistent donation embed message, for in-place refreshes. */
+	keyDonationEmbedMessageId: text("key_donation_embed_message_id"),
 	mercRoleId: text("merc_role_id"),
 	mercManagerRoleId: text("merc_manager_role_id"),
 	mercDefaultHitPrice: integer("merc_default_hit_price").default(3000000),
