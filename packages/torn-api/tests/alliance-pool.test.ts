@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { allianceApiKeys, db, eq } from "../../database";
 import {
@@ -6,6 +6,7 @@ import {
 	getActiveAllianceKeyPool,
 	getAllianceKeyPool,
 	hashApiKey,
+	healAllianceKeyNames,
 } from "../index";
 
 describe("Alliance key pool", () => {
@@ -74,5 +75,54 @@ describe("Alliance key pool", () => {
 		const pool = await getActiveAllianceKeyPool("alliance-guild");
 		expect(pool.some((k) => k.userId === 9001)).toBe(true);
 		expect(pool.some((k) => k.userId === 9002)).toBe(true);
+	});
+});
+
+describe("Alliance key name self-healing", () => {
+	const HASH = hashApiKey("alliance_heal_key", "pepper");
+	const ID = "test-heal-alliance-key";
+	const TORN_ID = 777777;
+
+	beforeEach(async () => {
+		await db.insert(allianceApiKeys).values({
+			id: ID,
+			guildId: null,
+			tornId: TORN_ID,
+			tornName: `Player ${TORN_ID}`,
+			apiKeyEncrypted: "alliance_heal_key",
+			apiKeyHash: HASH,
+		});
+	});
+
+	afterEach(async () => {
+		spyOn(globalThis, "fetch").mockRestore();
+		await db
+			.delete(allianceApiKeys)
+			.where(eq(allianceApiKeys.apiKeyHash, HASH));
+		clearAllianceKeyPoolCache();
+	});
+
+	test("resolves a placeholder name from the Torn API and persists it", async () => {
+		spyOn(globalThis, "fetch").mockImplementation((async (
+			input: Parameters<typeof fetch>[0],
+		) => {
+			// Only heal the fixture; leave any baseline imported rows untouched.
+			if (!String(input).includes("alliance_heal_key")) {
+				throw new Error("Unexpected key lookup in name-healing test");
+			}
+			return new Response(JSON.stringify({ name: "Real Player" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch);
+
+		const healed = await healAllianceKeyNames({ force: true });
+		expect(healed).toBeGreaterThanOrEqual(1);
+
+		const [row] = await db
+			.select({ tornName: allianceApiKeys.tornName })
+			.from(allianceApiKeys)
+			.where(eq(allianceApiKeys.id, ID));
+		expect(row?.tornName).toBe("Real Player");
 	});
 });

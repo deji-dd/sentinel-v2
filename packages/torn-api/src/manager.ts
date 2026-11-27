@@ -128,6 +128,86 @@ export function clearAllianceKeyPoolCache(): void {
 	cachedAllianceKeyPoolAt = 0;
 }
 
+const ALLIANCE_NAME_HEAL_INTERVAL_MS = 60_000;
+const ALLIANCE_NAME_HEAL_LIMIT = 10;
+let isHealingAllianceNames = false;
+let lastAllianceNameHealAt = 0;
+
+function isPlaceholderKeyName(name: string | null, tornId: number): boolean {
+	const trimmed = name?.trim();
+	return !trimmed || trimmed === `Player ${tornId}`;
+}
+
+/**
+ * Self-healing for imported system keys, which were stored without a Torn
+ * display name. Resolves placeholder names through the live Torn API and
+ * writes them back so the pool and the dashboard show real players.
+ */
+export async function healAllianceKeyNames(options?: {
+	force?: boolean;
+}): Promise<number> {
+	if (isHealingAllianceNames && !options?.force) return 0;
+	if (
+		!options?.force &&
+		Date.now() - lastAllianceNameHealAt < ALLIANCE_NAME_HEAL_INTERVAL_MS
+	) {
+		return 0;
+	}
+	isHealingAllianceNames = true;
+	lastAllianceNameHealAt = Date.now();
+
+	try {
+		const rows = await db
+			.select({
+				id: allianceApiKeys.id,
+				tornId: allianceApiKeys.tornId,
+				tornName: allianceApiKeys.tornName,
+				apiKeyEncrypted: allianceApiKeys.apiKeyEncrypted,
+			})
+			.from(allianceApiKeys)
+			.where(eq(allianceApiKeys.isValid, true))
+			.limit(ALLIANCE_NAME_HEAL_LIMIT);
+
+		const placeholders = rows.filter((row) =>
+			isPlaceholderKeyName(row.tornName, row.tornId),
+		);
+		if (placeholders.length === 0) return 0;
+
+		const masterKey = process.env.ENCRYPTION_KEY ?? "";
+		const results = await Promise.allSettled(
+			placeholders.map(async (row) => {
+				const apiKey =
+					row.apiKeyEncrypted.length > 16 && masterKey
+						? decryptApiKey(row.apiKeyEncrypted, masterKey)
+						: row.apiKeyEncrypted;
+				const profile = await new TornApiClient({ timeout: 5_000 }).getRaw<{
+					name?: string;
+				}>("user/", {
+					apiKey,
+					queryParams: { selections: "profile" },
+				});
+				const name =
+					typeof profile?.name === "string" ? profile.name.trim() : "";
+				if (!name || isPlaceholderKeyName(name, row.tornId)) return false;
+
+				await db
+					.update(allianceApiKeys)
+					.set({ tornName: name, updatedAt: new Date() })
+					.where(eq(allianceApiKeys.id, row.id));
+				return true;
+			}),
+		);
+
+		const healed = results.filter(
+			(result) => result.status === "fulfilled" && result.value === true,
+		).length;
+		if (healed > 0) clearAllianceKeyPoolCache();
+		return healed;
+	} finally {
+		isHealingAllianceNames = false;
+	}
+}
+
 /**
  * Fetches all active keys in the Alliance pool. Null-guild rows are the system
  * keys imported when the pool was created and are visible to every guild.
@@ -176,6 +256,15 @@ export async function getAllianceKeyPool(
 	// system keys working.
 	if (pool.length === 0) {
 		return getSystemKeyPool();
+	}
+
+	// Imported rows may still lack a display name. Heal them in the background
+	// so workers and the dashboard converge on real Torn names.
+	if (
+		guildId === undefined &&
+		rows.some((row) => isPlaceholderKeyName(row.tornName, row.tornId))
+	) {
+		void healAllianceKeyNames().catch(() => {});
 	}
 
 	if (guildId === undefined) {

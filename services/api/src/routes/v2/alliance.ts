@@ -13,6 +13,7 @@ import {
 	clearAllianceKeyPoolCache,
 	encryptApiKey,
 	hashApiKey,
+	healAllianceKeyNames,
 	isValidApiKey,
 	PublicKeyRequiredError,
 	verifyPublicApiKey,
@@ -224,6 +225,30 @@ export const allianceRoutes = new Elysia({ prefix: "/alliance" })
 		{
 			params: t.Object({ id: t.String() }),
 			detail: { summary: "Remove Alliance Key" },
+		},
+	)
+	// ─── POST /v2/alliance/key-pool/resolve-names ─────────────────────────
+	.post(
+		"/key-pool/resolve-names",
+		async ({ user, set }) => {
+			const guildId = await requireAllianceAdmin(user, set);
+			if (!guildId) {
+				return {
+					error:
+						set.status === 403
+							? "Forbidden"
+							: "Alliance server is not configured.",
+				};
+			}
+			const healed = await healAllianceKeyNames({ force: true });
+			return { success: true, healed };
+		},
+		{
+			detail: {
+				summary: "Resolve Alliance Key Names",
+				description:
+					"Fetches Torn display names for imported keys that were seeded without one.",
+			},
 		},
 	)
 	// ─── GET /v2/alliance/key-donation-channel ────────────────────────────
