@@ -64,6 +64,10 @@ import {
 	handleUserStockAlerts,
 } from "../stock-alert-distributor";
 import { handleTerritoryAlert } from "../territory-alert-distributor";
+import {
+	handleYabaCharts,
+	syncYabaChartChannels,
+} from "../yaba-charts-distributor";
 
 type PendingRequest = {
 	resolve: (data: VerificationResponse) => void;
@@ -398,6 +402,15 @@ export function setupBotIpcListeners(client: Client): void {
 			void handleCapitalPaperAlert(client, message.data);
 		} else if (message.action === "capital_personal_alert" && message.data) {
 			void handleCapitalPersonalAlert(client, message.data);
+		} else if (message.action === "yaba_charts") {
+			void handleYabaCharts(client, message.data);
+		} else if (
+			(message.action as string) === "sync_yaba_channels" &&
+			"data" in message &&
+			message.data
+		) {
+			const guildId = (message.data as unknown as { guildId?: string }).guildId;
+			void syncYabaChartChannels(client, guildId);
 		} else if (message.action === "user_shoplifting_alerts" && message.data) {
 			void handleUserShopliftingAlerts(client, message.data);
 		} else if (

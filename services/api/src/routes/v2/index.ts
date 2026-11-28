@@ -14,6 +14,7 @@ import { subversiveRoutes } from "./subversive";
 import { subversiveTargetFinderRoutes } from "./subversive-target-finder";
 import { systemRoutes } from "./system";
 import { ttRoutes } from "./tt";
+import { yabaRoutes } from "./yaba";
 
 export {
 	allianceRoutes,
@@ -30,6 +31,7 @@ export {
 	subversiveTargetFinderRoutes,
 	systemRoutes,
 	ttRoutes,
+	yabaRoutes,
 };
 
 export const v2Routes = new Elysia({ prefix: "/v2" })
@@ -46,4 +48,5 @@ export const v2Routes = new Elysia({ prefix: "/v2" })
 	.use(subversiveRoutes)
 	.use(subversiveTargetFinderRoutes)
 	.use(systemRoutes)
-	.use(ttRoutes);
+	.use(ttRoutes)
+	.use(yabaRoutes);

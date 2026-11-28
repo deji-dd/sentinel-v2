@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
 	BarChart2,
+	BarChart3,
 	Calendar,
 	Gift,
 	Hash,
@@ -166,6 +167,12 @@ export function getNavSections({
 								subPath: "/api-keys",
 								icon: KeyRound,
 								accent: "text-primary",
+							},
+							{
+								label: "YABA Stats",
+								subPath: "/yaba-stats",
+								icon: BarChart3,
+								accent: "text-info",
 							},
 						]
 					: []),

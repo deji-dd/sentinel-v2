@@ -11,6 +11,9 @@ export function getMetadataHeader(version: string): string {
 // @grant        GM_setValue
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.openInTab
 // @connect      api.blasted-labs.tech
 // @connect      subversive.blasted-labs.tech
 // @connect      api.klipy.com

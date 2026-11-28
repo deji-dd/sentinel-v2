@@ -1,5 +1,9 @@
 # Sentinel v2 — Architecture & Project Rules
 
+## Production Access
+
+- **Production server**: `ssh root@dejis-cloud` (deployment lives at `/opt/sentinel-v2`).
+
 ## Technical Stack & Runtime
 
 - **Runtime & Package Manager**: Bun (ESM native, `bun test`, `bun run`)

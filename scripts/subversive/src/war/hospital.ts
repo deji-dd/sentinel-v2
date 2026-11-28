@@ -1,4 +1,5 @@
 import { apiRequest } from "../api/client";
+import { serverNowSec } from "../lib/server-clock";
 import { isWarEngaged, state } from "../state";
 import type { DibsItem, WarTarget } from "../types";
 import {
@@ -26,7 +27,7 @@ export function initHospitalElements(
 
 export function updateHospCountdowns(): void {
 	if (!hospContainer) return;
-	const nowSec = Math.floor(Date.now() / 1000);
+	const nowSec = serverNowSec();
 	const leadTimeSec = state.dibsLeadTimeSeconds || 300;
 	const rows = hospContainer.querySelectorAll<HTMLElement>(".satf-queue-row");
 
@@ -154,7 +155,7 @@ export function renderHospitalQueue(queue: WarTarget[] = []): void {
 		return;
 	}
 
-	const nowSec = Math.floor(Date.now() / 1000);
+	const nowSec = serverNowSec();
 	state.hospitalQueue = queue.map((item) => {
 		const ff =
 			typeof item.fairFight === "number" && !Number.isNaN(item.fairFight)

@@ -1,3 +1,4 @@
+import { observeServerTime } from "../lib/server-clock";
 import { state } from "../state";
 
 export function detectAttackerFlightState(): "traveling" | "abroad" | "okay" {
@@ -57,6 +58,9 @@ export function apiRequest<T = Record<string, unknown>>(
 					data = JSON.parse(res.responseText || "{}");
 				} catch {
 					return reject(new Error(`Server error (${res.status})`));
+				}
+				if (typeof data.serverTime === "number") {
+					observeServerTime(data.serverTime);
 				}
 				if (res.status >= 200 && res.status < 300 && data.success !== false) {
 					resolve(data as T);

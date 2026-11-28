@@ -38,6 +38,7 @@ import TerritoryPage from "../pages/TerritoryPage";
 import { UnauthorizedPage } from "../pages/UnauthorizedPage";
 import { UnconfiguredPage } from "../pages/UnconfiguredPage";
 import VerificationPage from "../pages/VerificationPage";
+import { YabaSettingsPage } from "../pages/YabaSettingsPage";
 import { useRouter } from "../router";
 import { GuildSidebar } from "./GuildSidebar";
 
@@ -210,6 +211,10 @@ export default function GuildShell() {
 		if (subPath === "/api-keys") {
 			if (!isAlliance) return <NotFound />;
 			return <AllianceApiKeysPage guildId={guildId} />;
+		}
+		if (subPath === "/yaba-stats") {
+			if (!isAlliance) return <NotFound />;
+			return <YabaSettingsPage />;
 		}
 		if (subPath === "/territory") return <TerritoryPage guildId={guildId} />;
 		if (subPath === "/recruitment")

@@ -12,8 +12,10 @@
 FROM ghcr.io/deji-dd/bun-base:1.4.4 AS base
 WORKDIR /app
 
-# Install build dependencies & curl for healthchecks
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install build dependencies, curl for healthchecks, and fonts for alert charts.
+# resvg and @napi-rs/canvas both resolve `DejaVu Sans` through fontconfig; without
+# a font installed every chart attachment is drawn with no text at all.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates fontconfig fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 
 # Copy root workspace configs and all package.json files for caching
 FROM base AS dependencies
@@ -29,6 +31,7 @@ COPY services/scheduler/package.json ./services/scheduler/
 COPY web/dashboard/package.json ./web/dashboard/
 COPY web/tt-selector/package.json ./web/tt-selector/
 COPY web/stocks/package.json ./web/stocks/
+COPY web/yaba/package.json ./web/yaba/
 
 RUN bun install --frozen-lockfile || bun install
 

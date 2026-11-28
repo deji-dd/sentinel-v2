@@ -47,6 +47,9 @@ function getMetadataBanner(version: string): string {
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.openInTab
 // @connect      api.blasted-labs.tech
 // @connect      sentinel.blasted-labs.tech
 // @connect      localhost

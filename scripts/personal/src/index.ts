@@ -1,3 +1,6 @@
+// Safari's Userscripts manager only provides Promise-based GM.* methods.
+// Must be first so synchronous GM_getValue calls in imported modules work.
+import "../../gm-compat";
 import {
 	DEFAULT_SETTINGS,
 	isDocumentVisible,

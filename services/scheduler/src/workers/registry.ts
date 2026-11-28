@@ -40,6 +40,7 @@ import { startTornAbroadStocks } from "./torn/abroad-stocks";
 import { startTornReferences } from "./torn/references";
 import { startTornTerritoryActivity } from "./torn/territory-activity";
 import { startTornTerritoryData } from "./torn/territory-data";
+import { startYabaBackfill, startYabaCharts, startYabaNightly } from "./yaba";
 
 const logger = new Logger("Scheduler", "WorkerRegistry");
 
@@ -273,6 +274,23 @@ export const REGISTERED_WORKERS: WorkerDefinition[] = [
 		description:
 			"Event-driven mercenary hit validation engine consuming the shared faction attack feed",
 		start: startMercAttackValidatorWorker,
+	},
+	{
+		id: "yaba:nightly",
+		description:
+			"01:00 UK nightly YABA faction activity collection (immediate first run), ranking snapshots and chart dispatch",
+		start: startYabaNightly,
+	},
+	{
+		id: "yaba:backfill",
+		description:
+			"03:00 UK historical 90/30/7/1-day personal-stat anchor backfill for YABA members",
+		start: startYabaBackfill,
+	},
+	{
+		id: "yaba:charts",
+		description: "07:00 UK top-10 YABA faction and player chart posts",
+		start: startYabaCharts,
 	},
 ];
 

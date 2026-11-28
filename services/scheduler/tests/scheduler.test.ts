@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { db, eq, workerSchedules } from "@sentinel/database";
+
 import { ScheduledRunner } from "../src/lib/scheduler";
 
 describe("ScheduledRunner Engine", () => {
@@ -21,6 +23,31 @@ describe("ScheduledRunner Engine", () => {
 		});
 
 		expect(runner).toBeDefined();
+	});
+
+	test("bootRun executes a fresh cron worker immediately", async () => {
+		const worker = `test:boot-run-${crypto.randomUUID()}`;
+		let executed = false;
+		const runner = new ScheduledRunner({
+			worker,
+			schedule: {
+				type: "cron",
+				pattern: "0 1 * * *",
+				timezone: "Europe/London",
+			},
+			bootRun: true,
+			handler: async () => {
+				executed = true;
+			},
+		});
+
+		await runner.start();
+		await Bun.sleep(60);
+		expect(executed).toBe(true);
+		const status = runner.getStatus();
+		expect(status.nextRunAt).toBeGreaterThan(Date.now() + 60_000);
+		runner.stop();
+		await db.delete(workerSchedules).where(eq(workerSchedules.id, worker));
 	});
 
 	test("executes handler on triggerNow()", async () => {

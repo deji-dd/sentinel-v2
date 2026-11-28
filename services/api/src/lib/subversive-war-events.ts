@@ -8,6 +8,8 @@ export interface WarEventPayload {
 	success: true;
 	modified: boolean;
 	version: number;
+	/** Sentinel's wall clock (epoch ms), so clients can correct a skewed local clock. */
+	serverTime: number;
 	war?: ReturnType<typeof subversiveTargetCache.getWarState> & {
 		userHitCount?: number;
 	};
@@ -72,6 +74,7 @@ class SubversiveWarEventManager {
 			success: true,
 			modified: options.modified ?? true,
 			version: this.currentVersion,
+			serverTime: Date.now(),
 			war: {
 				...war,
 				userHitCount,
@@ -120,6 +123,7 @@ class SubversiveWarEventManager {
 					success: true,
 					modified: false,
 					version: this.currentVersion,
+					serverTime: Date.now(),
 				});
 			}, timeoutMs);
 

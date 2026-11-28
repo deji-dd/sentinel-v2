@@ -191,6 +191,13 @@ export async function syncElimsGiveawaysViaIpc(
 /**
  * Dispatches an IPC signal to the Bot to refresh the Alliance key donation embed.
  */
+/** Asks the bot to refresh the daily YABA chart channels. */
+export async function syncYabaChannelsViaIpc(
+	guildId: string,
+): Promise<boolean> {
+	return notifyBotAction("sync_yaba_channels", { guildId });
+}
+
 export async function syncAllianceKeyDonationViaIpc(
 	guildId: string,
 ): Promise<boolean> {

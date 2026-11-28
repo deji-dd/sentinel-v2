@@ -14,6 +14,7 @@ export const env = {
 		"https://elims.blasted-labs.tech",
 		"https://api.elims.blasted-labs.tech",
 		"https://subversive.blasted-labs.tech",
+		"https://yaba.blasted-labs.tech",
 		"https://www.torn.com",
 		"https://aquasense.ayodejib.dev",
 		"https://api.ayodejib.dev",
@@ -22,6 +23,7 @@ export const env = {
 		"http://localhost:5175",
 		"http://localhost:5176",
 		"http://localhost:5177",
+		"http://localhost:5178",
 		"http://127.0.0.1:3000",
 	],
 	SESSION_SECRET:

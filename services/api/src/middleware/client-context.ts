@@ -6,6 +6,7 @@ export type ClientAppType =
 	| "bot-dashboard"
 	| "elims-dashboard"
 	| "subversive-dashboard"
+	| "yaba-dashboard"
 	| "blasted-script"
 	| "unknown";
 
@@ -76,6 +77,12 @@ export const clientContextPlugin = new Elysia({
 			origin.startsWith("https://subversive.blasted-labs.tech")
 		) {
 			clientApp = "subversive-dashboard";
+		} else if (
+			clientHeader === "yaba-dashboard" ||
+			host.startsWith("yaba.blasted-labs.tech") ||
+			origin.startsWith("https://yaba.blasted-labs.tech")
+		) {
+			clientApp = "yaba-dashboard";
 		} else if (clientHeader === "blasted-script") {
 			clientApp = "blasted-script";
 		}

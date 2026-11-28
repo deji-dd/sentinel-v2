@@ -47,12 +47,18 @@ const PAPER_DESK_URL = "https://stocks.blasted-labs.tech/desk/paper";
 /**
  * Thresholds are code-level policy (like the rest of the capital risk rules),
  * so changing one is a deliberate edit rather than a dashboard tweak.
+ *
+ * Calibrated against production NAV data: the live book sits at par with no
+ * positions and the paper book moves about 0.02% an hour, 0.09% a day and 0.03%
+ * over three hours. Percent-level thresholds could never fire on that series,
+ * which left the whole insight stream permanently silent. The cooldowns below
+ * still keep a repeated episode to one alert.
  */
 const THRESHOLDS = {
 	/** Ignore a new extreme unless it beats the old one by at least this much. */
-	newExtremeMinPct: 0.05,
-	navMove1hPct: 1,
-	navMove1dPct: 3,
+	newExtremeMinPct: 0.02,
+	navMove1hPct: 0.05,
+	navMove1dPct: 0.15,
 	/** Consecutive hourly snapshots moving the same way. */
 	streakPeriods: 3,
 	/**
@@ -60,10 +66,10 @@ const THRESHOLDS = {
 	 * par ($1.00) with a few open positions emits "trends" driven by sub-cent
 	 * rounding noise in the unit price.
 	 */
-	trendMinPct: 1,
-	returnMilestonesUp: [5, 10, 25, 50],
-	returnMilestonesDown: [-5, -10, -20],
-	drawdownMilestones: [5, 10, 15],
+	trendMinPct: 0.05,
+	returnMilestonesUp: [1, 2, 5, 10],
+	returnMilestonesDown: [-1, -2, -5],
+	drawdownMilestones: [0.5, 1, 2],
 	/** Deployed share of NAV below this is idle cash. */
 	idleCashPct: 50,
 	/** One position above this share of NAV is a concentration risk. */
@@ -755,7 +761,12 @@ async function evaluateBook(book: CapitalBook, now: Date): Promise<void> {
  * or manual trigger cannot send a second digest for the same day.
  */
 async function sendDailyDigest(book: CapitalBook, now: Date): Promise<void> {
-	if (!(await shouldFire(`${book}:digest`, DIGEST_COOLDOWN_MS))) return;
+	// The key carries the UTC date so the 07:00 tick for a new day is never
+	// measured against yesterday's 07:00:00.026 timestamp and suppressed a few
+	// milliseconds early. The 24h cooldown still stops a restart replaying the
+	// same day's digest.
+	const digestKey = `${book}:digest:${now.toISOString().slice(0, 10)}`;
+	if (!(await shouldFire(digestKey, DIGEST_COOLDOWN_MS))) return;
 
 	const { nav, positions } = await readCurrentNav(book);
 	const bookRow = await getCapitalBook(book);

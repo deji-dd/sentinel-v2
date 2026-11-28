@@ -49,6 +49,14 @@ export const guildConfigs = pgTable("guild_configs", {
 		.default([])
 		.notNull(),
 	ttFactionIds: jsonb("tt_faction_ids").$type<number[]>().default([]).notNull(),
+	/** Channel for the daily YABA top-10 faction chart. */
+	yabaFactionChartChannelId: text("yaba_faction_chart_channel_id"),
+	/** Persistent message id for the faction chart (edited in place). */
+	yabaFactionChartMessageId: text("yaba_faction_chart_message_id"),
+	/** Channel for the daily YABA top-10 player chart. */
+	yabaPlayerChartChannelId: text("yaba_player_chart_channel_id"),
+	/** Persistent message id for the player chart (edited in place). */
+	yabaPlayerChartMessageId: text("yaba_player_chart_message_id"),
 	/** Channel where the Alliance public-key donation embed is posted. */
 	keyDonationChannelId: text("key_donation_channel_id"),
 	/** Id of the persistent donation embed message, for in-place refreshes. */

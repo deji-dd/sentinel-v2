@@ -114,6 +114,12 @@ export const staticSpaPlugin = new Elysia({ name: "middleware.staticSpa" }).get(
 		} else if (host.includes("stocks.") || origin.includes("stocks.")) {
 			appDir = "web/stocks/dist";
 		} else if (
+			host.includes("yaba.") ||
+			host.includes("yaba-dashboard") ||
+			origin.includes("yaba.")
+		) {
+			appDir = "web/yaba/dist";
+		} else if (
 			host.includes("subversive.") ||
 			host.includes("subversive-dashboard") ||
 			origin.includes("subversive")

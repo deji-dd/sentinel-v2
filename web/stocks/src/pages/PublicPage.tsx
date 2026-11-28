@@ -198,30 +198,14 @@ function BookOverview({ book }: { book: Book }) {
 				<>
 					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
 						<StatCard
-							label={
-								data?.flags.showAum
-									? isPaper
-										? "Amount Invested"
-										: "Assets under management"
-									: "AUM (private)"
-							}
+							label={data?.flags.showAum ? "Amount Invested" : "AUM (private)"}
 							value={
 								data?.flags.showAum
-									? compactMoney(
-											isPaper ? summary.investedCapital : summary.aum,
-										)
+									? compactMoney(summary.investedCapital)
 									: "—"
 							}
-							hint={
-								isPaper
-									? "Capital deployed in the simulation"
-									: `${summary.investorCount} active investor${summary.investorCount === 1 ? "" : "s"}`
-							}
-							help={
-								isPaper
-									? "Total capital deployed in the simulation — the sum of all deposits minus withdrawals."
-									: "Assets Under Management: the total market value the fund manages — cash plus stock positions at current prices. AUM divided by units outstanding gives NAV per unit."
-							}
+							hint="Capital deployed"
+							help="Total capital deployed — the sum of all deposits minus withdrawals."
 						/>
 						<StatCard
 							label="Unit price"
@@ -250,9 +234,7 @@ function BookOverview({ book }: { book: Book }) {
 							help={`Annualized unit price return based on the fund's track record. Indicative: a short history exaggerates annualized figures. Calculated after ${CAPITAL_APR_MIN_DAYS} days of trading.`}
 						/>
 						<StatCard
-							label={
-								isPaper ? "Simulated distributions" : "Distributed to investors"
-							}
+							label={isPaper ? "Simulated distributions" : "Distributions"}
 							value={compactMoney(summary.cumulativePayouts)}
 							hint={
 								data?.flags.showFees

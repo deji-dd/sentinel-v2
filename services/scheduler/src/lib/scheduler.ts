@@ -78,6 +78,11 @@ export type EventRunnerConfig = {
 	 */
 	skipBootRun?: boolean;
 	/**
+	 * On a brand-new schedule (no persisted row yet), run immediately instead
+	 * of waiting for the first cron tick. Later boots keep the normal cadence.
+	 */
+	bootRun?: boolean;
+	/**
 	 * Maximum execution time in milliseconds before the cycle is aborted.
 	 * If omitted for interval workers with cadence <= 60s, defaults to 85% of interval.
 	 * If omitted for cron / long workers, defaults to 5 minutes (300,000ms).
@@ -214,7 +219,9 @@ export class ScheduledRunner {
 
 			if (!schedule) {
 				const initialNextRunAt =
-					this.schedule.type === "cron" && this.cronInstance
+					!this.config.bootRun &&
+					this.schedule.type === "cron" &&
+					this.cronInstance
 						? (this.cronInstance.nextRun() ?? new Date(now))
 						: new Date(now);
 

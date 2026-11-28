@@ -1,3 +1,4 @@
+import { serverNowSec } from "../lib/server-clock";
 import { isWarEngaged, state } from "../state";
 import type { CurrentWarInfo } from "../types";
 import { formatSeconds } from "../utils/formatters";
@@ -34,7 +35,7 @@ export function initWarBannerElements(root: ShadowRoot | Document): void {
 
 export function updateWarCountdown(): void {
 	if (!warTimer || !state.war) return;
-	const now = Math.floor(Date.now() / 1000);
+	const now = serverNowSec();
 	const start = state.war.start || 0;
 
 	if (state.war.state === "scheduled") {

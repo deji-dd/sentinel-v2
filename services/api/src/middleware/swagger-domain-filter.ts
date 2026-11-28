@@ -80,6 +80,16 @@ export const DOMAIN_CONFIGS: Record<string, SwaggerDomainConfig> = {
 			path.startsWith("/v2/subversive") ||
 			path.startsWith("/v2/merc"),
 	},
+	"yaba.blasted-labs.tech": {
+		title: "Sentinel V2 — YABA Faction Report API",
+		description:
+			"Public leaderboards and admin controls for the YABA faction report.",
+		isPathAllowed: (path: string) =>
+			path.startsWith("/health") ||
+			path.startsWith("/api/health") ||
+			path.startsWith("/v2/yaba") ||
+			path.startsWith("/v2/auth"),
+	},
 	"subversive.blasted-labs.tech": {
 		title: "Sentinel V2 — Subversive Faction API",
 		description: "Subversive faction operations, recruitment, and dibs API.",

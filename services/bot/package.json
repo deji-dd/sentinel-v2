@@ -13,11 +13,14 @@
 	"devDependencies": {},
 	"peerDependencies": {},
 	"dependencies": {
+		"@napi-rs/canvas": "latest",
+		"@resvg/resvg-js": "latest",
 		"@sentinel/database": "workspace:*",
 		"@sentinel/schemas": "workspace:*",
 		"@sentinel/torn-api": "workspace:*",
 		"@sentinel/utils": "workspace:*",
-		"discord.js": "latest",
-		"@resvg/resvg-js": "latest"
+		"chart.js": "latest",
+		"chartjs-plugin-annotation": "latest",
+		"discord.js": "latest"
 	}
 }

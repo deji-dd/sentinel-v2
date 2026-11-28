@@ -1197,6 +1197,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		return {
 			success: true,
+			serverTime: Date.now(),
 			war: {
 				...war,
 				lead,
@@ -1424,6 +1425,7 @@ export const subversiveTargetFinderRoutes = new Elysia({
 
 		return {
 			success: true,
+			serverTime: Date.now(),
 			queue,
 		};
 	})

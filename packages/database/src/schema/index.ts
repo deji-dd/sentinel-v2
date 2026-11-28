@@ -16,3 +16,4 @@ export * from "./subversive";
 export * from "./system";
 export * from "./torn";
 export * from "./user-maps";
+export * from "./yaba";

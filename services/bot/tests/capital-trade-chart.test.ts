@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { Resvg } from "@resvg/resvg-js";
 import type { CapitalTradeContext } from "@sentinel/schemas";
 
 import {
-	buildCapitalTradeChartSvg,
+	buildCapitalTradeChartConfig,
 	type ChartCandle,
 } from "../src/lib/capital-trade-chart";
+import { renderChartPng } from "../src/lib/chart-render";
 
 function candles(count = 80): ChartCandle[] {
 	const start = Date.UTC(2026, 0, 1);
@@ -58,42 +58,56 @@ function sellTrade(): CapitalTradeContext {
 	};
 }
 
+type TradeConfig = NonNullable<ReturnType<typeof buildCapitalTradeChartConfig>>;
+
+function annotationContent(config: TradeConfig, key: string): string {
+	const annotations = config.options?.plugins?.annotation?.annotations as
+		Record<string, { label?: { content?: string } }> | undefined;
+	const label = annotations?.[key]?.label;
+	return typeof label?.content === "string" ? label.content : "";
+}
+
 describe("Capital trade chart", () => {
 	it("renders the buy signal, SMA band and frozen risk levels", () => {
-		const svg = buildCapitalTradeChartSvg({
+		const config = buildCapitalTradeChartConfig({
 			title: "[TSB] Buy 1,000 shares",
 			candles: candles(),
 			trade: buyTrade(),
 		});
 
-		expect(svg).not.toBeNull();
-		expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
-		expect(svg).toContain("Score 78");
-		expect(svg).toContain("z -1.62σ");
-		expect(svg).toContain("RSI 29");
-		expect(svg).toContain("Stop 95.55");
-		expect(svg).toContain("Target 101.40");
-		expect(svg).toContain("-1.25");
-		expect(svg).toContain("BUY 97.50");
+		expect(config).not.toBeNull();
+		const title = config?.options?.plugins?.title?.text;
+		expect(JSON.stringify(title)).toContain("[TSB] Buy 1,000 shares");
+		expect(JSON.stringify(title)).toContain("Score 78");
+		expect(JSON.stringify(title)).toContain("z -1.62σ");
+		expect(JSON.stringify(title)).toContain("RSI 29");
+		expect(annotationContent(config!, "stop")).toBe("Stop 95.55");
+		expect(annotationContent(config!, "target")).toBe("Target 101.40");
+		expect(annotationContent(config!, "entryThreshold")).toBe("entry −1.25σ");
+		expect(annotationContent(config!, "exit")).toBe("BUY 97.50");
+		expect(config?.data.datasets.some((set) => set.label === "SMA20")).toBe(
+			true,
+		);
 	});
 
 	it("marks both ends of a sell and states the position P/L", () => {
-		const svg = buildCapitalTradeChartSvg({
+		const config = buildCapitalTradeChartConfig({
 			title: "[TSB] Sell 1,000 shares",
 			candles: candles(),
 			trade: sellTrade(),
 		});
 
-		expect(svg).not.toBeNull();
-		expect(svg).toContain("BUY 96.40");
-		expect(svg).toContain("SELL 101.80");
-		expect(svg).toContain("+1.80R");
-		expect(svg).toContain("P/L +1,250.50");
+		expect(config).not.toBeNull();
+		expect(annotationContent(config!, "entry")).toBe("BUY 96.40");
+		expect(annotationContent(config!, "exit")).toBe("SELL 101.80");
+		expect(JSON.stringify(config?.options?.plugins?.title?.text)).toContain(
+			"P/L +1,250.50",
+		);
 	});
 
 	it("declines to chart when there is no usable price history", () => {
 		expect(
-			buildCapitalTradeChartSvg({
+			buildCapitalTradeChartConfig({
 				title: "[TSB] Buy 1,000 shares",
 				candles: candles(4),
 				trade: buyTrade(),
@@ -102,17 +116,13 @@ describe("Capital trade chart", () => {
 	});
 
 	it("produces a renderable PNG for an alert attachment", () => {
-		const svg = buildCapitalTradeChartSvg({
+		const config = buildCapitalTradeChartConfig({
 			title: "[TSB] Buy 1,000 shares",
 			candles: candles(),
 			trade: buyTrade(),
 		});
-		expect(svg).not.toBeNull();
-		const png = new Resvg(svg ?? "", {
-			fitTo: { mode: "width", value: 1200 },
-		})
-			.render()
-			.asPng();
-		expect(png.byteLength).toBeGreaterThan(1000);
+		expect(config).not.toBeNull();
+		const png = renderChartPng(config!, 1200, 660);
+		expect(png.length).toBeGreaterThan(1000);
 	}, 20_000);
 });

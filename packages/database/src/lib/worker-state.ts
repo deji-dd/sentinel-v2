@@ -51,6 +51,8 @@ export const WORKER_STATE_IDS = {
 	capitalPayments: "capital:payments",
 	/** Capital unit-price insight cooldowns, persisted across scheduler restarts. */
 	capitalAlerts: "capital:alerts",
+	/** YABA faction report collector cursor and last successful run. */
+	yabaCollector: "yaba:collector",
 } as const;
 
 export type WorkerStateId =

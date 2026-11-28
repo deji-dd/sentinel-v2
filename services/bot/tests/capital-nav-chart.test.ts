@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
 
-import { Resvg } from "@resvg/resvg-js";
 import type { CapitalAlertChartContext } from "@sentinel/schemas";
 
-import { buildCapitalNavChartSvg } from "../src/lib/capital-nav-chart";
+import {
+	buildCapitalNavChartConfig,
+	generateCapitalNavChartPng,
+} from "../src/lib/capital-nav-chart";
 
 function context(count = 30): CapitalAlertChartContext {
 	const start = Date.UTC(2026, 0, 1);
@@ -19,28 +21,35 @@ function context(count = 30): CapitalAlertChartContext {
 	};
 }
 
+function annotationContent(
+	config: NonNullable<ReturnType<typeof buildCapitalNavChartConfig>>,
+	key: string,
+): string {
+	const annotations = config.options?.plugins?.annotation?.annotations as
+		Record<string, { label?: { content?: string } }> | undefined;
+	const label = annotations?.[key]?.label;
+	return typeof label?.content === "string" ? label.content : "";
+}
+
 describe("Capital unit-price chart", () => {
 	it("draws the series, reference line and current marker", () => {
-		const svg = buildCapitalNavChartSvg(context());
-		expect(svg).not.toBeNull();
-		expect(svg).toContain("Unit price — new high");
-		expect(svg).toContain("Previous high");
-		expect(svg).toContain("NOW");
-		expect(svg).toContain("<polyline");
+		const config = buildCapitalNavChartConfig(context());
+		expect(config).not.toBeNull();
+		const title = config?.options?.plugins?.title?.text;
+		expect(JSON.stringify(title)).toContain("Unit price — new high");
+		expect(JSON.stringify(title)).toContain("New all-time high $1.0450");
+		expect(annotationContent(config!, "reference")).toBe("Previous high");
+		expect(annotationContent(config!, "event")).toBe("NOW");
+		expect(config?.data.datasets[0]?.data.length).toBe(30);
 	});
 
 	it("declines to chart without enough points", () => {
-		expect(buildCapitalNavChartSvg(context(2))).toBeNull();
+		expect(buildCapitalNavChartConfig(context(2))).toBeNull();
 	});
 
-	it("produces a renderable PNG for an alert attachment", () => {
-		const svg = buildCapitalNavChartSvg(context());
-		expect(svg).not.toBeNull();
-		const png = new Resvg(svg ?? "", {
-			fitTo: { mode: "width", value: 1200 },
-		})
-			.render()
-			.asPng();
-		expect(png.length).toBeGreaterThan(1000);
+	it("produces a renderable PNG for an alert attachment", async () => {
+		const png = await generateCapitalNavChartPng(context());
+		expect(png).not.toBeNull();
+		expect(png?.length).toBeGreaterThan(1000);
 	}, 30_000);
 });

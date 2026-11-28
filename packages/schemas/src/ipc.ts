@@ -59,7 +59,30 @@ export type IpcTerritoryMessage = {
 	data: IpcTerritoryPayload;
 };
 
-export type IpcBotMessage = IpcWarMessage | IpcTerritoryMessage;
+export type IpcYabaChartsMessage = {
+	action: "yaba_charts";
+	data: {
+		guildId: string;
+		generatedAt: string;
+		window: string;
+		uiUrl: string;
+		factions: Array<{
+			rank: number;
+			name: string;
+			score: number;
+			type: string;
+		}>;
+		players: Array<{
+			rank: number;
+			name: string;
+			score: number;
+			factionName: string | null;
+		}>;
+	};
+};
+
+export type IpcBotMessage =
+	IpcWarMessage | IpcTerritoryMessage | IpcYabaChartsMessage;
 
 export type IpcForceWorkerMessage = {
 	action: "force_run_worker";
@@ -198,6 +221,13 @@ export type IpcSyncReactionRolesMessage = {
 
 export type IpcSyncFactionMapMessage = {
 	action: "sync_faction_map";
+	data?: {
+		guildId?: string;
+	};
+};
+
+export type IpcSyncYabaChannelsMessage = {
+	action: "sync_yaba_channels";
 	data?: {
 		guildId?: string;
 	};
@@ -655,6 +685,8 @@ export type IpcFetchFactionMembersResponseMessage = {
  */
 export type IpcMessage =
 	| IpcBotMessage
+	| IpcYabaChartsMessage
+	| IpcSyncYabaChannelsMessage
 	| IpcForceWorkerMessage
 	| IpcResetLogManagerMessage
 	| IpcFetchFactionMembersRequestMessage
